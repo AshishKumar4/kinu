@@ -164,7 +164,7 @@ function EntryDetails({ entry, id, expanded, rpc, onReverted }: {
       {entry.kind === 'fact' && <div className="mb-2"><EntryFacts entry={entry} /></div>}
       {evidence && <div className="t-meta t-mono p-text-3 whitespace-pre-wrap break-words">{entry.evidence}</div>}
       {entry.workspace !== undefined && (
-        <Link to={workspaceRoute(entry.workspace)} className="t-meta mt-2 inline-block p-accent-fg hover:underline" data-changelog-workspace={entry.workspace}>
+        <Link to={workspaceRoute(entry.workspace)} className="t-meta mt-2 inline-block p-link" data-changelog-workspace={entry.workspace}>
           Open the workspace
         </Link>
       )}

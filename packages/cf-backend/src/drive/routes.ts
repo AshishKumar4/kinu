@@ -13,6 +13,7 @@ import type { DriveAnswer } from '../user/drive';
 import { framedDownload, ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
+import { UNPLACED } from '../user/workspace-placement';
 
 type DriveRouteObject = Pick<UserDO,
   | 'ensureProfile'
@@ -58,9 +59,9 @@ driveRoutes.use('/api/drive/*', ownerGate(), async (c, next) => {
   const identity = c.get('identity');
   const owner = c.get('owner');
   const userObject = c.env.UserDO.idFromName(identity.userId);
-  await idempotent('ensureProfile', () => c.env.UserDO.get(userObject),
+  await idempotent('ensureProfile', () => c.env.UserDO.get(userObject, { locationHint: UNPLACED }),
     (stub) => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined), { onRetry: logDoCallRetry });
-  const object: DriveRouteObject = c.env.UserDO.get(userObject);
+  const object: DriveRouteObject = c.env.UserDO.get(userObject, { locationHint: UNPLACED });
   c.set('drive', { object, owner });
   await next();
 });

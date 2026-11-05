@@ -19,6 +19,7 @@ import { IconControl } from "@/components/ui/IconControl";
 import { PillButton } from "@/components/ui/Pill";
 import { ChromeButton } from "@/components/ui/ChromeButton";
 import { SlashMenu, type SlashMenuControl } from "@/components/SlashMenu";
+import { useHeldWhile } from "@/hooks/use-held-while";
 
 const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];
 
@@ -304,12 +305,10 @@ export function Composer({
   const stranded = liveness.kind === "stranded";
   // A branch runs the draft's words as a parallel head: attachments alone give it nothing to run.
   const canBranch = Boolean(onBranch) && streaming && value.trim() !== "" && mode?.value !== "plan";
-  const [stopping, setStopping] = useState(false);
-  const [recovering, setRecovering] = useState(false);
-  const recoverLabel = RECOVER_LABEL[recovering ? "busy" : "idle"];
   // The runtime sends no stopped event; `streaming` going false confirms the stop.
-  useEffect(() => { if (!streaming) setStopping(false); }, [streaming]);
-  useEffect(() => { if (!stranded) setRecovering(false); }, [stranded]);
+  const [stopping, setStopping] = useHeldWhile(streaming);
+  const [recovering, setRecovering] = useHeldWhile(stranded);
+  const recoverLabel = RECOVER_LABEL[recovering ? "busy" : "idle"];
   // Enter while a turn runs steers it; it is never a no-op.
   const menu = slash?.highlighted === undefined ? undefined : slash;
 

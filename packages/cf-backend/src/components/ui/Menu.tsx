@@ -8,7 +8,7 @@
 import { Fragment, useId, type ReactElement, type ReactNode } from "react";
 import { CheckIcon, DotsThreeIcon } from "@phosphor-icons/react";
 import { Menu as Base } from "@cloudflare/kumo/primitives/menu";
-import { useMediaQuery } from "@/hooks/use-media-query";
+import { SM_QUERY, useMediaQuery } from "@/hooks/use-media-query";
 
 export interface MenuItem {
   readonly label: string;
@@ -44,7 +44,7 @@ export function Menu({ name, items, trigger, className, initiallyOpen = false }:
   className?: string;
   initiallyOpen?: boolean;
 }) {
-  const sheet = !useMediaQuery("(min-width: 640px)");
+  const sheet = !useMediaQuery(SM_QUERY);
 
   if (items.length === 0) return null;
 

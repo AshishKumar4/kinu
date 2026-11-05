@@ -12,6 +12,7 @@ import { logDoCallRetry } from '../obs/do-call-retry';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { Effect, Result } from 'effect';
 import { carriesCauseCode, diagnostics, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
+import { UNPLACED } from './workspace-placement';
 
 export type WorkspaceRegistry = Pick<UserDO, 'workspaceAdmission' | 'ensureWorkspaceCapability'>;
 
@@ -70,7 +71,7 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
     // Order is the security property: the registry must admit the name before claimOwner, or a crafted name wakes an
     // arbitrary OrchestratorAgent. Read fresh for every request, never kept, so a removal holds at once everywhere.
     const admission = admitted?.name === workspaceName ? admitted.admission : yield* Effect.promise(() => idempotent('workspaceAdmission',
-      () => env.UserDO.get(userObject), (stub) => stub.workspaceAdmission(owner, workspaceName), { onRetry: logDoCallRetry }));
+      () => env.UserDO.get(userObject, { locationHint: UNPLACED }), (stub) => stub.workspaceAdmission(owner, workspaceName), { onRetry: logDoCallRetry }));
 
     if (admission === null) {
       return refused<Agent>(404, `Workspace ${workspaceName} not in your registry. Create it via POST /api/user/workspaces first.`);
@@ -108,7 +109,7 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
     // The UserDO serializes this reconcile; a mismatch is repaired by minting anew.
     const provisioned = yield* Effect.result(Effect.tryPromise({
       // Replay replaces the single current hash and installed token; the prior token is no longer live.
-      try: () => idempotent('ensureWorkspaceCapability', () => env.UserDO.get(userObject),
+      try: () => idempotent('ensureWorkspaceCapability', () => env.UserDO.get(userObject, { locationHint: UNPLACED }),
         (stub) => stub.ensureWorkspaceCapability(workspaceName, claimed.success.capabilityHash), { onRetry: logDoCallRetry }),
       catch: (cause) => ({ cause }),
     }));

@@ -4,9 +4,7 @@
  */
 import { FRAME_PAGE, PageHeader } from "@/components/ui/PageHeader";
 import { Button } from "@/components/ui/Button";
-import { showing, detach } from "@kinu.run/core/obs";
-import { Effect } from "effect";
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useCallback, useState, type CSSProperties, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { FileIcon, FolderIcon, GitBranchIcon, LinkIcon, type Icon } from "@phosphor-icons/react";
@@ -17,6 +15,8 @@ import { personReaches, reachConnection } from "@/components/slates/ForkReachPan
 import { registerWorkspace } from "@/lib/user-api";
 import { getBlueprint, signedInEmail } from "@/lib/shared-api";
 import { Notice } from "@/components/ui/Notice";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { Surface } from "@/components/ui/Surface";
 
 /** A tree row's depth, for `p-tree-indent`. */
@@ -87,28 +87,20 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
   );
 }
 
-export default function BlueprintPage({ fixture, viewer }: {
-  fixture?: BlueprintView;
-  viewer?: string | null;
-} = {}) {
+export default function BlueprintPage() {
   const { id = "" } = useParams();
-  const [view, setView] = useState<BlueprintView | null>(fixture ?? null);
-  const [email, setEmail] = useState<string | null | undefined>(viewer);
-  const [err, setErr] = useState<string | null>(null);
+  const read = useCallback(() => getBlueprint(id), [id]);
+  const blueprint = useAsyncResource(read);
+  const viewer = useAsyncResource(signedInEmail);
+  const view = lastValue(blueprint.resource);
+  // Unknown until read: Fork waits for whether there is anyone to fork as.
+  const email = viewer.resource.status === "ready" ? viewer.resource.value : undefined;
   const [forking, setForking] = useState(false);
+  let failure: string | null = null;
 
-  useEffect(() => {
-    if (fixture !== undefined) return;
-    let live = true;
-    const failed = showing((chain) => { if (live) setErr(chain); });
+  if (viewer.resource.status === "error") failure = viewer.resource.message;
 
-    detach(Effect.all([
-      Effect.catchCause(Effect.map(Effect.promise(() => getBlueprint(id)), (loaded) => { if (live) setView(loaded); }), failed),
-      Effect.catchCause(Effect.map(Effect.promise(() => signedInEmail()), (who) => { if (live) setEmail(who); }), failed),
-    ], { concurrency: 'unbounded' }));
-
-    return () => { live = false; };
-  }, [fixture, id]);
+  if (blueprint.resource.status === "error") failure = blueprint.resource.message;
 
   const fork = () => {
     if (email === null) {
@@ -137,8 +129,8 @@ export default function BlueprintPage({ fixture, viewer }: {
           )}
         </PageHeader>
         <div className="mt-8 space-y-6">
-          {err && <Notice tone="danger">{err}</Notice>}
-          {view === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
+          {failure !== null && <LoadFailure what="this blueprint" message={failure} onRetry={() => { blueprint.reload(); viewer.reload(); }} />}
+          {view === null && failure === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
           {view !== null && (
             <>
               <div>

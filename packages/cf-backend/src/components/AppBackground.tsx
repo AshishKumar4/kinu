@@ -11,7 +11,7 @@ import { APP_ROUTES, routeTemplateOf, type ReportedRoute } from '@kinu.run/core'
 import type { ArtFrame, KeepOut } from '@kinu.run/core/web/art';
 import { type Field, type MeshActivity, type MeshMode, type MeshTemperamentName, NeuralMesh } from '@kinu.run/core/web/neural-mesh';
 import { groundTextElements } from '@kinu.run/core/web/ground-text';
-import { useMediaQuery } from '@/hooks/use-media-query';
+import { DESKTOP_QUERY, REDUCED_MOTION_QUERY, useMediaQuery } from '@/hooks/use-media-query';
 import { useRosterActivity } from '@/hooks/use-workspace-roster';
 import { mountLivingCanvas, type LivingCanvas } from './landing/search-tree/living-canvas';
 import { keepOutOf, type FrameTimes } from './landing/search-tree/stage';
@@ -26,7 +26,6 @@ const STILL_STEP = 1 / 30;
 const RESOLUTION = 1;
 
 /** Tailwind's `md` (the shell's rail breakpoint); narrower gets the still. */
-const RAIL_QUERY = '(min-width: 48rem)';
 
 const SHOWN_ROUTES: Partial<Record<ReportedRoute, true>> = {
   [APP_ROUTES.newWorkspace]: true,
@@ -72,9 +71,9 @@ declare global {
 /** `known` outlives the tissue so a decision that arrived on another route still flashes on return. */
 function Tissue({ known, temperament }: { readonly known: { current: MeshActivity }; readonly temperament: MeshTemperamentName }): ReactElement {
   const hostRef = useRef<HTMLDivElement>(null);
-  const wide = useMediaQuery(RAIL_QUERY);
+  const wide = useMediaQuery(DESKTOP_QUERY);
   const hoverable = useMediaQuery('(hover: hover)');
-  const calm = useMediaQuery('(prefers-reduced-motion: reduce)');
+  const calm = useMediaQuery(REDUCED_MOTION_QUERY);
   const { working, decisions } = useRosterActivity();
   const living = useRef<LivingCanvas<ArtFrame, NeuralMesh> | null>(null);
 

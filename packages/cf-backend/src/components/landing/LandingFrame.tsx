@@ -6,13 +6,13 @@
 import { lazy, Suspense, type ReactElement } from 'react';
 
 import { useHydrated } from '@/hooks/use-hydrated';
-import { useMediaQuery } from '@/hooks/use-media-query';
+import { REDUCED_MOTION_QUERY, useMediaQuery } from '@/hooks/use-media-query';
 
 const LandingWorkspaceFrame = lazy(() => import('./LandingWorkspaceFrame'));
 
 /** Hidden under `prefers-reduced-motion`, where there is no playback to restart. */
 function LandingMovieReplay(): ReactElement | null {
-  const reduced = useMediaQuery('(prefers-reduced-motion: reduce)');
+  const reduced = useMediaQuery(REDUCED_MOTION_QUERY);
 
   if (reduced) return null;
 

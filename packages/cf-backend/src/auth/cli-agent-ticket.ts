@@ -1,9 +1,10 @@
 /** A CLI's agent socket: its connect ticket, its own credential in place of a browser session. */
 import { Cause, Effect } from 'effect';
-import { err, extractTicketOrchestratorAgentName, objectNamed, ownerCaller, type ObjectNamespace, type OwnerCapabilityEnv } from '@kinu.run/core';
+import { err, extractTicketOrchestratorAgentName, ownerCaller, type ObjectNamespace, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { toKinuError, type KinuError } from '@kinu.run/core/obs';
 import type { AuthIdentity } from './session';
 import type { UserDO } from '../user/user-do';
+import { accountNamed } from '../user/workspace-placement';
 
 export function parseCliAgentConnectTicketUserId(ticket: string): string | null {
   const match = /^pat_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(ticket);
@@ -58,7 +59,7 @@ export function authenticateCliAgentTicketRequest<Id>(
   if (read === null || read instanceof Response) return Effect.succeed(read);
 
   return Effect.catchCause(Effect.gen(function* () {
-    const userDO = objectNamed(env.UserDO, read.userId);
+    const userDO = accountNamed(env.UserDO, read.userId);
 
     const verified = yield* Effect.promise(async () => userDO.verifyCliAgentConnectTicket(await ownerCaller(env), read.ticket, {
       userId: read.userId,

@@ -8,6 +8,7 @@ import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import { logDoCallRetry } from '../obs/do-call-retry';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { UserDO } from './user-do';
+import { accountNamed, UNPLACED } from './workspace-placement';
 
 type ShareRosterAuthority = Pick<UserDO, 'shareCards_withdraw' | 'sharesReceived_forget' | 'shareRecipient_forget'>;
 
@@ -25,7 +26,7 @@ export async function forgetSharesGiven<Id>(
 ): Promise<{ recipients: number }> {
   for (const recipientId of recipients) {
     const recipient = env.UserDO.idFromName(recipientId);
-    await idempotent('sharesReceived_forget', () => env.UserDO.get(recipient),
+    await idempotent('sharesReceived_forget', () => env.UserDO.get(recipient, { locationHint: UNPLACED }),
       (stub) => stub.sharesReceived_forget(owner, userId), { onRetry: logDoCallRetry });
   }
 
@@ -46,7 +47,7 @@ export async function forgetSharesReceived<Id>(
   for (const card of cards) owners.set(card.ownerUserId, [...(owners.get(card.ownerUserId) ?? []), card.workspace]);
 
   for (const [ownerId, workspaces] of owners) {
-    await idempotent('shareRecipient_forget', () => env.UserDO.get(env.UserDO.idFromName(ownerId)),
+    await idempotent('shareRecipient_forget', () => accountNamed(env.UserDO, ownerId),
       (stub) => stub.shareRecipient_forget(owner, person, workspaces), { onRetry: logDoCallRetry });
   }
 

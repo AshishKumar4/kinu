@@ -187,7 +187,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
     return (
       <div className="t-meta p-4 space-y-2">
         <div className="p-danger break-words">{file.error}</div>
-        <a href={downloadHref} download={name} className="inline-flex items-center gap-1 p-accent-fg hover:underline">
+        <a href={downloadHref} download={name} className="inline-flex items-center gap-1 p-link">
           <DownloadSimpleIcon size={12} />Download instead
         </a>
       </div>

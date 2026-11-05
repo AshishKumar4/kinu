@@ -10,6 +10,7 @@ import {
 import { bootstrappedProfile } from './helpers/bindings';
 import { AuthError, authenticateRequest, type AuthIdentity } from '../src/auth/session';
 import { authApiRoutes } from '../src/auth/routes';
+import { placementFor } from '../src/user/workspace-placement';
 import { makeKv, type FakeKv } from './helpers/kv';
 import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER } from '@kinu.run/core';
 import type { BrowserSessionIdentity } from '../src/user/sessions';
@@ -47,14 +48,25 @@ function setupEnv() {
     },
   };
 
+  // Where the first reach of each account asked its object to run: the reach that makes it.
+  const hints = new Map<string, string | undefined>();
+
   return {
     kv,
     ensuredProfiles,
+    hints,
     liveSessions: () => [...rows.keys()],
     // A deployment that signs in through OAuth, as these logins do.
     env: {
       AUTH_KV: kv,
-      UserDO: { idFromName: (name) => name, get: () => userDO },
+      UserDO: {
+        idFromName: (name) => name,
+        get: (id, options) => {
+          if (!hints.has(id)) hints.set(id, options?.locationHint);
+
+          return userDO;
+        },
+      },
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
       SIGN_IN_PROVIDERS: 'google',
     } satisfies AuthStoreEnv<string>,
@@ -92,6 +104,16 @@ describe('the browser auth store', () => {
       displayName: 'Ashish',
     });
     expect(verified?.authTime).toBe(created.identity.authTime);
+  });
+
+  // The owner, 2026-11-05: an account's object is placed where every model provider answers, as a workspace's is.
+  test('a first sign-in from Hong Kong makes the account\'s object in western Europe, never where Anthropic refuses', async () => {
+    const { env, hints } = setupEnv();
+
+    await createSession(env, profile('google', 'g-1', 'hk@example.com'), placementFor({ continent: 'AS', longitude: '114.17' }));
+    await createSession(env, profile('google', 'g-2', 'sf@example.com'), placementFor({ continent: 'NA', longitude: '-122.4' }));
+
+    expect([...hints.values()]).toEqual(['weur', 'wnam']);
   });
 
   test('the same verified email is the same Kinu user across providers', async () => {

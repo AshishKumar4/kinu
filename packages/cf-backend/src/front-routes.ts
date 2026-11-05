@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import { routeAgentRequest } from 'agents/routing';
 import {
   ACCESS_TOKEN_SCOPES, APP_ROUTES, err, extractOrchestratorAgentName, HOSTED_ACTOR_ID_HEADER, isForeignAgentNamespacePath, markDocument,
-  objectNamed, serveApp,
+  serveApp,
 } from '@kinu.run/core';
 import { landingPage, type LandingEnv } from './landing-route';
 import { ROSTER_SOCKET_ROUTE } from './user/roster-socket';
@@ -18,6 +18,7 @@ import { cliAgentTicketOf, withoutCliAgentTicket } from './auth/cli-agent-ticket
 import { appendIdentityHeaders } from './cli/rpc-gate';
 import { beneath, rawPath, type FamilyEnv } from './api/context';
 import type { RequestAccount } from './auth/session';
+import { accountNamed } from './user/workspace-placement';
 
 export type FrontRoutesEnv = Pick<Env, 'ASSETS' | 'UserDO' | 'OrchestratorAgent' | 'CLI_PUBLIC_ORIGIN' | 'PREVIEW_HOST_SUFFIX' | 'PREVIEW_HOST_PORT'>
   & LandingEnv;
@@ -66,7 +67,7 @@ export function frontRoutes<B extends FrontRoutesEnv>(accountOf: (request: Reque
 
       if (account === 'none' && c.req.path === '/') return landingPage(c.req.raw, c.env);
 
-      return typeof account === 'object' ? objectNamed(c.env.UserDO, account.id).fetch(c.req.raw) : next();
+      return typeof account === 'object' ? accountNamed(c.env.UserDO, account.id).fetch(c.req.raw) : next();
     });
   }
 
@@ -86,7 +87,7 @@ export function frontRoutes<B extends FrontRoutesEnv>(accountOf: (request: Reque
     // The account's object admits it before the workspace's object is reached, so a name the account does not hold
     // wakes nothing (workspace-ownership.ts). It is asked with the request's method and headers but no body, which the
     // workspace's object still takes; a HEAD is asked as a GET, whose answer has the admission's body.
-    const admitted = await objectNamed(c.env.UserDO, account.id).fetch(new Request(c.req.url, {
+    const admitted = await accountNamed(c.env.UserDO, account.id).fetch(new Request(c.req.url, {
       method: c.req.method === 'HEAD' ? 'GET' : c.req.method, headers: c.req.raw.headers,
     }));
 

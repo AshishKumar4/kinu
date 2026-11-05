@@ -361,7 +361,7 @@ export function gateExec<R>(
     const { call } = prepared;
     const at = await executor.shellSession?.at(call.shell, call.cwd);
 
-    const review = reviewShellCommand(executor, call.text, at);
+    const review = await reviewShellCommand(executor, call.text, at);
 
     const cwd = at !== undefined && !at.mayBeUsers ? at.cwd : call.cwd;
 

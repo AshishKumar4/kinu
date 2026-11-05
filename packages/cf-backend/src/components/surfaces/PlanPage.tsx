@@ -70,7 +70,7 @@ function PlanPage({ item, owner, rpc, planRpc, onReviewActor, resource, onRetry,
       )}
       <div className="min-h-0 flex-1">
         <Suspense fallback={<div className="flex justify-center py-8"><Loader size="sm" /></div>}>
-          <PlanReviewView plan={item.plan} rpc={item.owner.name === "main" ? rpc : planRpc} readOnly={!mine || item.owner.retired || item.plan.status !== "pending"} owedIntents={owedIntents}
+          <PlanReviewView key={`${item.plan.id}:${String(item.plan.revision)}`} plan={item.plan} rpc={item.owner.name === "main" ? rpc : planRpc} readOnly={!mine || item.owner.retired || item.plan.status !== "pending"} owedIntents={owedIntents}
             {...(item.owner.name !== "main" && { agentName: item.owner.name })} />
         </Suspense>
       </div>

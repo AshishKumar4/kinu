@@ -6,7 +6,6 @@ import { Hono } from 'hono';
 import { Result } from 'effect';
 import * as v from 'valibot';
 import {
-  objectNamed,
   err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
@@ -23,6 +22,7 @@ import type { OrchestratorAgent } from '../orchestrator';
 import { workspaceOwner } from '../workspace-owner-rpc';
 import { ROOT_SLATE_CALLER, SIGNED_OUT_VIEWER } from '@kinu.run/core/slates';
 import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
+import { accountNamed } from '../user/workspace-placement';
 
 /** The owner's workspace, once the app host proved it is theirs. */
 type OwnedWorkspace = Pick<DurableObjectStub<OrchestratorAgent>, 'setLiveShareMode' | 'setLiveShareListing' | 'slatePreapprovals' | 'withdrawSlatePreapproval' | 'slateAs'>;
@@ -102,7 +102,7 @@ sharedRoutes.get('/api/shared', async (c) => json({ body: await library(c.env, c
 sharedRoutes.post('/api/shared/seen', async (c) => {
   const identity = c.get('identity');
 
-  await objectNamed(c.env.UserDO, identity.userId).sharesSeen(c.get('owner'), Date.now());
+  await accountNamed(c.env.UserDO, identity.userId).sharesSeen(c.get('owner'), Date.now());
 
   return json({ body: { seen: true } });
 });
@@ -139,7 +139,7 @@ sharedRoutes.post(LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, async (c) => shareChange
 
 
 async function library(env: Env, identity: AuthIdentity, owner: UserCaller): Promise<SharedLibrary> {
-  const userDO = objectNamed(env.UserDO, identity.userId);
+  const userDO = accountNamed(env.UserDO, identity.userId);
   const slates: OwnedSlate[] = [];
   const mine: SharedRow[] = [];
 

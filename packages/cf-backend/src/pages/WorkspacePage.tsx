@@ -1,23 +1,14 @@
 import { askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
-import { createContext, startTransition, useContext, useState, useRef, useEffect, useCallback, useMemo, type ReactNode, type RefObject } from "react";
+import { startTransition, useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useParams, useLocation, Link, Navigate, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
-import {
-  ArrowsClockwiseIcon, GitBranchIcon, ListIcon,
-  WarningCircleIcon,
-} from "@phosphor-icons/react";
-import {
-  CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
-  newestOpener, ownerAsks, planSurface,
-  countOf,
-  agentRoute, workspaceRoute,
-} from "@kinu.run/core";
-import { APP_ROUTES, liveStep, rowText, threadLiveTail, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
+import { ArrowsClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, ownerAsks, planSurface, workspaceRoute } from "@kinu.run/core";
+import { APP_ROUTES, rowText, threadLiveTail, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
 import type { UIMessage } from "ai";
-import type { SubagentView } from "@kinu.run/core/protocol";
-import { useActorChat, useKinu } from "@/hooks/use-kinu";
+import { useKinu } from "@/hooks/use-kinu";
 import { useChatThread } from "@/hooks/use-chat-thread";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
@@ -25,17 +16,12 @@ import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { useFocusLine } from "@/hooks/use-focus-line";
-import { ActivityView } from "@/components/workspaces/ActivityView";
 import { BackgroundWork } from "@/components/BackgroundWork";
-import { DESKTOP_LANDING, useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
-import NotFoundPage from "@/pages/NotFoundPage";
+import { useWorkbenchSurfaces } from "@/hooks/use-workbench-surfaces";
 import { useTurnAnnotations } from "@/hooks/use-turn-annotations";
 import { touchWorkspace } from "@/lib/user-api";
-import { useAsyncResource } from "@/hooks/use-async-resource";
 import { readFailureText } from "@kinu.run/core";
 import { workspaceCommands } from "@/lib/workspace-commands";
-import { LoadFailure } from "@/components/ui/LoadFailure";
-import { Modal } from "@/components/ui/Modal";
 import { TurnRevert } from "@/components/RevertTurnDialog";
 import { DeviceOfflineRow, SubagentChatBase } from "@/components/MessageView";
 import { ChatColumn, EmptyConversation } from "@/components/ChatColumn";
@@ -50,337 +36,24 @@ import { classifyProgrammaticTurn, messageSignalId, messagesUpTo, splicesSeenOn,
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
-import { SLATE_PREFIX, agentTitle, siteSurface, surfacePreviewTarget, mainPanelAgent, nestedAgent, type AgentLinkIds, type ForkNode, type PanelAgent } from "@kinu.run/core";
-import { ViewOnlyBar } from "@/components/ViewOnlyBar";
-import { NodeTranscript } from "@/components/NodeTranscript";
+import { SLATE_PREFIX, siteSurface, surfacePreviewTarget, type AgentLinkIds, type PanelAgent } from "@kinu.run/core";
 import { FileLinkContext } from "@/components/surfaces/shared";
-import { KinuMark } from "@/components/ui/KinuLogo";
-import { KeptChatColumn } from "@/components/KeptChatColumn";
-import { FocusBar, WorkspaceBarActions, WorkspaceHeader, type ChatTab } from "@/components/WorkspaceHeader";
-import { useMascotOf } from "@/hooks/use-chat-mascot";
-import { RemoveWorkspaceDialog } from "@/components/RemoveWorkspaceDialog";
-import { DeleteChatDialog } from "@/components/DeleteChatDialog";
-import { NewChatView } from "@/components/workspaces/NewChatView";
-import { WorkspaceOverview } from "@/components/workspaces/WorkspaceOverview";
-import { WorkspaceSettings } from "@/pages/SettingsPage";
-import { useLayoutDrawer, useWorkspaceArea } from "@/components/layout";
+import { type ChatTab } from "@/components/WorkspaceHeader";
+import { useWorkspaceArea } from "@/components/layout";
 import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
-import { attempt, renderThrownChain, settleLogged, showing, detach, settle, type KinuError, detachPromise } from "@kinu.run/core/obs";
-import { TextInput } from "@/components/ui/Field";
-import { WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
+import { attempt, renderThrownChain, showing, detach, settle, type KinuError, detachPromise } from "@kinu.run/core/obs";
+import { WorkbenchPanels, type InspectorControl } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments } from "@/components/workspaces/NewChatView";
-import type { WorkspaceRpc } from "@/lib/workspace-rpc";
-import { Notice } from "@/components/ui/Notice";
-import { IconControl } from "@/components/ui/IconControl";
 import { OpenWorkspaceProvider } from "@/hooks/use-open-workspace";
-import { useLabelledStep } from "@/hooks/use-labelled-step";
-
-/** The mission is shown as the standing brief, not sent as an opening message
- *  the agent would then try to carry out. */
-interface TerminalCloseState {
-  readonly code: number;
-  readonly reason: string;
-  readonly message: string;
-}
-
-function retryIsOwed(intents: readonly OwedOwnerIntent[], actor: string | null, messages: readonly UIMessage[]): boolean {
-  const newest = newestOpener(messages);
-
-  return newest !== undefined && intents.some((intent) => intent.kind === "retry" && intent.actor === actor && intent.target === newest);
-}
-
-/** A terminal close means the SDK stopped redialling; it is not a reconnecting state. */
-function TerminalCloseBoundary({ close, onRetry }: {
-  close: TerminalCloseState;
-  onRetry: () => void;
-}) {
-  return (
-    <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
-      <WarningCircleIcon size={28} className="p-danger" />
-      <p className="t-body p-text">
-        {close.code === 1008 ? "Access to this workspace was denied" : "This workspace is unavailable"}
-      </p>
-      <p className="t-meta p-text-3 max-w-sm break-words">{close.reason || close.message}</p>
-      <div className="flex items-center gap-3">
-        <Button variant="ghost" size="sm" onClick={onRetry}>Try again</Button>
-        <Link to="/" className="t-meta p-accent-fg hover:underline">Back to your workspaces</Link>
-      </div>
-    </div>
-  );
-}
-
-function ForkModal({
-  sourceName, messagesUpToHere, onCancel, onSubmit,
-}: {
-  sourceName: string;
-  messagesUpToHere: number;
-  onCancel: () => void;
-  /** Throws on RPC error so the modal can display it. */
-  onSubmit: (name: string) => Promise<void>;
-}) {
-  const [name, setName] = useState("");
-  const { busy, error, run } = useLabelledStep();
-  const submit = (): void => run("fork", async () => onSubmit(name.trim()));
-
-  return (
-    <Modal
-      title="Fork the workspace from here"
-      icon={<GitBranchIcon size={18} className="p-accent-fg" />}
-      onClose={onCancel}
-      busy={busy !== null}
-      footer={<>
-        <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy !== null}>Cancel</Button>
-        <Button variant="primary" size="sm" onClick={submit} busy={busy !== null}>
-          {busy !== null ? "Forking…" : "Fork"}
-        </Button>
-      </>}
-    >
-      <div className="t-meta p-text-2 space-y-2">
-        <p>Create a new workspace from <span className="font-mono p-text">{sourceName}</span>, with its own conversation and its own copy of the files.</p>
-        <ul className="list-disc list-inside space-y-px p-text-3">
-          <li>Conversation: the {countOf(messagesUpToHere, "message")} up to this one</li>
-          <li>Files: the project, SOUL.md and memory as they are now, not as they were at this message</li>
-          <li>Also copied: learned tools and settings</li>
-          <li>Starts fresh: swarm trees, evolution events, scaffold, installed runtimes</li>
-          <li>Source workspace is unaffected</li>
-        </ul>
-      </div>
-
-      <div className="space-y-1">
-        <label className="t-meta p-text-3 block">Fork name (optional)</label>
-        <TextInput
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="a generated address, e.g. quiet-harbor-3f9a2c1d"
-          disabled={busy !== null}
-          className="t-mono"
-        />
-        <p className="t-meta p-text-3">Lowercase letters, digits and hyphens, at most 31 characters</p>
-      </div>
-
-      {error !== null && <Notice tone="danger">{error}</Notice>}
-    </Modal>
-  );
-}
-
-function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: string; path: string; rpc: WorkspaceRpc; ids: AgentLinkIds; input: boolean }) {
-  const load = useCallback(() => nestedAgent((request) => rpc("inspectSubagent", [request]), path, ids), [rpc, path, ids]);
-  const { resource, reload } = useAsyncResource(load, undefined, `${path}|${ids.actor ?? ""}|${ids.parent ?? ""}`);
-
-  if (resource.status === "loading") return <div className="flex flex-1 items-center justify-center"><Loader size="sm" /></div>;
-
-  if (resource.status === "error") return <LoadFailure className="p-4" what={`${path}'s place in its roster`} message={resource.message} onRetry={reload} />;
-  const agent = resource.value;
-
-  if (agent === null) return <p className="t-body p-4 p-text-3">No agent is at {path} in this workspace.</p>;
-
-  return (
-    <SubagentChatBase.Provider value={{ base: subagentBase(workspace, path), parent: agent.actorId }}>
-      {agent.live
-        ? <SubagentChatColumn workspace={workspace} subName={path} title={agent.title} input={input} />
-        : <KeptChatColumn workspace={workspace} subName={path} title={agent.title} rpc={rpc} actorId={agent.actorId} />}
-    </SubagentChatBase.Provider>
-  );
-}
-
-function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
-  main: ReturnType<typeof useKinu>;
-  ownerPath: string | null;
-  runId: string;
-  nodeId: string;
-  agent: PanelAgent;
-}) {
-  const working = agent.activity === "working";
-
-  const trees = useMemo(() => new Map<string, ForkNode>([[runId, {
-    id: nodeId, parentId: null, depth: 0, value: null, visits: null, status: working ? "running" : "terminal",
-    action: agent.label, children: [],
-  }]]), [runId, nodeId, working, agent.label]);
-
-  return (
-    <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`node/${runId}/${nodeId}`}>
-      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 py-4">
-        {agent.parent !== null && <p className="t-meta p-text-3">Swarm worker from {agent.parent}</p>}
-        {/* Main's socket reads every journal and carries every head's stream. */}
-        <NodeTranscript selection={{ runId, nodeId }} ownerPath={ownerPath} trees={trees} rpc={main.rpc} headActivity={main.headActivity}
-          headDeltas={main.headDeltas} onSelect={() => undefined} />
-      </div>
-      {/* The workspace holds every running worker, whoever started the swarm; its siblings run on. */}
-      <ViewOnlyBar running={working} onStop={() => detachPromise(() => settleLogged("agents.stop_failed", { doing: "stop a swarm worker", otherwise: "io" },
-        () => main.rpc("stopSwarmWorker", [nodeId])))} />
-    </div>
-  );
-}
+import { closeWords, retryIsOwed, TerminalCloseBoundary, SwarmNodePane, type AgentPlanWindow, AgentPlanWindowContext, AttentionContext, AgentChatColumn } from "./workspace/agent-panes";
+import { useAgentsPanel, chatTab, subagentBase, routedAgentPath } from "./workspace/agents-panel";
+import { ForkModal, DeleteChat, MainClearDialog, type FocusIdentity, WorkspaceBar, WorkspaceView, GoneWorkspace } from "./workspace/chrome";
 
 /** The workspace's own chat, where its answers' blocks resolve. */
 const WORKSPACE_CHAT = { actorId: null } as const;
 
-/** Main's row before the roster is read. */
-const MAIN_UNREAD = mainPanelAgent({ activity: "idle" });
-
-function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench }: {
-  listed: readonly PanelAgent[] | null;
-  live: boolean;
-  workspace: string | undefined;
-  node: string | null;
-  subName: string | undefined;
-  workbench: RefObject<WorkbenchHandle | null>;
-}) {
-  const navigate = useNavigate();
-
-  const agents = useMemo((): readonly PanelAgent[] => {
-    const main = listed?.find((agent) => agent.category === "main") ?? MAIN_UNREAD;
-
-    return [{ ...main, activity: mainActivity(main.activity, live) }, ...(listed ?? []).filter((agent) => agent.category !== "main")];
-  }, [listed, live]);
-
-  const shownAgent = useMemo(() => shownPanelAgent(agents, node, subName), [agents, node, subName]);
-
-  const open = useCallback((agent: PanelAgent) => settleLogged("agents.open_failed", { doing: "open an agent's chat", otherwise: "io" }, async () => {
-    await navigate(agentPagePath(workspace, agent));
-    workbench.current?.showChat();
-  }), [navigate, workspace, workbench]);
-
-  const shown = shownAgent?.key ?? null;
-  const panel = useMemo(() => ({ list: agents, shown, open }), [agents, shown, open]);
-
-  return {
-    shownAgent,
-    rosterLoaded: listed !== null,
-    panel,
-  };
-}
-
-/** Main's mark follows this page's own socket for working, so the bar and the composer's Stop never disagree; a
- *  question for the person outranks either. */
-function mainActivity(listed: PanelAgent["activity"], live: boolean): PanelAgent["activity"] {
-  if (listed === "waiting") return listed;
-
-  if (live) return "working";
-
-  return listed === "working" ? "idle" : listed;
-}
-
-function shownPanelAgent(agents: readonly PanelAgent[], node: string | null, subName: string | undefined): PanelAgent | undefined {
-  if (node !== null) return agents.find((agent) => agent.key === node);
-
-  return agents.find((agent) => agent.open.kind === "chat" && agent.open.path === (subName ?? null));
-}
-
-function agentPagePath(workspace: string, { open }: PanelAgent): string {
-  if (open.kind === "chat") return open.path === null ? workspaceRoute(workspace) : agentRoute(workspace, open.path);
-  const owner = open.owner === null ? "" : `&owner=${encodeURIComponent(open.owner)}`;
-
-  return `${workspaceRoute(workspace)}?node=${encodeURIComponent(`${open.runId}/${open.nodeId}`)}${owner}`;
-}
-
-/** `node` is `<run>/<node>`. */
-function SwarmNodePane({ main, node, ownerPath, agent, rosterLoaded }: {
-  main: ReturnType<typeof useKinu>;
-  node: string;
-  ownerPath: string | null;
-  agent: PanelAgent | undefined;
-  rosterLoaded: boolean;
-}) {
-  const [runId = "", ...rest] = node.split("/");
-  const nodeId = rest.join("/");
-
-  if (agent === undefined) {
-    return (
-      <div className="t-meta flex flex-1 items-center justify-center px-6 text-center p-text-3" data-agent-pane={`node/${node}`}>
-        {rosterLoaded ? "This swarm worker is no longer listed. Open the Agents panel to pick another." : "Loading this swarm worker…"}
-      </div>
-    );
-  }
-
-  return <SwarmNodeColumn main={main} ownerPath={ownerPath} runId={runId} nodeId={nodeId} agent={agent} />;
-}
-
-/** A chat's delete, asked from its tab or its sidebar row: deleting the chat on screen returns to Main. */
-function DeleteChat({ chat, workspace, shown, dismiss, onClose }: {
-  chat: { readonly title: string; readonly path: string } | null;
-  workspace: string;
-  shown: string | undefined;
-  dismiss: WorkspaceState["dismissSubagent"];
-  onClose: () => void;
-}) {
-  const navigate = useNavigate();
-
-  if (chat === null) return null;
-
-  return (
-    <DeleteChatDialog title={chat.title} onClose={onClose} onConfirm={async () => {
-      await dismiss(chat.path, false);
-
-      if (shown === chat.path) await navigate(workspaceRoute(workspace));
-    }} />
-  );
-}
-
-function MainClearDialog({ open, agents, onClear, onClose }: {
-  open: boolean;
-  agents: readonly PanelAgent[];
-  onClear: () => Promise<void>;
-  onClose: () => void;
-}) {
-  if (!open) return null;
-
-  return <DeleteChatDialog title={agents.find((agent) => agent.key === MAIN_UNREAD.key)?.label ?? MAIN_UNREAD.label} clears onConfirm={onClear} onClose={onClose} />;
-}
-
 /** The workspace's own pages share the chat route's key, so the socket and the bar stay mounted across them. */
 const WORKSPACE_VIEW = "/workspace/:agentId/:view";
-
-/** Main is the workspace's own chat: its × clears the conversation and Main stays. A chat the person opened is deleted. */
-function chatTab(workspace: string, agent: PanelAgent, actions: {
-  renameMain: (title: string) => Promise<void>;
-  renameChat: (path: string, title: string) => Promise<void>;
-  clearMain: () => void;
-  remove: (path: string) => void;
-}): ChatTab {
-  const path = agent.open.kind === "chat" ? agent.open.path : null;
-
-  if (path === null) return { agent, to: workspaceRoute(workspace), rename: actions.renameMain, remove: actions.clearMain, clears: true };
-
-  return {
-    agent, to: subagentBase(workspace, path).slice(0, -1),
-    rename: (title: string) => actions.renameChat(path, title),
-    remove: () => actions.remove(path),
-  };
-}
-
-/** The bar's open item: the overview, or the chat shown when it has a tab. */
-function openBarItem(view: string | undefined, shown: PanelAgent | undefined): string | null {
-  if (view === "overview") return "overview";
-
-  return view === undefined && shown?.tab === true ? shown.key : null;
-}
-
-function subagentBase(workspace: string, subName: string): string {
-  return `${agentRoute(workspace, subName)}/`;
-}
-
-/** A subagent below a direct child is addressed by its `/`-joined path of names, as its socket and RPCs take it. */
-function routedAgentPath({ subName, "*": below }: Readonly<Record<string, string | undefined>>): string | undefined {
-  if (subName === undefined) return undefined;
-
-  return [subName, ...(below ?? "").split("/").filter(Boolean)].join("/");
-}
-
-/** The shown agent's plan and its window's RPC: an agent's plan is reviewed through its own window (D9), so the work
- *  surface takes both from the agent's pane, never from the workspace's socket. */
-interface AgentPlanWindow {
-  readonly plan: PlanReview | null;
-  readonly rpc: WorkspaceRpc;
-}
-
-const AgentPlanWindowContext = createContext<(window: AgentPlanWindow | null) => void>(() => {});
-
-/** The workspace's asks and the stack's calls, so an agent's own pane stacks the asks it raised (`ownerAsks`). */
-const AttentionContext = createContext<{
-  readonly reads: Parameters<typeof ownerAsks>[0];
-  readonly stack: Omit<AttentionStackProps, "asks">;
-} | null>(null);
 
 /** The plan the work surface reviews and the RPC its decisions go through: the workspace's own on the main pane, the
  *  shown agent's from its pane otherwise. */
@@ -398,91 +71,6 @@ function planOwnerName(subName: string | undefined, agentId: string | undefined)
   return agentId ?? "main";
 }
 
-function AgentChatColumn({ workspace, subName, subagents, rpc, ids, input }: {
-  workspace: string;
-  subName: string;
-  subagents: readonly SubagentView[];
-  rpc: WorkspaceRpc;
-  ids: AgentLinkIds;
-  input: boolean;
-}) {
-  if (subName.includes("/")) return <NestedAgentColumn workspace={workspace} path={subName} rpc={rpc} ids={ids} input={input} />;
-  const rosterEntry = subagents.find((entry) => entry.name === subName);
-  let column = <SubagentChatColumn workspace={workspace} subName={subName} title={rosterEntry ? agentTitle(rosterEntry) : subName} input={input} />;
-
-  if (rosterEntry?.status === "dismissed") {
-    // A dismissed agent has no socket; its kept chat is paged over this workspace's.
-    column = <KeptChatColumn workspace={workspace} subName={subName} title={agentTitle(rosterEntry)} rpc={rpc} actorId={rosterEntry.actorId} />;
-  }
-
-  // A subagent this agent asked opens below it.
-  return <SubagentChatBase.Provider value={{ base: subagentBase(workspace, subName), parent: rosterEntry?.actorId ?? null }}>{column}</SubagentChatBase.Provider>;
-}
-
-/** One subagent's chat over its own facet socket; Work Surface and Timeline stay on
- *  the parent socket. The facet exposes no fork/feedback/takes/restore. */
-function SubagentChatColumn({
-  workspace, subName, title, input,
-}: {
-  workspace: string;
-  subName: string;
-  title: string;
-  input: boolean;
-}) {
-  const state = useActorChat({ workspace, subagent: subName });
-  const pane = `${workspace}/agents/${subName}`;
-  const ui = useConversationUiState(pane);
-
-  usePlanApprovedMode(state.activePlan, ui.setMode);
-
-  const showPlanWindow = useContext(AgentPlanWindowContext);
-  const attention = useContext(AttentionContext);
-  const retryOwed = state.paneActorId !== null && retryIsOwed(attention?.stack.owedIntents ?? [], state.paneActorId, state.messages);
-
-  useEffect(() => { showPlanWindow({ plan: state.activePlan, rpc: state.rpc }); }, [showPlanWindow, state.activePlan, state.rpc]);
-  useEffect(() => () => { showPlanWindow(null); }, [showPlanWindow]);
-
-  const chat = useChatThread({
-    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, seedEdge: state.seedEdge,
-    steerRuns: state.steerRuns, actor: state.paneActorId,
-  });
-
-  // Its answers' blocks resolve in its own chat, once the pane knows whose that is.
-  const answerChat = useMemo(() => (state.paneActorId === null ? undefined : { actorId: state.paneActorId }), [state.paneActorId]);
-  // Its own questions, from the workspace's read, for each call's record.
-  const questions = attention?.reads.questions;
-  const asked = useMemo(() => (state.paneActorId === null ? [] : askedBy(questions ?? [], state.paneActorId)), [questions, state.paneActorId]);
-
-  if (state.terminalClose && !state.actorSnapshot) {
-    return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
-  }
-
-  if (state.connectionStatus === "connecting" && !state.actorSnapshot) {
-    return (
-      <div className="flex flex-1 items-center justify-center">
-        <div className="t-body flex items-center gap-2 p-text-2"><Loader size="sm" /><span>Connecting…</span></div>
-      </div>
-    );
-  }
-
-  const live = state.liveness.kind === "live";
-
-  return (
-    <ChatColumn pane={pane} label="Agent chat" state={state} ui={ui} chat={chat} retryOwed={retryOwed} input={input}
-      placeholder={live ? `Steer ${title}…` : `Message ${title}…`}
-      attention={attention !== null && state.paneActorId !== null
-        ? <AttentionStack asks={ownerAsks(attention.reads, { raisedBy: state.paneActorId })} {...attention.stack} />
-        : undefined}
-      empty={
-        <div className="flex h-full flex-col items-center justify-center text-center">
-          <KinuMark size={30} className="mb-3 p-accent opacity-60" />
-          <p className="t-body p-text-3">This agent's conversation starts here.</p>
-        </div>
-      }
-      asked={asked} answerSlates={answerChat} layout={{ startFirst: false, padClass: "pt-5 pb-12" }} extras={{ opening: true }} />
-  );
-}
-
 /** Each source keeps its own error so one recovery never hides another failure, and a
  *  failed hydrate never renders as "there is nothing". */
 const SIDE_SOURCES = [
@@ -493,117 +81,6 @@ const SIDE_SOURCES = [
 
 type SideSource = (typeof SIDE_SOURCES)[number]["source"];
 
-type WorkspaceState = ReturnType<typeof useKinu>;
-
-/** The workspace's bar, with the dialogs its delete controls open. In the `focus` layout the chat tabs give way to
- *  who is talking and what they are doing, until the person asks for the tabs. Until its layout is known it is bare. */
-function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view, inspector, actions, focus, pending }: {
-  workspace: string;
-  title: string;
-  editValue: string;
-  state: WorkspaceState;
-  agents: readonly PanelAgent[];
-  shown: PanelAgent | undefined;
-  view: string | undefined;
-  inspector: InspectorControl | null;
-  actions: (agent: PanelAgent) => ChatTab;
-  /** The `focus` layout's identity: the name it goes by and its line. */
-  focus: FocusIdentity | null;
-  /** Neither the workspace's status nor the roster has said which layout it is. */
-  pending: boolean;
-}) {
-  const drawer = useLayoutDrawer();
-  const agentsNav = useAgentsNav();
-  const { entries, rename } = useWorkspaceRoster();
-  const logo = entries.find((entry) => entry.name === workspace)?.logo;
-  const [removing, setRemoving] = useState(false);
-  const [tabsShown, setTabsShown] = useState(false);
-  const working = agents.filter((agent) => !agent.tab && agent.activity === "working").length;
-  const chats = agents.filter((agent) => agent.tab).map(actions);
-  const menu = drawer && <IconControl place="bar" onClick={drawer} aria-label="Open menu"><ListIcon size={18} /></IconControl>;
-  const barActions = <WorkspaceBarActions workspace={workspace} working={working} view={view} inspector={inspector} onAgents={() => agentsNav.enter(workspace)} />;
-  const speaking = shown ?? agents.find((agent) => agent.category === "main");
-  const mascotOf = useMascotOf(workspace);
-
-  if (pending) return <header className="p-bar" data-workspace-bar data-layout="pending">{menu && <div className="p-bar-menu">{menu}</div>}</header>;
-
-  if (focus !== null && !tabsShown && view === undefined) {
-    return (
-      <FocusBar
-        workspace={{ name: workspace, title, logo, to: workspaceRoute(workspace, "activity") }}
-        agent={{
-          label: focus.label ?? "", ...mascotOf(speaking?.key ?? "main", speaking?.colour ?? 0), activity: speaking?.activity,
-        }}
-        line={focus.line}
-        leading={menu}
-        trailing={barActions}
-        {...(chats.length > 1 && { tabs: { count: chats.length, show: () => setTabsShown(true) } })}
-      />
-    );
-  }
-
-  return (
-    <>
-      <WorkspaceHeader
-        workspace={{
-          name: workspace,
-          title, logo, to: workspaceRoute(workspace, "overview"), editValue,
-          rename: async (name) => { rename(workspace, (await state.rpc("setDisplayName", [name])).displayName); }, remove: () => setRemoving(true),
-        }}
-        chats={chats}
-        active={openBarItem(view, shown)}
-        newChat={workspaceRoute(workspace, "new")}
-        leading={menu}
-        trailing={barActions}
-      />
-      {removing && <RemoveWorkspaceDialog workspace={{ name: workspace, displayName: editValue }} onClose={() => setRemoving(false)} />}
-    </>
-  );
-}
-
-/** The workspace's own pages, under the bar the chats share. */
-function WorkspaceView({ view, workspace, title, state, agents, open, clearMain }: {
-  view: string;
-  workspace: string;
-  title: string;
-  state: WorkspaceState;
-  agents: readonly PanelAgent[];
-  open: (agent: PanelAgent) => void;
-  clearMain: () => void;
-}) {
-  const entry = useWorkspaceRoster().entries.find((each) => each.name === workspace);
-  const logo = entry?.logo;
-
-  if (view === "settings") {
-    return <WorkspaceSettings workspace={workspace} title={title} titleDraft={entry === undefined ? null : workspaceTitleDraft(entry)}
-      logo={logo} state={state} clearMain={clearMain} />;
-  }
-
-  if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubagent} />;
-
-  // The desktop's own page went with D99: its address lands on the desktop where it lives now, the Environment surface.
-  if (view === "desktop") return <Navigate to={`${workspaceRoute(workspace)}?${DESKTOP_LANDING}`} replace />;
-
-  // What the agent did and is doing, from its chat and its watches (1018-xao, Muse's activity log).
-  if (view === "activity") return <ActivityView workspace={workspace} title={title} rpc={state.rpc} now={liveStep(threadLiveTail({ last: state.messages.at(-1), liveness: state.liveness }))} />;
-
-  if (view !== "overview") return <NotFoundPage />;
-
-  return <WorkspaceOverview workspace={workspace} title={title} logo={logo} rpc={state.rpc} readMoves={state.readMoves}
-    plan={state.activePlan} arrival={state.workspacePlanArrival}
-    lineage={state.status?.forkLineage ?? null} agents={agents} open={open} />;
-}
-
-function GoneWorkspace() {
-  return (
-    <div className="h-full flex flex-col items-center justify-center gap-2 px-6 text-center" data-workspace-gone>
-      <p className="t-body p-text">This workspace no longer exists</p>
-      <p className="t-meta p-text-3">It was deleted, here or somewhere else.</p>
-      <Link to="/" className="t-meta mt-1 p-accent-fg hover:underline">Back to your workspaces</Link>
-    </div>
-  );
-}
-
 /**
  * Live steers' rule: a card spliced into a running turn goes into the last message when that is the answer being
  * written. A card the chat already draws is not live: the page keeps its cards until it closes, and three a long turn
@@ -613,12 +90,6 @@ function useLiveSplices(entries: readonly { readonly message: UIMessage }[], car
   const answering = entries.at(-1)?.message.role === "assistant";
 
   return useMemo(() => (answering ? cards.filter((card) => card.atStep !== undefined && !drawn.has(card.id)) : []), [answering, cards, drawn]);
-}
-
-/** What the `focus` layout's bar says: the name it goes by (its agent's, else the workspace's title) and its line. */
-interface FocusIdentity {
-  readonly label?: string;
-  readonly line: ReactNode;
 }
 
 /** A workspace's page, the one its route names; Home names the assistant's (`workspace`): its chat, with nothing above it. */
@@ -657,12 +128,15 @@ export default function WorkspacePage(props: WorkspacePageProps = {}) {
   // The owner's assistant is Home: its own address opens Home, and its other pages are in its layout from the start.
   if (props.workspace === undefined && home && own) return <Navigate to={{ pathname: APP_ROUTES.home, search, hash }} replace />;
 
-  if (agentId !== undefined && gone === agentId) return <GoneWorkspace />;
+  // Its route always names it; an address without one has no workspace to open.
+  if (agentId === undefined) return <Navigate to={APP_ROUTES.workspaces} replace />;
+
+  if (gone === agentId) return <GoneWorkspace />;
 
   // Unmounting closes its socket and every read it polls.
   return (
     <ModelMenuProvider key={agentId}>
-      <OpenWorkspace onGone={setGone} {...props} layout={props.layout ?? (home ? "focus" : undefined)} />
+      <OpenWorkspace onGone={setGone} workspace={agentId} elsewhere={props.workspace !== undefined} layout={props.layout ?? (home ? "focus" : undefined)} />
     </ModelMenuProvider>
   );
 }
@@ -707,11 +181,16 @@ function inspectorReady(control: InspectorControl | null): boolean {
   return control?.ready === true;
 }
 
-function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onGone: (workspace: string) => void }) {
+/** `elsewhere`: drawn where its route is not (Home). */
+function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
+  workspace: string;
+  elsewhere: boolean;
+  layout?: WorkspaceLayout;
+  onGone: (workspace: string) => void;
+}) {
   const params = useParams();
-  const agentId = workspace ?? params.agentId;
 
-  useOwnBar(workspace !== undefined);
+  useOwnBar(elsewhere);
   const subName = routedAgentPath(params);
   const [search] = useSearchParams();
   const linkIds = useMemo<AgentLinkIds>(() => ({ actor: search.get("actor"), parent: search.get("parent") }), [search]);
@@ -753,7 +232,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
     workbench, surface, setSurface, show, previewAddress, openPreview, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
     desktopLanding, desktopLanded,
   } = useWorkbenchSurfaces({
-    workspace: agentId ?? "", executors: state.executors, slates: state.slates, search: location.search,
+    workspace: agentId, executors: state.executors, slates: state.slates, search: location.search,
     inspectorReady: inspectorReady(inspectorControl),
   });
 
@@ -768,7 +247,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   latestState.current = state;
 
   // A chat renames and deletes alike from its tab and its sidebar row, through the same dialogs.
-  const chatActions = useCallback((agent: PanelAgent): ChatTab => chatTab(agentId ?? "", agent, {
+  const chatActions = useCallback((agent: PanelAgent): ChatTab => chatTab(agentId, agent, {
     renameMain: async (name) => { await latestState.current.rpc("renameMainChat", [name]); },
     renameChat: async (path, name) => { await latestState.current.renameSubagent(path, name); },
     clearMain: () => { setClearingMain(true); },
@@ -776,7 +255,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   }), [agentId]);
 
   useEffect(() => {
-    if (agentId !== undefined) publish({ workspace: agentId, ...agentsPanel, actions: chatActions });
+    publish({ workspace: agentId, ...agentsPanel, actions: chatActions });
   }, [agentId, agentsPanel, chatActions, publish]);
 
   // The stack answers through the workspace's own calls on every pane: one queue, whichever pane asks. The account's
@@ -794,7 +273,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   const openAsk = useCallback(async (key: string): Promise<void> => {
     setAskFocus(key);
 
-    if (subName !== undefined) await navigate(workspaceRoute(agentId ?? ""));
+    if (subName !== undefined) await navigate(workspaceRoute(agentId));
     workbench.current?.showChat();
   }, [subName, navigate, agentId, workbench]);
 
@@ -808,7 +287,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
     focus: { chosen: askFocus, choose: setAskFocus },
   }), [workspaceRpc, state.owedIntents, resolveConsent, refreshPendingActions, show, decideAccountProposal, askFocus]);
 
-  const mainPane = `${agentId ?? ""}/main`;
+  const mainPane = `${agentId}/main`;
   const ui = useConversationUiState(mainPane);
 
   usePlanApprovedMode(subName === undefined ? state.activePlan : null, ui.setMode);
@@ -834,7 +313,6 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   const dropped = state.connectionStatus === "disconnected";
 
   useEffect(() => {
-    if (!agentId) return;
     startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
       const taken = yield* Effect.promise(async () => touchWorkspace(agentId));
 
@@ -896,7 +374,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
         draw: (count) => <ProgrammaticTurnCard turn={turn} text={card.text} state={card.state} count={count} />,
       }] : [];
     }),
-    ...state.subagentEvents.map((event) => subagentEventRow(event, agentId ?? "")),
+    ...state.subagentEvents.map((event) => subagentEventRow(event, agentId)),
   ], [state.signalCards, state.subagentEvents, drawnCardIds, liveSplices, agentId]);
 
   const threadMessages = useMemo(() => thread.entries.map(({ message }) => message), [thread.entries]);
@@ -942,8 +420,6 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   // What the focus bar says of the main agent: its live step, else its watches (Muse's status and Upcoming, 1018-xao).
   const mainLine = useFocusLine(state.rpc, knownLayout === "focus", threadLiveTail({ last: state.messages.at(-1), liveness: state.liveness }));
 
-  if (!agentId) return null;
-
   const as = state.actorSnapshot;
   // The roster holds the title; the visit (`touchWorkspace`) makes this workspace its newest row.
   const rosterEntry = workspaceEntries.find((entry) => entry.name === agentId);
@@ -973,7 +449,6 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
     return <div className="h-full flex flex-col">{bar}<div className="min-h-0 flex-1"><TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} /></div></div>;
   }
 
-
   return (
     <OpenWorkspaceProvider value={agentId}>
     <SlateInlineContext.Provider value={slateInline}><FileLinkContext.Provider value={fileLinks}><ChatImageContext.Provider value={chatImages}>
@@ -987,14 +462,9 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
       {state.terminalClose && (
         <div className="p-banner-danger t-meta flex flex-wrap items-center justify-center gap-2 px-3 py-1 p-danger border-b p-border">
           <WarningCircleIcon size={12} className="shrink-0" />
-          <span className="break-words">
-            {state.terminalClose.code === 1008
-              ? "Access to this workspace was denied."
-              : "This workspace is unavailable."}
-            {" "}{state.terminalClose.reason || state.terminalClose.message}
-          </span>
+          <span className="break-words">{closeWords(state.terminalClose).title}. {closeWords(state.terminalClose).detail}</span>
           <Button variant="ghost" size="sm" onClick={state.retryLoad}>Try again</Button>
-          <Link to="/" className="p-accent-fg hover:underline">Back to your workspaces</Link>
+          <Link to="/" className="p-link">Back to your workspaces</Link>
         </div>
       )}
 
@@ -1027,7 +497,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
               empty={<EmptyConversation mission={as?.mission ?? ""} />}
               asked={asked} answerSlates={WORKSPACE_CHAT} layout={{ startFirst: true, padClass: "pt-6 pb-12" }}
               extras={{
-                float: agentId === undefined ? undefined : (
+                float: (
                   <BackgroundWork workspace={agentId} agents={agentsPanel.list} jobs={state.backgroundJobs}
                     open={(agent) => { detachPromise(() => agentsPanel.open(agent)); }} openWork={() => show("Work")} />
                 ),
@@ -1068,7 +538,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
                 attachments,
                 drop: chatDrop,
                 onBranch: handleBranch,
-                commands: agentId === undefined ? undefined : (say) => workspaceCommands({
+                commands: (say) => workspaceCommands({
                   workspace: agentId, say, clear: () => { setClearingMain(true); }, compact: async () => state.rpc("compactConversation", []), show, go: (path) => Effect.promise(async () => navigate(path)),
                   history: chat.readAll,
                   walkBack: setRevertFor,

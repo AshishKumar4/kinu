@@ -105,6 +105,17 @@ export const GoogleClientSchema = v.object({
 
 export type OAuthClient = v.InferOutput<typeof GoogleClientSchema>;
 
+/** The connectors a person set up for a Kinu before its first deploy, which the deploy binds: GitHub's app by its slug. */
+const HeldConnectorsSchema = v.object({ github: v.nullable(v.string()), google: v.boolean() });
+
+export type HeldConnectors = v.InferOutput<typeof HeldConnectorsSchema>;
+
+/** A Kinu's connectors before its first deploy: those held, and the address its apps name (`plannedOrigin`), null
+ *  while the deploy still has to make it. */
+export const ConnectorsBeforeSchema = v.object({ ...HeldConnectorsSchema.entries, origin: v.nullable(v.string()) });
+
+export type ConnectorsBefore = v.InferOutput<typeof ConnectorsBeforeSchema>;
+
 /** A Kinu the deploy flow made: its account, and its Worker's name there. */
 export interface KinuWorker {
   readonly account: string;
