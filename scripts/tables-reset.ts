@@ -412,8 +412,10 @@ export function censusDiff(before: string, after: string, { changed: planned, ad
   const was = censusOfLines(before);
   const now = censusOfLines(after);
   // A workspace takes a generation each time it is made (nimbus-workspace.ts), so one the walk opened moves it with its
-  // activation, as one whose tables the walk reset does.
-  const opened = [...now.rows.values()].filter((row) => row.table === ACTIVATIONS && row.rows > (was.rows.get(`${row.database}\t${row.table}`)?.rows ?? 0)).map((row) => row.database);
+  // activation, as one whose tables the walk reset does. A full ring keeps its count as it opens (its oldest row goes),
+  // so an opening is any change to the ledger; ledgerBadly proves apart that the change only appended (staging
+  // 5577e67a1, 2026-11-05: ten busy workspaces at 256 activations read their moved generation as outside the plan).
+  const opened = [...now.rows.values()].filter((row) => row.table === ACTIVATIONS && row.digest !== was.rows.get(`${row.database}\t${row.table}`)?.digest).map((row) => row.database);
   const reset = new Set([...[...was.rows.values()].filter((row) => planned.has(row.table)).map((row) => row.database), ...opened]);
   // An object the census before did not hold was made since, by a sign-in or a first request: a reset changes only objects
   // that exist, so it is said once, never as each of its tables changed (staging 4ebac191c, 2026-10-23: one new account
