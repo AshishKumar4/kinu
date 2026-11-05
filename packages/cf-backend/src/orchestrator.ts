@@ -41,6 +41,8 @@ import {
 } from "@kinu.run/core";
 import { PROJECT_OWNER_CRED, blueprintOwnerName, blueprintSeed, kinuBlueprint, stableStringify, bookmarkNow, censusOf, missingBytes, requireOps, restartedForRestore, restoreArmed, type ArmedRestore, type MissingBytes, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
+import type { WorkspaceActorContext } from './workspace-actor/context';
+import { ActorProfiles } from './workspace-actor/profiles';
 import { unownedWorkspace, WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
 import type { WorkspaceEgress } from "@nimbus-sh/core/_shared/workspace-network.js";
@@ -277,7 +279,7 @@ import {
   type TerminalTurnParts,
 } from "@kinu.run/core";
 import { accountNamed } from './user/workspace-placement';
-import { ComputerProcessEnds, jobState, inspectSubagentStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair, type RunEventInput, type SubagentInspectionAuthority, type ConversationRecall, PLATFORM_LIMITS, ProgramsInFlight, cardWords, specProvider, WORKERS_AI_PROVIDER_ID, type GitHubDeps, type SendState, type SubagentActivityEvent, codemodeSurface, HeldReads, PAGE_KEEPALIVE, type SqlExec, recoverSubagentLifecycles, type ScaffoldRunOptions, initActorClaimTables, ActorClaimStore, initPendingSendTables, createScaffoldCandidateSurface, createScaffoldHistory, type ScaffoldCandidateBinding, type ScaffoldControl, type RefinementDeps, type TurnContinuity, buildBuiltinTools, buildMcpToolSet, McpToolSurfaceCache, type BrowserSessions, browserSessions, currentDateForPrompt, answerDrawsPages, type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability, ExtensionHost, type PromptFile, PromptFileSchema, type AgentOrchestrator, actorTerminalEffects, DynamicContextLedger, type BackendHost, EvolutionLanes, drainPendingEvents, standingFileLedger, type DynamicDelegate, builtinStores, type ComposedRequest, type AgentsSwarmDeps, type PromptModelContext, isWorkMode, type HeadJournal, LiveHeadJournal, type HeadStreamFrame, type HeadId, type HeadReport, type HeadRuntime, type HeadGrounding, MissionGovernor, type MissionSeam, type MissionBudgetRefusal, priceCall, type Usage, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, recordModelOperations, type ModelAttemptInfo, type ProviderWaitInfo, pricedModelCallEvent, type FactsStore, createAgentStores, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subagentDelegatesOf, type SubagentRosterEntry, type SqlExecutor, type JobResumer, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE, type BackgroundJobStore, type TaskListStore, resumeBackgroundJob, resumableBackgroundJob, computerProcessJob, computerProcessResume, stopComputerProcessJob, harvestBackgroundJob, isWorkspaceProcessJob, stopWorkspaceProcessJob, workspaceProcessJobRuns, cancelCurrentWork, getStoredModelSpec, type ChatHistoryPage, PositionPageRequestSchema, type PositionPageRequest, type MctsSearchStore, isSteerBranchRunId, type ActiveSkillSet, type TurnReads, type PlanDecisionOutcome, type ReviewAnnotation, type PlanReviewDecision, type PlanReviewResult, type OwnerAnswer, type SubagentRuntime, type TemporaryAgentPort, subagentTitle, temporaryPortFor, bootstrapScaffold, applyWorkspaceTitle, suggestWorkspaceTitle, parseModelSpec, specModelInfo, assembleActorTurn, type ModelWindow, type AgentsMdSources, ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo, collectWorkspaceAgentsMd, InstructionApprovalStore, type InstructionTrustResolver, InstructionApprovalDesk, type AdmittedInstructionDecision, type InstructionSourceRow, type InstructionSourceView, JsonObjectSchema, changeRoleAsOwner, loadProfileAuthorityInputs, resolveTurnProfile, resolveRoutingProfile, ancestorPins, createAgentConfigStore, type PinnedProfile, captureOperationProfile, runOperationProfile, withOperationProfile, providerAccounts, type ProviderAccounts, scopedTurnSurface, toolsNamespace, runWorkModeInvocation, hostedSurfaceActor, resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, type ModelRouteResolution, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode, GITHUB_MCP_PRESET, recognizeGitHubMcp, type SerializableToolDescriptor, OwnerAnswersSchema, REPORT_TOOL, type ActiveRoster, type ProfileAuthorityInputs, type ProfileCatalogEnvelope, toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, providersWithoutOwnerSecrets, withholdingOwnerSecrets, currentWorkMode, requireWorkModePermission, type ResolvedTurnProfile, type ModelCallSpend, type ToolSurfaceNarrowing, type AgentInbox, childContextResolver, recoveryBackoffMs, TerminalTransitions, initTerminalEffectTable, turnRecordingEffects, type TerminalEffectFault, type CodemodeProvider, type SlateRoute, type SlateSurfaceValue, type UserCaller, ensureIdentityTable, initMissionBudgetTable, JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from "@kinu.run/core";
+import { ComputerProcessEnds, jobState, inspectSubagentStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair, type RunEventInput, type SubagentInspectionAuthority, type ConversationRecall, PLATFORM_LIMITS, ProgramsInFlight, cardWords, specProvider, WORKERS_AI_PROVIDER_ID, type GitHubDeps, type SendState, type SubagentActivityEvent, codemodeSurface, HeldReads, PAGE_KEEPALIVE, type SqlExec, recoverSubagentLifecycles, type ScaffoldRunOptions, initActorClaimTables, ActorClaimStore, initPendingSendTables, createScaffoldCandidateSurface, createScaffoldHistory, type ScaffoldCandidateBinding, type ScaffoldControl, type RefinementDeps, type TurnContinuity, buildBuiltinTools, buildMcpToolSet, McpToolSurfaceCache, type BrowserSessions, browserSessions, currentDateForPrompt, answerDrawsPages, type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability, ExtensionHost, type PromptFile, PromptFileSchema, type AgentOrchestrator, actorTerminalEffects, DynamicContextLedger, type BackendHost, EvolutionLanes, drainPendingEvents, standingFileLedger, type DynamicDelegate, builtinStores, type ComposedRequest, type AgentsSwarmDeps, type PromptModelContext, isWorkMode, type HeadJournal, LiveHeadJournal, type HeadStreamFrame, type HeadId, type HeadReport, type HeadRuntime, type HeadGrounding, MissionGovernor, type MissionSeam, type MissionBudgetRefusal, priceCall, type Usage, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, recordModelOperations, type ModelAttemptInfo, type ProviderWaitInfo, pricedModelCallEvent, type FactsStore, createAgentStores, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subagentDelegatesOf, type SubagentRosterEntry, type SqlExecutor, type JobResumer, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE, type BackgroundJobStore, type TaskListStore, resumeBackgroundJob, resumableBackgroundJob, computerProcessJob, computerProcessResume, stopComputerProcessJob, harvestBackgroundJob, isWorkspaceProcessJob, stopWorkspaceProcessJob, workspaceProcessJobRuns, cancelCurrentWork, getStoredModelSpec, type ChatHistoryPage, PositionPageRequestSchema, type PositionPageRequest, type MctsSearchStore, isSteerBranchRunId, type ActiveSkillSet, type TurnReads, type PlanDecisionOutcome, type ReviewAnnotation, type PlanReviewDecision, type PlanReviewResult, type OwnerAnswer, type SubagentRuntime, type TemporaryAgentPort, subagentTitle, temporaryPortFor, bootstrapScaffold, applyWorkspaceTitle, suggestWorkspaceTitle, parseModelSpec, specModelInfo, assembleActorTurn, ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo, type AdmittedInstructionDecision, type InstructionSourceRow, type InstructionSourceView, JsonObjectSchema, changeRoleAsOwner, captureOperationProfile, runOperationProfile, withOperationProfile, providerAccounts, type ProviderAccounts, scopedTurnSurface, toolsNamespace, runWorkModeInvocation, hostedSurfaceActor, resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode, GITHUB_MCP_PRESET, recognizeGitHubMcp, type SerializableToolDescriptor, OwnerAnswersSchema, REPORT_TOOL, type ActiveRoster, type ProfileCatalogEnvelope, toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, providersWithoutOwnerSecrets, withholdingOwnerSecrets, currentWorkMode, requireWorkModePermission, type ResolvedTurnProfile, type ModelCallSpend, type ToolSurfaceNarrowing, type AgentInbox, childContextResolver, recoveryBackoffMs, TerminalTransitions, initTerminalEffectTable, turnRecordingEffects, type TerminalEffectFault, type CodemodeProvider, type SlateRoute, type SlateSurfaceValue, type UserCaller, ensureIdentityTable, initMissionBudgetTable, JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from "@kinu.run/core";
 import { type SlateCallerHop, initSlateUsageTable, slateAiAnswer } from "@kinu.run/core/slates";
 import { getCurrentAgent } from "agents";
 import { MessageType } from "agents/chat";
@@ -303,7 +305,6 @@ import { initWorkspaceGenerationTable } from "@kinu.run/core/workspace";
 import { attributeWorkspace, installAnalyticsDiagnostics, recordModelRow, recordToolRow, recordTtftRow, recordTurnRow } from "@kinu.run/core/analytics";
 import { TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from "./wake-jobs";
 import { callUserMcpTool } from "./user-mcp-call";
-
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
 interface ModelDimensions {
@@ -336,8 +337,6 @@ type ActorJobSeams = Pick<BackgroundJobRunnerDeps,
  * object and closes every socket (warm-forge-4d6acc02, 2026-09-25).
  */
 const ALARM_PROGRAM_WAIT_MS = Math.floor(PLATFORM_LIMITS['do.alarm.wall_ms'].value * 9 / 10);
-
-
 
 /** Text-only: attachment parts are dropped here but still reach the model via
  * `host.defaultInference()` (see _transformInferenceResult). */
@@ -507,7 +506,6 @@ export interface OwnToolsHeld {
 /** The owner's limits an actor asks, by the event an ask that could not reach them is logged as. */
 const LIMITS_UNASKED = { turn: 'limits.turn_unasked', bytes: 'limits.bytes_unasked' } as const;
 
-
 /** How often a workspace tells its owner's limits its size, as its turns open (`reportSizeOnCadence`). */
 const SIZE_REPORT_MS = 10 * 60_000;
 
@@ -535,7 +533,6 @@ interface ProviderLog {
   readonly recorder: RunEventRecorder;
   runId(): string;
 }
-
 
 const READS_BY_STATEMENT = new WeakMap<TemplateStringsArray, readonly LiveRead[]>();
 
@@ -714,7 +711,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       throw cause;
     }
   }
-
 
   /** The alarm's work, a job it re-drives or a turn a wake admits, launches programs that end with the alarm. */
   private async heldAlarm(): Promise<void> {
@@ -1118,9 +1114,39 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       detach: (work) => { this.detachOwned(work); },
     },
     reportModelCall: (report) => { this.reportModelCall(report); },
-    webSearchChain: async () => webSearchChainOf((await this.profileCatalog()).catalog),
+    webSearchChain: async () => webSearchChainOf((await this.profiles.catalog()).catalog),
     currentTurn: (reference) => this.currentTurnOf(reference),
   });
+
+  /** What each of this object's concerns reads of it. */
+  protected readonly context: WorkspaceActorContext = {
+    actor: () => this.actorHandle(),
+    runtime: () => this.rt,
+    config: () => this.config,
+    host: () => this.actorHost(),
+    sql: () => this.boundSql,
+    models: this.ownedModelServices,
+    workspaceName: () => this.workspaceName(),
+  };
+
+  private _profiles: ActorProfiles | null = null;
+  protected get profiles(): ActorProfiles {
+    this._profiles ??= this.createProfiles();
+
+    return this._profiles;
+  }
+
+  /** The one seam a test harness replaces the profile module through. */
+  protected createProfiles(): ActorProfiles {
+    return new ActorProfiles({
+      context: this.context,
+      account: this.account,
+      events: () => this.eventRecorder,
+      turn: { mode: () => this.preparedWorkMode(), operation: () => this.mainTurn()?.operation ?? null },
+      catalog: this.modelCatalog,
+      bound: this.boundProfiles,
+    });
+  }
 
   // The bare prototype must read as sound.
   protected storageRefusal?: StoragePredatesReleaseError;
@@ -1320,7 +1346,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     // A turn a deploy cut short reads right by the next tick of the wake it armed.
     this.overviewChanged();
   }
-
 
   protected owedWorkExists(): boolean {
     return this.maintenanceUnfinished || this.owedUntimedWork() || this.nextOwedAt() !== null;
@@ -1696,7 +1721,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     return {
       control: this.scaffoldControl,
       facts: this.facts,
-      approvals: this.instructionApprovals(),
+      approvals: this.profiles.approvals(),
       skillsVfs: this.rt.storage.vfs,
       recordedTurns: () => this.recordedTurns(),
     };
@@ -1709,7 +1734,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       profile: async () => {
         const mode = await this.preparedWorkMode();
 
-        return this.routingProfile([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.ownNamespaces(mode))], mode);
+        return this.profiles.routing([...Object.keys(this.getRawToolsForWorkMode(mode)), ...codemodeCapabilitiesFor(this.ownNamespaces(mode))], mode);
       },
       bindModel: spec => this.ownedModelServices.resolveModel(spec),
       modelContext: spec => this.modelCatalog.contextFor(spec),
@@ -2321,88 +2346,27 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     return '';
   }
 
-  /** The operation the workspace agent's tools now run under: the call's, else its turn's. */
-  protected operationProfile(): OperationProfile | null {
-    return currentOperationProfile(this.actorHandle()) ?? this.mainTurn()?.operation ?? null;
-  }
-
-  /** The last profile a turn or a status read resolved. */
-  private _settledProfile: ResolvedTurnProfile | null = null;
-
-  /** The profile this actor runs on now: its operation's, else the one its next turn resolves. */
-  protected async currentProfile(): Promise<ResolvedTurnProfile> {
-    const live = this.operationProfile()?.profile;
-
-    if (live !== undefined) return live;
-    const { profile } = await this.actorProfile({ actor: this.actorHandle(), availableTools: [], workMode: 'build' });
-
-    this._settledProfile = profile;
-
-    return profile;
-  }
-
-  private runningProfile(): ResolvedTurnProfile | null {
-    return this.operationProfile()?.profile ?? this.boundProfiles.get(this.actorHandle().actorId) ?? this._settledProfile;
-  }
-  /** Instruction trust (KINU-N028): one store over actor SQL, scoped to this workspace so a forked
-   *  or copied root starts unapproved. */
-  private _instructionApprovals: InstructionApprovalStore | null = null;
-  protected instructionApprovals(): InstructionApprovalStore {
-    this._instructionApprovals ??= new InstructionApprovalStore(
-      this.rt.storage.sql,
-      this.actorHandle(),
-      `cf:${this.workspaceName()}`,
-    );
-
-    return this._instructionApprovals;
-  }
-
-  private _instructionTrust: InstructionTrustResolver | null = null;
-  protected instructionTrust(): InstructionTrustResolver {
-    const store = this.instructionApprovals();
-    this._instructionTrust ??= store.trustOf.bind(store);
-
-    return this._instructionTrust;
-  }
-
-  /** The workspace's instruction files, read through its sandbox where it has one. */
-  protected workspaceAgentsMd(window: ModelWindow, trust: InstructionTrustResolver): Promise<AgentsMdSources> {
-    return collectWorkspaceAgentsMd(this.rt.storage.vfs, window, trust, this.rt.executionRouter?.getProvider('computer'));
-  }
-
-  private _instructionDesk: InstructionApprovalDesk | null = null;
-  private instructionDesk(): InstructionApprovalDesk {
-    this._instructionDesk ??= new InstructionApprovalDesk({
-      agentsMd: (window, trust) => this.workspaceAgentsMd(window, trust),
-      skillsVfs: this.rt.storage.vfs,
-      approvals: this.instructionApprovals(),
-      window: () => this.modelCatalog.window(),
-    });
-
-    return this._instructionDesk;
-  }
-
   /** Derived on read, never stored, so the agent cannot fill the queue by writing files. */
   @callable()
   async listInstructionApprovals(request: PageRequest = {}): Promise<Page<InstructionSourceRow>> {
-    return this.instructionDesk().list(request);
+    return this.profiles.desk().list(request);
   }
 
   @callable()
   async readInstructionApproval(path: string): Promise<InstructionSourceView | null> {
-    return this.instructionDesk().read(path);
+    return this.profiles.desk().read(path);
   }
 
   /** Grants these bytes at this path system placement; the digest is re-checked against the file. */
   @callable()
   async approveInstruction(path: string, reviewedDigest: string): Promise<AdmittedInstructionDecision> {
-    return this.instructionDesk().approve(path, reviewedDigest);
+    return this.profiles.desk().approve(path, reviewedDigest);
   }
 
   /** The refusal is kept, so nothing can re-grant it without the owner deciding again. */
   @callable()
   async revokeInstruction(path: string): Promise<AdmittedInstructionDecision> {
-    return this.instructionDesk().revoke(path);
+    return this.profiles.desk().revoke(path);
   }
 
   private _turnT0 = 0;
@@ -2437,7 +2401,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
     return this._boundSql;
   }
-
 
   /** Persisted once per activation; tracing and swarm-progress frames share it so neither advances the other. */
   private _isolateGeneration: number | null = null;
@@ -2487,7 +2450,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         servingMoved: () => this.servingMoved(),
         boxUse: this.boxUse,
-        resolveProfile: () => this.routingProfile(),
+        resolveProfile: () => this.profiles.routing(),
         providers: (lane) => this.ownedModelServices.registryOver(lane),
         accounts: () => this.providerAccounts(),
         refusals: this.tierRefusals,
@@ -2770,7 +2733,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     admit?: () => void,
   ): Promise<SlateSurfaceValue> {
     // A tier the catalog does not name is refused by the resolver as bad input.
-    const { profile } = await this.actorProfile({
+    const { profile } = await this.profiles.resolve({
       actor: actor ?? this.actorHandle(), workMode: 'build', availableTools: [], explicitTier: route.tier,
     });
 
@@ -2842,14 +2805,14 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   protected async slateAuthority(
     requested: WorkMode, providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = [],
   ): Promise<SlateAuthority> {
-    const { profile, inputs } = await this.actorProfile({
+    const { profile, inputs } = await this.profiles.resolve({
       actor: this.actorHandle(),
       workMode: requested,
       // It answers no hirer, so it reports to none.
       availableTools: [...BUILTIN_TOOLS.filter((name) => name !== REPORT_TOOL), ...mcpToolKeys, ...codemodeCapabilitiesFor(providers)],
     });
 
-    const operation = this.operationProfile() ?? captureOperationProfile({ actor: this.actorHandle(), profile, inputs, runId: WORKSPACE_RUN_ID, turnId: null });
+    const operation = this.profiles.operation() ?? captureOperationProfile({ actor: this.actorHandle(), profile, inputs, runId: WORKSPACE_RUN_ID, turnId: null });
 
     return { mode: profile.workMode, reach: narrowToolSurface(operation.profile.allowedTools), operation };
   }
@@ -2861,7 +2824,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   private async hostedSlateAuthority(
     actor: SeatedActor, requested: WorkMode, providers: readonly CodemodeProvider[], native: readonly string[],
   ): Promise<SlateAuthority> {
-    const { profile } = await this.actorProfile({
+    const { profile } = await this.profiles.resolve({
       actor: actor.handle,
       availableTools: [...native, ...codemodeCapabilitiesFor(providers)],
       workMode: requested,
@@ -3062,19 +3025,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     hub: () => this.userHub(), owned: () => this.getOwnerUserId() !== null, workspace: () => this.name,
   });
 
-  /** `record` lets core emit the `profile_resolution` run event; this backend only picks where it goes. */
-  protected async profileInputs(): Promise<ProfileAuthorityInputs> {
-    return loadProfileAuthorityInputs({
-      envelope: () => this.profileCatalog(),
-      provider: () => this.ownedModelServices.profileProviderSnapshot(),
-      record: (event) => this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event),
-    });
-  }
-
-  protected profileCatalog(): Promise<ProfileCatalogEnvelope> {
-    return this.account.catalog();
-  }
-
   /** Null when unset (registry picks the default). */
   protected getStoredModelId(): string | null {
     return this.config.getModel();
@@ -3157,7 +3107,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   /** Takes effect on the next resolved turn: `beforeTurn` re-reads
    * `config.getRoleSelection()` (core profiles/role-change.ts:1-5). */
   @callable() async setRole(roleId: string): Promise<{ role: string }> {
-    const { envelope } = await this.profileInputs();
+    const { envelope } = await this.profiles.inputs();
     const changed = changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.activeRoleLabel() });
 
     // Main's isolate measures its next request on the new role, as every agent's does.
@@ -3256,7 +3206,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   /** Model for auxiliary calls and compaction. */
   getModel(): LanguageModel {
     this.actorHandle();
-    const spec = this.runningProfile()?.tier.model ?? this.getStoredModelId();
+    const spec = this.profiles.running()?.tier.model ?? this.getStoredModelId();
 
     return settleSync(spec === null
       ? Effect.fail(new KinuError('missing', 'this agent has resolved no profile yet and pins no model'))
@@ -3311,10 +3261,10 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   }
 
   protected async oneShotOn(source: 'fast' | 'logo'): Promise<(system: string, prompt: string) => Promise<string>> {
-    const route = resolveModelRoute(source, await this.routingProfile());
+    const route = resolveModelRoute(source, await this.profiles.routing());
 
     return (system, prompt) => completeOnRoute(route, {
-      llm: (resolution) => routedLlm((serving) => this.modelForResolution(serving), resolution, {
+      llm: (resolution) => routedLlm((serving) => this.profiles.forResolution(serving), resolution, {
         report: (report) => this.reportModelCall(report), operations: this.modelOperations,
       }, system),
       attemptOf: (spec) => this.ownedModelServices.attemptFor(spec),
@@ -3339,13 +3289,10 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     return this.refusalNotices;
   }
 
-
-
-
   /** The workspace agent's tools as a turn of its own reaches them now, under its operation's profile. */
   getTools(): ToolSet {
     const tools = this.ownTools(this.turnWorkMode(), null).turn;
-    const operation = this.operationProfile();
+    const operation = this.profiles.operation();
 
     return operation ? withOperationProfile(tools, operation) : tools;
   }
@@ -3426,7 +3373,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
   /** "Beta: swarms" as the account's catalog says it now, held for the workspace agent's tools. */
   protected async currentAccountSwarms(): Promise<boolean> {
-    this._accountSwarms = betaSwarms((await this.profileCatalog()).catalog);
+    this._accountSwarms = betaSwarms((await this.profiles.catalog()).catalog);
 
     return this._accountSwarms;
   }
@@ -3461,7 +3408,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       models: this.ownedModelServices,
       // The merge is a judge call: its model and effort come from the route table via this profile,
       // not from the actor's stored chat spec.
-      profile: () => this.routingProfile(),
+      profile: () => this.profiles.routing(),
       reportModelCall: (report) => this.reportModelCall(report),
       operations: this.modelOperations,
       grounding,
@@ -3525,7 +3472,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    *  Protected: a hosted actor's search prices its estimate against this resolution. */
   protected effectiveModelSpec(): string {
     return resolveEffectiveModelSpec({
-      live: () => this.runningProfile()?.tier.model,
+      live: () => this.profiles.running()?.tier.model,
       stored: () => this.getStoredModelId(),
       normalize: (spec) => (spec === null ? '' : this.providerRegistry().normalizeSpecSync(spec)),
     });
@@ -3665,7 +3612,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       },
     );
 
-    this._settledProfile = assembled.profile;
+    this.profiles.settledOn(assembled.profile);
 
     return { execution: assembled.execution, profile: assembled.profile, sessionKey: this.name };
   }
@@ -3808,7 +3755,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   }
 
   protected workModeForMetadata(metadata: JsonObject | undefined): WorkMode {
-    return this.operationProfile()?.profile.workMode ?? turnTags({ metadata }).mode;
+    return this.profiles.operation()?.profile.workMode ?? turnTags({ metadata }).mode;
   }
 
   protected async preparedWorkMode(): Promise<WorkMode> {
@@ -3835,70 +3782,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
     return parsed.success ? parsed.output : undefined;
   }
-
-  /**
-   * The live turn's profile, else one resolved now for durable work without a chat turn.
-   * MODEL_ROUTE_POLICY is read against this; resolving a model any other way bypasses routing.
-   */
-  protected async routingProfile(availableTools: readonly string[] = [], preparedMode?: WorkMode): Promise<ResolvedTurnProfile> {
-    return resolveRoutingProfile({
-      actor: this.actorHandle(),
-      resolve: async () => {
-        const inputs = await this.profileInputs();
-
-        return resolveTurnProfile({
-          ...inputs,
-          ...ownProfileChoices(this.config, inputs),
-          workMode: preparedMode ?? await this.preparedWorkMode(),
-          availableTools,
-          activeSkills: [],
-        });
-      },
-    });
-  }
-  /** Resolved now, as this root's or hosted actor's next turn would. */
-  protected async actorProfile(input: {
-    readonly actor: ActorHandle;
-    readonly availableTools: readonly string[];
-    readonly workMode: WorkMode;
-    /** An `ai.run` call's named tier overrides the actor's assignment for this call. */
-    readonly explicitTier?: string | undefined;
-  }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
-    const inputs = await this.profileInputs();
-
-    return {
-      profile: resolveTurnProfile({
-        ...inputs,
-        ...ownProfileChoices(input.actor.config, inputs, this.ancestorProfiles(input.actor), {
-          explicitTier: input.explicitTier,
-        }),
-        workMode: input.workMode,
-        availableTools: [...input.availableTools],
-        activeSkills: [],
-      }),
-      inputs,
-    };
-  }
-
-  /** Ancestors' own pins, nearest first, up to the root; none for an agent no one hired, whose own pins are the workspace's. */
-  protected ancestorProfiles(actor: ActorHandle): PinnedProfile[] | undefined {
-    if (actor.parentActorId === null) return undefined;
-
-    return ancestorPins(actor.parentActorId, { actorId: this.actorHandle().actorId, pins: this.config }, (id) => {
-      const parent = this.actorHost().describe(id);
-
-      return parent === null ? null : { parentActorId: parent.parentActorId, pins: createAgentConfigStore(this.boundSql, id, actor.assertCurrent) };
-    });
-  }
-
-  /** One model of a side route or of its chain, resolved the one way every side model is. */
-  protected modelForResolution(resolution: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>) {
-    return {
-      spec: resolution.model,
-      ...this.ownedModelServices.resolveModelWithEffort(resolution.model, resolution.reasoningEffort),
-    };
-  }
-
 
   /** A lane: work held alive whose own row outlives the activation running it, so the next one re-drives what it left
    *  (D11). Not a fiber: the platform's recovery hook runs under a timeout. */
@@ -3966,7 +3849,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   ): Promise<JsonValue | undefined> {
     await this.currentAccountSwarms();
     // Work outside a turn runs on the profile the actor resolves now.
-    await this.currentProfile();
+    await this.profiles.current();
 
     return await resumeBackgroundJob({
       rawTools: (resumeMode) => this.getRawToolsForWorkMode(resumeMode),
@@ -4531,7 +4414,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
   private snapshotSeq = 0;
 
-
   private _agentTurns: AgentTurns | null = null;
 
   protected get agentTurns(): AgentTurns {
@@ -4720,7 +4602,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         vfs: this.rt.storage.vfs,
         config: this.agentBound(actorId).stores.config,
         userText: text,
-        trust: this.instructionTrust(),
+        trust: this.profiles.trust(),
         limits: this.modelCatalog.window(),
         alreadyActive: new Set(alreadyActive),
       }),
@@ -4923,7 +4805,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     this.invalidateModelCaches();
     await this.terminal.ownerActed();
 
-
     for (const { actorId } of this.workspaceActors().list()) {
       if (!this.isAgent(actorId)) continue;
       this.detachOwned(logged('agent.settings_release_failed', { doing: "telling an agent's isolate the model settings changed", otherwise: 'unavailable' },
@@ -5005,7 +4886,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       contextTree: (actorId, editor) => this.agentStores(actorId).contextTree(editor),
       // Same profile authority an actor chat resolves through, so a role restriction narrows
       // a chat and a head identically; branches under an unresolved profile are unreproducible.
-      resolveProfile: (input) => this.actorProfile(input),
+      resolveProfile: (input) => this.profiles.resolve(input),
       reportModelCall: (report) => { this.reportModelCall(report); },
       refusals: (actor) => this.refusalNoticesFor(actor),
       liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -5070,7 +4951,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       vfs: () => this.rt.storage.vfs,
       // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
       // surface are framed from it.
-      profile: (input) => this.actorProfile({ ...input, actor: input.actor.handle }),
+      profile: (input) => this.profiles.resolve({ ...input, actor: input.actor.handle }),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
       priceAs: (spec) => this.priceHostedModel(spec),
       surface: async (actor, turn) => await this.actorSurface(actor, turn),
@@ -5187,7 +5068,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   /** The profile a turn runs under: a recovered execution's is the one it froze, so a role or model chosen since cannot
    *  answer it differently. The workspace agent's tools offer what its turn read of the account's catalog. */
   private async surfaceProfile(actor: CFSeat, turn: SurfaceTurn, opened: OpenedSurface): Promise<ActorSurface['resolved']> {
-    const resolved = turn.frozen ?? await this.actorProfile({ actor: actor.handle, availableTools: [], workMode: turn.lane.mode });
+    const resolved = turn.frozen ?? await this.profiles.resolve({ actor: actor.handle, availableTools: [], workMode: turn.lane.mode });
 
     opened.surface.resolved(resolved.profile, resolved.inputs);
 
@@ -5353,7 +5234,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   private asRoot<A>(build: (seat: CFSeat, reach: ActorReach, operation: () => OperationProfile | null) => A): A {
     const root = this.rootBound();
 
-    return build({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), () => this.operationProfile());
+    return build({ ...root, runtime: this.rt }, actorReach(actorPolicy(root.record)), () => this.profiles.operation());
   }
 
   protected ownStoreInputs(ledgers: TurnLedgers): BuiltinStoreInputs {
@@ -5415,7 +5296,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   /** The workspace agent's own tools in `mode` outside any turn of its: a scaffold's rollout, a slate's call, a retry. */
   protected ownTools(mode: WorkMode, scope: string | null, held?: OwnToolsHeld): ActorToolsets {
     const root = this.rootBound();
-    const operation = () => this.operationProfile();
+    const operation = () => this.profiles.operation();
 
     return this.actorTools({ ...root, runtime: this.rt }, surfaceReach(actorPolicy(root.record), { authorship: 'owner', mode, awaitsReply: false }, true), mode, {
       // A call outside any operation (a slate's) is no turn's effect.
@@ -5498,7 +5379,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       events: new EventLog(this.watchedExec, actor.handle),
     });
   }
-
 
   /**
    * The account reads a turn's opening makes, each in flight beside its settings revision read rather than after it:
@@ -5611,7 +5491,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   protected async actorSources(
     actor: CFSeat, reach: ActorReach, turn: SourcesTurn | null, planes = this.sourcePlanes(actor, reach, turn !== null),
   ): Promise<RunTurnSources> {
-    const trust = this.instructionTrust();
+    const trust = this.profiles.trust();
     const providers = this.providerRegistry();
     const driving = turn?.surface.item.metadata ?? {};
 
@@ -5621,8 +5501,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       await this.refreshSoulText();
     }
 
-    const inputs = turn?.resolved.inputs ?? await this.profileInputs();
-    const choices = ownProfileChoices(actor.stores.config, inputs, this.ancestorProfiles(actor.handle), { explicitTier: turnTags({ metadata: driving }).tier });
+    const inputs = turn?.resolved.inputs ?? await this.profiles.inputs();
+    const choices = ownProfileChoices(actor.stores.config, inputs, this.profiles.ancestors(actor.handle), { explicitTier: turnTags({ metadata: driving }).tier });
 
     // A failed catalog read answers no tools and the turn runs on its own. The hub's device check refreshes the
     // workspace's executors.
@@ -5660,11 +5540,11 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       skillReads: { ...(turn?.hidesSkills !== undefined && { hides: turn.hidesSkills }), ...(planes.sharedSkills !== null && { shared: planes.sharedSkills }) },
       profileInputs: async () => inputs,
       choices,
-      ancestors: () => this.ancestorProfiles(actor.handle) ?? [],
+      ancestors: () => this.profiles.ancestors(actor.handle) ?? [],
       agentsActions: () => agentsActionsFor({ swarm: {}, swarms: betaSwarms(inputs.envelope.catalog), team, ...(reach.kind === 'workspace' && { peers: {} }) }),
       temporaryAsk: () => team?.temporary !== undefined,
       soul: async () => (reach.kind === 'workspace' ? this.getSoulText() : await this.loadSoulText()),
-      agentsMd: (window) => this.workspaceAgentsMd(window, trust),
+      agentsMd: (window) => this.profiles.agentsMd(window, trust),
       workspaceIdentity: async () => identity,
       artifacts: { sql: this.boundSql, held: turn?.artifacts },
       affinity: this.ownedModelServices.affinityKey,
@@ -6282,7 +6162,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   // receivePeerMessage below is the receiver.
   private _peerHub: PeerHub | null = null;
 
-
   protected get peerHub(): PeerHub {
     this._peerHub ??= new PeerHub({
       sql: this.ctx.storage.sql,
@@ -6420,7 +6299,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
     return this.runActorDirectory({ actorId, workspaceId, parentActorId }, [], operation);
   }
-
 
   private async runActorDirectory(caller: ActorReference, path: readonly string[], operation: ChildActorOperation): Promise<ActorDirectoryResult> {
     this.requireOwner();
@@ -7859,7 +7737,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       return record === null ? actorId : workActorName(record);
     };
 
-
     const { ledger } = this.terminal;
     // Every agent's turns run in its own isolate: the ones executing are those this activation holds open.
     const agentTurns = new AgentOpenTurns(this.boundSql).all();
@@ -8225,9 +8102,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     for (const delivery of deliveries) this.detachOwned(delivery);
   }
 
-
-
-
   /**
    * Reconcile the fork journal a dead activation left running, then reclaim the exploration actors it settled.
    * Once per activation, so started only by `onStart`, last, and not awaited: the resume gate re-drives jobs, and a
@@ -8480,7 +8354,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       // Read at once, none waiting on another. Main's conversation and its measure are its own isolate's.
       const [profile, displayName, standing] = yield* Effect.all([
         // A workspace not yet holding its capability cannot read the catalog; it reports only its pins.
-        attempt({ doing: 'resolving the profile the next turn runs on', otherwise: 'unavailable' }, () => this.currentProfile()).pipe(
+        attempt({ doing: 'resolving the profile the next turn runs on', otherwise: 'unavailable' }, () => this.profiles.current()).pipe(
           Effect.catch((failure) => Effect.sync(() => {
             diagnostics.failure('actor.status_profile_unresolved', failure);
 
@@ -8660,7 +8534,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     entries: ChangelogEntry[]; unseenCount: number; seenAt: number;
   }> {
     return getEvolutionChangelog(this.boundSql, this.actorHandle(), {
-      limit: opts?.limit, changesOnly: opts?.changesOnly === true, approvals: this.instructionApprovals(),
+      limit: opts?.limit, changesOnly: opts?.changesOnly === true, approvals: this.profiles.approvals(),
     });
   }
 
@@ -9380,7 +9254,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       const actorId = child.handle.actorId;
 
       // The effective model: the actor's own pin, else the workspace's, else its tier's, with its source.
-      const { profile } = yield* Effect.promise(async () => this.actorProfile({
+      const { profile } = yield* Effect.promise(async () => this.profiles.resolve({
         actor: child.handle, availableTools: [], workMode: 'build',
       }));
 
@@ -9404,7 +9278,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   /** The workspace agent's chat, as {@link getActorSnapshot} reads a hosted one's: its profile the one its next turn runs. */
   private async mainSnapshot(): Promise<ActorSnapshot> {
     const [profile, activePlan, standing, displayName, mission] = await Promise.all([
-      this.currentProfile(), this.getActivePlanReview(), this.mainStanding({ fresh: true }), this.workspaceTitle(), this.ownMission(),
+      this.profiles.current(), this.getActivePlanReview(), this.mainStanding({ fresh: true }), this.workspaceTitle(), this.ownMission(),
     ]);
 
     return {
@@ -9858,7 +9732,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   async liveShareBundle(share: string, userId: string): Promise<SlateAnswer<BlueprintBundle>> {
     return (await this.slates()).controller.liveShareBundle(share, userId);
   }
-
 
   /** DO-only, like the blueprint twin, for the same reason. */
   async shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<OwnedLiveShare>> {
