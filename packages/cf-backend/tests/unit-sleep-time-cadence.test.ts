@@ -4,7 +4,7 @@
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import type { Connection } from 'agents';
-import { SLEEP_TIME_CADENCE } from '@kinu.run/core';
+import { SLEEP_TIME_CADENCE, type AccountProposal } from '@kinu.run/core';
 import {
   chatSessionTurns, orchestratorHarness,
   type ActorHarness, type HarnessOrchestratorAgent,
@@ -71,6 +71,28 @@ describe('the turn-count trigger', () => {
     for (const turn of ['ask-4', 'ask-5', 'ask-6']) expect(second).toContain(turn);
 
     for (const turn of ['ask-1', 'ask-2', 'ask-3']) expect(second).not.toContain(turn);
+  });
+});
+
+describe('what the pass proposes to the account', () => {
+  test('a proposal the idle wake filed is delivered by the next turn\'s pass', async () => {
+    const accountProposals: AccountProposal[] = [];
+    const proposing = { upserts: [], decay: [], account: [{ key: 'owner.editor', value: 'helix', rationale: 'said so' }] };
+    const harness = orchestratorHarness({ titles: [], accountProposals }, undefined, undefined, { sleepTimeModel: proposing });
+
+    // Two turns: each turn's pass finds nothing owed and nothing due.
+    await settle(harness, 1);
+    await settle(harness, 2);
+    expect(harness.sleepTimePrompts).toHaveLength(0);
+
+    // The idle wake runs the pass, which files the account's proposal.
+    setSystemTime(new Date(Date.now() + SLEEP_TIME_CADENCE.idleMs + 1_000));
+    await harness.agent._kinuTimerTick();
+    expect(harness.sleepTimePrompts).toHaveLength(1);
+
+    await settle(harness, 3);
+
+    expect(accountProposals.map((proposal) => proposal.kind === 'fact' ? proposal.key : proposal.kind)).toEqual(['owner.editor']);
   });
 });
 

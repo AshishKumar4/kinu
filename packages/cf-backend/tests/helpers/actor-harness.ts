@@ -15,7 +15,7 @@ import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, ScriptedCall, SettledTurn, TurnHarness } from './turn-harness';
 import type { ComputerSize, UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import type { GitHubAnswer, GitHubRead, GoogleAnswer, GoogleCall, ObjectNamespace, WorkspaceOverview } from '@kinu.run/core';
+import type { AccountProposal, GitHubAnswer, GitHubRead, GoogleAnswer, GoogleCall, ObjectNamespace, WorkspaceOverview } from '@kinu.run/core';
 import type { GalleryListingSync } from '@kinu.run/core/slates';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
 import { OwnedModelServices } from '../../src/owned-model-services';
@@ -1686,6 +1686,8 @@ export interface RecordedUserPlaneCalls {
   github?: { readonly reads: GitHubRead[]; readonly answer: (read: GitHubRead) => GitHubAnswer };
   /** The owner's Google connection, likewise, for each call the account makes to Google's APIs. */
   google?: { readonly calls: GoogleCall[]; readonly answer: (call: GoogleCall) => GoogleAnswer };
+  /** Set to hold the account's memory: its facts read empty, and each proposal a workspace makes lands here. */
+  accountProposals?: AccountProposal[];
 }
 
 /** A real user plane: `userDO` is bound at `env.UserDO`; `workspace` is the DO name
@@ -1818,6 +1820,17 @@ export function makeEnv(
             userPlane.mcp.calls.push({ tool: call.name, args: call.args });
 
             return JSON.stringify(userPlane.mcp.answer);
+          },
+          accountMemory_facts: async (_caller: UserCaller): Promise<never[]> => {
+            if (userPlane?.accountProposals === undefined) throw new Error('harness UserDO: no account memory is served');
+
+            return [];
+          },
+          accountMemory_propose: async (_caller: UserCaller, proposal: AccountProposal): Promise<string> => {
+            if (userPlane?.accountProposals === undefined) throw new Error('harness UserDO: no account memory is served');
+            userPlane.accountProposals.push(proposal);
+
+            return `proposal-${String(userPlane.accountProposals.length)}`;
           },
           githubRead: async (_caller: UserCaller, read: GitHubRead): Promise<GitHubAnswer> => {
             if (userPlane?.github === undefined) throw new Error('harness UserDO: no GitHub connection is served');
