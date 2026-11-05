@@ -409,21 +409,14 @@ export {
 // Cross-workspace experience transfer
 export {
   createExperienceLibrary,
-  findPublishable,
-  runExperienceAction,
   EXPERIENCE_KINDS,
-  type ExperienceActionDeps,
-  type ExperienceActionInput,
-  type ExperienceLibraryClient,
   initExperienceLibraryTables,
   initImportedExperienceTable,
   listImportedExperience,
-  listPublishable,
   type ExperienceEntry,
   type ExperienceKind,
   type ExperienceLibraryStore,
   type ExperienceSearchOptions,
-  type PublishSources,
   type PublishableCandidate,
 } from './experience/index';
 

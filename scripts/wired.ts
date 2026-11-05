@@ -609,7 +609,7 @@ function enclosingExport(node: SyntaxNode, module: Module): string | undefined {
 /**
  * Classes whose `extends` chain leaves this repository. A method on one of those
  * may be called by the framework that owns the base, and `OrchestratorAgent
- * extends ActorAgent extends AIChatAgent` means the chain has to be followed
+ * extends OrchestratorAgent extends AIChatAgent` means the chain has to be followed
  * rather than tested one link deep.
  */
 function foreignRooted(
@@ -1758,7 +1758,7 @@ export function measureFields(
     // was most of a 3.6 s run.
     const typed = new Map<string, Typed[]>();
     /** `const x = { … }` — the literal a name is bound to, so an argument
-     *  passed as a NAME is still a construction site. `actor-agent.ts` writes
+     *  passed as a NAME is still a construction site. `orchestrator.ts` writes
      *  its whole toolset deps as `const builtinDeps: Parameters<typeof
      *  buildActorTools>[0] = { … }` and passes the name: an annotation no
      *  parser here can resolve, and the literal that fills eleven fields of
@@ -1988,7 +1988,7 @@ export const BLIND_SPOTS: readonly string[] = [
   + 'as `registry.register(x)` and selected later by an id read off the wire is reached '
   + 'through a VALUE, not through a name, so reachability over identifiers says nothing about '
   + 'it. Confirmed live instance: `strategy/heads.ts` and `strategy/mcts.ts` both read as '
-  + 'reached here, because `fork-deps.ts` names their factories and `actor-agent.ts` calls '
+  + 'reached here, because `fork-deps.ts` names their factories and `orchestrator.ts` calls '
   + 'that; whether anything ever SELECTS either strategy is a fact about the registry, and '
   + 'this gate cannot see it. `gate:reachability` closes the one case where the string is the '
   + 'whole surface (`@callable`); every other registry here is open.',
@@ -2045,7 +2045,7 @@ export const BLIND_SPOTS: readonly string[] = [
   'AN INDEXED ACCESS DEEPER THAN ONE HOP, OR THROUGH A TYPE ALIAS — NOT DETECTED. `I[\'k\']` is '
   + 'resolved to whatever the INTERFACE `I` declares for `k`, direct members only; '
   + '`type X = { k: T }`, `I[\'a\'][\'b\']` and `Parameters<typeof f>[0]` are not. The last of those '
-  + 'is live in `actor-agent.ts` and is reached instead by following the bound NAME to its '
+  + 'is live in `orchestrator.ts` and is reached instead by following the bound NAME to its '
   + 'literal, which is why those eleven `BuiltinToolDeps` fields are not findings.',
   'A SPAWNED SCRIPT WHOSE PATH THIS TREE DOES NOT WRITE — NOT DETECTED, so it is not rooted. `spawned-script` roots the '
   + 'file a `fork`/`spawn`/`execFile` names, following one binding hop to the string literal; a '

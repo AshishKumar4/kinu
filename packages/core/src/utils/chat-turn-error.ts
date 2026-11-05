@@ -1,6 +1,6 @@
 /**
  * Chat-error decision per frame. A frame that ends a chat response in failure is the turn's, unless it carries the
- * runtime's refusal `reason` (`actor-agent.ts`, refusing a resume, a request or a connect): then the tab was refused,
+ * runtime's refusal `reason` (`orchestrator.ts`, refusing a resume, a request or a connect): then the tab was refused,
  * in the runtime's own words. Kinu's transport never re-serves an older turn's failure.
  */
 

@@ -294,8 +294,6 @@ export const DECLARED = byFile([
   // Wire shapes: each `ok`/`success` here is read by a caller that does not share this process (RPC, HTTP, a
   // model or the program it wrote, stdout) or mirrors one in a fixture; changing it changes that contract.
   ...([
-    ['packages/cf-backend/src/actor-agent.ts', ['installWorkspaceCapability', 'onModelSettingsChanged', 'cancelCurrentWork'],
-      'DO RPC answers (capability install, model-settings fan-out, cancel), read across the isolate'],
     ['packages/cf-backend/src/client-socket-gate.ts', ['admittedMessage', 'refusedUnavailable', 'refuseRevokedAuthority', 'authorityDenial'],
       'the Agents SDK\'s `{ success: false }` RPC denial a client gate sends over the socket'],
     ['packages/cf-backend/src/cli/routes.ts', ['body'],
@@ -350,7 +348,7 @@ export const DECLARED = byFile([
       'the dismissSubagent RPC answer as the hook passes it on'],
     ['packages/cf-backend/src/mcp-server.ts', ['McpAgentClient'],
       'the saveNoteFromMcp RPC answer the MCP save_note tool returns'],
-    ['packages/cf-backend/src/orchestrator.ts', ['resolveHostedActorRoute', 'announceDeviceUnavailable', 'announceDeviceAvailable', 'setTurnFeedback', 'restoreWorkspaceBaseline', 'recordHeadStep', 'destroyAgent', 'saveNoteFromMcp', 'liveShareBundle', 'renameSubagentAgent', 'dismissSubagent', 'prepareTerminal', 'setCurriculumTaskStatus', 'rawCopyFromFork'],
+    ['packages/cf-backend/src/orchestrator.ts', ['installWorkspaceCapability', 'onModelSettingsChanged', 'cancelCurrentWork', 'resolveHostedActorRoute', 'announceDeviceUnavailable', 'announceDeviceAvailable', 'setTurnFeedback', 'restoreWorkspaceBaseline', 'recordHeadStep', 'destroyAgent', 'saveNoteFromMcp', 'liveShareBundle', 'renameSubagentAgent', 'dismissSubagent', 'prepareTerminal', 'setCurriculumTaskStatus', 'rawCopyFromFork'],
       'workspace DO RPC answers (callable methods and DO-to-DO calls) read by the UI, the CLI and other objects'],
     ['packages/cf-backend/src/slates/host.ts', ['blueprintAnswer', 'readLiveShareRecord', 'unshare', 'operation', 'sharing', 'savePage', 'answerServed', 'releaseInvocation', 'hostCall', 'drawnPageCall', 'drawnPageAnswer', 'surfaceCall', 'run', 'call', 'remove'],
       '`SlateAnswer`, the slate host\'s refusal-as-value over DO RPC'],

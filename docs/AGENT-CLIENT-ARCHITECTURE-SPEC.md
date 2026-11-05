@@ -235,7 +235,7 @@ on this path. See [WORKSPACES.md](WORKSPACES.md).
 
 Canonical read: `getChatHistoryPage`
 (`packages/core/src/read-models/status.ts`), exposed as a callable on
-`ActorAgent` (`packages/cf-backend/src/actor-agent.ts`). Consumers:
+`OrchestratorAgent` (`packages/cf-backend/src/orchestrator.ts`). Consumers:
 
 - the web chat pane, through `useChatThread`
   (`packages/cf-backend/src/hooks/use-chat-thread.ts`, used twice in

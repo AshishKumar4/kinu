@@ -1757,6 +1757,10 @@
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "token TEXT NOT NULL"
   ],
+  "workspace_capability@packages/cf-backend/src/orchestrator.ts": [
+    "id INTEGER PRIMARY KEY CHECK (id = 1)",
+    "token TEXT NOT NULL"
+  ],
   "workspace_identity@packages/core/src/identity/schema.ts": [
     "singleton INTEGER NOT NULL DEFAULT 1 UNIQUE CHECK (singleton = 1)",
     "id TEXT NOT NULL",

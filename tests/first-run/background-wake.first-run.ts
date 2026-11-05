@@ -20,7 +20,7 @@ const DEFECT: FirstRunDefect = {
   provedRedAt: 'fddd4f9d6',
   redDirection: 'RED by reading on build fddd4f9d6: `_kinuTerminalRetryTick` cancelled its armed row '
     + 'whenever `nextOwedAt()` was null, and an open run row is untimed, so every mid-turn tick left '
-    + 'the registry empty (packages/cf-backend/src/actor-agent.ts:1929-1932 at that build). '
+    + 'the registry empty (packages/cf-backend/src/orchestrator.ts at that build). '
     + 'Unit red: unit-alarm-wake-chain "a tick that fires inside a parked turn keeps a wake row" '
     + 'found 0 rows before 14909875d. This row is the live proof; it needs the eval-only abort '
     + '(ARCHITECTURE-DECISIONS C3) to end an activation on the deployed build, so its first live '
