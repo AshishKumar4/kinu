@@ -33,8 +33,6 @@ export function isValidRoleId(value: string): value is RoleId {
  */
 export const TIER_IDS = ['fast', 'default', 'deep'] as const;
 
-export type BuiltinTierId = (typeof TIER_IDS)[number];
-
 export type TierId = string;
 
 const TIER_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;

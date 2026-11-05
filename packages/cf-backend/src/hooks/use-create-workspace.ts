@@ -6,6 +6,7 @@ import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useLimitRefusal } from "@/components/limits/LimitRefusal";
 import { Cause, Effect } from 'effect';
 import { renderThrownChain, settle } from '@kinu.run/core/obs';
+import { workspaceRoute } from "@kinu.run/core";
 
 export const MISSION_LABEL = "Mission";
 
@@ -29,7 +30,7 @@ export function useCreateWorkspace() {
     return settle(Effect.catchCause(Effect.gen(function* () {
       const created = yield* Effect.promise(() => roster.create(m));
       onBeforeNavigate?.();
-      yield* Effect.promise(async () => navigate(`/workspace/${created.name}`, attachments.length === 0 ? undefined : { state: { attachments } }));
+      yield* Effect.promise(async () => navigate(workspaceRoute(created.name), attachments.length === 0 ? undefined : { state: { attachments } }));
     }), (failed) => Effect.sync(() => {
       const failure = Cause.squash(failed);
 

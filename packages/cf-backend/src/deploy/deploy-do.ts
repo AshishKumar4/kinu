@@ -37,10 +37,10 @@
  * only through a sign-in that proved that user: the sign-in's own object,
  * named by its cookie's digest, holds the grant and the user for an hour.
  */
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import {
-  ACCESS_TOKEN_KEY, DEPLOY_CLIENT_ID_KEY, DEPLOY_SOCKET_PROTOCOL,
+  ACCESS_TOKEN_KEY, CONNECTOR_SECRETS, DEPLOY_CLIENT_ID_KEY, DEPLOY_SOCKET_PROTOCOL,
   DeployInputsSchema, DeployNeedSchema, DeployRunPhaseSchema, DeployRunPlanSchema, DeploymentRecordSchema,
   FACT_ADDRESS, HeldBytes, REFRESH_TOKEN_KEY, SELF_UPDATE_RUN_ID, SIGN_IN_AGAIN_NEED,
   bearerTransport, cloudflareResult, deployPlan, deployRunView, exchangeDeployCode, factsFrom, failureWords,
@@ -48,7 +48,7 @@ import {
   zoneHeld,
   type ArtifactMember, type ArtifactSource, type CloudflareUser, type DeployChoice, type DeployFrame, type DeployInputs, type DeployLedger, type DeployNeed,
   DeployRunFrameSchema, type DeployRunFrame, type DeployRunOutcome, type DeployRunPlan, type DeployRunView,
-  type DeploySecretVault, type DeploySnapshot,
+  type Connector, type DeploySecretVault, type DeploySnapshot, type GithubApp, type HeldConnectors, type KinuWorker, type OAuthClient,
   type DeployStepRow, type DeploymentRecord, type TarArtifact,
 } from '@kinu.run/core/deploy';
 import { durableStamps, randomToken, readStamp, repairSchema, SCHEMA_TABLES, sha256Hex, writeStamp } from '@kinu.run/core';
@@ -67,6 +67,14 @@ const ChoicesSchema: v.GenericSchema<readonly DeployChoice[]> = v.array(v.object
 }));
 
 const RUN_STATE_KEY = 'run.state';
+
+/** A connector's client a person made before its Kinu, held on their sign-in until the Kinu's first run binds it. */
+const HeldClientSchema = v.object({ clientId: v.string(), clientSecret: v.string(), slug: v.optional(v.string()), origin: v.string() });
+
+const connectorKey = (kinu: KinuWorker, connector: Connector): string => `${SECRET_PREFIX}connector.${kinu.account}.${kinu.name}.${connector}`;
+
+/** The address a GitHub App being made for a Kinu not yet deployed names, held until GitHub's return. */
+const makingKey = (kinu: KinuWorker): string => `connector-making.${kinu.account}.${kinu.name}`;
 
 const RUN_ID_KEY = 'run.id';
 
@@ -443,6 +451,59 @@ export class DeployRunDO extends DurableObject<Env> {
     return this.signIn.following();
   }
 
+  /**
+   * Holds, or with null lets go of, `kinu`'s client for `connector`, made before the Kinu is for the address `origin`
+   * (its callbacks name it); its first run binds it only if it answers there.
+   */
+  async holdConnector(kinu: KinuWorker, connector: Connector, client: OAuthClient | null, origin: string): Promise<void> {
+    if (client === null) await this.ctx.storage.delete(connectorKey(kinu, connector));
+    else await this.ctx.storage.put(connectorKey(kinu, connector), v.parse(HeldClientSchema, { ...client, origin }));
+  }
+
+  /** The address the GitHub App now being made for `kinu` names, until GitHub hands the app back. */
+  async makingGithubApp(kinu: KinuWorker, origin: string): Promise<void> {
+    await this.ctx.storage.put(makingKey(kinu), origin);
+  }
+
+  /** Holds the GitHub App made for `kinu` for the address it was made for; false when no app was being made here. */
+  async holdGithubApp(kinu: KinuWorker, app: GithubApp): Promise<boolean> {
+    const origin = await heldValue(this.ctx.storage, makingKey(kinu), v.string());
+
+    if (origin === null) return false;
+    await this.ctx.storage.put(connectorKey(kinu, 'github'), v.parse(HeldClientSchema, { ...app, origin }));
+    await this.ctx.storage.delete(makingKey(kinu));
+
+    return true;
+  }
+
+  /** What is held for `kinu` that names `origin`; a client made for another address is as good as none. */
+  async heldConnectors(kinu: KinuWorker, origin: string | null): Promise<HeldConnectors> {
+    const [github, google] = await Promise.all([this.heldFor(kinu, 'github', origin), this.heldFor(kinu, 'google', origin)]);
+
+    return { github: github === null ? null : github.slug ?? '', google: google !== null };
+  }
+
+  /** The Worker secrets the clients held for `kinu` at `origin` become (`CONNECTOR_SECRETS`). */
+  async connectorSecrets(kinu: KinuWorker, origin: string): Promise<Readonly<Record<string, string>>> {
+    const secrets: Record<string, string> = {};
+
+    for (const connector of ['github', 'google'] as const) {
+      const client = await this.heldFor(kinu, connector, origin);
+
+      if (client === null) continue;
+      secrets[CONNECTOR_SECRETS[connector].id] = client.clientId;
+      secrets[CONNECTOR_SECRETS[connector].secret] = client.clientSecret;
+    }
+
+    return secrets;
+  }
+
+  private async heldFor(kinu: KinuWorker, connector: Connector, origin: string | null) {
+    const client = await heldValue(this.ctx.storage, connectorKey(kinu, connector), HeldClientSchema);
+
+    return client !== null && client.origin === origin ? client : null;
+  }
+
   // ── A page run ────────────────────────────────────────────────────────────
 
   async busy(): Promise<boolean> {
@@ -451,9 +512,10 @@ export class DeployRunDO extends DurableObject<Env> {
 
   /**
    * A new run in this account, replacing whatever finished or stopped here before: the ledger, the vault (a change
-   * must never bind another Worker's minted keys) and the setup link start empty. Null while a plan is going.
+   * must never bind another Worker's minted keys) and the setup link start empty, the vault holding only `secrets`
+   * (connector clients made before the Kinu). Null while a plan is going.
    */
-  async begin(owner: string, plan: DeployRunPlan, grant: DeployGrant): Promise<string | null> {
+  async begin(owner: string, plan: DeployRunPlan, grant: DeployGrant, secrets: Readonly<Record<string, string>>): Promise<string | null> {
     if (await this.going()) return null;
     const parsed = v.parse(DeployRunPlanSchema, plan);
 
@@ -463,6 +525,8 @@ export class DeployRunDO extends DurableObject<Env> {
 
     this.sql.exec(`DELETE FROM deploy_step`);
     await this.ctx.storage.delete([...vault.keys(), PAUSE_KEY, SEAT_KEY, VERSION_KEY]);
+
+    for (const [name, value] of Object.entries(secrets)) await this.ctx.storage.put(`${SECRET_PREFIX}${name}`, value);
     await this.ctx.storage.put(RUN_ID_KEY, runId);
     await this.ctx.storage.put(OWNER_KEY, owner);
     await this.holdPlan(parsed);
@@ -1007,13 +1071,9 @@ export class DeployRunDO extends DurableObject<Env> {
     const body = JSON.stringify(frame);
 
     for (const socket of only === null ? this.ctx.getWebSockets() : [only]) {
-      try {
-        socket.send(body);
-      } catch (cause) {
-        diagnostics.event('deploy.frame_undelivered', {
-          run, frame: frame.type, error: renderThrownChain({ cause }),
-        });
-      }
+      const sent = Result.try(() => { socket.send(body); });
+
+      if (Result.isFailure(sent)) diagnostics.event('deploy.frame_undelivered', { run, frame: frame.type, error: renderThrownChain({ cause: sent.failure }) });
     }
   }
 

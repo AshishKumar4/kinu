@@ -59,7 +59,7 @@ export async function readVersionedScaffoldSource(source: VersionedScaffoldSourc
 
   if (!await exists(source.vfs, versioned)) return null;
 
-  return v.parse(v.string(), await readText(source.vfs, versioned));
+  return await readText(source.vfs, versioned);
 }
 
 /** The source of a runtime's own scaffold at `version`, from its own state, its `.vN` file the only copy; null without it. */

@@ -5,14 +5,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { WarningIcon, XIcon } from "@phosphor-icons/react";
-import { Effect } from "effect";
-import { shownBytes, type LimitReading, type LimitsReport } from "@kinu.run/core";
-import { detach } from "@kinu.run/core/obs";
+import { calendarDay, shownBytes, type LimitReading, type LimitsReport } from "@kinu.run/core";
+import { detachPromise } from "@kinu.run/core/obs";
 import { getLimits } from "@/lib/limits-api";
 import { Surface } from "@/components/ui/Surface";
 import { Button } from "@/components/ui/Button";
 import { settingsPath } from "@/components/SettingsRail";
 import { dayTurnsAt, shownReadings } from "./limit-words";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 /** How often the bar reads the limits again while the app stays open, beside every focus of the window. */
 const READ_EVERY_MS = 5 * 60_000;
@@ -25,13 +25,9 @@ function dismissalKey(reading: LimitReading): string {
 }
 
 function dismissed(): ReadonlySet<string> {
-  const stored = window.localStorage.getItem(DISMISSED);
+  const stored = readStored(DISMISSED);
 
   return new Set(stored === null ? [] : stored.split("\n"));
-}
-
-function day(at: number): string {
-  return new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 /** The bar's words for a limit near or at its end, as the board says them. */
@@ -42,7 +38,7 @@ function bannerText(reading: LimitReading): string {
         ? `You have all ${String(reading.limit)} free workspaces. They all keep working; remove one to start another.`
         : `You've used ${String(reading.used)} of your ${String(reading.limit)} free workspaces.`;
     case "computer_hours":
-      return `You've used ${String(Math.floor(reading.used / 3600))} of this month's ${String(reading.limit / 3600)} computer hours. It starts again ${day(reading.resetsAt ?? Date.now())}.`;
+      return `You've used ${String(Math.floor(reading.used / 3600))} of this month's ${String(reading.limit / 3600)} computer hours. It starts again ${calendarDay(reading.resetsAt ?? Date.now())}.`;
     case "stored_bytes":
       return `Your storage is ${shownBytes(reading.used)} of ${shownBytes(reading.limit)}.`;
     case "model_tokens":
@@ -64,12 +60,12 @@ export function LimitBanner() {
   const [report, setReport] = useState<LimitsReport | null>(null);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(dismissed);
 
-  const read = useCallback(() => detach(Effect.promise(async () => {
+  const read = useCallback(() => detachPromise(async () => {
     const [answer] = await Promise.allSettled([getLimits()]);
 
     // A read that failed shows nothing: the bar is a courtesy, and Settings › Usage says why it could not read.
     if (answer.status === "fulfilled") setReport(answer.value);
-  })), []);
+  }), []);
 
   useEffect(() => {
     read();
@@ -91,7 +87,7 @@ export function LimitBanner() {
   const dismiss = () => {
     const next = new Set(hidden).add(dismissalKey(reading));
 
-    window.localStorage.setItem(DISMISSED, [...next].join("\n"));
+    writeStored(DISMISSED, [...next].join("\n"));
     setHidden(next);
   };
 

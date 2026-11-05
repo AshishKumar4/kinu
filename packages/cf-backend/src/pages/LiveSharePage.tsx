@@ -6,17 +6,16 @@
  * slate's script cannot cover them (docs/SLATE-SHARING-NIMBUS.md §3). The host sits on a subdomain of the app's own
  * site, so the ticket's cookie reaches it inside the frame.
  */
-import { showing, detach } from "@kinu.run/core/obs";
 import { Button } from "@/components/ui/Button";
 import { slateFrameSrc, type LiveShareOpen } from "@kinu.run/core";
-import { Effect } from "effect";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { useSlateHostContext } from "@/components/slates/InlineSlate";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { usePartHost } from "@/hooks/use-part-host";
 import { openLiveShare } from "@/lib/shared-api";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 import { signInAndReturn } from "@/lib/sign-in";
 import { Notice } from "@/components/ui/Notice";
 import { Surface } from "@/components/ui/Surface";
@@ -53,25 +52,12 @@ function SignInToOpen() {
 
 export default function LiveSharePage() {
   const { workspace = "", share = "" } = useParams();
-  const [opened, setOpened] = useState<LiveShareOpen | null>(null);
-  const [signedOut, setSignedOut] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let live = true;
-
-    detach(Effect.catchCause(
-      Effect.map(Effect.promise(() => openLiveShare({ workspace, share })), (answer) => {
-        if (!live) return;
-
-        if (answer === null) setSignedOut(true);
-        else setOpened(answer);
-      }),
-      showing((chain) => { if (live) setErr(chain); }),
-    ));
-
-    return () => { live = false; };
-  }, [workspace, share]);
+  // Null once read: no one is signed in to open it.
+  const open = useCallback(() => openLiveShare({ workspace, share }), [workspace, share]);
+  const { resource } = useAsyncResource(open);
+  const opened = resource.status === "ready" ? resource.value : null;
+  const signedOut = resource.status === "ready" && resource.value === null;
+  const err = resource.status === "error" ? resource.message : null;
 
   return (
     <Surface look="page" className="flex h-dvh flex-col p-text">

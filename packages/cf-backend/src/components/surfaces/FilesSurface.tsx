@@ -15,8 +15,9 @@ import {
 import {
   DEFAULT_FILES_VIEW, formatBytes, joinDir, parentDir, shortAge, MOUNT_EXECUTORS,
   type DirEntry, type EnvironmentInfo, type FilesView,
+  countOf,
 } from "@kinu.run/core";
-import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, settle, detachPromise } from "@kinu.run/core/obs";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Empty } from "@/components/ui/Empty";
@@ -31,7 +32,6 @@ import {
   PLANE, entryRevision, nextTreeCache, putFileBytes, type CachedDir,
 } from "@kinu.run/core";
 import type { VfsRevision } from "@nimbus-sh/core/vfs/vfs.js";
-import { composing } from "@/components/ui/form";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { getFilesView, setFilesView } from "@/lib/user-api";
 import { Button } from "@/components/ui/Button";
@@ -39,7 +39,7 @@ import { FilePicker } from "@/components/ui/FilePicker";
 import { EntriesHead, EntryButton, TreeRow, entryProps, type EntryState } from "@/components/ui/Entries";
 import { InlineAction } from "@/components/ui/InlineAction";
 import { DropHint } from "@/components/ui/FilePicker";
-import { TextInput } from "@/components/ui/Field";
+import { TextInput, composing } from "@/components/ui/Field";
 
 /** An upload over a file already there: replaced only on the owner's word. */
 function ReplacePrompt({ name, onReplace, onKeep }: { name: string; onReplace: () => void; onKeep: () => void }) {
@@ -181,7 +181,7 @@ function useFilesView(): readonly [FilesView, (view: FilesView) => void] {
 
   const choose = useCallback((next: FilesView) => {
     setChosen(next);
-    detach(Effect.promise(() => setFilesView(next)));
+    detachPromise(() => setFilesView(next));
   }, []);
 
   return [chosen ?? lastValue(resource) ?? DEFAULT_FILES_VIEW, choose];
@@ -280,7 +280,7 @@ function MoreRow({ next, more }: { next: number | undefined; more: () => Promise
   if (next === undefined) return null;
 
   return (
-    <EntryButton data-files-more onClick={() => detach(Effect.promise(more))} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
+    <EntryButton data-files-more onClick={() => detachPromise(more)} className={`grid ${COLUMNS} ${ROW_HEIGHT}`}>
       <CaretDownIcon size={16} /><span className="t-body">Load more</span>
     </EntryButton>
   );
@@ -296,8 +296,8 @@ export interface FilesSurfaceProps {
 /** "3 folders, 2 files", naming only what the folder holds, and that more follow when they do. */
 function folderCount(folders: number, files: number, more: boolean): string {
   const said = [
-    ...(folders > 0 ? [`${String(folders)} ${folders === 1 ? "folder" : "folders"}`] : []),
-    ...(files > 0 || folders === 0 ? [`${String(files)} ${files === 1 ? "file" : "files"}`] : []),
+    ...(folders > 0 ? [countOf(folders, "folder")] : []),
+    ...(files > 0 || folders === 0 ? [countOf(files, "file")] : []),
     ...(more ? ["more below"] : []),
   ];
 
@@ -401,7 +401,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const uploadDropped = useCallback((files: FileList) => {
     const dropped = [...files];
 
-    detach(Effect.promise(() => run(Effect.promise(() => uploadFiles(dropped)))));
+    detachPromise(() => run(Effect.promise(() => uploadFiles(dropped))));
   }, [run, uploadFiles]);
 
   const { dragOver, handlers: listDrop } = useFileDrop(uploadDropped);
@@ -502,23 +502,23 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               </span>
             ))}
           </div>
-          <FilePicker ref={uploadInputRef} multiple onChange={(e) => detach(Effect.promise(async () => {
+          <FilePicker ref={uploadInputRef} multiple onChange={(e) => detachPromise(async () => {
               const picked = [...(e.currentTarget.files ?? [])];
               e.currentTarget.value = "";
 
               return run(Effect.promise(() => uploadFiles(picked)));
-            }))} />
+            })} />
           <div className="ml-auto flex items-center gap-px shrink-0">
             <Button variant="ghost" size="sm" icon={<ArrowUpIcon size={14} />} onClick={() => setPath(parentDir(path))} disabled={atRoot} title="Parent directory" aria-label="Parent directory" />
             <Button variant="ghost" size="sm" icon={<HouseIcon size={14} />} onClick={() => setPath("/")} disabled={atRoot} title="Workspace root" aria-label="Workspace root" />
             <Button variant="ghost" size="sm" icon={<UploadSimpleIcon size={14} />} onClick={() => uploadInputRef.current?.click()} title={`Upload files to ${path}`}>Upload</Button>
             <ViewMenu view={view} onChange={chooseView} />
             {/* Drops every cached listing: a plane without mtime gives `nextTreeCache` nothing to compare. */}
-            <Button variant="ghost" size="sm" icon={<ArrowsClockwiseIcon size={14} />} onClick={() => detach(Effect.promise(() => run(Effect.sync(() => {
+            <Button variant="ghost" size="sm" icon={<ArrowsClockwiseIcon size={14} />} onClick={() => detachPromise(() => run(Effect.sync(() => {
               setTreeCache(new Map());
               reloadListing();
               reloadMounts();
-            }))))} title="Refresh" aria-label="Refresh" />
+            })))} title="Refresh" aria-label="Refresh" />
           </div>
         </div>
 
@@ -564,7 +564,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
                   {u.status === "uploading" && <><Loader size="sm" /><span className="p-text-2 truncate">{name}</span><span className="t-meta ml-auto p-text-3 shrink-0">uploading…</span></>}
                   {u.status === "error" && <><WarningIcon size={16} className="p-danger shrink-0" /><span className="p-text-2 truncate">{name}</span><span className="t-meta p-danger truncate">{u.error}</span></>}
                   {u.status === "exists" && (
-                    <ReplacePrompt name={name} onReplace={() => detach(Effect.promise(() => replaceUpload(u)))} onKeep={() => keepExisting(u.target)} />
+                    <ReplacePrompt name={name} onReplace={() => detachPromise(() => replaceUpload(u))} onKeep={() => keepExisting(u.target)} />
                   )}
                 </div>
               );
@@ -624,6 +624,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
           {preview && (
             <FileViewer
+              key={preview}
               path={preview} read={readPlaneFile}
               revision={previewRevision}
               rawHref={rawUrl(preview, false)}
@@ -663,7 +664,7 @@ function TreeNode({ dir, label, hidden = false, depth, path, previewPath, expand
   return (
     <div>
       <TreeRow depth={depth} open={active} hidden={hidden} data-files-tree-node={dir} onOpen={() => onNavigate(dir)}
-        fold={{ open: isOpen, label: isOpen ? `Collapse ${label}` : `Expand ${label}` }} onFold={() => detach(Effect.promise(() => onToggle(dir)))}>
+        fold={{ open: isOpen, label: isOpen ? `Collapse ${label}` : `Expand ${label}` }} onFold={() => detachPromise(() => onToggle(dir))}>
         {isOpen ? <FolderOpenIcon data-entry-face size={14} className="p-info shrink-0" weight="fill" />
           : <FolderIcon data-entry-face size={14} className="p-info shrink-0" weight="fill" />}
         <span data-entry-face className="truncate">{label}</span>
@@ -798,7 +799,7 @@ function RenameField({ draft, onRenameDraft, onRenameCommit, onRenameCancel, cla
       value={draft}
       onClick={(e) => e.stopPropagation()}
       onChange={(e) => onRenameDraft(e.currentTarget.value)}
-      onKeyDown={(e) => detach(Effect.promise(async () => {
+      onKeyDown={(e) => detachPromise(async () => {
         e.stopPropagation();
 
         if (composing(e.nativeEvent)) return;
@@ -806,7 +807,7 @@ function RenameField({ draft, onRenameDraft, onRenameCommit, onRenameCancel, cla
         if (e.key === "Enter") return onRenameCommit(e.currentTarget.value);
 
         if (e.key === "Escape") onRenameCancel();
-      }))}
+      })}
       onBlur={onRenameCancel}
       className={`min-w-0 ${className}`}
     />
@@ -821,7 +822,7 @@ function DeleteChoice({ name, onDelete, onCancelDelete, className }: {
 }) {
   return (
     <span className={`t-meta flex items-center gap-3 ${className}`} onClick={(e) => e.stopPropagation()}>
-      <Button variant="danger" size="sm" data-files-delete-confirm onClick={() => detach(Effect.promise(onDelete))} aria-label={`Delete ${name}`}>Delete</Button>
+      <Button variant="danger" size="sm" data-files-delete-confirm onClick={() => detachPromise(onDelete)} aria-label={`Delete ${name}`}>Delete</Button>
       <Button variant="ghost" size="sm" onClick={onCancelDelete} aria-label="Keep it">Keep</Button>
     </span>
   );

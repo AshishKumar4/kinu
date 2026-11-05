@@ -2,7 +2,7 @@
 import { useState, useCallback, useEffect, useRef, useMemo, type RefObject } from "react";
 import { flushSync } from "react-dom";
 import { useAgent } from "agents/react";
-import { Effect } from "effect";
+import { Cause, Effect } from "effect";
 import {
   ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE, hostedActorSocketPath, type ActorSnapshot, type InlineSteer, type PlanReview,
   type ReasoningEffort,
@@ -14,7 +14,7 @@ import type { SendLanding, SendState } from "@kinu.run/core";
 import { workspaceRpc } from "@/lib/workspace-rpc";
 import type { OrchestratorAgent } from "@/orchestrator";
 import { sendLanding } from "@kinu.run/core";
-import { attemptInItsWords, detach, diagnostics, renderThrownChain, settle, toKinuError } from "@kinu.run/core/obs";
+import { attempt, attemptInItsWords, chainOf, detach, detachPromise, diagnostics, KinuError, settle } from "@kinu.run/core/obs";
 import {
   createSessionRecovery, fetchDeployedBuildSha, isNewerDeployedBuild, pageDeployedBuildSha, reportChatStreamFailure,
   routeTemplateOf, type SessionRecovery,
@@ -47,11 +47,6 @@ export interface KinuActorAddress {
   subagent?: string;
 }
 
-const KinuActorAddressSchema = v.object({
-  workspace: v.string(),
-  subagent: v.optional(v.string()),
-});
-
 /** Where the message landed, once its request has ended; it rejects `cancelled` when no turn took it, as when a Stop
  *  handed it back. Null: the press was not taken. */
 export type SendAdmission = Promise<SendLanding> | null;
@@ -80,7 +75,7 @@ export function useWorkspaceRpc(agentId: string) {
 }
 
 export interface WorkspaceExtension {
-  readonly snapshot: (snap: WorkspaceOpening, isSourceCurrent: (source: LiveRefreshSource) => boolean) => Promise<void>;
+  readonly snapshot: (snap: WorkspaceOpening, isSourceCurrent: (source: LiveRefreshSource) => boolean) => Effect.Effect<void>;
   readonly frame: (msg: SocketFrame) => Promise<void>;
   readonly refresh: () => void;
   readonly jobs: () => Promise<void>;
@@ -115,22 +110,10 @@ export interface ProviderWaitShown {
   readonly retries?: number;
 }
 
-export function useChatOwner(target: string | KinuActorAddress | undefined, extension: RefObject<WorkspaceExtension | null> | null) {
-  const targetString = v.safeParse(v.string(), target);
-  const targetAddress = v.safeParse(KinuActorAddressSchema, target);
+export function useChatOwner(target: KinuActorAddress, extension: RefObject<WorkspaceExtension | null> | null) {
+  const { workspace, subagent } = target;
 
-  const addressed = targetAddress.success ? targetAddress.output.workspace : undefined;
-  const workspace = targetString.success ? targetString.output : addressed;
-
-  const subagent = targetAddress.success ? targetAddress.output.subagent : undefined;
-
-  const actorAddress = useMemo<KinuActorAddress>(() => {
-    const address: KinuActorAddress = { workspace: workspace === undefined || workspace === "" ? "default" : workspace };
-
-    if (subagent) address.subagent = subagent;
-
-    return address;
-  }, [workspace, subagent]);
+  const actorAddress = useMemo<KinuActorAddress>(() => (subagent ? { workspace, subagent } : { workspace }), [workspace, subagent]);
 
   const actorKey = useMemo(
     () => JSON.stringify([actorAddress.workspace, subagent ?? null]),
@@ -376,16 +359,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     const failed = standingStreamError;
 
     // Reported once per failure; a report that cannot be sent is a diagnostic, never the page's failure.
-    detach(Effect.promise(async () => {
-      try {
-        await reportChatStreamFailure(failed, subagent === undefined ? "root" : "actor", {
-          release: pageDeployedBuildSha(),
-          route: routeTemplateOf(location.pathname),
-        });
-      } catch (cause) {
-        diagnostics.event("client_error.reporter_failed", { reason: renderThrownChain({ cause }) });
-      }
-    }));
+    detach(Effect.catchCause(Effect.promise(() => reportChatStreamFailure(failed, subagent === undefined ? "root" : "actor", {
+      release: pageDeployedBuildSha(),
+      route: routeTemplateOf(location.pathname),
+    })), (unsent) => Effect.sync(() => { diagnostics.event("client_error.reporter_failed", { reason: chainOf(unsent) }); })));
   }, [standingStreamError, subagent]);
 
   // Version skew: /api/health's build sha against the page's own (`pageDeployedBuildSha`), on each reconnect.
@@ -417,23 +394,16 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   useEffect(() => {
     if (!agent) return;
 
-    const onOpen = async () => {
+    const opened = () => {
       const isFirst = recoveryFirstOpen.current;
       recoveryFirstOpen.current = false;
       sessionRecovery.socketOpened(isFirst);
 
-      if (!isFirst) {
-        try {
-          await refreshDeployedBuild();
-        } catch (cause) {
-          diagnostics.failure('session.build_check_failed', toKinuError({
-            doing: 'check the deployed build after reconnect', cause, otherwise: 'io',
-          }));
-        }
-      }
+      if (isFirst) return;
+      detach(Effect.catch(attempt({ doing: 'check the deployed build after reconnect', otherwise: 'io' }, refreshDeployedBuild), (failed) => Effect.sync(() => {
+        diagnostics.failure('session.build_check_failed', failed);
+      })));
     };
-
-    const opened = () => detach(Effect.promise(onOpen));
 
     agent.addEventListener("open", opened);
 
@@ -441,18 +411,11 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
   }, [agent, refreshDeployedBuild, sessionRecovery]);
 
   // A reconnect or manual retry changes the transport identity so mounted readers reload too.
-  const rpc = useMemo(() => workspaceRpc(async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    try {
-      const value = await agent.call<T>(method, args);
-
-      sessionRecovery.rpcSucceeded();
-
-      return value;
-    } catch (cause) {
-      sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN);
-      throw cause;
-    }
-  }), [agent, sessionRecovery, loadGeneration]);
+  // A call's failure is the caller's as it came; the recovery only counts it.
+  const rpc = useMemo(() => workspaceRpc(<T,>(method: string, args?: unknown[]): Promise<T> => settle(Effect.tapDefect(
+    Effect.tap(Effect.promise(() => agent.call<T>(method, args)), () => Effect.sync(() => { sessionRecovery.rpcSucceeded(); })),
+    (cause) => Effect.sync(() => { sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN); }),
+  ))), [agent, sessionRecovery, loadGeneration]);
 
   // Answered by the socket's auto-response, never the object: an idle page wakes nothing (2026-09-26, 180 RPCs a
   // minute to none). A silently dead socket shows in the next calls' timeouts, the workspace's and an agent's alike.
@@ -473,37 +436,31 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     let timer: ReturnType<typeof setTimeout> | undefined;
     let disposed = false;
 
-    detach(Effect.promise(() => Promise.resolve().then(async () => {
-      try {
-        if (disposed) return;
+    detach(Effect.catch(Effect.gen(function* () {
+      yield* Effect.promise(() => Promise.resolve());
 
-        const outcome = await loadWorkspaceSnapshot(
-          loadChat,
-          setSourceError,
-          (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
-          // A hosted chat's load seeds only its plan; the workspace's seeds every read its opening carries.
-          isSubagent ? ["plan"] : SNAPSHOT_SEEDED_SOURCES,
-        );
+      if (disposed) return;
 
-        if (disposed || outcome === "superseded") return;
+      const outcome = yield* loadWorkspaceSnapshot(
+        loadChat,
+        setSourceError,
+        (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
+        // A hosted chat's load seeds only its plan; the workspace's seeds every read its opening carries.
+        isSubagent ? ["plan"] : SNAPSHOT_SEEDED_SOURCES,
+      );
 
-        if (outcome === "loaded") {
-          failureStreak.current = 0;
+      if (disposed || outcome === "superseded") return;
 
-          return;
-        }
+      if (outcome === "loaded") {
+        failureStreak.current = 0;
 
-        const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
-        failureStreak.current += 1;
-        timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
-      } catch (cause) {
-        diagnostics.failure('workspace.initial_snapshot_task_failed', toKinuError({
-          doing: 'refreshing live workspace data',
-          cause,
-          otherwise: 'io',
-        }));
+        return;
       }
-    })));
+
+      const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
+      failureStreak.current += 1;
+      timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
+    }), (failed) => Effect.sync(() => { diagnostics.failure('workspace.initial_snapshot_task_failed', failed); })));
 
     return () => {
       disposed = true;
@@ -513,7 +470,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
   /** Aborts the SDK request and the server turn in parallel. Unread messages come back on their
    *  `returned` broadcasts. Releases the send latch on settle, success or failure. */
-  const abortChat = useCallback(async (): Promise<void> => {
+  const abortChat = useCallback((): Promise<void> => {
     // Snapshot before the awaits: a Send admitted meanwhile owns the latch and must keep it.
     const aborting = sendLatch.current.owner;
     const landing = [...unlanded.current.values()];
@@ -521,30 +478,19 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
     // Drawn with the Stop itself, never after it: Stop is pressed inside a transition, and the SDK's status is not.
     if (landing.length > 0) flushSync(() => { setStopsLanding((stops) => stops + 1); });
 
-    try {
-      await Promise.all([
-        stop(),
-        rpc("cancelCurrentWork", []),
-      ]);
-    } finally {
+    // The latch is released and the jobs read whether or not the abort was answered; its failure is the caller's.
+    return settle(Effect.ensuring(Effect.asVoid(Effect.promise(() => Promise.all([stop(), rpc("cancelCurrentWork", [])]))), Effect.gen(function* () {
       abandonTurnIfOwner(sendLatch.current, aborting);
-
-      try {
-        await extension?.current?.jobs();
-      } catch (cause) {
-        diagnostics.failure('workspace.abort_refresh_failed', toKinuError({
-          doing: 'refreshing live workspace data',
-          cause,
-          otherwise: 'io',
-        }));
-      }
+      yield* Effect.catch(attempt({ doing: 'refreshing live workspace data', otherwise: 'io' }, async () => extension?.current?.jobs()), (failed) => Effect.sync(() => {
+        diagnostics.failure('workspace.abort_refresh_failed', failed);
+      }));
 
       // Released in the render the caller's restore of handed-back words lands in: both follow the same landings.
       if (landing.length > 0) {
-        await Promise.all(landing);
+        yield* Effect.promise(() => Promise.all(landing));
         setStopsLanding((stops) => stops - 1);
       }
-    }
+    })));
   }, [stop, rpc, extension]);
 
   const adoptPlan = (plan: PlanReview): void => {
@@ -602,24 +548,18 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
    *  recovery still shows as stuck. Resolves the failure reason (also the workspace notice) or null. */
   const recoverTurn = useCallback(async (): Promise<string | null> => {
     setSourceError("recover", null);
-    let thrown: { cause: unknown } | null = null;
 
-    try {
-      await rpc("recoverStrandedTurn", []);
-    } catch (cause) {
-      thrown = { cause };
-    }
+    return settle(Effect.catchCause(Effect.map(Effect.promise(() => rpc("recoverStrandedTurn", [])), () => {
+      extension?.current?.refresh();
 
-    if (thrown !== null) {
-      const reason = `Recovery failed: ${readFailureText(thrown)}`;
+      return null;
+    }), (failed) => Effect.sync(() => {
+      const reason = `Recovery failed: ${readFailureText({ cause: Cause.squash(failed) })}`;
+
       setSourceError("recover", reason);
 
       return reason;
-    }
-
-    extension?.current?.refresh();
-
-    return null;
+    })));
   }, [extension, rpc, setSourceError]);
 
   /**
@@ -628,40 +568,42 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
    * the lists the first screen draws came back a wave later. The exploration canvas is not seeded here; its surface
    * fetches its own.
    */
-  async function loadChat(
+  function loadChat(
     isCurrent: () => boolean,
     isSourceCurrent: (source: LiveRefreshSource) => boolean,
-  ): Promise<void> {
-    const opening = isSubagent ? null : await rpc("getWorkspaceOpening", []);
-    // The root resolves the name through its directory, so a tab cannot ask about a non-child actor.
-    const chat = opening?.chat ?? await rpc("getActorSnapshot", [subagent]);
+  ): Effect.Effect<void, KinuError> {
+    return Effect.gen(function* () {
+      const opening = isSubagent ? null : yield* Effect.promise(() => rpc("getWorkspaceOpening", []));
+      // The root resolves the name through its directory, so a tab cannot ask about a non-child actor.
+      const chat = opening?.chat ?? (yield* Effect.promise(() => rpc("getActorSnapshot", [subagent])));
 
-    if (!isCurrent()) return;
-    // Decoded before anything is published: a chat whose plan does not decode fails whole, never half-loaded nor read
-    // as "no plan".
-    const loadedPlan = parseActivePlanReview({ value: chat.activePlan });
+      if (!isCurrent()) return;
+      // Decoded before anything is published: a chat whose plan does not decode fails whole, never half-loaded nor read
+      // as "no plan".
+      const loadedPlan = yield* parseActivePlanReview({ value: chat.activePlan });
 
-    // Set before anything is admitted: stamped frames are a hosted chat's only while the id matches, and a page request
-    // without it reads the workspace's rows.
-    if (isSubagent) {
-      ownActorIdRef.current = chat.actorId;
-      setPaneActorId(chat.actorId);
-    }
+      // Set before anything is admitted: stamped frames are a hosted chat's only while the id matches, and a page request
+      // without it reads the workspace's rows.
+      if (isSubagent) {
+        ownActorIdRef.current = chat.actorId;
+        setPaneActorId(chat.actorId);
+      }
 
-    setActorSnapshot(chat);
+      setActorSnapshot(chat);
 
-    if (isSourceCurrent("plan")) {
-      if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
-      setActivePlan(loadedPlan);
-    }
+      if (isSourceCurrent("plan")) {
+        if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
+        setActivePlan(loadedPlan);
+      }
 
-    // Replace, never merge: durable rows are the authority, so a reconnecting tab learns missed
-    // transitions and drops settled chips. A racing broadcast upserts by id afterwards.
-    setSteerRuns([...chat.pendingSteers]);
+      // Replace, never merge: durable rows are the authority, so a reconnecting tab learns missed
+      // transitions and drops settled chips. A racing broadcast upserts by id afterwards.
+      setSteerRuns([...chat.pendingSteers]);
 
-    if (opening === null) return;
-    setTurnClaim(opening.turnClaim);
-    await extension?.current?.snapshot(opening, isSourceCurrent);
+      if (opening === null) return;
+      setTurnClaim(opening.turnClaim);
+      yield* extension?.current?.snapshot(opening, isSourceCurrent) ?? Effect.void;
+    });
   }
 
   useEffect(() => {
@@ -753,7 +695,7 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
     if (run === null) return false;
     // Its stream tells how the turn ended; a run that fails outside it is reported, never dropped.
-    detach(Effect.promise(() => run));
+    detachPromise(() => run);
 
     return true;
   }, [startTurn, messages.length, regenerate]);
@@ -768,49 +710,53 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 
     showing(modelId);
 
-    try {
-      // The server may have normalized the spec.
-      const { spec } = await rpc("setModel", [modelId, ...actorArgs]);
+    const call = <A,>(work: () => Promise<A>) => Effect.tryPromise({ try: work, catch: (cause) => ({ cause }) });
 
+    return settle(Effect.catch(Effect.map(call(() => rpc("setModel", [modelId, ...actorArgs])), ({ spec }) => {
+      // The server may have normalized the spec.
       if (spec) showing(spec);
       setSourceError("model", null);
 
       return null;
-    } catch (err) {
+    }), (refused) => Effect.gen(function* () {
       // Roll back to the model the chat runs, so the picker never shows an unsaved one.
-      let reason = `Could not switch model: ${readFailureText({ cause: err })}`;
+      const reason = `Could not switch model: ${readFailureText(refused)}`;
 
-      try {
-        showing((await rpc("getActorSnapshot", actorArgs)).model.model);
-      } catch (rollbackErr) {
-        reason += `. Could not re-read the saved model either (${readFailureText({ cause: rollbackErr })}), so the picker may not show the saved model`;
-      }
+      const reread = yield* Effect.match(call(() => rpc("getActorSnapshot", actorArgs)), {
+        onSuccess: (snapshot) => {
+          showing(snapshot.model.model);
 
-      setSourceError("model", reason);
+          return "";
+        },
+        onFailure: (unread) => `. Could not re-read the saved model either (${readFailureText(unread)}), so the picker may not show the saved model`,
+      });
 
-      return reason;
-    }
+      setSourceError("model", reason + reread);
+
+      return reason + reread;
+    })));
   }, [rpc, setSourceError, actorArgs]);
 
   /** Null clears to the tier's. Optimistic, rolled back on refusal. */
-  const setReasoningEffort = useCallback(async (effort: ReasoningEffort | null): Promise<void> => {
+  const setReasoningEffort = useCallback((effort: ReasoningEffort | null): Promise<void> => {
     const before = actorSnapshot?.reasoningEffort ?? null;
 
     setActorSnapshot((prev) => prev ? { ...prev, reasoningEffort: effort } : prev);
 
-    try {
-      await rpc("setReasoningEffort", [effort, ...actorArgs]);
-      setSourceError("model", null);
-    } catch (err) {
-      setActorSnapshot((prev) => prev ? { ...prev, reasoningEffort: before } : prev);
-      setSourceError("model", `Could not set the thinking level: ${readFailureText({ cause: err })}`);
-    }
+    return settle(Effect.match(Effect.tryPromise({ try: () => rpc("setReasoningEffort", [effort, ...actorArgs]), catch: (cause) => ({ cause }) }), {
+      onSuccess: () => { setSourceError("model", null); },
+      onFailure: (refused) => {
+        setActorSnapshot((prev) => prev ? { ...prev, reasoningEffort: before } : prev);
+        setSourceError("model", `Could not set the thinking level: ${readFailureText(refused)}`);
+      },
+    }));
   }, [rpc, setSourceError, actorArgs, actorSnapshot?.reasoningEffort]);
 
+  // A plan that does not decode fails the read, reported as a failed read is.
   const rereadPlan = useCallback(() => refreshCurrentLiveResource(
     "plan",
-    () => rpc("getActivePlanReview", []),
-    (plan) => setActivePlan(parseActivePlanReview({ value: plan })),
+    () => settle(Effect.flatMap(Effect.promise(() => rpc("getActivePlanReview", [])), (plan) => parseActivePlanReview({ value: plan }))),
+    setActivePlan,
   ), [refreshCurrentLiveResource, rpc]);
 
   return {
@@ -868,12 +814,10 @@ export function useChatOwner(target: string | KinuActorAddress | undefined, exte
 export type ChatLink = ReturnType<typeof useChatOwner>["link"];
 
 /** The opening's plan, or null when it holds none; a plan that does not decode fails the opening. */
-function parseActivePlanReview({ value }: { value: unknown }): PlanReview | null {
+function parseActivePlanReview({ value }: { value: unknown }): Effect.Effect<PlanReview | null, KinuError> {
   const parsed = v.safeParse(v.nullable(PlanReviewSchema), value);
 
-  if (!parsed.success) {
-    throw new Error("Active plan returned an invalid response", { cause: parsed.issues });
-  }
-
-  return parsed.output;
+  return parsed.success
+    ? Effect.succeed(parsed.output)
+    : Effect.fail(new KinuError("bad_input", "Active plan returned an invalid response", { cause: new v.ValiError(parsed.issues) }));
 }

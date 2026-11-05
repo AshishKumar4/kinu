@@ -18,7 +18,7 @@ export const LONGHORIZON_ANSWER_FILE = 'bench-answer.txt';
 
 const LONGHORIZON_ENTRIES_PER_FILE = 25;
 
-export type LongHorizonMode = 'digest' | 'continuation';
+type LongHorizonMode = 'digest' | 'continuation';
 
 /** Fields set the three axes OOLONG parameterizes: length, planted facts, arity. */
 export interface LongHorizonSpec {
@@ -208,7 +208,7 @@ export function generateLongHorizonFiles(spec: LongHorizonSpec): LongHorizonFile
 
 type MarkedEntry = LongHorizonEntry & { marker: NonNullable<LongHorizonEntry['marker']> };
 
-export type LongHorizonQuestionKind = 'count' | 'list' | 'verbatim';
+type LongHorizonQuestionKind = 'count' | 'list' | 'verbatim';
 
 export interface LongHorizonQuestion {
   id: string;
@@ -364,7 +364,7 @@ export function longHorizonAnswerMatches(question: LongHorizonQuestion, submitte
   }
 }
 
-export interface LongHorizonQuestionResult {
+interface LongHorizonQuestionResult {
   id: string;
   expected: string;
   submitted: string | null;

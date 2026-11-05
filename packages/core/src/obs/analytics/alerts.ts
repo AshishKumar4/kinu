@@ -1,5 +1,4 @@
-
-const HOUR_MS = 3_600_000;
+import { HOUR_MS } from '../../utils/date';
 
 export const ALERT_SIGNALS = [
   'wake_loop', 'platform_kill', 'provider_down', 'turn_failures', 'client_errors', 'stuck_effects',

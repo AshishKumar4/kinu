@@ -95,33 +95,17 @@ const SwarmConfigWireSchema = v.strictObject({
 
 /** Absent keys stay absent: `resolveSwarm` reads `undefined` as "caller did not state this axis". */
 function configOf(wire: v.InferOutput<typeof SwarmConfigWireSchema>): Partial<SwarmConfig> {
-  const config: Partial<SwarmConfig> = {};
-
-  if (wire.unit !== undefined) Object.assign(config, { unit: wire.unit });
-
-  if (wire.context !== undefined) Object.assign(config, { context: wire.context });
-
-  if (wire.expand !== undefined) Object.assign(config, { expand: wire.expand });
-
-  if (wire.score !== undefined) Object.assign(config, { score: wire.score });
-
-  if (wire.advance !== undefined) Object.assign(config, { advance: wire.advance });
-
-  if (wire.carry !== undefined) Object.assign(config, { carry: wire.carry });
-
-  if (wire.exploration_weight !== undefined) {
-    Object.assign(config, { explorationWeight: wire.exploration_weight });
-  }
-
-  if (wire.prune_threshold !== undefined) {
-    Object.assign(config, { pruneThreshold: wire.prune_threshold });
-  }
-
-  if (wire.min_visits_for_prune !== undefined) {
-    Object.assign(config, { minVisitsForPrune: wire.min_visits_for_prune });
-  }
-
-  return config;
+  return {
+    ...(wire.unit !== undefined && { unit: wire.unit }),
+    ...(wire.context !== undefined && { context: wire.context }),
+    ...(wire.expand !== undefined && { expand: wire.expand }),
+    ...(wire.score !== undefined && { score: wire.score }),
+    ...(wire.advance !== undefined && { advance: wire.advance }),
+    ...(wire.carry !== undefined && { carry: wire.carry }),
+    ...(wire.exploration_weight !== undefined && { explorationWeight: wire.exploration_weight }),
+    ...(wire.prune_threshold !== undefined && { pruneThreshold: wire.prune_threshold }),
+    ...(wire.min_visits_for_prune !== undefined && { minVisitsForPrune: wire.min_visits_for_prune }),
+  };
 }
 
 /** Annotated with the domain type so an arm that drifts from `Objective` fails to compile here. */

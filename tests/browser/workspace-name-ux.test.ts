@@ -161,7 +161,7 @@ describe('the workspace frame names an untitled workspace the same way', () => {
       // The blank rename field hints the shared untitled label: press the
       // name's pencil and read the input it opens. Static markup never
       // opens it, so only the browser can pin this half of the contract.
-      await page.hover('.p-bar-tab[data-title] a');
+      await page.hover('[data-bar-tab][data-title] a');
       await page.click(`button[aria-label="Rename ${UNTITLED}"]`);
       await page.waitForSelector('input[placeholder]');
       const placeholder = await page.$eval('input[placeholder]', (input) => input.getAttribute('placeholder'));

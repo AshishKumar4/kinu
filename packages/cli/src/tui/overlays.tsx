@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type { SelectOption, SelectRenderable } from '@opentui/core';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { describeExecutionContext, executorLabel, filterModels, OTHER_OPTION, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type AskingAgent, type ChangelogEntry, type OwnerAnswer, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
@@ -8,7 +9,7 @@ import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
 import type { ApprovalPrompt } from './use-approvals';
 import { terminalMayApprove, waitingApprovalDetails } from '../waiting-approvals';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { detach, renderThrownChain } from '@kinu.run/core/obs';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiActionId } from './actions';
 import {
   REFERENCE_TERMINAL_GROUNDS,
@@ -30,6 +31,49 @@ function selectAt<T>(items: readonly T[], onSelect: (item: T) => void): (index: 
 
     if (item !== undefined) onSelect(item);
   };
+}
+
+/** Every overlay's list: one look, the selected row lifted and its description in the accent. `focused` lists take keys
+ *  themselves; an unfocused one follows its search field through `ref`. */
+function OverlaySelect({ options, onSelect, height, focused = true, selectedIndex = 0, showDescription = false, ref, id }: {
+  options: SelectOption[];
+  onSelect: (index: number) => void;
+  /** Rows tall; absent, it fills what its column leaves. */
+  height?: number;
+  focused?: boolean;
+  selectedIndex?: number;
+  showDescription?: boolean;
+  ref?: { current: SelectRenderable | null };
+  id?: string;
+}) {
+  const { colors } = useTuiTheme();
+
+  return (
+    <select
+      id={id}
+      ref={ref}
+      focused={focused}
+      options={options}
+      selectedIndex={selectedIndex}
+      showDescription={showDescription}
+      showScrollIndicator={true}
+      wrapSelection={true}
+      onSelect={onSelect}
+      style={{
+        width: '100%',
+        flexGrow: 1,
+        ...(height !== undefined && { height }),
+        backgroundColor: colors.background.overlay,
+        textColor: colors.text.primary,
+        focusedBackgroundColor: colors.background.overlay,
+        focusedTextColor: colors.text.primary,
+        selectedBackgroundColor: colors.background.selection,
+        selectedTextColor: colors.text.strong,
+        descriptionColor: colors.text.muted,
+        selectedDescriptionColor: colors.intent.accentStrong,
+      }}
+    />
+  );
 }
 
 interface CommandHintProps {
@@ -166,24 +210,8 @@ function SearchablePalette<T>({ title, frame, hint, placeholder, onFilter, items
       {items.length === 0 ? (
         <PaletteLine text={empty} width={innerWidth} color={colors.text.muted} />
       ) : (
-        <select
-          id={selectId}
-          ref={selectRef}
-          focused={false}
-          options={items.map((item): SelectOption => ({ name: row(item, innerWidth), description: '', value: item }))}
-          showDescription={false}
-          showScrollIndicator={true}
-          wrapSelection={true}
-          onSelect={selectAt(items, onSelect)}
-          style={{
-            width: '100%',
-            flexGrow: 1,
-            backgroundColor: colors.background.overlay,
-            textColor: colors.text.primary,
-            selectedBackgroundColor: colors.background.selection,
-            selectedTextColor: colors.text.primary,
-          }}
-        />
+        <OverlaySelect id={selectId} ref={selectRef} focused={false} onSelect={selectAt(items, onSelect)}
+          options={items.map((item): SelectOption => ({ name: row(item, innerWidth), description: '', value: item }))} />
       )}
     </PaletteFrame>
   );
@@ -338,31 +366,7 @@ function AccountPickerOverlay({ model, accounts, terminal, onSelect }: AccountPi
   return (
     <PaletteFrame title={clipText(`Run ${model.label} on`, innerWidth)} width={paletteWidth} height={paletteHeight} left={position.left} top={position.top}>
       <PaletteLine text="↑/↓ move · Enter choose · Esc close" width={innerWidth} color={colors.text.muted} />
-      <select
-        focused={true}
-        options={options}
-        selectedIndex={0}
-        showDescription={false}
-        showScrollIndicator={true}
-        wrapSelection={true}
-        onSelect={(index) => {
-          const selected = options[index];
-
-          if (selected) onSelect(String(selected.value));
-        }}
-        style={{
-          flexGrow: 1,
-          height: Math.max(3, paletteHeight - 5),
-          backgroundColor: colors.background.overlay,
-          textColor: colors.text.primary,
-          focusedBackgroundColor: colors.background.overlay,
-          focusedTextColor: colors.text.primary,
-          selectedBackgroundColor: colors.background.selection,
-          selectedTextColor: colors.text.strong,
-          descriptionColor: colors.text.muted,
-          selectedDescriptionColor: colors.intent.accentStrong,
-        }}
-      />
+      <OverlaySelect options={options} height={Math.max(3, paletteHeight - 5)} onSelect={selectAt(options, (selected) => onSelect(String(selected.value)))} />
     </PaletteFrame>
   );
 }
@@ -456,12 +460,10 @@ function ModelListOverlay({ models, failures, currentSpec, terminal, loading, er
           const controller = new AbortController();
           testing.current = controller;
           setTested({ label: model.label, text: 'testing…', ok: true });
-          test(model.spec, controller.signal).then(
-            (result) => { if (!controller.signal.aborted) setTested({ label: model.label, text: modelTestText(result, { provider: model.provider, from: 'here' }), ok: result.ok }); },
-            (...rejection: [unknown]) => {
-              if (!controller.signal.aborted) setTested({ label: model.label, text: `the test couldn't run: ${renderThrownChain({ cause: rejection[0] })}`, ok: false });
-            },
-          );
+          detach(Effect.match(Effect.tryPromise({ try: () => test(model.spec, controller.signal), catch: (cause) => ({ cause }) }), {
+            onSuccess: (result) => { if (!controller.signal.aborted) setTested({ label: model.label, text: modelTestText(result, { provider: model.provider, from: 'here' }), ok: result.ok }); },
+            onFailure: (failed) => { if (!controller.signal.aborted) setTested({ label: model.label, text: `the test couldn't run: ${renderThrownChain(failed)}`, ok: false }); },
+          }));
 
           return true;
         }}
@@ -481,28 +483,8 @@ function ModelListOverlay({ models, failures, currentSpec, terminal, loading, er
         />
       )}
       {!loading && (error === null || error === undefined) && options.length > 0 && (
-        <select
-          ref={selectRef}
-          focused={false}
-          options={options}
-          selectedIndex={selectedIndex}
-          showDescription={false}
-          showScrollIndicator={true}
-          wrapSelection={true}
-          onSelect={selectAt(filteredModels, onSelect)}
-          style={{
-            flexGrow: 1,
-            height: compact ? 1 : Math.max(3, paletteHeight - 6),
-            backgroundColor: colors.background.overlay,
-            textColor: colors.text.primary,
-            focusedBackgroundColor: colors.background.overlay,
-            focusedTextColor: colors.text.primary,
-            selectedBackgroundColor: colors.background.selection,
-            selectedTextColor: colors.text.strong,
-            descriptionColor: colors.text.muted,
-            selectedDescriptionColor: colors.intent.accentStrong,
-          }}
-        />
+        <OverlaySelect ref={selectRef} focused={false} options={options} selectedIndex={selectedIndex}
+          height={compact ? 1 : Math.max(3, paletteHeight - 6)} onSelect={selectAt(filteredModels, onSelect)} />
       )}
       {!loading && shownFailureLines.map((line) => (
         <PaletteLine key={line} text={line} width={innerWidth} color={colors.intent.warning} />
@@ -552,27 +534,8 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
       {!compact && (
         <PaletteLine text="↑/↓ move · Enter forks before that message · Esc close" width={innerWidth} color={colors.text.muted} />
       )}
-      <select
-        focused={true}
-        options={options}
-        selectedIndex={0}
-        showDescription={false}
-        showScrollIndicator={true}
-        wrapSelection={true}
-          onSelect={selectAt(candidates, onSelect)}
-        style={{
-          flexGrow: 1,
-          height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 5),
-          backgroundColor: colors.background.overlay,
-          textColor: colors.text.primary,
-          focusedBackgroundColor: colors.background.overlay,
-          focusedTextColor: colors.text.primary,
-          selectedBackgroundColor: colors.background.selection,
-          selectedTextColor: colors.text.strong,
-          descriptionColor: colors.text.muted,
-          selectedDescriptionColor: colors.intent.accentStrong,
-        }}
-      />
+      <OverlaySelect options={options} height={compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 5)}
+        onSelect={selectAt(candidates, onSelect)} />
     </PaletteFrame>
   );
 }
@@ -616,27 +579,8 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
       {options.length === 0 ? (
         <PaletteLine text="No self-changes recorded yet." width={innerWidth} color={colors.text.muted} />
       ) : (
-        <select
-          focused={true}
-          options={options}
-          selectedIndex={0}
-          showDescription={true}
-          showScrollIndicator={true}
-          wrapSelection={true}
-          onSelect={selectAt(view.entries, onSelect)}
-          style={{
-            flexGrow: 1,
-            height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 5),
-            backgroundColor: colors.background.overlay,
-            textColor: colors.text.primary,
-            focusedBackgroundColor: colors.background.overlay,
-            focusedTextColor: colors.text.primary,
-            selectedBackgroundColor: colors.background.selection,
-            selectedTextColor: colors.text.strong,
-            descriptionColor: colors.text.muted,
-            selectedDescriptionColor: colors.intent.accentStrong,
-          }}
-        />
+        <OverlaySelect options={options} showDescription height={compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 5)}
+          onSelect={selectAt(view.entries, onSelect)} />
       )}
     </PaletteFrame>
   );
@@ -685,27 +629,8 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
           <PaletteLine text="↑/↓ compare · Enter uses that take (recorded as preference) · Esc keep" width={innerWidth} color={colors.text.muted} />
         </>
       )}
-      <select
-        focused={true}
-        options={options}
-        selectedIndex={0}
-        showDescription={true}
-        showScrollIndicator={true}
-        wrapSelection={true}
-        onSelect={selectAt(set.candidates, onSelect)}
-        style={{
-          flexGrow: 1,
-          height: compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 6),
-          backgroundColor: colors.background.overlay,
-          textColor: colors.text.primary,
-          focusedBackgroundColor: colors.background.overlay,
-          focusedTextColor: colors.text.primary,
-          selectedBackgroundColor: colors.background.selection,
-          selectedTextColor: colors.text.strong,
-          descriptionColor: colors.text.muted,
-          selectedDescriptionColor: colors.intent.accentStrong,
-        }}
-      />
+      <OverlaySelect options={options} showDescription height={compact ? Math.max(1, paletteHeight - 4) : Math.max(3, paletteHeight - 6)}
+        onSelect={selectAt(set.candidates, onSelect)} />
     </PaletteFrame>
   );
 }
@@ -1405,28 +1330,8 @@ export function QuestionsOverlay({ asking, terminal, onAnswer, onChat }: {
             cursorColor: colors.intent.accentStrong,
           }}
         />
-      ) : <select
-        key={question.id}
-        focused={true}
-        options={options}
-        selectedIndex={Math.max(0, question.recommended ?? 0)}
-        showDescription={true}
-        showScrollIndicator={true}
-        wrapSelection={true}
-        onSelect={selectAt(choices, choose)}
-        style={{
-          flexGrow: 1,
-          height: Math.max(3, paletteHeight - 6),
-          backgroundColor: colors.background.overlay,
-          textColor: colors.text.primary,
-          focusedBackgroundColor: colors.background.overlay,
-          focusedTextColor: colors.text.primary,
-          selectedBackgroundColor: colors.background.selection,
-          selectedTextColor: colors.text.strong,
-          descriptionColor: colors.text.muted,
-          selectedDescriptionColor: colors.intent.accentStrong,
-        }}
-      />}
+      ) : <OverlaySelect key={question.id} options={options} selectedIndex={Math.max(0, question.recommended ?? 0)} showDescription
+        height={Math.max(3, paletteHeight - 6)} onSelect={selectAt(choices, choose)} />}
     </PaletteFrame>
   );
 }

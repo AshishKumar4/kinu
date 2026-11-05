@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { SealCheckIcon, ShieldWarningIcon, ArrowUpRightIcon } from "@phosphor-icons/react";
-import { sandboxedHtml, splitQuotedReply, type MailBox, type MailMessageView } from "@kinu.run/core";
+import { agentRoute, sandboxedHtml, splitQuotedReply, workspaceRoute, type MailBox, type MailMessageView } from "@kinu.run/core";
 import { Avatar } from "@/components/ui/Avatar";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { mailTime } from "./ImportantMailRow";
@@ -69,7 +69,9 @@ export function MailMessage({ mail, box, owner, open, onToggle }: {
     ? "You" : mail.from.name ?? mail.from.address;
 
   const reader = box?.kind === "person" ? "Kinu" : box?.path.split(".")[0] ?? "";
-  const chat = box?.workspace === null || box?.workspace === undefined ? null : `/workspace/${encodeURIComponent(box.workspace)}${box.kind === "agent" ? `/agents/${encodeURIComponent(reader)}` : ""}`;
+  let chat: string | null = null;
+
+  if (box?.workspace !== null && box?.workspace !== undefined) chat = box.kind === "agent" ? agentRoute(box.workspace, reader) : workspaceRoute(box.workspace);
 
   if (!open) return (
     <Pressable className="flex items-center gap-3 px-4 py-2" onClick={onToggle} data-mail-message={mail.id} data-folded="">
@@ -83,7 +85,7 @@ export function MailMessage({ mail, box, owner, open, onToggle }: {
   return (
     <article data-mail-message={mail.id} className="space-y-3 px-4 py-4">
       <MessageHeader mail={mail} name={name} onToggle={onToggle} />
-      {mail.woke !== null && <p data-mail-woke={mail.woke} className="t-meta p-text-3">Woke {reader}{chat !== null && <> · <Link to={chat} className="inline-flex items-center gap-px p-accent-fg hover:underline">Open chat<ArrowUpRightIcon size={11} /></Link></>}</p>}
+      {mail.woke !== null && <p data-mail-woke={mail.woke} className="t-meta p-text-3">Woke {reader}{chat !== null && <> · <Link to={chat} className="inline-flex items-center gap-px p-link">Open chat<ArrowUpRightIcon size={11} /></Link></>}</p>}
       {mail.direction === "out" && mail.writtenBy !== null && <p className="t-meta p-text-3">Written by {mail.writtenBy} · approved by you</p>}
       {mail.sendState !== null && ["queued", "failed"].includes(mail.sendState) && <p className="t-meta p-text-3">{mail.sendState}</p>}
       {mail.html === null ? <MailBody text={mail.text} /> : <SealedMailHtml html={mail.html} />}

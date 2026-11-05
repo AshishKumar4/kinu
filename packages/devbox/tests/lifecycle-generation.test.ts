@@ -45,7 +45,6 @@ const TIGHT_POLICY: DevboxPolicy = {
   portProbeIntervalMs: 1,
 };
 
-
 class TightBox extends Devbox<unknown> {
   /** The budget's clock, advanced by the test: a 20 ms budget is a fact of
    *  arithmetic here, not a race against the machine. */
@@ -62,10 +61,6 @@ class TightBox extends Devbox<unknown> {
   protected override get previewHost(): string | undefined {
     return 'preview.example';
   }
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
 }
 
 class TestBox extends TestDevbox<unknown> {
@@ -75,9 +70,6 @@ class TestBox extends TestDevbox<unknown> {
 
   /** Off, so the schedule rows a test counts are the ones its own actions
    *  wrote. The ambient tick is exercised elsewhere. */
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
 }
 
 class HeartbeatBox extends TestBox {
@@ -85,8 +77,6 @@ class HeartbeatBox extends TestBox {
     return HEARTBEAT_POLICY;
   }
 }
-
-
 
 /** Parsed, not cast: a filed row missing a stage or reason is a defect to fail on. */
 const FiledIncidentSchema = v.object({ stage: v.string(), reason: v.string(), processId: v.optional(v.string()), port: v.optional(v.number()) });
@@ -200,7 +190,6 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect((await box.devboxState()).restoration).toBe('unstarted');
   });
 
-
   test('a dark box admits through the instance probe and restores', async () => {
     // Dark means no listener, no specs, nothing exposed: the instance probe asks the platform.
     // A fresh box that cannot admit and restore this way can never bootstrap.
@@ -256,7 +245,6 @@ describe('the startup kick arms restoration without attaching inline', () => {
       ready: (await box.devboxState()).ready,
     }).toEqual({ starts: 2, stamps: 2, ready: true });
   });
-
 
   // A read starts, arms and attaches nothing; state-read.test.ts covers a box at rest and a reset object.
   test('a state poll of a stopped container starts, arms and attaches nothing', async () => {
@@ -500,7 +488,6 @@ describe('a destroyed box starts nothing of its own until it is asked again', ()
     expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
       .toEqual({ running: false, rows: [] });
   });
-
 
   // Review, 2026-09-28: a file write queued on its path before the teardown got the path after it,
   // and its readiness check reopened the box and started a container.
@@ -1123,7 +1110,6 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     expect(container.starts).toHaveLength(1);
     expect(container.processes.size).toBe(1);
   });
-
 
   test('an initial boot stamp that exceeds the hook budget leaves the box unattached',
     async () => {

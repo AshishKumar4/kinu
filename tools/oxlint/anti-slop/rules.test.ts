@@ -11,8 +11,8 @@ const rulesDirectory = join(process.cwd(), ANTI_SLOP_RULES);
 // answer to "which rule suites exist", and this one would have counted a stray
 // editor temp file or a build artefact as a suite while the lint that governs the
 // directory ignores both. The predicate is shared with `scripts/ladder.test.ts`,
-// which holds the 41 suites here equal to the 12 the command line names plus the
-// set this loop imports: the two consumers cannot disagree about which files this
+// which holds the suites here equal to those the command line names plus the set
+// this loop imports: the two consumers cannot disagree about which files this
 // runner reaches.
 const suites = trackedFiles()
   .filter(isAntiSlopRuleSuite)

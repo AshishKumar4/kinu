@@ -16,7 +16,8 @@ import { Row, RowAction } from "@/components/ui/Row";
 import { Status } from "@/components/ui/Status";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { mcpServerStatus, NOT_ADDED, type PluginStatus } from "@/components/plugins/mcp-status";
-import { renderThrownChain, detach } from "@kinu.run/core/obs";
+import { chainOf, detachPromise } from "@kinu.run/core/obs";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { TextInput } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
 
@@ -115,7 +116,8 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
 }) {
   const [openToken, setOpenToken] = useState(false);
   const [token, setToken] = useState('');
-  const [busy, setBusy] = useState(false);
+  const step = useLabelledStep();
+  const busy = step.busy !== null;
   const [own, setOwn] = useState<string | null>(null);
   const err = errors === undefined ? own : errors.of(preset.id);
   const setErr = (error: string | null) => { if (errors === undefined) setOwn(error); else errors.set(preset.id, error); };
@@ -140,16 +142,15 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
     ? preset.tokenFallback?.label ?? 'Access token'
     : preset.tokenLabel ?? 'Access token';
 
-  /** `connect` is the sign-in begun at the click, before the add's await, for a preset that signs in. */
-  const add = async (input: McpServerInput, connect?: ConnectRun) => {
+  /** `connect` is the sign-in begun at the click, before the add's await, for a preset that signs in. The row keeps a
+   *  failure where the list keeps its rows' (`errors`), so the step keeps none. */
+  const add = (input: McpServerInput, connect?: ConnectRun): void => {
     setErr(null);
-    setBusy(true);
-
-    try {
-      const result = await addMcpServer(input);
+    step.run('add', () => Effect.catchCause(Effect.gen(function* () {
+      const result = yield* Effect.promise(() => addMcpServer(input));
 
       if (result.signIn && connect !== undefined) {
-        const failed = await signInMcpServer(connect, result.id, ended);
+        const failed = yield* Effect.promise(() => signInMcpServer(connect, result.id, ended));
 
         if (failed !== null) setErr(failed);
       } else {
@@ -159,17 +160,15 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
       setOpenToken(false);
       setToken('');
       onChanged();
-    } catch (e) {
+    }), (failed) => Effect.sync(() => {
       connect?.cancel();
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
-      setBusy(false);
-    }
+      setErr(chainOf(failed));
+    })));
   };
 
-  const connect = async (): Promise<void> => {
+  const connect = (): void => {
     if (signIn) {
-      await add({ presetId: preset.id }, beginConnect());
+      add({ presetId: preset.id }, beginConnect());
     } else {
       setOpenToken(true);
     }
@@ -177,21 +176,21 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
 
   // An added server offers its sign-in where the account says it does (`server.signIn`): begun again for a run of its
   // own, in a tab opened now. An earlier failure stays until a sign-in connects (`ended`), not while one is pending.
-  const signInAgain = useCallback(() => detach(Effect.promise(async () => {
+  const signInAgain = useCallback(() => detachPromise(async () => {
     if (server === undefined) return;
 
     const failed = await signInMcpServer(beginConnect(), server.id, ended);
 
     if (failed !== null) setErr(failed);
-  })), [server, ended]);
+  }), [server, ended]);
 
   const { ask, dialog } = useConfirmation();
 
-  const reconnect = useCallback(() => detach(Effect.promise(async () => {
+  const reconnect = useCallback(() => detachPromise(async () => {
     if (server === undefined) return;
     setErr(await reconnectSaying(server.id, preset.title));
     onChanged();
-  })), [server, preset.title, onChanged]);
+  }), [server, preset.title, onChanged]);
 
   const remove = () => {
     if (!server) return;
@@ -215,7 +214,7 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
     );
   } else {
     trailing = (
-      <RowAction data-plugin-add onClick={(...args: Parameters<typeof connect>) => detach(Effect.promise(async () => connect(...args)))} disabled={busy}
+      <RowAction data-plugin-add onClick={connect} disabled={busy}
         aria-label={`Add ${preset.title}`} title={`Add ${preset.title}`}>
         <PlusIcon size={16} />
       </RowAction>
@@ -236,10 +235,8 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
             <div className="flex items-center gap-2">
               {/* Credential region: the marker keeps the value out of feedback screenshots. */}
               <TextInput className="min-w-0 flex-1" {...SECRET_REGION} type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} aria-label={tokenLabel} placeholder={tokenLabel} />
-              <Button variant="secondary" size="sm" onClick={() => detach(Effect.promise(async () => { await add({
-                  presetId: preset.id,
-                  headers: { Authorization: `Bearer ${token}` },
-                }); }))} disabled={busy || !token.trim()}>
+              <Button variant="secondary" size="sm" onClick={() => add({ presetId: preset.id, headers: { Authorization: `Bearer ${token}` } })}
+                busy={busy} disabled={!token.trim()}>
                 {busy ? 'Connecting…' : 'Connect'}
               </Button>
             </div>

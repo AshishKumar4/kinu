@@ -30,7 +30,7 @@ export function AccountPanelModal({ panel, onClose, mcp }: {
       title={title}
       onClose={onClose}
       icon={<Icon size={18} className="p-accent-fg" />}
-      maxWidthClass="max-w-2xl"
+      width="lg"
       footer={<Button variant="ghost" size="sm" onClick={onClose}>Done</Button>}
     >
       {panel === 'providers' && <ProvidersPanel />}

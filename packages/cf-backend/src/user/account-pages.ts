@@ -7,7 +7,7 @@
 import { Hono, type Context } from 'hono';
 import { Effect, Result } from 'effect';
 import {
-  accountTheme, APP_ROUTES, DEFAULT_THEME, ERROR_STATUS, err, extractOrchestratorAgentName, hostedActorRoute, objectNamed, ownerCaller,
+  accountTheme, APP_ROUTES, DEFAULT_THEME, ERROR_STATUS, err, extractOrchestratorAgentName, hostedActorRoute, ownerCaller,
   THEME_CONFIG_KEY, serveApp, type ObjectNamespace, type OwnerCapabilityEnv, type ThemeName, type UserCaller,
 } from '@kinu.run/core';
 import { settle, settleLogged, type KinuError } from '@kinu.run/core/obs';
@@ -25,6 +25,7 @@ import type { AuthEnv, AuthIdentity } from '../auth/session';
 import type { IndexFeedEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
+import { accountNamed } from './workspace-placement';
 
 type AccountShellEnv<Id> = Pick<Env, 'ASSETS' | 'PREVIEW_HOST_SUFFIX' | 'PREVIEW_HOST_PORT'> & LandingEnv & OwnerCapabilityEnv & {
   readonly UserDO: ObjectNamespace<Id, Pick<UserDO, 'getConfig'>>;
@@ -39,7 +40,7 @@ export const accountShell = async <Id, E extends FamilyEnv<AccountShellEnv<Id>, 
     let theme: ThemeName = DEFAULT_THEME;
 
     await settleLogged('app.theme_read_failed', { doing: "reading the account's theme for its page", otherwise: 'unavailable' }, async () => {
-      const account = objectNamed(c.env.UserDO, c.get('identity').userId);
+      const account = accountNamed(c.env.UserDO, c.get('identity').userId);
 
       theme = accountTheme(await account.getConfig(await ownerCaller(c.env), THEME_CONFIG_KEY));
     });

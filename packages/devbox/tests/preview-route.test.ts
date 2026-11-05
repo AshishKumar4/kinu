@@ -6,23 +6,12 @@ import { expect, test } from 'bun:test';
 import { TEST_BOX_ID, boxState, fakeStorage, harness, type Harness } from './support/devbox-harness';
 
 class PreviewBox extends TestDevbox<unknown> {
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-
   protected override get previewHost(): string | undefined {
     return 'preview.test';
   }
 }
 
 /** A box under the default preview zone, which it reads from `DEVBOX_PREVIEW_HOST`. */
-class ZoneBox extends TestDevbox<unknown> {
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-}
 
 const OWN = `${TEST_BOX_ID}-tok5173.preview.test`;
 
@@ -75,14 +64,14 @@ test('a preview whose server is not listening answers 502 in the platform\'s wor
 });
 
 /** The same object woken by its id alone, as the golden wakes a waiting box: the platform gives it no name (L4). */
-function wokenById({ state, env }: Harness<ZoneBox>): ZoneBox {
+function wokenById({ state, env }: Harness<TestDevbox>): TestDevbox {
   const id = { toString: () => TEST_BOX_ID, equals: () => false };
 
-  return new ZoneBox(Object.assign(Object.create(state), { id }), env);
+  return new TestDevbox(Object.assign(Object.create(state), { id }), env);
 }
 
 test('a port is published under DEVBOX_PREVIEW_HOST at the box\'s name, which it keeps when woken by its id', async () => {
-  const made = harness(ZoneBox);
+  const made = harness(TestDevbox);
   Object.assign(made.env, { DEVBOX_PREVIEW_HOST: 'preview.example.com' });
   made.container.listening.add(3000);
   await made.box.devboxStartup();
@@ -94,14 +83,14 @@ test('a port is published under DEVBOX_PREVIEW_HOST at the box\'s name, which it
 });
 
 test('a port no host can name is refused before a token is minted', async () => {
-  const offZone = harness(ZoneBox);
-  const longest = harness(ZoneBox, 'a'.repeat(41));
-  const tooLong = harness(ZoneBox, 'a'.repeat(42));
-  const upper = harness(ZoneBox, 'Demo');
+  const offZone = harness(TestDevbox);
+  const longest = harness(TestDevbox, 'a'.repeat(41));
+  const tooLong = harness(TestDevbox, 'a'.repeat(42));
+  const upper = harness(TestDevbox, 'Demo');
   const zone = { DEVBOX_PREVIEW_HOST: 'preview.example.com' };
   // Never reached by a name: made by its id alone.
   const unnamedRows = fakeStorage();
-  const unnamed = new ZoneBox(boxState({ storage: unnamedRows.handle, id: TEST_BOX_ID, blockConcurrencyWhile: (closure) => closure() }), zone);
+  const unnamed = new TestDevbox(boxState({ storage: unnamedRows.handle, id: TEST_BOX_ID, blockConcurrencyWhile: (closure) => closure() }), zone);
 
   for (const made of [longest, tooLong, upper]) Object.assign(made.env, zone);
 

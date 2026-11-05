@@ -14,9 +14,11 @@ import {
   type BackgroundJobRow, type ControlAction, type JsonValue,
   type Panel as PanelValue,
 } from '../../lib/control-api';
-import { Notice, Panel, SectionHeader, useControlRead, when } from './panels';
+import { Panel, SectionHeader, useControlRead, when } from './panels';
+import { Notice, type NoticeTone } from '@/components/ui/Notice';
 import { TextInput } from "@/components/ui/Field";
 import { Surface } from "@/components/ui/Surface";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 /** Every panel arrives in this shape so one down surface never blanks the page. */
 function PanelBlock(
@@ -108,54 +110,46 @@ export function WorkspaceDrilldown(
     onChanged?: () => void;
   },
 ): ReactNode {
-  const { load, reload } = useControlRead(
-    () => fetchWorkspaceDetail(ownerUserId, workspace), [ownerUserId, workspace],
-  );
+  const { load, reload } = useControlRead(useCallback(() => fetchWorkspaceDetail(ownerUserId, workspace), [ownerUserId, workspace]));
 
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ tone: 'ok' | 'warn' | 'danger'; text: string } | null>(null);
+  const [result, setResult] = useState<{ tone: NoticeTone; text: string } | null>(null);
   const [pending, setPending] = useState<PendingControl | null>(null);
   const [typedName, setTypedName] = useState('');
-
-  const act = useCallback(async (action: WorkspaceControlAction) => {
-    setBusy(true);
-    setResult(null);
-    const answer = await runAction(action);
-    setBusy(false);
-
-    if (answer.status === 'ok') {
-      setResult({
-        tone: answer.value.outcome === 'ok' ? 'ok' : 'warn',
-        text: answer.value.detail,
-      });
-      reload();
-      onChanged?.();
-
-      return answer.value.outcome === 'ok';
-    }
-
-    setResult({
-      tone: answer.status === 'stale-auth' ? 'warn' : 'danger',
-      text: answer.status === 'stale-auth'
-        // The step-up window is five minutes; hitting it is expected, not an error.
-        ? `${answer.reason} Sign in again, then retry.`
-        : answer.reason,
-    });
-
-    return false;
-  }, [onChanged, reload]);
+  const step = useLabelledStep();
+  const busy = step.busy !== null;
+  const shown = step.error === null ? result : { tone: 'danger' as const, text: step.error };
 
   const confirm = useCallback((control: PendingControl) => {
     setTypedName('');
     setPending(control);
   }, []);
 
-  const runPending = useCallback(async () => {
+  /** A control the server answered: its outcome said above the panels, the dialog closed on an `ok`. */
+  const runPending = (): void => {
     if (pending === null) return;
-    const ok = await act(pending.action);
+    step.run(pending.action.action, async () => {
+      setResult(null);
+      const answer = await runAction(pending.action);
 
-    if (ok) setPending(null);
-  }, [act, pending]);
+      if (answer.status === 'ok') {
+        setResult({ tone: answer.value.outcome === 'ok' ? 'success' : 'warning', text: answer.value.detail });
+        reload();
+        onChanged?.();
+
+        if (answer.value.outcome === 'ok') setPending(null);
+
+        return;
+      }
+
+      setResult({
+        tone: answer.status === 'stale-auth' ? 'warning' : 'danger',
+        text: answer.status === 'stale-auth'
+          // The step-up window is five minutes; hitting it is expected, not an error.
+          ? `${answer.reason} Sign in again, then retry.`
+          : answer.reason,
+      });
+    });
+  };
 
   const retypeRequired = pending?.action.action === 'workspace.remove';
   const confirmBlocked = busy || (retypeRequired && typedName !== workspace);
@@ -169,9 +163,9 @@ export function WorkspaceDrilldown(
         onRefresh={reload}
       />
 
-      {result !== null && (
-        <Notice tone={result.tone}>
-          {result.text}
+      {shown !== null && (
+        <Notice tone={shown.tone}>
+          {shown.text}
         </Notice>
       )}
 
@@ -245,7 +239,7 @@ export function WorkspaceDrilldown(
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => setPending(null)}>
               Cancel
             </Button>
-            <Button variant={pending.danger ? "destructive" : "primary"} size="md" disabled={confirmBlocked} onClick={() => void runPending()}>
+            <Button variant={pending.danger ? "destructive" : "primary"} size="md" disabled={confirmBlocked} onClick={runPending}>
               {busy ? 'Working…' : confirmWord}
             </Button>
           </>}

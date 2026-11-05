@@ -4,7 +4,7 @@ import { Effect } from "effect";
 import * as v from "valibot";
 import { JsonValueSchema, type AccountMemoryProposal, type JsonValue } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain, tolerate } from "@kinu.run/core/obs";
-import { Card } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useAsyncResource } from "@/hooks/use-async-resource";

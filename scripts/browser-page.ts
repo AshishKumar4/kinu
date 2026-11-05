@@ -203,7 +203,7 @@ const DEAD_END = `(() => {
     const said = [...document.querySelectorAll('.p-danger')].map((el) => (el.textContent ?? '').trim()).join(' ');
     return 'the welcome page, which the account has not finished' + (said === '' ? '' : ': ' + said);
   }
-  const notice = [...document.querySelectorAll('.p-notice-danger, [data-notice="danger"], [data-failure]')]
+  const notice = [...document.querySelectorAll('[role="dialog"] .p-notice-tone-danger, [data-notice="danger"], [data-failure]')]
     .filter((el) => el.getClientRects().length > 0)
     .map((el) => (el.textContent ?? '').trim())
     .find((text) => text !== '');

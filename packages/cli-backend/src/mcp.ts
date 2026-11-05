@@ -1,6 +1,6 @@
 // Local MCP client over stdio child processes.
 
-import { Effect, Cause } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
 import {
   decodeJsonValue, describeMcpTool, JsonObjectSchema, listMcpToolsLeniently, NO_TIMER_DEADLINE_MS,
   type JsonObject, type JsonValue, type ListedMcpTools, type McpToolRefusal, type RemoteMcpTool, type SerializableToolDescriptor,
@@ -9,7 +9,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as v from 'valibot';
-import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { chainOf, diagnostics, hold, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 
 /**
  * No wall clock on startup or tool calls; they end on answer, child exit, owner
@@ -172,7 +172,7 @@ export function connectMcpServers(
 async function listServerTools(client: Client, serverName: string, signal?: AbortSignal): Promise<ListedMcpTools> {
   const options = { timeout: NO_TIMER_DEADLINE_MS, signal };
 
-  try {
+  const strict = await hold(Effect.promise(async () => {
     const tools: RemoteMcpTool[] = [];
     let cursor: string | undefined;
 
@@ -183,17 +183,18 @@ async function listServerTools(client: Client, serverName: string, signal?: Abor
       cursor = page.nextCursor;
     } while (cursor !== undefined);
 
-    return { tools, refused: [] };
-  } catch (strict) {
-    signal?.throwIfAborted();
-    diagnostics.event('mcp.tool_list_rejected', { server: serverName, reason: renderThrownChain({ cause: strict }) });
+    return tools;
+  }));
 
-    return listMcpToolsLeniently({ name: serverName }, (next) => client.request(
-      { method: 'tools/list', params: next === undefined ? {} : { cursor: next } },
-      ResultSchema,
-      options,
-    ));
-  }
+  if (Exit.isSuccess(strict)) return { tools: strict.value, refused: [] };
+  signal?.throwIfAborted();
+  diagnostics.event('mcp.tool_list_rejected', { server: serverName, reason: chainOf(strict.cause) });
+
+  return listMcpToolsLeniently({ name: serverName }, (next) => client.request(
+    { method: 'tools/list', params: next === undefined ? {} : { cursor: next } },
+    ResultSchema,
+    options,
+  ));
 }
 
 

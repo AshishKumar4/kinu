@@ -1,8 +1,9 @@
 /** A control-plane read has five outcomes: value, not operator, stale sign-in, no control plane, failure. */
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import type { ReactNode } from 'react';
 import { Loader } from '@/components/ui/Loader';
-import { ArrowClockwiseIcon, LockKeyIcon, WarningIcon } from '@phosphor-icons/react';
+import { ArrowClockwiseIcon } from '@phosphor-icons/react';
+import { Notice } from '@/components/ui/Notice';
+import { useAsyncResource } from '@/hooks/use-async-resource';
 import type { ControlAnswer } from '../../lib/control-api';
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
@@ -16,43 +17,17 @@ interface ControlRead<Value> {
   reload: () => void;
 }
 
-export function useControlRead<Value>(
-  read: () => Promise<ControlAnswer<Value>>,
-  deps: readonly unknown[],
-): ControlRead<Value> {
-  const [load, setLoad] = useState<Load<Value>>({ phase: 'loading' });
-  const [nonce, setNonce] = useState(0);
+/** `read` must be stable (useCallback): it is the read's identity, as `useAsyncResource`'s `load` is. */
+export function useControlRead<Value>(read: () => Promise<ControlAnswer<Value>>): ControlRead<Value> {
+  // `control()` answers every failure of a read, the transport's included; a rejection left is a defect.
+  const { resource, reload } = useAsyncResource(read);
 
-  useEffect(() => {
-    let live = true;
-    setLoad({ phase: 'loading' });
+  if (resource.status === 'loading') return { load: { phase: 'loading' }, reload };
 
-    // `control()` names HTTP failures in its answer, so a rejection is the transport; settle it as `failed`.
-    const readFailed = (...rejection: [unknown]): void => {
-      const [thrown] = rejection;
-
-      diagnostics.failure('control.read_failed', toKinuError({
-        doing: 'run a control-plane read', cause: thrown, otherwise: 'io',
-      }));
-
-      if (live) {
-        setLoad({
-          phase: 'settled',
-          answer: { status: 'failed', reason: renderThrownChain({ cause: thrown }) },
-        });
-      }
-    };
-
-    void read().then(
-      (answer) => { if (live) setLoad({ phase: 'settled', answer }); },
-      readFailed,
-    );
-
-    return () => { live = false; };
-    // `read` is a fresh closure every render, so `deps` stand in for it.
-  }, [...deps, nonce]);
-
-  return { load, reload: useCallback(() => setNonce((n) => n + 1), []) };
+  return {
+    load: { phase: 'settled', answer: resource.status === 'ready' ? resource.value : { status: 'failed', reason: resource.message } },
+    reload,
+  };
 }
 
 /** The server answers 404 to a non-operator so a probe learns nothing; `forbidden` renders that as a sentence. */
@@ -70,49 +45,28 @@ export function Panel<Value>(
       return children(answer.value);
     case 'forbidden':
       return (
-        <Notice tone="muted" icon={<LockKeyIcon size={14} />}>
+        <Notice tone="info">
           This account is not a control-plane operator.
         </Notice>
       );
     case 'stale-auth':
       return (
-        <Notice tone="warn" icon={<WarningIcon size={14} />}>
+        <Notice tone="warning">
           {answer.reason} <a className="underline" href="/login">Sign in again</a>.
         </Notice>
       );
     case 'access-expired':
       // A full load of this page, which Access answers with its own sign-in and then this page again.
       return (
-        <Notice tone="warn" icon={<WarningIcon size={14} />}>
+        <Notice tone="warning">
           <a className="underline" href={location.pathname + location.search} data-access-sign-in>{answer.reason}</a>.
         </Notice>
       );
     case 'unconfigured':
-      return <Notice tone="muted" icon={<WarningIcon size={14} />}>{answer.reason}</Notice>;
+      return <Notice tone="info">{answer.reason}</Notice>;
     case 'failed':
-      return <Notice tone="danger" icon={<WarningIcon size={14} />}>{answer.reason}</Notice>;
+      return <Notice tone="danger">{answer.reason}</Notice>;
   }
-}
-
-const NOTICE_TONE = {
-  muted: 'p-text-3',
-  warn: 'p-accent-fg',
-  danger: 'p-danger',
-  ok: 'p-success',
-} as const;
-
-export function Notice(
-  { tone, icon, children }: {
-    tone: keyof typeof NOTICE_TONE;
-    icon?: ReactNode;
-    children: ReactNode;
-  },
-): ReactNode {
-  return (
-    <Surface look="panel" className={`t-meta p-3 flex items-start gap-2 ${NOTICE_TONE[tone]}`}>
-      {icon}<div className="min-w-0">{children}</div>
-    </Surface>
-  );
 }
 
 export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }): ReactNode {

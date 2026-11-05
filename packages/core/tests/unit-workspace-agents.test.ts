@@ -15,7 +15,9 @@ import { measuredAt, readWorkspaceAgents, type ChatReport, type PanelAgent } fro
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { initAgentFiguresTable, readAgentFigures } from '../src/read-models/agent-figures';
-import { EventLog, initEventsHubTables, type EmailPayload } from '../src/events/hub/index';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import type { EmailPayload } from '../src/events/hub/types';
 import { initOwnerRequestsTable } from '../src/safety/owner-requests';
 
 const EMAIL: EmailPayload = {

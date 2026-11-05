@@ -1335,7 +1335,7 @@ const ANSWERS = `[...document.querySelectorAll('#chat .prose-chat')]
   .map((block) => (block.textContent ?? '').trim())
   .filter((text) => text.length > 0)`;
 
-const SHOWN_WARNINGS = `[...document.querySelectorAll('.p-notice-warning, [data-notice="warning"]')]
+const SHOWN_WARNINGS = `[...document.querySelectorAll('[data-notice="warning"]')]
   .map((notice) => (notice.textContent ?? '').trim()).filter((text) => text !== '').join(' | ')`;
 
 /** The mission the first-answer row creates its workspace with: #21's own. */

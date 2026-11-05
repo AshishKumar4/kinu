@@ -17,14 +17,6 @@ const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}box-size-`));
 
 afterAll(() => { rmSync(root, { recursive: true, force: true }); });
 
-class TestBox extends TestDevbox<unknown> {
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-}
-
-
 const INSTANCES = {
   small: { vcpu: 1, memoryMib: 4_096, diskMb: 20_000 },
   medium: { vcpu: 2, memoryMib: 8_192, diskMb: 20_000 },
@@ -34,7 +26,7 @@ const INSTANCES = {
 const instance = (size: keyof typeof INSTANCES) => INSTANCES[size];
 
 test('a box with no size chosen starts at the default size, from the golden', async () => {
-  const { box, container } = harness(TestBox);
+  const { box, container } = harness(TestDevbox);
   await box.start();
 
   expect(container.startOptions).toEqual([{ containerSnapshot: { id: HARNESS_GOLDEN }, entrypoint: GOLDEN_ENTRYPOINT, instance: instance('medium'), enableInternet: true }]);
@@ -43,7 +35,7 @@ test('a box with no size chosen starts at the default size, from the golden', as
 });
 
 test('resizing a box that has never started records the size and starts nothing; its first start uses it', async () => {
-  const { box, container } = harness(TestBox);
+  const { box, container } = harness(TestDevbox);
 
   expect(await box.resize('large')).toEqual({ kind: 'recorded', size: 'large', previous: undefined });
   expect({ starts: container.startOptions.length, running: container.running.running }).toEqual({ starts: 0, running: false });
@@ -57,7 +49,7 @@ test('resizing a box that has never started records the size and starts nothing;
 });
 
 test('resizing to the size a box runs at changes nothing', async () => {
-  const { box, container } = harness(TestBox);
+  const { box, container } = harness(TestDevbox);
   await box.start();
 
   expect(await box.resize('medium')).toEqual({ kind: 'unchanged', size: 'medium', previous: 'medium' });
@@ -67,7 +59,7 @@ test('resizing to the size a box runs at changes nothing', async () => {
 });
 
 test('an unknown size is refused and the recorded size stays', async () => {
-  const { box } = harness(TestBox);
+  const { box } = harness(TestDevbox);
   await box.resize('small');
 
   const [refused] = await Promise.allSettled([box.resize('huge')]);
@@ -81,7 +73,7 @@ test('an unknown size is refused and the recorded size stays', async () => {
 });
 
 test('a box that chose no size starts at the default its host stored, over the class\'s own default', async () => {
-  class DefaultedBox extends TestBox {
+  class DefaultedBox extends TestDevbox {
     protected override get defaultSize(): BoxSize {
       return 'small';
     }
@@ -100,7 +92,7 @@ test('a box that chose no size starts at the default its host stored, over the c
 });
 
 test('a box\'s own choice wins over the stored default, and dropping the choice follows the default again', async () => {
-  const { box, container } = harness(TestBox);
+  const { box, container } = harness(TestDevbox);
   await box.useDefaultSize('large');
   await box.resize('small');
   await box.start();
@@ -114,7 +106,7 @@ test('a box\'s own choice wins over the stored default, and dropping the choice 
 });
 
 test('a new stored default is recorded and waits for the running container\'s next start', async () => {
-  const { box, container } = harness(TestBox);
+  const { box, container } = harness(TestDevbox);
   await box.start();
 
   expect(await box.useDefaultSize('small')).toBe('small');
@@ -127,7 +119,7 @@ test('a new stored default is recorded and waits for the running container\'s ne
 });
 
 test('resizing a running box commits and starts it again at the new size; a running command ends and a supervised process comes back', async () => {
-  const { box, container } = harness(TestBox, undefined, localExec);
+  const { box, container } = harness(TestDevbox, undefined, localExec);
   await box.start();
   const cwd = join(root, 'resize');
   mkdirSync(cwd, { recursive: true });
@@ -151,7 +143,7 @@ test('resizing a running box commits and starts it again at the new size; a runn
 });
 
 test('a resize goes ahead over an unmanaged command, which a rest would refuse to stop (D35)', async () => {
-  const { box, container } = harness(TestBox);
+  const { box, container } = harness(TestDevbox);
   await box.start();
   const process = await box.startProcess('detached-work');
 
@@ -165,7 +157,7 @@ test('a resize goes ahead over an unmanaged command, which a rest would refuse t
 
 /** Binds no store until its host deploys one, so each start is refused the same way: with no bucket the golden cannot
  *  build (D85). */
-class UnboundStoreBox extends TestBox {
+class UnboundStoreBox extends TestDevbox {
   bound = false;
 
   protected override get store(): string {
@@ -176,7 +168,7 @@ class UnboundStoreBox extends TestBox {
 /** Refused by the platform the same way at every start, a refusal only a changed input lifts (D52). A refused wake of
  *  the golden asks the golden once for another before the refusal is recorded (D64), so each attempt is two starts. */
 async function refusedStart() {
-  const made = harness(TestBox);
+  const made = harness(TestDevbox);
   made.container.containerUnavailable = new DevboxError('configuration', 'the platform refuses this application');
   await made.box.start();
 
@@ -201,7 +193,7 @@ const startupRows = (container: { readonly scheduleRows: readonly { readonly cal
 test('a start that fails permanently is refused once: later requests and a successor after eviction answer the recorded refusal without starting again', async () => {
   const { box, container, state, env } = await refusedStart();
   const asked = [await refusalOf(box.resolveReadiness()), await refusalOf(box.resolveReadiness())];
-  const successor = new TestBox(state, env);
+  const successor = new TestDevbox(state, env);
   container.owner = successor;
   await successor.kickStartup();
   const armedByKick = startupRows(container);
@@ -276,13 +268,13 @@ test('a changed input asks again: another size, the internet setting, or an expl
 
 // The platform's own words when it has no room (D36; `bench-artifacts/side-by-side/c-before.log`, 2026-09-30).
 test('a capacity answer is a retry, never a recorded refusal: a successor starts the box once the platform has room', async () => {
-  const { box, container, state, rows, env } = harness(TestBox);
+  const { box, container, state, rows, env } = harness(TestDevbox);
   const capacity = 'There is no container instance that can be provided to this Durable Object, try again later';
   container.startFaultBeforeRunning = new Error(capacity);
 
   const refused = await box.resolveReadiness();
   const recorded = { row: rows.get('devbox:start-refused'), reported: (await box.boxSize()).startRefused, armed: startupRows(container) };
-  const successor = new TestBox(state, env);
+  const successor = new TestDevbox(state, env);
   container.owner = successor;
 
   expect({ refused, recorded, ready: await successor.resolveReadiness(), starts: container.startOptions.length }).toEqual({

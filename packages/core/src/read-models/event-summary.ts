@@ -6,6 +6,7 @@
 
 import * as v from 'valibot';
 import { MAIL_HANDED_EVENT } from '../mail/handed';
+import { countOf } from '../utils/format';
 
 export interface EventSummary {
   /** What happened, short: "Task reminder". */
@@ -49,8 +50,6 @@ const SummaryFieldsSchema = v.looseObject({
 
 type SummaryFields = v.InferOutput<typeof SummaryFieldsSchema>;
 
-const plural = (count: number, one: string, many = `${one}s`): string => `${String(count)} ${count === 1 ? one : many}`;
-
 /** The parts there are, joined: "2 approved · 1 denied". */
 const joined = (parts: readonly (string | false | undefined)[]): string | undefined => {
   const present = parts.filter((part): part is string => typeof part === 'string' && part !== '');
@@ -65,7 +64,7 @@ const withLine = (label: string, line: string | undefined, rest: Omit<EventSumma
 function taskReminder(fields: SummaryFields): EventSummary {
   const titles = fields[TASK_REMINDER_OPEN_KEY] ?? [];
 
-  return withLine('Task reminder', titles.length === 0 ? undefined : `${plural(titles.length, 'open task')}: ${titles.join(' · ')}`);
+  return withLine('Task reminder', titles.length === 0 ? undefined : `${countOf(titles.length, 'open task')}: ${titles.join(' · ')}`);
 }
 
 /** What each of the container's incident stages was, by devbox's `IncidentStage`. */
@@ -99,7 +98,7 @@ const SUMMARIES = new Map<string, (fields: SummaryFields) => EventSummary>([
   ['plan_feedback', planDecision(false)],
   ['slate', (fields) => withLine(fields.ask === true ? 'Slate ask' : 'Slate', fields.said, { ...(fields.slate !== undefined && { about: fields.slate }) })],
   ['fork_interrupted', (fields) => withLine('Swarm interrupted', joined([
-    counted(fields.heads, (count) => plural(count, 'branch', 'branches')), counted(fields.runs?.length, (count) => plural(count, 'run')),
+    counted(fields.heads, (count) => countOf(count, 'branch', 'branches')), counted(fields.runs?.length, (count) => countOf(count, 'run')),
   ]))],
   ['owner_waits_cleared', (fields) => withLine('Waits cleared', fields.what ?? undefined)],
   // A thread the owner sent from Mail: the same card as an arrival's.

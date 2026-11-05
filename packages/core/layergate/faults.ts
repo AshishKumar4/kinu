@@ -1,6 +1,7 @@
 // Validates the gate: each fault patches only subjects its own layer owns, and must crater that layer
 // while leaving the others flat, measured against the clean run rather than the locked baseline.
 
+import { Effect } from 'effect';
 import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../src/extension';
 import { DynamicContextLedger, type DynamicContext } from '../src/prompting/volatile-context';
@@ -9,7 +10,6 @@ import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../src/tools/clamp';
 import { LAYERS, type Layer } from './layers';
 import { observePipeline, scoreAgainstBaseline } from './gate';
 import type { PipelineSubjects } from './subjects';
-import { renderThrownChain } from '../src/obs/index';
 
 export interface Fault<S = PipelineSubjects> {
   readonly id: string;
@@ -228,18 +228,6 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     }),
   },
   {
-    id: 'delegation/evidence-undercounts',
-    layer: 'delegation',
-    patches: ['delegationFeatures', 'renderDelegationFeatures'],
-    models: 'subagent spawns stop being counted and the rendered evidence drops its wall clock',
-    inject: (s) => ({
-      ...s,
-      delegationFeatures: (turn) => ({ ...s.delegationFeatures(turn), teamCalls: 0 }),
-      renderDelegationFeatures: (features) =>
-        s.renderDelegationFeatures(features).replace(/, [\d.]+(?:min|s) wall clock$/, ''),
-    }),
-  },
-  {
     id: 'tool-contract/notes-truncated',
     layer: 'tool-contract',
     patches: ['renderToolSchemaDescription'],
@@ -267,12 +255,11 @@ export const FAULTS: readonly Fault[] = Object.freeze([
         if (first && original.indexOf(first.oldText) !== original.lastIndexOf(first.oldText)) {
           const at = original.indexOf(first.oldText);
 
-          return {
-            ok: true,
+          return Effect.succeed({
             content: original.slice(0, at) + first.newText + original.slice(at + first.oldText.length),
             applied: [{ line: 1, removedLines: 1, addedLines: 1 }],
             spans: [{ start: at, end: at + first.oldText.length, inserted: first.newText.length }],
-          };
+          });
         }
 
         return s.applyFileEdits(original, edits, path);
@@ -282,14 +269,11 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'craft-fitness/prose-scored-as-execution',
     layer: 'craft-fitness',
-    patches: ['craftInvocationSites', 'craftInvocationError'],
-    models: 'the signal stops distinguishing code from prose and failures stop naming the tool that raised: ' +
-      'a crafted tool merely MENTIONED in a string earns execution credit, and no failure is attributable to anything',
+    patches: ['craftInvocationSites'],
+    models: 'the signal stops distinguishing code from prose: a crafted tool merely MENTIONED in a string earns execution credit',
     inject: (s) => ({
       ...s,
       craftInvocationSites: (code, known) => known.filter((name) => code.includes(name)),
-      craftInvocationError: (_name, cause) =>
-        new Error(renderThrownChain({ cause: cause })),
     }),
   },
 ]);

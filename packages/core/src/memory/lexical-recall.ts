@@ -58,11 +58,12 @@ const SYNONYM_GROUPS = {
   save: ['store', 'persist', 'preserve', 'keep'],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
-const GROUPS: ReadonlyMap<string, readonly string[]> = new Map(Object.entries(SYNONYM_GROUPS));
+/** Each word's groups: a word listed in two (`token` is a password and a key, `port` a socket and a move) expands to both. */
+const GROUPS_OF = Object.entries(SYNONYM_GROUPS).reduce((groups, [canonical, members]) => {
+  for (const word of [canonical, ...members]) groups.set(word, [...groups.get(word) ?? [], [canonical, ...members]]);
 
-const CANONICAL = new Map<string, string>([...GROUPS].flatMap(([canonical, group]) => [
-  [canonical, canonical] as const, ...group.map((word) => [word, canonical] as const),
-]));
+  return groups;
+}, new Map<string, (readonly string[])[]>());
 
 const CJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/u;
 
@@ -76,8 +77,7 @@ function tokenize(text: string): string[] {
 }
 
 function synonymsOf(token: string): readonly string[] {
-  const canonical = CANONICAL.get(token);
-  const group = canonical === undefined ? [token] : [canonical, ...GROUPS.get(canonical) ?? []];
+  const group = GROUPS_OF.get(token)?.flat() ?? [token];
 
   return token === 'preference' || token === 'prefer' || token === 'preferred' ? [...group, 'wants', 'want', 'prefers'] : group;
 }

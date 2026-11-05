@@ -1,6 +1,5 @@
 /** The reads only the workspace's pane draws, over the chat's socket, and the frames that move them. */
 import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction } from "react";
-import { Effect } from "effect";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState, SubagentActivityEventSchema,
   type MctsProgress, branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, LIVE_READS,
@@ -17,7 +16,8 @@ import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.run/core";
 import { appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas } from "@kinu.run/core";
 import { parseMemoryNotes } from "@kinu.run/core";
-import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { attempt, detach, diagnostics, settle } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 import {
   reconcilePreviewPorts, type ExecutorPortRefresh, type PinnedPreviewPort,
 } from "@kinu.run/core";
@@ -292,13 +292,10 @@ export function useWorkspaceReads(link: ChatLink) {
   const refreshRoster = useCallback(() => refreshCurrentLiveResource("roster", () => rpc("listSubagents", []), setSubagents), [refreshCurrentLiveResource, rpc]);
 
   // The server pushes the fact, not the rows; one re-read updates every open tab.
-  const reread = async (resource: string, refresh: () => Promise<void>): Promise<void> => {
-    try {
-      await refresh();
-    } catch (cause) {
-      diagnostics.failure('workspace.live_refresh_failed', toKinuError({ doing: 'refreshing live workspace data', cause, otherwise: 'io' }), { resource });
-    }
-  };
+  const reread = useCallback((resource: string, refresh: () => Promise<void>): Promise<void> => settle(Effect.catch(
+    attempt({ doing: 'refreshing live workspace data', otherwise: 'io' }, refresh),
+    (failed) => Effect.sync(() => { diagnostics.failure('workspace.live_refresh_failed', failed, { resource }); }),
+  )), []);
 
   const paneFrame = async (msg: SocketFrame): Promise<void> => {
     if (msg.type === "mcts-progress") {
@@ -427,18 +424,14 @@ export function useWorkspaceReads(link: ChatLink) {
   const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
 
-    const results = await Promise.all(["workspace", "computer"].map(async (executor) => {
-      try {
-        const result = await rpc("getExposedPorts", [executor]);
-
-        return { executor, result } satisfies ExecutorPortRefresh;
-      } catch (cause) {
-        return {
-          executor,
-          result: { ports: [], error: readFailureText({ cause }) },
-        } satisfies ExecutorPortRefresh;
-      }
-    }));
+    // Each executor's list is its own answer: one that fails is said on its row, not the other's.
+    const results = await Promise.all(["workspace", "computer"].map((executor) => settle(Effect.match(
+      Effect.tryPromise({ try: () => rpc("getExposedPorts", [executor]), catch: (cause) => ({ cause }) }),
+      {
+        onSuccess: (result): ExecutorPortRefresh => ({ executor, result }),
+        onFailure: (failed): ExecutorPortRefresh => ({ executor, result: { ports: [], error: readFailureText(failed) } }),
+      },
+    ))));
 
     if (generation !== exposedPortsRefreshGeneration.current) return;
     setPinnedPorts((previous) => {
@@ -479,17 +472,10 @@ export function useWorkspaceReads(link: ChatLink) {
   ]);
 
   const rereadLive = useCallback((reads: readonly LiveRead[], also: readonly (() => Promise<void>)[] = []): void => {
-    detach(Effect.promise(async () => {
-      try {
-        await Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]);
-      } catch (cause) {
-        diagnostics.failure('workspace.live_refresh_failed', toKinuError({
-          doing: 'refreshing live workspace data',
-          cause,
-          otherwise: 'io',
-        }));
-      }
-    }));
+    detach(Effect.catch(
+      attempt({ doing: 'refreshing live workspace data', otherwise: 'io' }, () => Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())])),
+      (failed) => Effect.sync(() => { diagnostics.failure('workspace.live_refresh_failed', failed); }),
+    ));
   }, [liveReads]);
 
   const refreshLiveData = useCallback((): void => {
@@ -516,52 +502,46 @@ export function useWorkspaceReads(link: ChatLink) {
     }
   }, [streaming, refreshLiveData]);
 
-  async function applySnapshot(snap: WorkspaceOpening, isSourceCurrent: (source: LiveRefreshSource) => boolean): Promise<void> {
-    setWorkspaceStatus(snap.status);
+  function applySnapshot(snap: WorkspaceOpening, isSourceCurrent: (source: LiveRefreshSource) => boolean): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      setWorkspaceStatus(snap.status);
 
-    if (isSourceCurrent("memoryContent")) {
-      setMemoryContent(snap.memoryContent);
+      if (isSourceCurrent("memoryContent")) {
+        setMemoryContent(snap.memoryContent);
 
-      if (snap.memoryContent) setMemory(memoryRows(snap.memoryContent));
-    }
+        if (snap.memoryContent) setMemory(memoryRows(snap.memoryContent));
+      }
 
-    if (isSourceCurrent("executors")) {
-      setExecutors(snap.executors);
-      setLastActiveExecutor(snap.lastActiveExecutor);
-      const outputs = new Map<string, ExecutorOutput[]>();
+      if (isSourceCurrent("executors")) {
+        setExecutors(snap.executors);
+        setLastActiveExecutor(snap.lastActiveExecutor);
+        const outputs = new Map<string, ExecutorOutput[]>();
 
-      for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
-      setExecutorOutputs(outputs);
-    }
+        for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
+        setExecutorOutputs(outputs);
+      }
 
-    if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
+      if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
 
-    if (isSourceCurrent("slates")) applySlates(snap.slates);
-    setBranchRuns(snap.branchRuns.map((run) => ({
-      branchId: run.branchId, task: run.task, status: run.status,
-    })));
+      if (isSourceCurrent("slates")) applySlates(snap.slates);
+      setBranchRuns(snap.branchRuns.map((run) => ({
+        branchId: run.branchId, task: run.task, status: run.status,
+      })));
 
-    if (isSourceCurrent("pendingActions")) setPendingActions(snap.pendingActions);
+      if (isSourceCurrent("pendingActions")) setPendingActions(snap.pendingActions);
 
-    if (isSourceCurrent("jobs")) setBackgroundJobs(snap.backgroundJobs);
+      if (isSourceCurrent("jobs")) setBackgroundJobs(snap.backgroundJobs);
 
-    if (isSourceCurrent("work")) setInspectedWork(snap.inspectedWork);
+      if (isSourceCurrent("work")) setInspectedWork(snap.inspectedWork);
 
-    // Each fails on its own surface, as its own read did; each port list is its executor's answer, not the workspace's.
-    try {
-      await Promise.all([
+      // Each fails on its own surface, as its own read did; each port list is its executor's answer, not the workspace's.
+      return Effect.catch(attempt({ doing: 'refreshing live workspace data', otherwise: 'io' }, () => Promise.all([
         refreshExposedPorts(), refreshOwnerQuestions(), refreshOwedIntents(),
         refreshCurrentLiveResource("roster", () => listedOn(snap.subagents), setSubagents),
         refreshCurrentLiveResource("consents", () => listedOn(snap.pendingConsents), setPendingConsents),
         refreshCurrentLiveResource("agents", () => listedOn(snap.workspaceAgents), setWorkspaceAgents),
-      ]);
-    } catch (cause) {
-      diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
-        doing: 'refreshing live workspace data',
-        cause,
-        otherwise: 'io',
-      }));
-    }
+      ])), (failed) => Effect.sync(() => { diagnostics.failure('workspace.snapshot_followup_refresh_failed', failed); }));
+    });
   }
 
   useEffect(() => {
@@ -635,13 +615,9 @@ export function useWorkspaceReads(link: ChatLink) {
       return;
     }
 
-    searchTimer.current = setTimeout(() => detach(Effect.promise(async () => {
-      // Published only while this query is still the newest.
-      let thrown: { cause: unknown } | null = null;
-
-      try {
-        const results = await rpc("searchMemoryHybrid", [q]);
-
+    // Published only while this query is still the newest, its answer or its failure.
+    searchTimer.current = setTimeout(() => detach(Effect.match(Effect.tryPromise({ try: () => rpc("searchMemoryHybrid", [q]), catch: (cause) => ({ cause }) }), {
+      onSuccess: (results) => {
         if (seq !== searchSeq.current) return;
         setSourceError("memory", null);
         setMemory((results ?? []).map(r => ({
@@ -651,13 +627,8 @@ export function useWorkspaceReads(link: ChatLink) {
           updatedAt: r.startLine ? `lines ${r.startLine}-${r.endLine}` : "",
           savedBy: null,
         })));
-      } catch (err) {
-        thrown = { cause: err };
-      }
-
-      if (thrown !== null && seq === searchSeq.current) {
-        setSourceError("memory", `Memory search failed: ${readFailureText(thrown)}`);
-      }
+      },
+      onFailure: (failed) => { if (seq === searchSeq.current) setSourceError("memory", `Memory search failed: ${readFailureText(failed)}`); },
     })), MEMORY_SEARCH_DEBOUNCE_MS);
   }, [rpc, memoryContent, setSourceError]);
 

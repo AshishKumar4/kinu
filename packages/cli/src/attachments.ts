@@ -1,12 +1,14 @@
 /** @path, quoted and ~-prefixed tokens (drag-drop) that stat to a regular file become attachments. Images and
  * PDFs inline as data-URL parts; other files stay path references for the agent's tools. */
 
-import { stat, readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
 import { readShellWord, referencePrefixes, resolvePath, type PathPlanes, type PromptFile } from '@kinu.run/core';
 import { renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 import { formatBytes } from '@kinu.run/core';
+import { Result } from 'effect';
 
 /** Everything else is reachable through the agent's read tools; inlining would only burn context. */
 const INLINE_MEDIA_TYPES = new Map([
@@ -157,14 +159,17 @@ export async function resolvePromptAttachments(
       continue;
     }
 
-    try {
-      const bytes = await readFile(found.path);
-      files.push({ filename, mediaType, url: `data:${mediaType};base64,${bytes.toString('base64')}` });
-      attached.push({ path: found.path, filename, mediaType, size: found.size });
-      inlineBudget -= found.size;
-    } catch (err) {
-      errors.push(`Could not read ${filename}: ${renderThrownChain({ cause: err })}`);
+    // Within the inline budget, so read in place.
+    const bytes = Result.try(() => readFileSync(found.path));
+
+    if (Result.isFailure(bytes)) {
+      errors.push(`Could not read ${filename}: ${renderThrownChain({ cause: bytes.failure })}`);
+      continue;
     }
+
+    files.push({ filename, mediaType, url: `data:${mediaType};base64,${bytes.success.toString('base64')}` });
+    attached.push({ path: found.path, filename, mediaType, size: found.size });
+    inlineBudget -= found.size;
   }
 
   // Right-to-left so indices stay valid.

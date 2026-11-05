@@ -3,12 +3,12 @@
  * (`lib/http.ts`), which a typed-failure handler passes by, so the row showed nothing (review, 2026-10-23).
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { asFetchFunction } from '@kinu.run/core';
 import { reconnectSaying } from '../src/lib/user-api';
+import { holdFetch } from '@kinu.run/test-utils';
 
-const realFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(network.restore);
 
 describe("a row's Reconnect", () => {
   test('back again says nothing; a refusal, a dropped connection or a server still failing each say why', async () => {
@@ -21,7 +21,7 @@ describe("a row's Reconnect", () => {
 
     let asked = 0;
 
-    globalThis.fetch = asFetchFunction(async () => {
+    network.stub(async () => {
       const answer = answers[asked];
 
       asked += 1;

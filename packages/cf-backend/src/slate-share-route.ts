@@ -12,6 +12,8 @@ import {
   ingressAdmitted, keptSlateContext, labelSigner, reoriginateRequest, SHARE_VIEWER_REQUESTS_PER_MINUTE, type ShareViewerClaim, VIEWER_EXCHANGE_PATH,
 } from '@kinu.run/core';
 import { Hono } from 'hono';
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { rawPath, routeError, type FamilyEnv } from './api/context';
 import { mintViewerTicket, ticketUser, viewerCookie, viewerCookieResponse, viewerSigner } from './viewer-pass';
@@ -65,12 +67,7 @@ export function liveShareEntryPage(env: Env, workspace: string, share: string): 
 
 
 
-async function viewerSource(env: Env, request: Request): Promise<string> {
-  const secret = viewerSigner.secret(env);
-
-  // Reached only after the share-token check, so a missing secret is a fault.
-  if (secret === undefined) throw new Error('viewer source signed with no secret');
-
+function viewerSource(secret: string, request: Request): Promise<string> {
   return viewerSigner.token(secret, `kinu:viewer-source:v1:${request.headers.get('cf-connecting-ip') ?? ''}`);
 }
 
@@ -78,16 +75,18 @@ interface VerifiedShare {
   readonly env: Env;
   readonly handle: string;
   readonly workspace: string;
+  /** What a viewer's source is signed with. */
+  readonly viewerSecret: string;
 }
 
 const shareHostRoutes = new Hono<FamilyEnv<VerifiedShare, object>>({ getPath: rawPath });
 
 // A ticket mints the identity cookie; the consent button mints the consent cookie over the already-proven subject.
 shareHostRoutes.all(VIEWER_EXCHANGE_PATH, async (c) => {
-  const { env, handle, workspace } = c.env;
+  const { env, handle, workspace, viewerSecret } = c.env;
   const request = c.req.raw;
   const url = new URL(request.url);
-  const source = await viewerSource(env, request);
+  const source = await viewerSource(viewerSecret, request);
   const consent = url.searchParams.has('consent');
   const ticket = consent ? null : await ticketUser(env, workspace, handle, url.searchParams.get('ticket') ?? '');
 
@@ -124,7 +123,7 @@ function actsFromElsewhere(request: Request, url: URL): boolean {
 }
 
 shareHostRoutes.all('*', async (c) => {
-  const { env, handle, workspace } = c.env;
+  const { env, handle, workspace, viewerSecret } = c.env;
   const request = c.req.raw;
   const url = new URL(request.url);
   // Read the claim before the sanitizer strips the cookie.
@@ -134,7 +133,7 @@ shareHostRoutes.all('*', async (c) => {
     return new Response('A share acts on its viewer\'s behalf only from its own page', { status: 403, headers: { 'cache-control': 'no-store' } });
   }
 
-  const claim: ShareViewerClaim = { userId: cookie?.userId ?? null, source: await viewerSource(env, request), consented: cookie?.consented === true };
+  const claim: ShareViewerClaim = { userId: cookie?.userId ?? null, source: await viewerSource(viewerSecret, request), consented: cookie?.consented === true };
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
   const stub: SlateShareHost = objectNamed(env.OrchestratorAgent, workspace);
@@ -180,5 +179,10 @@ export async function handleSlateShareHostRequest(request: Request, env: Env): P
     return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   }
 
-  return await shareHostRoutes.fetch(request, { env, handle, workspace });
+  const viewerSecret = viewerSigner.secret(env);
+
+  // Past the share-token check, so a missing secret is a fault.
+  if (viewerSecret === undefined) return settle(Effect.die(new Error('viewer source signed with no secret')));
+
+  return await shareHostRoutes.fetch(request, { env, handle, workspace, viewerSecret });
 }

@@ -8,7 +8,7 @@ import {
   UsersIcon,
 } from "@phosphor-icons/react";
 import * as v from "valibot";
-import { OwnedLiveShareSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareVisibility, type OwnedLiveShare, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach } from "@kinu.run/core";
+import { OwnedLiveShareSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareVisibility, type OwnedLiveShare, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach, countOf } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { listShare, readPreapprovals, revokeShare, setShareMode, shareLive, withdrawPreapproval } from "@/lib/shared-api";
@@ -17,21 +17,13 @@ import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, type AccessOption } from "./ShareParts";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { Notice } from "@/components/ui/Notice";
 import { Group } from "@/components/ui/Group";
 import { Choices, type Choice } from "@/components/ui/Choices";
 import { Checkbox } from "@/components/ui/Check";
 import { Pressable } from "@/components/ui/Pressable";
 import { Segmented } from "@/components/ui/Segmented";
-
-export interface LiveShareFixture {
-  graph: SlateReach;
-  liveShares: OwnedLiveShare[];
-  /** Why the shared slate does not run, as its preview would refuse it. */
-  refused?: string;
-  /** What the owner answered "Always for this slate" to, standing now. */
-  preapproved?: SharePreapproval[];
-}
 
 /** The ticked members, as the share route takes them. */
 const approvalsOf = (approved: ReadonlySet<string>) => [...approved]
@@ -143,11 +135,11 @@ function PrimaryAction({ reviewing, busy, canShare, canApprove, onShare, onAppro
   onShare: () => void;
   onApprove: () => void;
 }) {
-  if (reviewing) return <Button variant="primary" size="sm"  onClick={onApprove} disabled={busy || !canApprove} data-share-approve-reach>Approve the new reach</Button>;
+  if (reviewing) return <Button variant="primary" size="sm" onClick={onApprove} disabled={busy || !canApprove} data-share-approve-reach>Approve the new reach</Button>;
 
   return (
-    <Button variant="primary" size="sm"  onClick={onShare} disabled={!canShare} data-share-submit>
-      {busy ? <><Loader size="sm" /><span className="ml-1">Sharing…</span></> : "Share"}
+    <Button variant="primary" size="sm" onClick={onShare} busy={busy} disabled={!canShare} data-share-submit>
+      {busy ? "Sharing…" : "Share"}
     </Button>
   );
 }
@@ -234,7 +226,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
   const names = [...new Set(graph.namespaces.filter((row) => row.slate === graph.slate).map((row) => row.title))].join(", ");
   let changes = "reading only";
 
-  if (approved.size > 0) changes = `${String(approved.size)} ${approved.size === 1 ? "change" : "changes"} allowed`;
+  if (approved.size > 0) changes = `${countOf(approved.size, "change")} allowed`;
 
   return (
     <Group>
@@ -269,7 +261,7 @@ function Reach({ graph, visibility, approved, onToggle, disabled }: {
             );
           })}
           <p className="p-text-2" data-grant-summary>
-            People get {counts.read} read-only member{counts.read === 1 ? "" : "s"}. You allowed {approved.size} of {counts.acting} change{counts.acting === 1 ? "" : "s"}.
+            People get {counts.read} read-only member{counts.read === 1 ? "" : "s"}. You allowed {approved.size} of {countOf(counts.acting, "change")}.
           </p>
         </div>
       )}
@@ -477,30 +469,19 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
 }
 
 /** The slate's standing approvals, read with the sheet, and each taken back from every share of it. */
-function useStanding(workspace: string, slate: string, fixture: LiveShareFixture | undefined, failed: (chain: string) => void) {
-  const [standing, setStanding] = useState<readonly SharePreapproval[]>(fixture?.preapproved ?? []);
-
-  useEffect(() => {
-    if (fixture !== undefined) return;
-    let live = true;
-
-    detach(Effect.catchCause(
-      Effect.map(Effect.promise(() => readPreapprovals({ workspace, slate })), (read) => { if (live) setStanding(read.preapproved); }),
-      showing((chain) => { if (live) failed(chain); }),
-    ));
-
-    return () => { live = false; };
-  }, [fixture, workspace, slate, failed]);
+function useStanding(workspace: string, slate: string, failed: (chain: string) => void) {
+  const read = useCallback(async () => (await readPreapprovals({ workspace, slate })).preapproved, [workspace, slate]);
+  const { resource, set } = useAsyncResource(read);
 
   const withdraw = useCallback((entry: SharePreapproval) => detach(Effect.catchCause(
     Effect.map(
       Effect.promise(() => withdrawPreapproval({ workspace, slate, entry: { slate: entry.slate, namespace: entry.namespace, member: entry.member, root: entry.root } })),
-      (left) => setStanding(left.preapproved),
+      (left) => set(left.preapproved),
     ),
     showing(failed),
-  )), [workspace, slate, failed]);
+  )), [workspace, slate, failed, set]);
 
-  return { standing, withdraw };
+  return { standing: lastValue(resource) ?? [], unread: resource.status === "error" ? resource.message : null, withdraw };
 }
 
 /** The people typed in, and of them those who edit too; only people added by name edit: a link opens it for use alone. */
@@ -521,21 +502,14 @@ function usePeopleRoles(emails: string, visibility: LiveShareVisibility) {
 }
 
 /** A shared slate runs only what its own folder builds alone: why its preview refuses it, when it does (`sharedBuildRefusal`). */
-function useSharedRefusal(rpc: WorkspaceRpc, slate: string, fixture: LiveShareFixture | undefined): string | null {
-  const [refused, setRefused] = useState<string | null>(fixture?.refused ?? null);
+function useSharedRefusal(rpc: WorkspaceRpc, slate: string): string | null {
+  const preview = useCallback(async () => {
+    const shown = await rpc("slate", [{ op: "preview", id: slate }]);
 
-  useEffect(() => {
-    if (fixture !== undefined) return;
-    let live = true;
+    return !shown.ok && shown.reason === "bad_input" ? shown.error : null;
+  }, [rpc, slate]);
 
-    detach(Effect.map(Effect.promise(() => rpc("slate", [{ op: "preview", id: slate }])), (shown) => {
-      if (live && !shown.ok && shown.reason === "bad_input") setRefused(shown.error);
-    }));
-
-    return () => { live = false; };
-  }, [fixture, rpc, slate]);
-
-  return refused;
+  return lastValue(useAsyncResource(preview).resource);
 }
 
 /** Whether the people it is shared with may fork it: a fork is their own copy, on their own connections. */
@@ -616,17 +590,16 @@ function ShareChoices({ choices, set, first, reviewing, reach, busy }: {
   );
 }
 
-export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending, fixture }: {
+export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending }: {
   workspace: string;
   slate: string;
   rpc: WorkspaceRpc;
   onClose: () => void;
   onBusy: (busy: boolean) => void;
   onListingPending?: () => void;
-  fixture?: LiveShareFixture;
 }) {
-  const [graph, setGraph] = useState<SlateReach | null>(fixture?.graph ?? null);
-  const [shares, setShares] = useState<OwnedLiveShare[]>(fixture?.liveShares ?? []);
+  const [graph, setGraph] = useState<SlateReach | null>(null);
+  const [shares, setShares] = useState<OwnedLiveShare[]>([]);
   const [visibility, setVisibility] = useState<LiveShareVisibility>("users");
   const [mode, setMode] = useState<ShareMode>("own");
   // Asked at the slate's first share only: a later share shares what the first one did.
@@ -634,7 +607,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   // A stopped owner share whose new reach the form shows, for the owner to approve instead of making a share.
   const [reviewing, setReviewing] = useState<string | null>(null);
   const [emails, setEmails] = useState("");
-  const refused = useSharedRefusal(rpc, slate, fixture);
+  const refused = useSharedRefusal(rpc, slate);
   const [approved, setApproved] = useState<ReadonlySet<string>>(new Set());
   const [fork, setFork] = useState(true);
   const [busy, setBusyState] = useState(false);
@@ -643,7 +616,6 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   const setBusy = useCallback((next: boolean) => { setBusyState(next); onBusy(next); }, [onBusy]);
 
   useEffect(() => {
-    if (fixture !== undefined) return;
     let live = true;
     detach(Effect.catchCause(Effect.map(Effect.promise(() => Promise.all([
       rpc("slate", [{ op: "graph", id: slate }]),
@@ -654,9 +626,8 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
       setShares(answered(rows, v.array(OwnedLiveShareSchema)).filter((share) => share.slate === slate && share.revokedAt === null));
     }), showing((chain) => { if (live) setErr(chain); })));
 
-
     return () => { live = false; };
-  }, [fixture, rpc, slate]);
+  }, [rpc, slate]);
 
   const toggle = useCallback((approval: Approval) => {
     setApproved((previous) => {
@@ -670,7 +641,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   }, []);
 
   const { emailList, editing, editors, setRole } = usePeopleRoles(emails, visibility);
-  const { standing, withdraw } = useStanding(workspace, slate, fixture, setErr);
+  const { standing, unread, withdraw } = useStanding(workspace, slate, setErr);
 
   // The owner's access is approved at a revision of the slate: none before it has been opened once.
   const revision = graph?.revision ?? null;
@@ -784,7 +755,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
           }} />
         )}
         <AlwaysAllowed standing={standing} graph={graph} onWithdraw={withdraw} disabled={busy} />
-        <Failure message={err} />
+        <Failure message={err ?? unread} />
       </div>
       <div className="flex justify-end gap-2 border-t p-border pt-4">
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>

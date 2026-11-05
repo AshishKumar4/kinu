@@ -51,7 +51,7 @@ export {
   type Refusal,
 } from './error';
 
-export { attempt, attemptInItsWords, flight, hold, inItsWords, joining, recording, refusing, settle, settleSync, showing, tolerate, tolerateAsync, tolerated, type Joined } from './effect';
+export { attempt, attemptInItsWords, chainOf, flight, hold, inItsWords, joining, recording, refusing, settle, settleSync, showing, tolerate, tolerateAsync, tolerated, type Joined } from './effect';
 
 export { confirmedDeletion } from './confirmed-deletion';
 
@@ -66,6 +66,7 @@ export {
   settleLogged,
   settleLoggedSync,
   detach,
+  detachPromise,
   RESERVED_LOG_FIELDS,
   type LogEventName,
   type LogFields,

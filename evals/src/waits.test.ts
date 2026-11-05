@@ -9,24 +9,20 @@ function call(at: number, recorded: Pick<ToolCallEnd, 'name' | 'args' | 'duratio
   return { type: 'tool_call_end', runId: 'trial-run', eventIndex: at, timestamp: '2026-10-19T19:00:00Z', toolCallId: `call-${String(at)}`, ...recorded };
 }
 
-const handle = (kind: string, message: string) => ({ background: true, jobId: `bgjob-${kind}`, kind, message });
-
-const WINDOW = 'Outran the 30s foreground window; backgrounded: still running, not cancelled. The settled result will wake you.';
-
-const PERSON = 'The person wrote while this ran; backgrounded: still running, not cancelled. The settled result will wake you.';
+const handle = (kind: string, movedBy: 'window' | 'person' | 'spawn') => ({ background: true, jobId: `bgjob-${kind}`, kind, movedBy, message: 'moved' });
 
 // Main's report on rc22 (2026-10-20): a program that stalled 30 s and became a job still let its task pass, so a grade
 // cannot see where the harness made the agent wait.
 test('a trial names each shell command or program that became a job, what moved it, and its slowest calls', () => {
   const waits = measureWaits([
     { actor: 'main', events: [
-      call(1, { name: 'shell', args: { command: 'setsid -f chromium http://127.0.0.1:3000' }, durationMs: 30_064, result: handle('shell', WINDOW) }),
+      call(1, { name: 'shell', args: { command: 'setsid -f chromium http://127.0.0.1:3000' }, durationMs: 30_064, result: handle('shell', 'window') }),
       call(2, { name: 'eval', args: { code: 'return await workspace.slates.chat.probeAsk({ q: "ok" });' }, durationMs: 120_800, result: 'PROBE_OK' }),
       // A spawn hands back its job at once, by design: no wait.
-      call(3, { name: 'agents', args: { op: 'swarm' }, durationMs: 230, result: handle('spawn', 'Started.') }),
+      call(3, { name: 'agents', args: { op: 'swarm' }, durationMs: 230, result: handle('agents', 'spawn') }),
       call(4, { name: 'file', args: { op: 'read', path: '/a' }, durationMs: 12, result: 'text' }),
     ] },
-    { actor: 'subagent-1', events: [call(5, { name: 'eval', args: { code: 'execFile("npx", ["tsc"])' }, durationMs: 9_000, result: handle('eval', PERSON) })] },
+    { actor: 'subagent-1', events: [call(5, { name: 'eval', args: { code: 'execFile("npx", ["tsc"])' }, durationMs: 9_000, result: handle('eval', 'person') })] },
   ]);
 
   expect(waits).toEqual({

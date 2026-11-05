@@ -2,13 +2,12 @@ import { generateText, streamText } from 'ai';
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import {
-  asFetchFunction,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   defaultSpecFor,
   KINU_USER_AGENT,
   requestUrl, type ModelMenuEntry, type CredentialSummary,
 } from '@kinu.run/core';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, present, holdFetch } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry, userCredentials, type UserCredentialClient } from '../src/providers/agent-registry';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { serveFamily } from './helpers/api';
@@ -245,12 +244,12 @@ describe("Settings' model test", () => {
     const userId = '0123456789abcdef0123456789abcdef';
     const user = createTestUserDO({ durableObjectId: userId });
     const owner = await testOwner();
-    const original = globalThis.fetch;
+    const network = holdFetch();
     const sessions: (string | null)[] = [];
 
     await user.userDO.ensureProfile(owner, 'owner@example.test');
     await user.userDO.setCredential(owner, 'opencode-go.bearer', { kind: 'bearer', token: 'go-key' });
-    globalThis.fetch = asFetchFunction(async (input, init) => {
+    network.stub(async (input, init) => {
       if (requestUrl(input).includes('models.dev')) return Response.json(OPENCODE_GO_CATALOG);
       sessions.push(new Headers(init?.headers).get('x-opencode-session'));
 
@@ -275,7 +274,7 @@ describe("Settings' model test", () => {
       expect(sessions).toHaveLength(1);
       expect(sessions[0]).toStartWith('kinu-');
     } finally {
-      globalThis.fetch = original;
+      network.restore();
       await user.joinFibers();
       user.close();
     }

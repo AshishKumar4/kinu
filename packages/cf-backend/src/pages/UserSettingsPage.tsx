@@ -1,12 +1,11 @@
 /** Sections live in the URL hash (`/user/settings#devices`); each section owns its own reads. */
-import { Effect } from 'effect';
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { ArrowSquareOutIcon, GearSixIcon } from "@phosphor-icons/react";
 import { setDisplayName, type UserProfile } from "../lib/user-api";
-import { Card } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
 import { Page } from "@/components/ui/PageHeader";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -27,24 +26,19 @@ import { BetaSettings } from "@/components/BetaSettings";
 import { AccountMemoryCard } from "@/components/account/AccountMemoryCard";
 import { AppearanceCard } from "@/components/account/AppearanceCard";
 import { WebSearchSettings } from "@/components/account/WebSearchSettings";
-import { showing, detach } from '@kinu.run/core/obs';
+import { useLabelledStep } from '@/hooks/use-labelled-step';
 
 function ProfileNameEditor({ profile, onSaved }: {
   profile: { email: string; displayName: string | null } | null;
   onSaved: (saved: UserProfile | null) => void;
 }) {
   const [name, setName] = useState(profile?.displayName ?? '');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep();
+  const saving = busy !== null;
   const stored = profile?.displayName ?? '';
   const changed = name.trim() !== stored.trim();
 
-  const save = () => Effect.gen(function* () {
-    setSaving(true);
-    setError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () { onSaved(yield* Effect.promise(async () => setDisplayName(name))); }), showing(setError)), Effect.sync(() => { setSaving(false); }));
-  });
+  const save = (): void => run('save', async () => onSaved(await setDisplayName(name)));
 
   return (
     <div className="space-y-2">
@@ -52,8 +46,8 @@ function ProfileNameEditor({ profile, onSaved }: {
         <div className="flex-1">
           <DisplayNameField value={name} onChange={setName} saving={saving} />
         </div>
-        <Button variant="secondary" disabled={!changed || saving} onClick={() => detach(save())}>
-          {saving ? <Loader size="sm" /> : null} Save
+        <Button variant="secondary" disabled={!changed} busy={saving} onClick={save}>
+          Save
         </Button>
       </div>
       {error && <p className="t-meta p-danger">{error}</p>}

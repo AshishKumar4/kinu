@@ -7,6 +7,7 @@ import {
 import {
   ADVISOR_SEVERITY_LABEL, eventSourceLabel, eventVariantLabel, keptAdvisorNote, MAIL_HANDED_EVENT, MAIN_AGENT, parseDrainedEvents,
   type AdvisorSeverity, type ClassifiedProgrammaticTurn, type DrainedEvent, type SignalCard,
+  countOf,
 } from "@kinu.run/core";
 import { IconControl } from "@/components/ui/IconControl";
 import { PillButton } from "@/components/ui/Pill";
@@ -201,7 +202,7 @@ function TurnCard({ turn, text, state, count = 1 }: TurnCardProps) {
         icon={approved ? CheckCircleIcon : ProhibitIcon}
         tone={approved ? "p-success" : "p-text-3"}
         label={`You ${said}`}
-        body={`${String(turn.count)} queued command${turn.count === 1 ? "" : "s"}`}
+        body={countOf(turn.count, "queued command")}
         state={state}
         count={count}
       />

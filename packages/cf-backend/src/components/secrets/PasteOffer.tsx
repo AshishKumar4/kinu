@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { KeyIcon } from "@phosphor-icons/react";
 import { pastedSecrets, type PastedSecret } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
-import { useLabelledStep } from "@/components/ui/ConfirmDialog";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { Switch } from "@/components/ui/Switch";
 import { putSecrets } from "@/lib/user-api";
 import { rowsReady, secretEntries, SecretRows, type SecretDraft } from "@/components/secrets/SecretRows";
@@ -88,9 +88,6 @@ export function usePastedSecretGuard(input: {
   return { guarded, offer };
 }
 
-/** A move closes its dialog itself, by handing the draft its names. */
-const NOTHING_AFTER = (): void => {};
-
 /** The found secrets as rows to name and host, saved together; each value in the draft becomes its `$NAME`. */
 function MoveToSecrets({ found, workspace, onClose, onMoved }: {
   found: readonly PastedSecret[];
@@ -103,13 +100,14 @@ function MoveToSecrets({ found, workspace, onClose, onMoved }: {
   })));
 
   const [allowHere, setAllowHere] = useState(workspace !== undefined);
-  const { busy, error, run } = useLabelledStep(NOTHING_AFTER);
+  // A move closes its dialog itself, by handing the draft its names.
+  const { busy, error, run } = useLabelledStep();
   const saving = busy !== null;
   // What the draft will say instead, in the names the rows hold now.
   const said = secretEntries(rows).map(({ name }) => `$${name}`).join(", ") || "$NAME";
 
   return (
-    <Modal title="Move to Secrets" icon={<KeyIcon size={16} className="p-text-3" />} onClose={onClose} busy={saving} maxWidthClass="max-w-2xl"
+    <Modal title="Move to Secrets" icon={<KeyIcon size={16} className="p-text-3" />} onClose={onClose} busy={saving} width="lg"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
         <Button variant="primary" size="sm" data-secret-move-save disabled={!rowsReady(rows) || saving} onClick={() => run("save", async () => {

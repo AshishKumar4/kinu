@@ -17,14 +17,14 @@ import {
   deleteCredential, getProfileCatalog, listCloudflareAccounts, listCredentials, setCredential, testWebSearch, updateProfileCatalog,
   type CloudflareAccountStatus, type WebSearchAnswer,
 } from "@/lib/user-api";
-import { Choice, Field } from "@/components/ui/form";
+import { Select } from "@/components/ui/Select";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { Segmented } from "@/components/ui/Segmented";
 import { Status } from "@/components/ui/Status";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { Notice } from "@/components/ui/Notice";
-import { TextInput } from "@/components/ui/Field";
+import { TextInput, Field } from "@/components/ui/Field";
 import { Card } from "@/components/ui/Card";
 import { Chip } from "@/components/ui/Chip";
 import { Choices, type Choice as Option } from "@/components/ui/Choices";
@@ -268,7 +268,7 @@ function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
   return (
     <div className="space-y-3" data-web-search-key={provider}>
       <Field label="Provider" inline>
-        <Choice label="Search provider" size="sm" className="sm:w-56" value={provider} disabled={disabled || saving}
+        <Select label="Search provider" size="sm" className="sm:w-56" value={provider} disabled={disabled || saving}
           options={KEYED_PROVIDERS.map((id) => ({ value: id, label: `${WEB_SEARCH_PROVIDERS[id].label}${stored.has(id) ? " · key stored" : ""}` }))}
           onChange={(next) => {
             setProvider(next);
@@ -288,7 +288,7 @@ function KeyEntry({ primary, stored, disabled, onSaved, onRemoved }: {
           <Button variant="danger" size="sm" disabled={saving || disabled} onClick={() => detach(remove())}>Remove key</Button>
         )}
         {direct !== null && (
-          <a href={direct.keyPage} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 p-accent-fg hover:underline">
+          <a href={direct.keyPage} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 p-link">
             Get a {WEB_SEARCH_PROVIDERS[provider].label} key <ArrowSquareOutIcon size={11} />
           </a>
         )}
@@ -322,7 +322,7 @@ function Backups({ backups, chain, stored, disabled, onChange }: {
           </Chip>
         ))}
         {candidates.length > 0 && (
-          <Choice<string> label="Add a web search backup" size="sm" className="w-52" disabled={disabled} value=""
+          <Select<string> label="Add a web search backup" size="sm" className="w-52" disabled={disabled} value=""
             options={[{ value: "", label: backups.length === 0 ? "Add a backup…" : "Add another…" }, ...candidates.map((route) => ({ value: `${route.provider}|${route.billing}`, label: routeLabel(route) }))]}
             onChange={(value) => {
               const route = candidates.find((candidate) => `${candidate.provider}|${candidate.billing}` === value);

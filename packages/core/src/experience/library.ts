@@ -3,7 +3,7 @@
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
 import { nanoid } from '../utils/nanoid';
-import { nowMs } from '../utils/date';
+import { ftsPhrases } from '@kinu.run/agent-utils/memory';
 import {
   EXPERIENCE_KINDS,
   experienceSearchText,
@@ -81,7 +81,6 @@ export interface ExperienceLibraryStore {
 
 const DEFAULT_SEARCH_LIMIT = 10;
 
-
 const LibraryRowSchema = v.object({
   id: v.string(),
   source_workspace: v.string(),
@@ -110,15 +109,6 @@ function toEntry(row: LibraryRow): ExperienceEntry | null {
   };
 }
 
-/** Quote each term so punctuation is never FTS5 syntax; OR them so multi-word queries rank. */
-function ftsQuery(query: string): string | null {
-  const terms = query.split(/[^\p{L}\p{N}_]+/u).filter((t) => t.length > 0);
-
-  if (terms.length === 0) return null;
-
-  return terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ');
-}
-
 export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
   const rows = (query: string, ...bindings: SqlValue[]): LibraryRow[] =>
     sql.exec(query, ...bindings).toArray().map((row) => v.parse(LibraryRowSchema, row));
@@ -127,7 +117,7 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
     publish(candidate, sourceWorkspace) {
       return settleSync(Effect.gen(function* () {
         const id = `exp-${nanoid()}`;
-        const publishedAt = nowMs();
+        const publishedAt = Date.now();
         // ON CONFLICT keeps the original id so importers' provenance references stay valid.
         sql.exec(
           `INSERT INTO experience_library
@@ -160,7 +150,7 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
 
     search(options: ExperienceSearchOptions = {}) {
       const limit = Math.max(1, options.limit ?? DEFAULT_SEARCH_LIMIT);
-      const match = options.query ? ftsQuery(options.query) : null;
+      const match = options.query ? ftsPhrases(options.query).join(' OR ') || null : null;
       // '' matches no kind or workspace, so one statement serves filtered and unfiltered cases.
       const kind = options.kind ?? '';
       const exclude = options.excludeWorkspace ?? '';

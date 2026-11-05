@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
-  isSlateFrameMessage, slateFrameSrc, slateLinkId,
+  readSlateFrameMessage, slateFrameSrc, slateLinkId,
   SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE,
 } from '../src/slates/host-context';
 import { parseSlateProject } from '../src/slates/project';
@@ -19,17 +19,19 @@ test('a slate is sized by what it holds: package.json declares no inline height'
   expect(() => parseSlateProject({ main: 'server.js', slate: { inline: { height: 240 } } })).toThrow('slate.inline');
 });
 
-test('isSlateFrameMessage checks the frame, the origin and the envelope', () => {
+test('readSlateFrameMessage checks the frame, the origin and the envelope, and holds a runaway height', () => {
   const channel = new MessageChannel();
   const data = { kinu: SLATE_SIZE_CHANGED_MESSAGE, height: 200 };
 
   const event = (fields: { source?: unknown; origin?: string; data?: unknown }) =>
     ({ source: fields.source ?? null, origin: fields.origin ?? '', data: fields.data });
 
-  expect(isSlateFrameMessage(event({ source: channel.port1, origin: 'https://p.example.test', data }), channel.port1, 'https://p.example.test')).toBe(true);
-  expect(isSlateFrameMessage(event({ source: channel.port2, origin: 'https://p.example.test', data }), channel.port1, 'https://p.example.test')).toBe(false);
-  expect(isSlateFrameMessage(event({ source: channel.port1, origin: 'https://evil.example.test', data }), channel.port1, 'https://p.example.test')).toBe(false);
-  expect(isSlateFrameMessage(event({ source: channel.port1, origin: 'https://p.example.test', data: { kinu: 'other', height: 1 } }), channel.port1, 'https://p.example.test')).toBe(false);
+  expect(readSlateFrameMessage(event({ source: channel.port1, origin: 'https://p.example.test', data }), channel.port1, 'https://p.example.test')?.height).toBe(200);
+  expect(readSlateFrameMessage(event({ source: channel.port2, origin: 'https://p.example.test', data }), channel.port1, 'https://p.example.test')).toBeNull();
+  expect(readSlateFrameMessage(event({ source: channel.port1, origin: 'https://evil.example.test', data }), channel.port1, 'https://p.example.test')).toBeNull();
+  expect(readSlateFrameMessage(event({ source: channel.port1, origin: 'https://p.example.test', data: { kinu: 'other', height: 1 } }), channel.port1, 'https://p.example.test')).toBeNull();
+  // A page that grows with its frame says a height without end; the chat holds it to a page's worth.
+  expect(readSlateFrameMessage(event({ source: channel.port1, origin: 'https://p.example.test', data: { ...data, height: 1e9 } }), channel.port1, 'https://p.example.test')?.height).toBeLessThan(1e9);
 });
 
 test('slateFrameSrc embeds a schema-checked context and refuses a malformed one', () => {

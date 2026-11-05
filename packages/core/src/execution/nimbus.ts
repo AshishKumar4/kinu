@@ -6,16 +6,17 @@ import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { OutputSink, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { collectExecStream, type ExecChunk, type ExecOutput, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
-import type { VfsMount, WorkspacePrincipal } from '../vfs/mounts';
+import type { VfsMount, VfsMountRouting, WorkspacePrincipal } from '../vfs/mounts';
+import { createShellSession, type ShellPlane, type ShellSession } from './shell-session';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { atVfsPath } from '../vfs/errno';
-import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { syscallError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { execIdsOf, principalExecId } from './secrets-caller';
-import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
-import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { commandTool, LogLimitsSchema, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
+import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, settle, toKinuError, type Refusal } from '../obs/index';
 import { Cause, Effect, Exit } from 'effect';
 import { newJobId, type AdoptsJobs } from '../types/jobs';
 import { currentWorkMode } from './work-mode';
@@ -100,14 +101,7 @@ function workspaceNoListenerReason(port: number): string {
     + `once it listens. For an authored Worker slate, use its declared preview operation when available.`;
 }
 
-/** Session RPC failures default to `io`; abort, timeout and memory-wall keep the classifier's precise code. */
-function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
-  return toKinuError({ ...input, otherwise: 'io' });
-}
-
 const StringSchema = v.string();
-
-const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
 
 function stringifyResult(input: { value: unknown }): string {
   const text = v.safeParse(v.string(), input.value);
@@ -177,7 +171,7 @@ export async function startJobProcess(
   try {
     pid = (await touch(() => control.startProcess(command, { ...(cwd !== undefined && { cwd }), execId: principalExecId(jobId) }))).pid;
   } catch (err) {
-    return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
+    return refusalOf(toKinuError({ doing: `nimbus startProcess \`${command}\``, cause: err, otherwise: 'io' }));
   }
 
   const processId = String(pid);
@@ -261,7 +255,7 @@ function stopProcessMember({ box, touch }: NimbusReach): ExecutorTool {
       try {
         return { stopped: v.parse(KilledSchema, await touch(() => kill(pid))).ok };
       } catch (err) {
-        return refusalOf(nimbusFailure({ doing: `nimbus stopProcess ${String(pid)}`, cause: err }));
+        return refusalOf(toKinuError({ doing: `nimbus stopProcess ${String(pid)}`, cause: err, otherwise: 'io' }));
       }
     },
   };
@@ -283,7 +277,7 @@ function listProcessesMember({ box, touch }: NimbusReach): ExecutorTool {
 
         return rows.filter((row) => row.longRunning).map((row) => ({ processId: String(row.pid), pid: row.pid, status: row.state, command: row.command }));
       } catch (err) {
-        return refusalOf(nimbusFailure({ doing: 'nimbus listProcesses', cause: err }));
+        return refusalOf(toKinuError({ doing: 'nimbus listProcesses', cause: err, otherwise: 'io' }));
       }
     },
   };
@@ -310,7 +304,7 @@ function logsMember({ box, touch }: NimbusReach): ExecutorTool {
       try {
         return v.parse(LoggedSchema, await touch(() => readLogs(pid, limits))).text;
       } catch (err) {
-        return refusalOf(nimbusFailure({ doing: `nimbus logs ${String(pid)}`, cause: err }));
+        return refusalOf(toKinuError({ doing: `nimbus logs ${String(pid)}`, cause: err, otherwise: 'io' }));
       }
     },
   };
@@ -399,24 +393,25 @@ export function nimbusSession(opts: NimbusSessionOpts) {
       await touch(() => unexpose(port));
     },
     // Exposed ports without a URL are kept, carrying the host's reason as a refusal.
-    listExposedPorts: async () => {
+    listExposedPorts: () => {
       const ports = box.ports;
 
-      if (!ports?.list) return [];
+      if (!ports?.list) return Promise.resolve([]);
       const list = ports.list.bind(ports);
-      const exposed = await touch(() => list());
-      const unaddressed = exposed.find((p) => p.url === undefined && p.unavailable !== undefined);
 
-      if (unaddressed?.unavailable !== undefined) {
-        throw new KinuError('unsupported',
-          `workspace port ${unaddressed.port} is listening and has no preview URL: ${unaddressed.unavailable}`);
-      }
+      return settle(Effect.flatMap(Effect.promise(async () => touch(() => list())), (exposed) => {
+        const unaddressed = exposed.find((p) => p.url === undefined && p.unavailable !== undefined);
 
-      return exposed.map((p) => ({
-        port: p.port,
-        url: p.url ?? ports.url?.(p.port) ?? '',
-        status: 'unknown' as const,
-      })).filter((p) => p.url);
+        if (unaddressed?.unavailable !== undefined) {
+          return Effect.fail(new KinuError('unsupported', `workspace port ${unaddressed.port} is listening and has no preview URL: ${unaddressed.unavailable}`));
+        }
+
+        return Effect.succeed(exposed.map((p) => ({
+          port: p.port,
+          url: p.url ?? ports.url?.(p.port) ?? '',
+          status: 'unknown' as const,
+        })).filter((p) => p.url));
+      }));
     },
   };
 }
@@ -618,6 +613,16 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
 }
 
 /**
+ * The review session of the workspace's Nimbus shell over its mount table: a named call resumes Nimbus's own directory,
+ * a detach frees the name, and a path is judged where `plane` lands it.
+ */
+export function nimbusShellSession(shell: Shell, home: string, plane: () => ShellPlane & Pick<VfsMountRouting, 'userRoots'>): ShellSession {
+  return createShellSession({
+    home, userRoots: () => plane().userRoots(), plane, stored: async (name) => await shell.cwd?.(name) ?? null, detachFrees: true,
+  });
+}
+
+/**
  * A command's stream read to its end; `stop` cancels the stream, which ends the command. Cancelled by its own reader: on
  * workerd a pipe's abort signal leaves a source whose read is pending uncancelled, so a silent command ran on after a
  * Stop (armada 20261011135731-48f44e7b: pipeThrough uncancelled at 5004 ms, reader.cancel at 1502 ms).
@@ -667,18 +672,19 @@ export function nimbusSessionFiles(
   const at = (path: string): string => walkedPath(path, home);
   const files = cred === undefined ? session : session.as(cred);
 
-  const present = async <T>(path: string, syscall: string, read: (absolute: string) => Promise<T | null>): Promise<T> => {
+  // What the session answered, or ENOENT where it answered nothing.
+  const present = <T>(path: string, syscall: string, read: (absolute: string) => Promise<T | null>): Effect.Effect<T, VfsError> => {
     const absolute = at(path);
-    const answer = await atVfsPath(absolute, syscall, () => read(absolute));
 
-    if (answer === null) throw syscallError('ENOENT', syscall, absolute);
-
-    return answer;
+    return Effect.flatMap(
+      Effect.promise(async () => atVfsPath(absolute, syscall, () => read(absolute))),
+      (answer) => (answer === null ? Effect.fail(syscallError('ENOENT', syscall, absolute)) : Effect.succeed(answer)),
+    );
   };
 
   return {
-    readFile: (path) => present(path, 'open', (absolute) => files.readBytes(absolute)),
-    readRange: (path, offset, length) => present(path, 'read', (absolute) => files.readRange(absolute, offset, length)),
+    readFile: (path) => settle(present(path, 'open', (absolute) => files.readBytes(absolute))),
+    readRange: (path, offset, length) => settle(present(path, 'read', (absolute) => files.readRange(absolute, offset, length))),
     async writeFile(path, data) {
       const absolute = at(path);
 
@@ -695,7 +701,7 @@ export function nimbusSessionFiles(
 
       return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => ({ name: entry.name, type: direntType(entry.type) }));
     },
-    readlink: (path) => present(path, 'readlink', (absolute) => files.readlink(absolute)),
+    readlink: (path) => settle(present(path, 'readlink', (absolute) => files.readlink(absolute))),
     async stat(path, options) {
       const absolute = at(path);
       const stat = await atVfsPath(absolute, options?.follow === false ? 'lstat' : 'stat', () => (options?.follow === false ? files.lstat(absolute) : files.stat(absolute)));

@@ -14,12 +14,13 @@ import {
 import * as v from "valibot";
 import {
   APP_ROUTES, BUILTIN_SKILL_FILES, DRIVE_SKILLS_DIR, blueprintPagePath, compareCodeUnits, liveSharePagePath, entryRevision, formatBytes, joinDir, parseSkillFile, shortAge,
-  skillViewPath, workspaceDisplayTitle,
+  skillViewPath, textRenderOf, viewerKindOf, workspaceDisplayTitle,
   type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
   type SkillFileRefusal,
+  workspaceRoute,
 } from "@kinu.run/core";
-import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
-import { useMediaQuery } from "@/hooks/use-media-query";
+import { attempt, detach, diagnostics, settle, showing } from "@kinu.run/core/obs";
+import { WIDE_QUERY, useMediaQuery } from "@/hooks/use-media-query";
 import { ToolPage } from "@/components/ui/PageHeader";
 import { NavRow } from "@/components/ui/NavRow";
 import {
@@ -57,10 +58,8 @@ function folderHref(path: string): string {
 }
 
 function slateHref(slate: OwnedSlate): string {
-  return `/workspace/${encodeURIComponent(slate.workspace)}?slate=${encodeURIComponent(slate.id)}`;
+  return `${workspaceRoute(slate.workspace)}?slate=${encodeURIComponent(slate.id)}`;
 }
-
-const IMAGE = /\.(?:png|jpe?g|gif|webp|svg)$/iu;
 
 /** A tab or crumb press chose My stuff; a first visit lands on what holds something. */
 const ChosenState = v.object({ chosen: v.literal(true) });
@@ -147,7 +146,7 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
   tab: DriveTab; path: string; shown: DriveListing | null; places: readonly DriveTab[]; unseen: boolean;
 }) {
   // Drawn only from `lg`; the tree in it reads nothing while it is not drawn.
-  const drawn = useMediaQuery("(min-width: 1024px)");
+  const drawn = useMediaQuery(WIDE_QUERY);
   const listings = useFolderWay(drawn && tab === "mine", path, shown);
 
   if (!drawn) return null;
@@ -181,7 +180,7 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
 /** Below `lg`, the places as the row under the bar; with one place there is nothing to switch. */
 /** Below `lg`, where the places column is not drawn, the places are the tool's row under its header. */
 function PlacesRow({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
-  const column = useMediaQuery("(min-width: 1024px)");
+  const column = useMediaQuery(WIDE_QUERY);
 
   if (column || places.length < 2) return null;
 
@@ -285,11 +284,10 @@ function Section({ label, titled = true, heading = "quiet", rows = false, childr
   );
 }
 
+/** A cover reads a file's first lines only where they say what it is; markdown and HTML are core's kinds. */
 const TEXT = /\.(?:md|markdown|txt|csv|tsv|json|ya?ml|toml|ts|tsx|js|jsx|py|sh|css|html?)$/iu;
 
 const PROSE = /\.(?:md|markdown|txt)$/iu;
-
-const MARKDOWN = /\.(?:md|markdown)$/iu;
 
 const SHEET = /\.(?:csv|tsv)$/iu;
 
@@ -310,7 +308,7 @@ const pageLines = (markdown: string): CoverLine[] =>
 
 /** A skill's name over its description and steps, Markdown's first heading over the rest, else first lines. */
 function coverLines(text: string, name: string): [string | null, CoverLine[]] {
-  if (!MARKDOWN.test(name)) return [null, text.split("\n").slice(0, 14).map((line) => ({ text: line, heading: false }))];
+  if (textRenderOf(name) !== "markdown") return [null, text.split("\n").slice(0, 14).map((line) => ({ text: line, heading: false }))];
   const parsed = parseSkillFile(text);
 
   if (Result.isSuccess(parsed)) {
@@ -376,29 +374,37 @@ function TextPage({ text, name }: { text: string | null; name: string }) {
 /** The first lines of a text file, read once the tile is in view. */
 function TextCover({ path, name }: { path: string; name: string }) {
   const holder = useRef<HTMLSpanElement>(null);
+  const [shown, setShown] = useState(false);
   const [text, setText] = useState<string | null>(null);
 
   useEffect(() => {
     const element = holder.current;
 
     if (element === null) return;
-    let live = true;
 
     const observer = new IntersectionObserver((seen) => {
       if (!seen.some((entry) => entry.isIntersecting)) return;
       observer.disconnect();
-      readDriveText(path, 2048).then(
-        (file) => { if (live) setText(file.content ?? null); },
-        (...rejection: [unknown]) => {
-          diagnostics.failure("drive.cover_read_failed", toKinuError({ doing: `read ${path} for its tile`, cause: rejection[0], otherwise: "unavailable" }));
-        },
-      );
+      setShown(true);
     });
 
     observer.observe(element);
 
-    return () => { live = false; observer.disconnect(); };
-  }, [path]);
+    return () => { observer.disconnect(); };
+  }, []);
+
+  // Read once it has come into view: a cover that never does costs nothing.
+  useEffect(() => {
+    if (!shown) return;
+    let live = true;
+
+    detach(Effect.match(attempt({ doing: `read ${path} for its tile`, otherwise: "unavailable" }, () => readDriveText(path, 2048)), {
+      onSuccess: (file) => { if (live) setText(file.content ?? null); },
+      onFailure: (failed) => { diagnostics.failure("drive.cover_read_failed", failed); },
+    }));
+
+    return () => { live = false; };
+  }, [path, shown]);
 
   return <span ref={holder} className="absolute inset-0"><TextPage text={text} name={name} /></span>;
 }
@@ -631,8 +637,8 @@ function DriveNotices({ notice, onDismissNotice, listingPending, libraryResource
 
 function FileDrawer({ path, entry, onClose }: { path: string; entry: DriveEntry; onClose: () => void }) {
   return (
-    <Drawer onClose={onClose} data-drive-viewer="">
-      <FileViewer path={path} read={readDriveText} revision={entryRevision(entry)} rawHref={inlineUrl(path)} downloadHref={downloadUrl(path)} onClose={onClose} />
+    <Drawer label={path} onClose={onClose} data-drive-viewer="">
+      <FileViewer key={path} path={path} read={readDriveText} revision={entryRevision(entry)} rawHref={inlineUrl(path)} downloadHref={downloadUrl(path)} onClose={onClose} />
     </Drawer>
   );
 }
@@ -649,8 +655,8 @@ function BuiltinSkillDrawer({ name, onClose }: { name: string; onClose: () => vo
   const bytes = `data:text/markdown;charset=utf-8,${encodeURIComponent(BUILTIN_SKILL_FILES[name])}`;
 
   return (
-    <Drawer onClose={onClose} data-drive-viewer="">
-      <FileViewer path={skillViewPath(name)} read={readBuiltinSkill} revision="built-in" rawHref={bytes} downloadHref={bytes} onClose={onClose} />
+    <Drawer label={name} onClose={onClose} data-drive-viewer="">
+      <FileViewer key={name} path={skillViewPath(name)} read={readBuiltinSkill} revision="built-in" rawHref={bytes} downloadHref={bytes} onClose={onClose} />
     </Drawer>
   );
 }
@@ -851,7 +857,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
       menu={[
         { label: "Open", icon: <ArrowSquareOutIcon size={15} />, onSelect: () => void navigate(slateHref(slate)) },
         { label: "Share…", icon: <ShareNetworkIcon size={15} />, marker: "data-drive-share-slate", onSelect: () => setDialog({ kind: "share", slate }) },
-        { label: "Go to workspace", icon: <SquaresFourIcon size={15} />, onSelect: () => void navigate(`/workspace/${encodeURIComponent(slate.workspace)}`) },
+        { label: "Go to workspace", icon: <SquaresFourIcon size={15} />, onSelect: () => void navigate(workspaceRoute(slate.workspace)) },
       ]} />
   );
 
@@ -896,7 +902,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     return (
       <Tile key={entry.name} title={entry.name} icon={fileIcon(entry.name)} onOpen={() => show("file", entry.name)}
         picture={TEXT.test(entry.name) && entry.size > 0 ? <TextCover path={full} name={entry.name} />
-          : <FileCover name={entry.name} image={IMAGE.test(entry.name) ? inlineUrl(full) : undefined} />}
+          : <FileCover name={entry.name} image={viewerKindOf(entry.name) === "image" ? inlineUrl(full) : undefined} />}
         meta={entry.unused === undefined ? <span className="truncate">{[formatBytes(entry.size), age].filter(Boolean).join(" · ")}</span> : <NotUsed refusal={entry.unused} />}
         menu={fileMenu(entry)}
         attributes={{ "data-drive-entry": entry.name, "data-drive-kind": entry.kind, "data-drive-skill": "false" }} />

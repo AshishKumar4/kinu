@@ -6,6 +6,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, useReloadWhenMoved } from "@/hooks/use-async-resource";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
+import { countOf } from "@kinu.run/core";
 
 /** A trend needs this many rated days to say anything. */
 const TREND_DAYS = 3;
@@ -49,8 +50,8 @@ export function QualityView({ rpc, moved }: { rpc: WorkspaceRpc; moved: number }
             {week.satisfaction.mean.toFixed(1)}<span className="t-body p-text-3"> / 5</span>
           </span>
           <span className="t-meta min-w-0 p-text-3">
-            over the last 7 days · {week.rated} of {week.turns} {week.turns === 1 ? "turn" : "turns"} rated{thumbs}
-            {corrected > 0 ? ` · corrected ${String(corrected)} ${corrected === 1 ? "time" : "times"}` : ""}
+            over the last 7 days · {week.rated} of {countOf(week.turns, "turn")} rated{thumbs}
+            {corrected > 0 ? ` · corrected ${countOf(corrected, "time")}` : ""}
           </span>
         </div>
       )}

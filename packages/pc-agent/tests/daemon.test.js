@@ -20,6 +20,8 @@ const os = require('node:os');
 
 const path = require('node:path');
 
+const protocol = require('../src/device-protocol.json');
+
 const { tolerate } = require('@kinu.run/core/obs');
 
 /** The daemon snapshots these paths at load. Reload its module after this fixture declares them: another suite
@@ -783,18 +785,20 @@ describe('daemon device path confinement', () => {
     }
   });
 
-  test('a range answers what the file holds, however long a range was asked for', async () => {
+  // Audit 0916 M2: a range read until the file ended, however long the ask, so one ask could hold a whole large file.
+  test('a range answers what the file holds, and one longer than an answer may carry is refused', async () => {
     const root = scratchDir('daemon-range');
     const small = path.join(root, 'small.txt');
     fs.writeFileSync(small, 'twelve bytes');
     const ws = fakeWs();
 
-    // Allocating the asked length would be a terabyte before the first byte is read.
-    handle({ id: 'long-range', method: 'readRange', sandbox: scoped([root]), params: [small, 7, 2 ** 40] }, ws, {});
+    handle({ id: 'long-range', method: 'readRange', sandbox: scoped([root]), params: [small, 7, protocol.readRangeMaxBytes] }, ws, {});
+    handle({ id: 'too-long', method: 'readRange', sandbox: scoped([root]), params: [small, 0, protocol.readRangeMaxBytes + 1] }, ws, {});
     const frame = await ws.response('long-range');
 
     expect(frame.error).toBeUndefined();
     expect(Buffer.from(frame.result.content, 'base64').toString('utf8')).toBe('bytes');
+    expect((await ws.response('too-long')).error?.message).toContain('at most');
   });
 
   test('a directory lists completely, one page at a time', async () => {
@@ -817,9 +821,11 @@ describe('daemon device path confinement', () => {
     const byName = (left, right) => left.localeCompare(right);
     expect(listed.sort(byName)).toEqual(names.sort(byName));
 
-    // A hub from before paging names no page and still gets every entry.
+    // A hub from before paging names no page and still gets every entry; a page longer than an answer may carry is refused.
     handle({ id: 'unpaged', method: 'listFiles', sandbox: scoped([root]), params: [root] }, ws, {});
+    handle({ id: 'too-long', method: 'listFiles', sandbox: scoped([root]), params: [root, { offset: 0, limit: protocol.listPageMaxEntries + 1 }] }, ws, {});
     expect((await ws.response('unpaged')).result.map((entry) => entry.name).sort(byName)).toEqual(names.sort(byName));
+    expect((await ws.response('too-long')).error?.message).toContain('at most');
   });
 
   // 2026-10-14, the owner's machine: a device root of 56,762 entries cost a statPath round trip per entry, and the

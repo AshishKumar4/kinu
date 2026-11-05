@@ -2,9 +2,9 @@ import { useId, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/Button";
 import { ArrowBendUpLeftIcon, NotePencilIcon, PaperPlaneTiltIcon } from "@phosphor-icons/react";
 import { replySubject, type MailBox, type MailMessageView, type MailThreadView } from "@kinu.run/core";
-import { useLabelledStep } from "@/components/ui/ConfirmDialog";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { Modal } from "@/components/ui/Modal";
-import { Choice } from "@/components/ui/form";
+import { Select } from "@/components/ui/Select";
 import { saveMailDraft, sendMail, type MailWrite } from "@/lib/mail-api";
 import { TextArea, TextInput } from "@/components/ui/Field";
 
@@ -43,7 +43,7 @@ export function Compose({ boxes, initialPath, onClose, onSaved }: {
   };
 
   return (
-    <Modal title="New message" icon={<NotePencilIcon size={18} />} onClose={onClose} busy={disabled} maxWidthClass="max-w-xl"
+    <Modal title="New message" icon={<NotePencilIcon size={18} />} onClose={onClose} busy={disabled} width="md"
       footer={<>
         <Button variant="ghost" size="sm" disabled={disabled} onClick={onClose}>Discard</Button>
         <Button variant="secondary" size="sm" type="submit" form={form} name="intent" value="draft" disabled={disabled}>{busy === "Saving" ? "Saving…" : "Save draft"}</Button>
@@ -51,7 +51,7 @@ export function Compose({ boxes, initialPath, onClose, onSaved }: {
       </>}>
       <form id={form} onSubmit={submit} data-mail-compose-form className="space-y-2">
         <div className="t-meta flex items-center gap-2 p-text-3" data-mail-from>From
-          <div className="min-w-0 flex-1"><Choice label="From" value={path} onChange={setPath} disabled={disabled} options={boxes.map((box) => ({ value: box.path, label: box.address }))} /></div>
+          <div className="min-w-0 flex-1"><Select label="From" value={path} onChange={setPath} disabled={disabled} options={boxes.map((box) => ({ value: box.path, label: box.address }))} /></div>
         </div>
         <TextInput value={to} onChange={(event) => setTo(event.target.value)} type="email" multiple required placeholder="To" aria-label="To" disabled={disabled} />
         <TextInput value={cc} onChange={(event) => setCc(event.target.value)} type="email" multiple placeholder="Cc" aria-label="Cc" disabled={disabled} />

@@ -1,11 +1,12 @@
-/** Wrapped in `data-feedback-omit` so the capture omits this dialog. A failed send keeps the capture; nothing retries automatically. */
+/** Marked `data-feedback-omit` so the capture omits this dialog. A failed send keeps the capture; nothing retries automatically. */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 import { ArrowCounterClockwiseIcon, CameraIcon, MegaphoneIcon, RectangleIcon, EyeSlashIcon } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "./ui/Modal";
 import { Cause, Effect } from "effect";
-import { detach, diagnostics, renderThrownChain, toKinuError, tolerateAsync } from "@kinu.run/core/obs";
+import { detach, diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { request } from "@/lib/http";
 import * as v from "valibot";
 import {
   capturePage,
@@ -22,15 +23,13 @@ import {
   FEEDBACK_MAX_SCREENSHOT_BYTES,
   FEEDBACK_OMIT_ATTR,
   FEEDBACK_SCREENSHOT_TYPE,
+  countOf,
 } from "@kinu.run/core";
 import { TextArea } from "@/components/ui/Field";
 import { Checkbox } from "@/components/ui/Check";
 import { Surface } from "@/components/ui/Surface";
 
-const FeedbackReplySchema = v.object({
-  id: v.optional(v.string()),
-  error: v.optional(v.string()),
-});
+const FeedbackReplySchema = v.object({ id: v.optional(v.string()) });
 
 const WORKSPACE_ROUTES: Readonly<Record<string, true>> = Object.freeze({
   workspace: true, swarm: true, settings: true, triggers: true,
@@ -272,19 +271,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         form.set(FEEDBACK_FIELDS.screenshot, new File([blob], "feedback.png", { type: FEEDBACK_SCREENSHOT_TYPE }));
       }
 
-      const response = yield* Effect.promise(() => fetch(FEEDBACK_ENDPOINT, { method: "POST", body: form, signal: attempt.signal }));
-
-      // A non-endpoint body (e.g. proxy HTML) parses to {}; the status then carries the failure.
-      const parsed = v.safeParse(
-        FeedbackReplySchema,
-        yield* Effect.promise(() => tolerateAsync(() => response.json(), 'malformed-input')),
-      );
-
-      const reply = parsed.success ? parsed.output : {};
-
-      if (!response.ok) {
-        return yield* Effect.die(new Error(reply.error ?? `the server answered ${String(response.status)}`));
-      }
+      const reply = yield* request(FeedbackReplySchema, FEEDBACK_ENDPOINT, { method: "POST", body: form, signal: attempt.signal });
 
       setSend({ phase: "sent", id: reply.id ?? "" });
     }), (failed) => Effect.sync(() => sendFailed(Cause.squash(failed)))));
@@ -297,109 +284,107 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
 
   if (send.phase === "sent") {
     return (
-      <div {...{ [FEEDBACK_OMIT_ATTR]: "1" }}>
-        <Modal title="Feedback sent" onClose={onClose} icon={<MegaphoneIcon size={16} className="p-accent-fg" />}
-          footer={<Button variant="primary" size="md" onClick={onClose} data-feedback-done>Done</Button>}>
-          <p className="t-body p-text-2" data-feedback-sent={send.id}>
-            Thank you. Your report is with us{send.id.length > 0 ? ` as ${send.id.slice(0, 8)}` : ""}.
-          </p>
-        </Modal>
-      </div>
+      <Modal {...{ [FEEDBACK_OMIT_ATTR]: "1" }} title="Feedback sent" onClose={onClose} icon={<MegaphoneIcon size={16} className="p-accent-fg" />}
+        footer={<Button variant="primary" size="md" onClick={onClose} data-feedback-done>Done</Button>}>
+        <p className="t-body p-text-2" data-feedback-sent={send.id}>
+          Thank you. Your report is with us{send.id.length > 0 ? ` as ${send.id.slice(0, 8)}` : ""}.
+        </p>
+      </Modal>
     );
   }
 
   return (
-    <div {...{ [FEEDBACK_OMIT_ATTR]: "1" }}>
-      <Modal
-        title="Send feedback"
-        onClose={onClose}
-        busy={sending}
-        maxWidthClass="max-w-2xl"
-        icon={<MegaphoneIcon size={16} className="p-accent-fg" />}
-        footer={
-          <>
-            {/* Never disabled: aborts the POST in flight, otherwise closes the dialog. */}
-            <Button type="button" variant="ghost" size="sm"
-              onClick={sending ? stop : onClose} data-feedback-cancel={sending ? "stop" : "close"}>
-              {sending ? "Stop" : "Cancel"}
-            </Button>
-            <Button variant="primary" size="md" onClick={submit} disabled={!sendable} data-feedback-send>
-              {sendLabel(send.phase)}
-            </Button>
-          </>
-        }
-      >
-        <label className="block space-y-2">
-          <span className="t-status p-text-2">What happened?</span>
-          <TextArea className="resize-y" autoFocus rows={4} value={note} maxLength={FEEDBACK_MAX_NOTE_CHARS} onChange={(event) => setNote(event.target.value)} placeholder="What you expected, and what happened instead." data-feedback-note />
-        </label>
+    <Modal
+      {...{ [FEEDBACK_OMIT_ATTR]: "1" }}
+      pageScrolls
+      title="Send feedback"
+      onClose={onClose}
+      busy={sending}
+      width="md"
+      icon={<MegaphoneIcon size={16} className="p-accent-fg" />}
+      footer={
+        <>
+          {/* Never disabled: aborts the POST in flight, otherwise closes the dialog. */}
+          <Button type="button" variant="ghost" size="sm"
+            onClick={sending ? stop : onClose} data-feedback-cancel={sending ? "stop" : "close"}>
+            {sending ? "Stop" : "Cancel"}
+          </Button>
+          <Button variant="primary" size="md" onClick={submit} disabled={!sendable} data-feedback-send>
+            {sendLabel(send.phase)}
+          </Button>
+        </>
+      }
+    >
+      <label className="block space-y-2">
+        <span className="t-status p-text-2">What happened?</span>
+        <TextArea className="resize-y" autoFocus rows={4} value={note} maxLength={FEEDBACK_MAX_NOTE_CHARS} onChange={(event) => setNote(event.target.value)} placeholder="What you expected, and what happened instead." data-feedback-note />
+      </label>
 
-        <div className="space-y-2">
-          <Checkbox checked={wanted} onChange={setWanted} data-feedback-include-shot=""
-            label={<span className="flex items-center gap-2"><CameraIcon size={16} />Include a screenshot of this page</span>} />
+      <div className="space-y-2">
+        <Checkbox checked={wanted} onChange={setWanted} data-feedback-include-shot=""
+          label={<span className="flex items-center gap-2"><CameraIcon size={16} />Include a screenshot of this page</span>} />
 
-          {shot.phase === "capturing" && (
-            <p className="t-meta p-text-3" data-feedback-shot="capturing">Taking the screenshot…</p>
-          )}
+        {shot.phase === "capturing" && (
+          <p className="t-meta p-text-3" data-feedback-shot="capturing">Taking the screenshot…</p>
+        )}
 
-          {shot.phase === "failed" && (
-            <p className="t-meta p-warn" data-feedback-shot="failed">
-              No screenshot: {shot.reason}. Your note can still be sent on its own.
-            </p>
-          )}
-
-          {ready && (
-            <div className="space-y-2" data-feedback-shot="ready">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button type="button" size="sm" variant={tool === "box" ? "secondary" : "ghost"}
-                  onClick={() => setTool("box")} data-feedback-tool="box">
-                  <RectangleIcon size={14} /> Box
-                </Button>
-                <Button type="button" size="sm" variant={tool === "hide" ? "secondary" : "ghost"}
-                  onClick={() => setTool("hide")} data-feedback-tool="hide">
-                  <EyeSlashIcon size={14} /> Hide
-                </Button>
-                <Button type="button" size="sm" variant="ghost" disabled={marks.length === 0}
-                  onClick={() => setMarks((current) => current.slice(0, -1))} data-feedback-undo>
-                  Undo
-                </Button>
-                <Button type="button" size="sm" variant="ghost" onClick={take} data-feedback-retake>
-                  <ArrowCounterClockwiseIcon size={14} /> Retake
-                </Button>
-                <span className="t-meta ml-auto p-text-3" data-feedback-shot-meta={String(shot.capture.redacted)}>
-                  {shot.capture.width}×{shot.capture.height}
-                  {shot.capture.redacted > 0
-                    ? ` · ${String(shot.capture.redacted)} field${shot.capture.redacted === 1 ? "" : "s"} hidden`
-                    : ""}
-                </span>
-              </div>
-              <Surface look="outlined" as="canvas"
-                ref={canvasRef}
-                onPointerDown={onDown}
-                onPointerMove={onMove}
-                onPointerUp={onUp}
-                className="block w-full cursor-crosshair touch-none"
-                data-feedback-canvas
-              />
-              <p className="t-meta p-text-3">
-                Drag on the image to {tool === "hide" ? "cover something" : "draw a box"}.
-              </p>
-            </div>
-          )}
-        </div>
-
-        {send.phase === "failed" && (
-          <p className="t-meta p-warn" data-feedback-error>
-            Not sent: {send.reason}. Your note and screenshot are still here, so you can retry.
+        {shot.phase === "failed" && (
+          <p className="t-meta p-warn" data-feedback-shot="failed">
+            No screenshot: {shot.reason}. Your note can still be sent on its own.
           </p>
         )}
 
-        <p className="t-meta p-text-3" data-feedback-consent>
-          Sending shares your note, the page address, your account email, and the screenshot if you
-          include one. Password fields are blacked out before upload. Use{" "}
-          <span className="p-text-2">Hide</span> for anything else.
+        {ready && (
+          <div className="space-y-2" data-feedback-shot="ready">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="button" size="sm" variant={tool === "box" ? "secondary" : "ghost"}
+                onClick={() => setTool("box")} data-feedback-tool="box">
+                <RectangleIcon size={14} /> Box
+              </Button>
+              <Button type="button" size="sm" variant={tool === "hide" ? "secondary" : "ghost"}
+                onClick={() => setTool("hide")} data-feedback-tool="hide">
+                <EyeSlashIcon size={14} /> Hide
+              </Button>
+              <Button type="button" size="sm" variant="ghost" disabled={marks.length === 0}
+                onClick={() => setMarks((current) => current.slice(0, -1))} data-feedback-undo>
+                Undo
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={take} data-feedback-retake>
+                <ArrowCounterClockwiseIcon size={14} /> Retake
+              </Button>
+              <span className="t-meta ml-auto p-text-3" data-feedback-shot-meta={String(shot.capture.redacted)}>
+                {shot.capture.width}×{shot.capture.height}
+                {shot.capture.redacted > 0
+                  ? ` · ${countOf(shot.capture.redacted, "field")} hidden`
+                  : ""}
+              </span>
+            </div>
+            <Surface look="outlined" as="canvas"
+              ref={canvasRef}
+              onPointerDown={onDown}
+              onPointerMove={onMove}
+              onPointerUp={onUp}
+              className="block w-full cursor-crosshair touch-none"
+              data-feedback-canvas
+            />
+            <p className="t-meta p-text-3">
+              Drag on the image to {tool === "hide" ? "cover something" : "draw a box"}.
+            </p>
+          </div>
+        )}
+      </div>
+
+      {send.phase === "failed" && (
+        <p className="t-meta p-warn" data-feedback-error>
+          Not sent: {send.reason}. Your note and screenshot are still here, so you can retry.
         </p>
-      </Modal>
-    </div>
+      )}
+
+      <p className="t-meta p-text-3" data-feedback-consent>
+        Sending shares your note, the page address, your account email, and the screenshot if you
+        include one. Password fields are blacked out before upload. Use{" "}
+        <span className="p-text-2">Hide</span> for anything else.
+      </p>
+    </Modal>
   );
 }

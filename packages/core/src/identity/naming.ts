@@ -194,7 +194,7 @@ export function resolveWorkspaceTitle(opts: {
 }
 
 /** DNS label (63) minus the 32 the preview label spends on port, handle and token (`preview/nimbus-preview-host.ts`). Refused, not truncated: a truncated address names a different workspace. */
-const WORKSPACE_ADDRESS_MAX = 31;
+export const WORKSPACE_ADDRESS_MAX = 31;
 
 const WorkspaceAddressSchema = v.pipe(v.string(), v.maxLength(WORKSPACE_ADDRESS_MAX), v.regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/));
 

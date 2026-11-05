@@ -5,7 +5,6 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { sqlCheckList } from '../utils/sql';
 import { nanoid } from '../utils/nanoid';
-import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { scrubSecrets } from '../safety/secret-patterns';
 
@@ -63,7 +62,7 @@ export function recordLesson(sql: SqlExecutor, actor: ActorHandle, input: {
 }): string {
   actor.assertCurrent();
   const id = input.key === undefined ? `lsn-${nanoid()}` : `lsn-${input.key}`;
-  const now = input.now ?? nowMs();
+  const now = input.now ?? Date.now();
   void sql`INSERT INTO lessons (actor_id, id, turn_ids, text, source, created_at, corroborated_at)
       VALUES (${actor.actorId}, ${id}, ${JSON.stringify(input.turnIds)}, ${scrubSecrets(input.text)}, ${input.source},
               ${now}, ${input.status === 'corroborated' ? now : null})

@@ -6,7 +6,7 @@
  */
 import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { CaretRightIcon } from "@phosphor-icons/react";
-import { toolRunSummary, type RunStep, type ToolRunSummary } from "@kinu.run/core";
+import { toolRunSummary, type RunStep, type ToolRunSummary, countOf } from "@kinu.run/core";
 import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { Effect } from "effect";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -288,7 +288,7 @@ export function TurnRollup({ line, phases, written, onSeen, children }: { line: 
   return (
     <ChatDisclosure live={false} folded="hidden" follow={String(phases)} viewport="max-h-36"
       label={<span key={written ?? ""} className={written === null ? undefined : "animate-fade-in"}>{written ?? line}</span>}
-      after={<span className="t-body shrink-0 p-text-3"> · {phases} {phases === 1 ? "phase" : "phases"}</span>}
+      after={<span className="t-body shrink-0 p-text-3"> · {countOf(phases, "phase")}</span>}
       data-turn-rollup={phases} data-phase-title={written === null ? "calls" : "model"} onSeen={onSeen}>
       {children}
     </ChatDisclosure>

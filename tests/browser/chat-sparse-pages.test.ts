@@ -3,7 +3,7 @@ import { expect, test } from 'bun:test';
 import type { Page } from 'puppeteer';
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
-const CHAT = '.p-thread-column.overflow-y-auto';
+const CHAT = '[data-transcript].overflow-y-auto';
 
 async function paint(page: Page): Promise<void> {
   await page.evaluate(() => new Promise<void>((resolve) => {

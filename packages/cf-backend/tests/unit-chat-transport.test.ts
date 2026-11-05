@@ -12,6 +12,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import type { Connection } from 'agents';
 import { ChatWireTransport, type ChatWire } from '../src/chat-transport';
 import { socketConnection } from './helpers/bindings';
+import { chatRequest } from './helpers/chat-frames';
 
 const FrameSchema = v.looseObject({
   type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()), landed: v.optional(v.string()),
@@ -123,7 +124,6 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   const transport = new ChatWireTransport(wire);
 
-
   return {
     /** The object after an eviction mid-turn: a fresh transport over the same database and sockets, the turn owed. */
     afterEviction: () => {
@@ -153,7 +153,7 @@ function openRequest(landing: SendLanding | HarnessRefusal = 'turn', loadHistory
   return {
     ...h,
     async open(conn: Connection, id: string, text: string): Promise<{ answered: Promise<boolean> }> {
-      const answered = h.transport.onMessage(conn, chatRequest(id, text));
+      const answered = h.transport.onMessage(conn, planRequest(id, text));
       await h.taken(h.sent.length + 1);
 
       return { answered };
@@ -166,24 +166,16 @@ function openRequest(landing: SendLanding | HarnessRefusal = 'turn', loadHistory
   };
 }
 
-function chatRequest(id: string, text: string, file?: { url: string; mediaType: string; filename: string }): string {
-  return JSON.stringify({
-    type: 'cf_agent_use_chat_request', id,
-    init: { method: 'POST', body: JSON.stringify({
-      messages: [{ id: `input-${id}`, role: 'user', parts: [
-        ...(file ? [{ type: 'file', ...file }] : []), { type: 'text', text },
-      ], metadata: { kinuMode: 'plan' } }],
-      trigger: 'submit-message',
-    }) },
-  });
-}
+/** A Plan-mode send, with a file before its text when given. */
+const planRequest = (id: string, text: string, file?: { url: string; mediaType: string; filename: string }): string =>
+  chatRequest(id, text, { metadata: { kinuMode: 'plan' }, before: file === undefined ? [] : [{ type: 'file', ...file }] });
 
 test("connect publication waits for the transcript, and chat admission for the agent's answer of what it holds", async () => {
   const pending = Promise.withResolvers<UIMessage[]>();
   const h = harness('turn', () => pending.promise, async () => { await pending.promise; });
   const connection = h.connection('waiting-history');
   const connected = h.transport.onConnect(connection);
-  const admitted = h.transport.onMessage(connection, chatRequest('replayed', 'already stored'));
+  const admitted = h.transport.onMessage(connection, planRequest('replayed', 'already stored'));
 
   expect(h.connectionFrames(connection.id)).toEqual([]);
   expect(h.sent).toEqual([]);
@@ -257,7 +249,7 @@ const STEP_ONE: UIMessageChunk[] = [
  *  read its replay waits on answers once released or refused. */
 async function joinedWhileLedgerReads() {
   const h = harness();
-  await h.transport.onMessage(h.connection('c1'), chatRequest('req-1', 'hello'));
+  await h.transport.onMessage(h.connection('c1'), planRequest('req-1', 'hello'));
   const revived = h.afterEviction();
   h.recorded.push([{ type: 'text', text: 'one', state: 'done' }]);
 
@@ -288,13 +280,13 @@ describe('ChatWireTransport', () => {
     const conn = h.connection('c1');
     const file = { url: 'data:text/plain;base64,aGk=', mediaType: 'text/plain', filename: 'note.txt' };
 
-    expect(await h.transport.onMessage(conn, chatRequest('req-1', 'hello', file))).toBe(true);
+    expect(await h.transport.onMessage(conn, planRequest('req-1', 'hello', file))).toBe(true);
     // The loop's drain writes the row when the splice lands, never the transport.
     expect(h.sent).toEqual([{ text: 'hello', files: [file], id: 'input-req-1', mode: 'plan' }]);
     expect(h.history).toEqual([]);
     expect(h.broadcasts).toEqual([{ frame: { type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true, landed: 'mid-turn' }, exclude: undefined }]);
     // The loop's reservation says the message was taken, so a replay asks for no turn.
-    await h.transport.onMessage(conn, chatRequest('req-1', 'hello', file));
+    await h.transport.onMessage(conn, planRequest('req-1', 'hello', file));
     expect(h.sent).toHaveLength(1);
     expect(h.responses()).toHaveLength(2);
   });
@@ -303,7 +295,7 @@ describe('ChatWireTransport', () => {
     const landing = Promise.withResolvers<SendLanding>();
     const h = harness(landing.promise);
     const conn = h.connection('c1');
-    const admitted = h.transport.onMessage(conn, chatRequest('req-1', 'one more thing'));
+    const admitted = h.transport.onMessage(conn, planRequest('req-1', 'one more thing'));
     await h.taken(1);
 
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'one more thing' }] });
@@ -330,9 +322,9 @@ describe('ChatWireTransport', () => {
     const landing = Promise.withResolvers<SendLanding>();
     const h = harness(landing.promise);
     const conn = h.connection('c1');
-    const first = h.transport.onMessage(conn, chatRequest('req-a', 'first'));
+    const first = h.transport.onMessage(conn, planRequest('req-a', 'first'));
     await h.taken(1);
-    const second = h.transport.onMessage(conn, chatRequest('req-b', 'second'));
+    const second = h.transport.onMessage(conn, planRequest('req-b', 'second'));
     await h.taken(2);
 
     h.history.push({ id: 'input-req-a', role: 'user', parts: [{ type: 'text', text: 'first\n\nsecond' }] });
@@ -353,7 +345,7 @@ describe('ChatWireTransport', () => {
     const h = harness({ refuse: 'send requires the message text' });
     const conn = h.connection('c1');
 
-    await h.transport.onMessage(conn, chatRequest('req-1', '   '));
+    await h.transport.onMessage(conn, planRequest('req-1', '   '));
     expect(h.responses()).toEqual([{ type: 'cf_agent_use_chat_response', id: 'req-1', body: 'send requires the message text', done: true, error: true }]);
     expect(h.history).toEqual([]);
     expect(h.broadcasts.filter((b) => b.frame.type === 'cf_agent_chat_messages')).toEqual([]);
@@ -364,7 +356,7 @@ describe('ChatWireTransport', () => {
   test('words a Stop handed back end their request plainly, and nothing is written', async () => {
     const h = harness({ refuse: 'message input-req-1 was handed back before a turn took it', handedBack: true });
 
-    expect(await h.transport.onMessage(h.connection('c1'), chatRequest('req-1', 'stopped words'))).toBe(true);
+    expect(await h.transport.onMessage(h.connection('c1'), planRequest('req-1', 'stopped words'))).toBe(true);
     expect(h.responses()).toEqual([{ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true }]);
     expect(h.history).toEqual([]);
   });
@@ -397,7 +389,7 @@ describe('ChatWireTransport', () => {
     const h = harness({ refuse: 'the send ledger is unreadable', fault: true });
     const conn = h.connection('c1');
 
-    await expect(h.transport.onMessage(conn, chatRequest('req-1', 'hello'))).rejects.toThrow('the loop failed to take a client message');
+    await expect(h.transport.onMessage(conn, planRequest('req-1', 'hello'))).rejects.toThrow('the loop failed to take a client message');
     // Without the frame the sending tab waits on a turn-end that never comes.
     expect(h.responses()).toHaveLength(1);
     expect(h.responses()[0]).toMatchObject({ id: 'req-1', done: true, error: true });
@@ -408,7 +400,7 @@ describe('ChatWireTransport', () => {
     const h = harness('turn', undefined, () => Promise.reject(new Error('the agent is unreachable')));
     const conn = h.connection('c1');
 
-    await expect(h.transport.onMessage(conn, chatRequest('req-1', 'hello'))).rejects.toThrow('the loop failed to take a client message');
+    await expect(h.transport.onMessage(conn, planRequest('req-1', 'hello'))).rejects.toThrow('the loop failed to take a client message');
     expect(h.responses()).toHaveLength(1);
     expect(h.responses()[0]).toMatchObject({ id: 'req-1', done: true, error: true });
   });
@@ -435,8 +427,8 @@ describe('ChatWireTransport', () => {
     const h = harness('turn');
     const conn = h.connection('c1');
 
-    const a = h.transport.onMessage(conn, chatRequest('req-a', 'a'));
-    const b = h.transport.onMessage(conn, chatRequest('req-b', 'b'));
+    const a = h.transport.onMessage(conn, planRequest('req-a', 'a'));
+    const b = h.transport.onMessage(conn, planRequest('req-b', 'b'));
     await Promise.all([a, b]);
 
     expect(h.sent.map((input) => [input.id, input.text])).toEqual([['input-req-a', 'a'], ['input-req-b', 'b']]);
@@ -806,7 +798,7 @@ describe('ChatWireTransport', () => {
   test('a re-opened turn\'s replay restates the steps finished before this activation ahead of the relay\'s', async () => {
     const h = harness();
     const first = h.connection('c1');
-    await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
+    await h.transport.onMessage(first, planRequest('req-1', 'hello'));
     const revived = h.afterEviction();
     h.recorded.push(
       [{ type: 'tool-shell', toolCallId: 'call_0', state: 'output-available', input: { command: 'echo 1' }, output: '1' }],
@@ -874,7 +866,7 @@ describe('ChatWireTransport', () => {
     ['holds none of the steps of', [], 1],
   ])('a re-opened turn whose ledger %s the turn re-opened at is never replayed as complete: the tab redials', async (_, steps, finished) => {
     const h = harness();
-    await h.transport.onMessage(h.connection('c1'), chatRequest('req-1', 'hello'));
+    await h.transport.onMessage(h.connection('c1'), planRequest('req-1', 'hello'));
     const revived = h.afterEviction();
 
     h.recorded.push(...steps);
@@ -965,7 +957,7 @@ describe('ChatWireTransport', () => {
   test('a tab that connects after an eviction waits on the owed turn, then follows its re-drive', async () => {
     const h = harness();
     const first = h.connection('c1');
-    await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
+    await h.transport.onMessage(first, planRequest('req-1', 'hello'));
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }]));
 
@@ -1020,14 +1012,14 @@ describe('ChatWireTransport', () => {
   test('a tab still in its handshake that sends a message spliced into the live turn hears its landing', async () => {
     const h = harness(['turn', 'mid-turn']);
     const first = h.connection('c1');
-    await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
+    await h.transport.onMessage(first, planRequest('req-1', 'hello'));
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }]));
 
     const second = h.connection('c2');
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
     await h.transport.onConnect(second);
-    await h.transport.onMessage(second, chatRequest('req-2', 'and also this'));
+    await h.transport.onMessage(second, planRequest('req-2', 'and also this'));
 
     const landings = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
       .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === 'req-2' && frame.done === true);
@@ -1105,7 +1097,7 @@ describe('ChatWireTransport', () => {
     const { answered } = await h.open(conn, 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     await h.transport.observe(chunks([{ type: 'start' }, { type: 'abort' }]));
-    await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
+    await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN, interrupted: true });
     h.transport.closeTurn('input-req-1', { messages: [...h.history], older: null });
     await h.land(answered);
 
@@ -1263,7 +1255,7 @@ describe('a tab that reconnects mid-turn', () => {
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]));
 
-    if (stopped) await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
+    if (stopped) await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN, interrupted: true });
     h.transport.closeTurn('input-req-1', { messages: [...h.history], older: null });
     await h.land(answered);
 

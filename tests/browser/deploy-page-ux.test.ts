@@ -328,6 +328,51 @@ describe('the deploy page', () => {
     });
   });
 
+  // Owner, 2026-10-31: Connectors are an optional step before Deploy. A new Kinu's GitHub app is made for the address it
+  // will have and its return lands back on Ready; with no address yet (no workers.dev name), it waits for the Kinu.
+  test('before Deploy, GitHub\'s app is made for the address the Kinu will have and Google\'s client is held for it', async () => {
+    await withGallery(async (gallery) => {
+      const page = await opened(gallery, 'ready');
+      const posted = Promise.withResolvers<{ readonly body: string }>();
+
+      await page.setRequestInterception(true);
+      page.on('request', (request) => detach(Effect.promise(async () => {
+        if (!request.url().startsWith('https://github.com/')) return request.continue();
+        posted.resolve({ body: request.postData() ?? '' });
+
+        return request.respond({ status: 200, contentType: 'text/html', body: '<p>GitHub</p>' });
+      })));
+      await page.waitForSelector('[data-deploy-connectors-before] [data-deploy-connector="google"] button');
+      await pressNamed(page, 'Use your own app');
+      await page.type('[data-deploy-connector="google"] input[aria-label="Client ID"]', '123-abc.apps.googleusercontent.com');
+      await page.type('[data-deploy-connector="google"] input[aria-label="Client secret"]', 'GOCSPX-secret');
+      await pressNamed(page, 'Save');
+      await page.waitForFunction(() => document.querySelector('[data-deploy-connector="google"]')?.textContent?.includes('Kinu takes it when it deploys') === true);
+      const sent = (await asked(page)).filter((each) => each.route === 'google').map((each) => each.body);
+
+      // The tab leaves for GitHub's form, so what it sent is read off the form GitHub was handed.
+      await page.click('[data-deploy-connectors-before] [data-deploy-connector="github"] button');
+      const manifest = v.parse(v.object({ url: v.string() }), JSON.parse(new URLSearchParams((await posted.promise).body).get('manifest') ?? '{}'));
+
+      const back = await opened(gallery, 'ready', '/deploy?github=kinu-ada&kinu=kinu&before=1');
+
+      await screenBecomes(back, 'ready');
+      await back.waitForFunction(() => document.querySelector('[data-deploy-connector="github"]')?.textContent?.includes('Its app is made') === true);
+      const waiting = await opened(gallery, 'no-subdomain');
+
+      await waiting.waitForSelector('[data-deploy-connectors-before] [data-deploy-connector="github"]');
+
+      expect({
+        manifest: manifest.url, sent,
+        waiting: await waiting.$$eval('[data-deploy-connectors-before] button', (buttons) => buttons.map((button) => button.textContent)),
+      }).toEqual({
+        manifest: 'https://kinu.ada.workers.dev',
+        sent: [{ account: ACCOUNT, name: 'kinu', client: { clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-secret' }, before: { kind: 'workers' } }],
+        waiting: [],
+      });
+    });
+  });
+
   // Google works through Composio with nothing set here; its own app is the steps Google's console needs, then a paste.
   test('Google\'s own app is set up by its steps and saved for the Kinu; a client that is not Google\'s is refused', async () => {
     await withGallery(async (gallery) => {

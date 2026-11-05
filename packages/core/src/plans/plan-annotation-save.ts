@@ -1,3 +1,5 @@
+import { serialQueue } from '@kinu.run/agent-utils';
+
 export interface PlanAnnotationSaveQueue<T> {
   enqueue(values: readonly T[]): Promise<boolean>;
   pending(): number;
@@ -7,20 +9,15 @@ export interface PlanAnnotationSaveQueue<T> {
 export function createPlanAnnotationSaveQueue<T>(
   write: (values: readonly T[]) => Promise<boolean>,
 ): PlanAnnotationSaveQueue<T> {
-  let tail = Promise.resolve();
+  const inOrder = serialQueue();
   let pending = 0;
 
   return {
     enqueue(values) {
       const snapshot = [...values];
       pending++;
-      const result = tail.then(() => write(snapshot));
-      tail = result.then(
-        () => { pending--; },
-        () => { pending--; },
-      );
 
-      return result;
+      return inOrder(() => write(snapshot)).finally(() => { pending--; });
     },
     pending: () => pending,
   };

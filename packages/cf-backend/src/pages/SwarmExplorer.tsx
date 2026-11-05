@@ -7,7 +7,8 @@ import { ArrowLeftIcon, GitForkIcon, TreeStructureIcon } from "@phosphor-icons/r
 import { SwarmTree } from "@/components/swarm-tree";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { findForkNode, terminalForkNode, treeStats, type ExplorerSelection } from "@kinu.run/core/swarm-view";
-import { EmptyState, formatScore } from "@/components/surfaces/shared";
+import { formatScore } from "@/components/surfaces/shared";
+import { Empty } from "@/components/ui/Empty";
 import {
   runStateLine, FrontierPanel, RunLivenessPanel, RunRefusalNote, SwarmConfigDisclosure, useForkRunTree,
 } from "@/components/surfaces/ExplorationSurface";
@@ -21,6 +22,7 @@ import { useElementSize } from "@/hooks/use-element-size";
 import { runLiveness } from "@kinu.run/core/swarm-view";
 import type { ForkRunParams, ForkRunSummary } from "@kinu.run/core";
 import { Surface } from "@/components/ui/Surface";
+import { countOf, workspaceRoute } from "@kinu.run/core";
 
 function CanvasNotice({ failure, loading, what, waiting, empty, onRetry }: {
   failure: string | null;
@@ -42,13 +44,14 @@ function CanvasNotice({ failure, loading, what, waiting, empty, onRetry }: {
 
   return (
     <div className="h-full flex items-center justify-center">
-      <EmptyState icon={<GitForkIcon size={28} />} title={empty} />
+      <Empty icon={GitForkIcon} title={empty} />
     </div>
   );
 }
 
 export default function SwarmExplorer() {
-  const { agentId } = useParams();
+  // Its route always names the workspace.
+  const { agentId = "" } = useParams();
   const [params] = useSearchParams();
   const runId = params.get("run");
   const state = useKinu(agentId);
@@ -85,7 +88,7 @@ export default function SwarmExplorer() {
   return (
     <Surface look="page" className="h-full flex flex-col">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 border-b p-border">
-        <Link to={`/workspace/${agentId}`} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
+        <Link to={workspaceRoute(agentId)} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
         <div className="hidden sm:block h-4 shrink-0 border-l p-border" />
         <GitForkIcon size={16} className="p-accent-fg shrink-0" />
         <span className="t-label p-text shrink-0">Swarm explorer</span>
@@ -201,7 +204,7 @@ function ExplorerBody({
             <span className="p-text-2">Winner: <strong className="p-success" data-tree-winner>{formatScore(winner.value)}</strong></span>
           )}
           {frontier !== null && (
-            <span className="p-text-2">Front: <strong className="p-text">{frontier.candidates.length} {frontier.candidates.length === 1 ? "candidate" : "candidates"}</strong></span>
+            <span className="p-text-2">Front: <strong className="p-text">{countOf(frontier.candidates.length, "candidate")}</strong></span>
           )}
           {run.status === "running" && (
             <span className="flex items-center gap-1 p-accent-fg">

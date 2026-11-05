@@ -12,6 +12,13 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin);
 }
 
+/** The bytes a base64 text decodes to, a data URL's payload alike, measured without decoding it. */
+export function base64Bytes(text: string): number {
+  const payload = text.startsWith('data:') ? text.slice(text.indexOf(',') + 1) : text;
+
+  return Math.floor(payload.replace(/=+$/u, '').length * 3 / 4);
+}
+
 export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);

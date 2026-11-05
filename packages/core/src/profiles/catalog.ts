@@ -28,7 +28,7 @@ import {
 } from '../types/profile';
 
 export type {
-  BuiltinTierId, ProfileAuthority, ProfileCatalog, RoleCatalog, RoleId,
+  ProfileAuthority, ProfileCatalog, RoleCatalog, RoleId,
   TierAssignment, TierAssignments, TierId, RoleDefinition, ProfileCatalogEnvelope,
 } from '../types/profile';
 

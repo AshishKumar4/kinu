@@ -19,6 +19,7 @@ import { VfsExportPageSchema } from '../vfs/export-page';
 import { isNimbusTable } from '../vfs/nimbus-tables';
 import { isTreeRelativePath, SHARED_ROOTS, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { FOLDER_SUBTREE } from '../vfs/resolve';
+import { columnNames, listedTables, quoteIdent } from '../utils/sql';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
 
@@ -48,15 +49,17 @@ const EXCLUDED_TABLES = {
   conversation_fts_state: true,
   // Derived from the notes the archive carries: the next open indexes them.
   memory_note_chunks: true,
-  memory_note_chunks_fts: true,
   memory_note_files: true,
   // Folded from the run events the archive carries, up to a rowid a restore renumbers: the next read folds them again.
   agent_figure_folds: true,
   memory_projection_updates: true,
 } satisfies Record<string, true>;
 
-function isInternalTable(name: string): boolean {
-  return name.startsWith('sqlite_') || name.startsWith('_cf_');
+/** An FTS5 index's `content` option: the table it indexes, `''` for none (contentless), null where it keeps its own. */
+function ftsContent(ddl: string): string | null {
+  const option = /\bcontent\s*=\s*(?:'((?:[^']|'')*)'|"((?:[^"]|"")*)"|([^\s,)]+))/iu.exec(ddl);
+
+  return option === null ? null : option[1] ?? option[2] ?? option[3] ?? '';
 }
 
 export const ARCHIVE_PIN_PREFIX = 'archive:';
@@ -310,27 +313,28 @@ function readSchema(sql: SqlExec): SchemaObject[] {
       WHERE sql IS NOT NULL AND type IN ('table', 'index', 'trigger', 'view')`,
   ).toArray().map((row) => v.parse(SchemaRowSchema, row));
 
-  const virtualNames = rows
-    .filter((r) => r.type === 'table' && /^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(r.sql))
-    .map((r) => r.name);
-
-  // FTS5 shadow tables are rebuilt from the virtual table, never dumped.
-  const isShadow = (name: string) => virtualNames.some((virtualName) => name.startsWith(`${virtualName}_`));
-
+  const listed = new Map(listedTables(sql).map((table) => [table.name, table]));
   const objects: SchemaObject[] = [];
 
   for (const row of rows) {
     if (
-      isInternalTable(row.name)
+      row.name.startsWith('sqlite_') || row.name.startsWith('_cf_')
       || Object.hasOwn(EXCLUDED_TABLES, row.name)
       || Object.hasOwn(EXCLUDED_TABLES, row.tbl_name)
       || row.name.startsWith('conversation_rev_')
     ) continue;
 
-    if (row.type === 'table' && isShadow(row.name)) continue;
-    const virtual = row.type === 'table' && virtualNames.includes(row.name);
-    // External-content FTS is re-derived after the rows land, not dumped.
-    const derived = virtual && /\bcontent\s*=\s*[^'"\s)]/i.test(row.sql);
+    const table = row.type === 'table' ? listed.get(row.name) : undefined;
+
+    // An FTS index's own tables are rebuilt with it, never dumped.
+    if (table?.type === 'shadow') continue;
+    const virtual = table?.type === 'virtual';
+    const content = virtual ? ftsContent(row.sql) : null;
+
+    // A contentless index holds nothing to dump or rebuild from: its owner indexes again on the next open.
+    if (content === '') continue;
+    // An external-content index is rebuilt from its rows once they land, not dumped.
+    const derived = content !== null;
     objects.push({
       kind: row.type,
       name: row.name,
@@ -339,7 +343,7 @@ function readSchema(sql: SqlExec): SchemaObject[] {
       virtual,
       derived,
       dumpRows: row.type === 'table' && !derived,
-      withoutRowid: /WITHOUT\s+ROWID/i.test(row.sql),
+      withoutRowid: table?.withoutRowid ?? false,
     });
   }
 
@@ -367,10 +371,6 @@ function countArchivedActors(sql: SqlExec): number {
   const counted = sql.exec(`SELECT COUNT(*) AS n FROM workspace_actors`).toArray()[0];
 
   return v.parse(v.number(), counted?.n);
-}
-
-function quoteIdent(name: string): string {
-  return `"${name.replace(/"/g, '""')}"`;
 }
 
 const KeysetValueSchema = v.union([v.string(), v.number()]);
@@ -506,7 +506,7 @@ function dumpRows(
 /** Tables an agent's own database holds rows of that actor in; the roster copies are the workspace's. */
 function agentTables(sql: SqlExec): SchemaObject[] {
   return readSchema(sql).filter((o) => o.dumpRows && o.name !== 'workspace_actors' && o.name !== 'workspace_identity'
-    && sql.exec(`PRAGMA table_info(${quoteIdent(o.name)})`).toArray().some((column) => v.parse(v.object({ name: v.string() }), column).name === 'actor_id'));
+    && columnNames(sql, o.name).includes('actor_id'));
 }
 
 export function readAgentArchivePage(sql: SqlExec, actorId: string, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage> {

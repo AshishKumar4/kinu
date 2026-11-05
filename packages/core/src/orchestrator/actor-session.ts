@@ -4,7 +4,7 @@ import type { ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid';
 import { serialQueue } from '@kinu.run/agent-utils';
-import { INTERRUPTED_TURN, measureTurnRequest, type ChatEvent, type ChatOptions, type StepRecord } from '../chat';
+import { INTERRUPTED_TURN, interruptedTurn, isInterruptedTurn, measureTurnRequest, type ChatEvent, type ChatOptions, type StepRecord } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
 import type { WorkMode } from '../types/turn';
@@ -786,7 +786,7 @@ export class ActorSession {
     active.phase = 'settling';
     const tally = newTurnTally(0);
 
-    tally.failure = new Error(INTERRUPTED_TURN);
+    tally.failure = interruptedTurn();
     active.ended = { steps: 0, interrupted: true, failure: tally.failure };
 
     return await this.turnResult(lease, active, tally, null);
@@ -896,9 +896,11 @@ export class ActorSession {
       if (!tally.completed) this.messages.push(...this.orchestrator.inbox.recordedMessages());
       tally.failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
 
-      if (tally.failure.message !== INTERRUPTED_TURN && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
+      if (!isInterruptedTurn(tally.failure) && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
       // A Stop ends the turn in its one name, whatever threw under it (an abort before the model's stream opened).
-      await emit({ type: 'error', message: active.abort.signal.aborted ? INTERRUPTED_TURN : renderThrownChain({ cause }) });
+      await emit(active.abort.signal.aborted
+        ? { type: 'error', message: INTERRUPTED_TURN, interrupted: true }
+        : { type: 'error', message: renderThrownChain({ cause }) });
     } finally {
       active.phase = 'settling';
       this.liveStream = null;
@@ -1168,7 +1170,7 @@ export class ActorSession {
 
         // The scaffold loop pushes an `error` event rather than throwing, so an empty turn never settles `completed`.
         // First failure wins; an abort is not one.
-        if (tally.failure === null && !abort.aborted && event.message !== INTERRUPTED_TURN) {
+        if (tally.failure === null && !abort.aborted && event.interrupted !== true) {
           tally.failure = new Error(event.message);
         }
 
@@ -1205,7 +1207,7 @@ export class ActorSession {
 
     return {
       text: said.text, answer: tally.answer, steps: tally.steps, failure: tally.failure, program, claim: active.claim,
-      interrupted: active.abort.signal.aborted || tally.failure?.message === INTERRUPTED_TURN,
+      interrupted: active.abort.signal.aborted || isInterruptedTurn(tally.failure),
       admittedMessages: tally.admittedMessages,
       outputReferences: output.messages, finalTextReference: said.reference,
       outputPartReferences: output.parts,

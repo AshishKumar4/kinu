@@ -9,6 +9,7 @@ import type { SubagentActivityEvent } from "@kinu.run/core";
 import { EventRow, foldRepeats } from "@/components/ProgrammaticTurnCard";
 import { eventTurnKey, messageTime } from "@/components/MessageView";
 import { IconLink } from "@/components/ui/IconControl";
+import { agentRoute } from "@kinu.run/core";
 
 /** One event to place: when it happened, what makes a repeat of it, and how it draws `count` times in a row. */
 export interface PlacedEvent {
@@ -104,7 +105,7 @@ export function subagentEventRow(event: SubagentActivityEvent, workspace: string
         count={count}
         hooks={{ "data-subagent-event": event.kind }}
         action={(
-          <IconLink place="pill" to={`/workspace/${workspace}/agents/${event.subagent}`} title={`Open ${event.subagent}'s chat`}
+          <IconLink place="pill" to={agentRoute(workspace, event.subagent)} title={`Open ${event.subagent}'s chat`}
             aria-label={`Open ${event.subagent}'s chat`} className="mt-1 mr-1">
             <ArrowUpRightIcon size={11} />
           </IconLink>

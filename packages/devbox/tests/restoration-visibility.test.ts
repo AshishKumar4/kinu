@@ -10,10 +10,6 @@ class TestBox extends TestDevbox<unknown> {
   protected override get policy(): DevboxPolicy {
     return { ...TEST_DEVBOX_POLICY, attachBudgetMs: 60_000 };
   }
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
 }
 
 describe('a box that is not attached is either visibly working or re-armable', () => {

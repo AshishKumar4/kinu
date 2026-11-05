@@ -5,6 +5,7 @@
 import { readText, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { addressingHint, formatPath, prefixedAddresses, resolvePath, type PathPlanes } from '../vfs/resolve';
 import { writeConditionally, type ObservedFile, type WriteGuarantee } from '../vfs/conditional-write';
@@ -17,7 +18,7 @@ import { applyFileEdits, formatFileSlice, FILE_READ_LINE_CHARS, FILE_READ_LINES,
 import { FileRefusalError } from '../types/file-edits';
 import { readFileHead, scanFileWindow, type ScannedFile } from './file-scan';
 import type { TurnFileLedger, FileEditOutcomeReason, FileSeenNeed } from '../vfs/file-ledger';
-import { KinuError, renderThrownChain, tolerateAsync } from '../obs/index';
+import { KinuError, renderThrownChain, settle, tolerateAsync } from '../obs/index';
 import { requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
 import { RESIDENT_TEXT_MAX_BYTES, type VfsMountRouting } from '../vfs/mounts';
@@ -80,10 +81,9 @@ interface GateVerdict {
  *  became an edit attempt and must not inflate `attempts`. */
 type FileToolFailureReason = FileEditOutcomeReason | 'bad_input';
 
-/** Fail at the operation that made the decision; callers choose the native or namespace boundary. */
-function failure(reason: FileToolFailureReason, error: string): never {
-  if (v.is(v.picklist(FILE_REFUSAL_REASONS), reason)) throw new FileRefusalError(reason, error);
-  throw new KinuError(reason, error);
+/** Fail at the operation that made the decision: one of the file plane's own verdicts, or a shared `ErrorCode`. */
+function failure(reason: FileToolFailureReason, error: string): Effect.Effect<never, KinuError> {
+  return Effect.fail(v.is(v.picklist(FILE_REFUSAL_REASONS), reason) ? new FileRefusalError(reason, error) : new KinuError(reason, error));
 }
 
 /** Which refusal a VFS errno is: absent path, permission wall, or filesystem failure. */
@@ -116,7 +116,9 @@ function missedPath(at: MissSource, path: string): string {
   return `${meant === undefined ? '' : `did you mean \`${meant.reference}\`? `}${addressingHint(at.planes, path)}`;
 }
 
-function vfsFailure(at: MissSource, input: { error: unknown }, action: string, path: string): VfsFailure {
+/** Why a plane call failed, as the operation's refusal; a `bad_input` it was handed stands as it is, as it never became
+ *  an edit attempt and counting it would inflate attempts. */
+function vfsFailure(at: MissSource, input: { error: unknown }, action: string, path: string): VfsFailure | KinuError {
   const err = input.error;
 
   if (err instanceof FileRefusalError) return { reason: err.verdict, error: err.message };
@@ -126,8 +128,7 @@ function vfsFailure(at: MissSource, input: { error: unknown }, action: string, p
       return { reason: err.code, error: err.message };
     }
 
-    // `bad_input` never became an edit attempt; counting it would inflate attempts.
-    throw err;
+    return err;
   }
 
   if (!isVfsError(err)) {
@@ -204,16 +205,16 @@ async function slateBuild(deps: FileDeps, path: string): Promise<{ readonly buil
 
 /** Read per call: a turn's ledger and budget are its own. */
 export function serveFile(current: () => FileDeps): Readonly<Record<keyof typeof FILE, Served>> {
-  const run = <A>(body: (files: ReturnType<typeof fileOps>) => Promise<A>) => body(fileOps(current()));
+  const files = () => fileOps(current());
 
   return {
-    read: serve(FILE.read, async ({ path, offset, limit }) => await run((files) => files.read(path, { offset, limit }))),
-    text: serve(FILE.text, async ({ path, encoding }) => await run((files) => files.text(path, encoding))),
-    edit: serve(FILE.edit, async ({ path, edits }) => await run((files) => files.edit(path, edits))),
-    write: serve(FILE.write, async ({ path, content, encoding }) => await run((files) => files.write(path, content, encoding))),
-    list: serve(FILE.list, async ({ path, offset }) => await run((files) => files.list(path, offset ?? 0))),
-    stat: serve(FILE.stat, async ({ path }) => await run((files) => files.stat(path))),
-    search: serve(FILE.search, async ({ path, query }) => await run((files) => files.search(path, query))),
+    read: serve(FILE.read, ({ path, offset, limit }) => settle(files().read(path, { offset, limit }))),
+    text: serve(FILE.text, ({ path, encoding }) => settle(files().text(path, encoding))),
+    edit: serve(FILE.edit, ({ path, edits }) => settle(files().edit(path, edits))),
+    write: serve(FILE.write, ({ path, content, encoding }) => settle(files().write(path, content, encoding))),
+    list: serve(FILE.list, ({ path, offset }) => settle(files().list(path, offset ?? 0))),
+    stat: serve(FILE.stat, ({ path }) => settle(files().stat(path))),
+    search: serve(FILE.search, ({ path, query }) => settle(files().search(path, query))),
     machine: serve(FILE.machine, async ({ path }) => {
       const { vfs, home } = current();
       // A plane with no mounts (the CLI's) is the workspace's alone.
@@ -250,22 +251,27 @@ function decodedText(bytes: Uint8Array): string {
   return new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes);
 }
 
+/** A plane call, its rejection kept as it came for the operation to word. */
+const plane = <A>(call: () => Promise<A>): Effect.Effect<A, { readonly cause: unknown }> => Effect.tryPromise({ try: call, catch: (cause) => ({ cause }) });
+
 function fileOps(deps: FileDeps) {
   const { vfs, ledger, budget } = deps;
 
-  /** A Plan-safe inspection: the VFS answer, bounded like a read. */
-  const inspect = async <A>(action: 'read' | 'list' | 'stat' | 'search', path: string, read: () => Promise<A | null>): Promise<A> => {
-    let output: A | null;
+  /** A plane call's failure as the operation's refusal; `record` counts it where it was an edit attempt. */
+  const refused = (thrown: { readonly cause: unknown }, action: string, path: string, record?: (reason: FileEditOutcomeReason) => void): Effect.Effect<never, KinuError> => {
+    const failed = vfsFailure(deps, { error: thrown.cause }, action, path);
 
-    try { output = await read(); }
-    catch (cause) {
-      const refused = vfsFailure(deps, { error: cause }, action, path);
+    if (failed instanceof KinuError) return Effect.fail(failed);
+    record?.(failed.reason);
 
-      return failure(refused.reason, refused.error);
-    }
-
-    return output ?? failure('missing', `No path at ${path}: ${missedPath(deps, path)}`);
+    return failure(failed.reason, failed.error);
   };
+
+  /** A Plan-safe inspection: the VFS answer, bounded like a read. */
+  const inspect = <A>(action: 'read' | 'list' | 'stat' | 'search', path: string, read: () => Promise<A | null>): Effect.Effect<A, KinuError> => plane(read).pipe(
+    Effect.catch((failed) => refused(failed, action, path)),
+    Effect.flatMap((output) => (output === null ? failure('missing', `No path at ${path}: ${missedPath(deps, path)}`) : Effect.succeed(output))),
+  );
 
   const searchLines = (content: string, query: string): { line: number; text: string }[] =>
     content.split('\n').flatMap((text, index) => text.includes(query) ? [{ line: index + 1, text }] : []);
@@ -349,38 +355,37 @@ function fileOps(deps: FileDeps) {
   };
 
   /** A raster image is shown to the model, as a screenshot is: its text would be noise. Null for anything else. */
-  const imageRead = async (path: string): Promise<ImageCarrier | null> => {
-    const target = await landing(path, false);
-    const bytes = await vfs.readFile(target.path);
+  const imageRead = (path: string): Effect.Effect<ImageCarrier | null, KinuError> => Effect.gen(function* () {
+    const { target, bytes } = yield* plane(async () => {
+      const landed = await landing(path, false);
+
+      return { target: landed, bytes: await vfs.readFile(landed.path) };
+    }).pipe(Effect.catch((failed) => refused(failed, 'read', path)));
+
     const image = rasterImage(bytes);
 
     if (image === null) return null;
 
     if (bytes.byteLength > IMAGE_READ_MAX_BYTES) {
-      return failure('bad_input', `${path} is a ${image.width}x${image.height} image of ${bytes.byteLength} bytes, above the `
+      return yield* failure('bad_input', `${path} is a ${image.width}x${image.height} image of ${bytes.byteLength} bytes, above the `
         + `${IMAGE_READ_MAX_BYTES} a model is shown; scale it down with the shell first.`);
     }
 
     const output = `${target.reference}: ${image.mediaType} ${image.width}x${image.height}, ${bytes.byteLength} bytes`;
 
     return imageCarrier(output, [{ mediaType: image.mediaType, data: bytesToBase64(bytes) }]);
-  };
+  });
 
   /** A text read reads every byte (the ledger keys on the whole-content fingerprint) but retains only this window and the running hash. */
-  const read = async (path: string, args: { readonly offset?: number | undefined; readonly limit?: number | undefined }): Promise<string | ImageCarrier> => {
+  const read = (path: string, args: { readonly offset?: number | undefined; readonly limit?: number | undefined }): Effect.Effect<string | ImageCarrier, KinuError> => Effect.gen(function* () {
     const maxChars = FILE_READ_MAX_CHARS;
-    let scanned: ScannedFile;
+    const shown = RASTER_PATH.test(path) ? yield* imageRead(path) : null;
 
-    try {
-      const shown = RASTER_PATH.test(path) ? await imageRead(path) : null;
+    if (shown !== null) return shown;
 
-      if (shown !== null) return shown;
-      scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit ?? FILE_READ_LINES, maxChars });
-    } catch (err) {
-      const vfsFail = vfsFailure(deps, { error: err }, 'read', path);
-
-      return failure(vfsFail.reason, vfsFail.error);
-    }
+    const scanned: ScannedFile = yield* plane(() => scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit ?? FILE_READ_LINES, maxChars })).pipe(
+      Effect.catch((failed) => refused(failed, 'read', path)),
+    );
 
     const slice = formatFileSlice(scanned.window, { path, limit: args.limit, maxChars });
 
@@ -394,14 +399,14 @@ function fileOps(deps: FileDeps) {
     }
 
     return slice.output;
-  };
+  });
 
   /**
    * The whole file for a program, which holds the value: a later write or edit through either surface is not blind.
    * `base64` gives its bytes exactly, which text cannot hold for a file that is not UTF-8; the ledger reads it as the
    * text a read of it shows, so a write is gated alike either way.
    */
-  const text = (path: string, encoding: 'utf8' | 'base64' = 'utf8'): Promise<string> => inspect('read', path, async () => {
+  const text = (path: string, encoding: 'utf8' | 'base64' = 'utf8'): Effect.Effect<string, KinuError> => inspect('read', path, async () => {
     if (encoding === 'utf8') {
       const whole = await readText(vfs, path);
 
@@ -432,20 +437,15 @@ function fileOps(deps: FileDeps) {
 
       return head.total !== null && head.total > head.bytes ? { path, matches, truncated: { shown: head.bytes, total: head.total } } : { path, matches };
     }),
-    write: async (path: string, written: string, encoding: 'utf8' | 'base64' = 'utf8') => {
+    write: (path: string, written: string, encoding: 'utf8' | 'base64' = 'utf8') => Effect.gen(function* () {
       requireBuild('file.write');
-      let target: Landing;
-      let existing: string | null;
-      let observed: ObservedFile;
 
-      try {
-        target = await landing(path, true);
-        ({ text: existing, observed } = await readObserved(target.path));
-      } catch (err) {
-        const vfsFail = vfsFailure(deps, { error: err }, 'write', path);
+      const { target, existing, observed } = yield* plane(async () => {
+        const landed = await landing(path, true);
+        const held = await readObserved(landed.path);
 
-        return failure(vfsFail.reason, vfsFail.error);
-      }
+        return { target: landed, existing: held.text, observed: held.observed };
+      }).pipe(Effect.catch((failed) => refused(failed, 'write', path)));
 
       // A memory note's text is kept scrubbed (`memory/scrub.ts`).
       const kept = target.note === null ? written : scrubSecrets(written);
@@ -456,87 +456,53 @@ function fileOps(deps: FileDeps) {
       if (existing !== null) {
         const { refusal, reason } = gate(path, existing, 'overwrite');
 
-        if (refusal && reason) return failure(reason, refusal);
+        if (refusal && reason) return yield* failure(reason, refusal);
       }
 
-      let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
-
-      try {
-        landed = await persist(target, content, (revision) => {
-          ledger.observeWhole(path, shown, revision);
-          noteFileChange(path, existing === null ? 'created' : 'replaced');
-        }, observed);
-      } catch (err) {
-        const vfsFail = vfsFailure(deps, { error: err }, 'write', path);
-
-        return failure(vfsFail.reason, vfsFail.error);
-      }
+      const landed = yield* plane(() => persist(target, content, (revision) => {
+        ledger.observeWhole(path, shown, revision);
+        noteFileChange(path, existing === null ? 'created' : 'replaced');
+      }, observed)).pipe(Effect.catch((failed) => refused(failed, 'write', path)));
 
       return {
         path, reference: target.reference, bytes: content.length, action: existing === null ? 'created' as const : 'replaced' as const,
         checked: landed.checked, ...undo(landed.report),
-        ...await slateBuild(deps, target.at),
+        ...yield* Effect.promise(() => slateBuild(deps, target.at)),
       };
-    },
-    edit: async (path: string, raw: readonly { readonly old_text: string; readonly new_text: string }[]) => {
+    }),
+    edit: (path: string, raw: readonly { readonly old_text: string; readonly new_text: string }[]) => Effect.gen(function* () {
       requireBuild('file.edit');
       const edits: FileEdit[] = raw.map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
+      const record = (reason: FileEditOutcomeReason): void => { ledger.recordEdit(path, reason); };
 
-      let target: Landing;
-      let current: string;
-      let observed: ObservedFile;
+      const target = yield* plane(() => landing(path, false)).pipe(Effect.catch((failed) => refused(failed, 'edit', path, record)));
+      // The revision the agent read, where the plane keeps it: the edit applies to what was read; a plane that keeps no
+      // revisions reads the file as it is.
 
-      try {
-        target = await landing(path, false);
-        // The revision the agent read, where the plane keeps it: the edit applies to what was read.
-        let held;
+      const held = yield* plane(() => readObserved(target.path, ledger.readRevision(path))).pipe(
+        Effect.catch((failed) => (isVfsError(failed.cause) && failed.cause.code === 'ENOTSUP' ? plane(() => readObserved(target.path)) : Effect.fail(failed))),
+        Effect.catch((failed) => refused(failed, 'edit', path, record)),
+      );
 
-        try {
-          held = await readObserved(target.path, ledger.readRevision(path));
-        } catch (cause) {
-          if (!isVfsError(cause) || cause.code !== 'ENOTSUP') throw cause;
-          held = await readObserved(target.path);
-        }
-
-        if (held.text === null) throw new VfsError('ENOENT', 'no such file, open', path);
-        ({ text: current, observed } = { text: held.text, observed: held.observed });
-      } catch (err) {
-        const vfsFail = vfsFailure(deps, { error: err }, 'edit', path);
-        ledger.recordEdit(path, vfsFail.reason);
-
-        return failure(vfsFail.reason, vfsFail.error);
-      }
-
+      if (held.text === null) return yield* refused({ cause: new VfsError('ENOENT', 'no such file, open', path) }, 'edit', path, record);
+      const current = held.text;
       const { refusal, reason } = gate(path, current, 'edit');
 
       if (refusal && reason) {
-        ledger.recordEdit(path, reason);
+        record(reason);
 
-        return failure(reason, refusal);
+        return yield* failure(reason, refusal);
       }
 
       // What an edit writes into a memory note is kept scrubbed (`memory/scrub.ts`).
-      const outcome = applyFileEdits(current, target.note === null ? edits : edits.map((edit) => ({ ...edit, newText: scrubSecrets(edit.newText) })), path);
+      const outcome = yield* applyFileEdits(current, target.note === null ? edits : edits.map((edit) => ({ ...edit, newText: scrubSecrets(edit.newText) })), path).pipe(
+        Effect.tapError((declined) => Effect.sync(() => { record(declined.verdict); })),
+      );
 
-      if (!outcome.ok) {
-        ledger.recordEdit(path, outcome.reason);
-
-        return failure(outcome.reason, outcome.message);
-      }
-
-      let landed: { readonly report: VfsWriteReport | null; readonly checked: WriteGuarantee };
-
-      try {
-        landed = await persist(target, outcome.content, (writtenRevision) => {
-          ledger.observeEdited(path, current, outcome, writtenRevision);
-          noteFileChange(path, 'edited');
-        }, observed);
-      } catch (err) {
-        const vfsFail = vfsFailure(deps, { error: err }, 'edit', path);
-        ledger.recordEdit(path, vfsFail.reason);
-
-        return failure(vfsFail.reason, vfsFail.error);
-      }
+      const landed = yield* plane(() => persist(target, outcome.content, (writtenRevision) => {
+        ledger.observeEdited(path, current, outcome, writtenRevision);
+        noteFileChange(path, 'edited');
+      }, held.observed)).pipe(Effect.catch((failed) => refused(failed, 'edit', path, record)));
 
       ledger.recordEdit(path, null);
 
@@ -544,8 +510,8 @@ function fileOps(deps: FileDeps) {
         path, reference: target.reference,
         applied: outcome.applied.map((a) => ({ line: a.line, removedLines: a.removedLines, addedLines: a.addedLines })),
         checked: landed.checked, ...undo(landed.report),
-        ...await slateBuild(deps, target.at),
+        ...yield* Effect.promise(() => slateBuild(deps, target.at)),
       };
-    },
+    }),
   };
 }

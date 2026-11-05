@@ -1,29 +1,15 @@
 // Subagent admission: trust `authenticated`; assignments pend at `normal`, reports at
 // `background`, and only reports may be taken by a reactor.
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import {
-  deriveEventTrust, derivePriority, deriveFields,
-  EventLog, initEventsHubTables, buildDrainBatch, dedupeKeyFor,
-  type IngressDescriptor, type KinuEvent,
-  type SubagentTaskPayload, type SubagentReportPayload,
-} from '../src/events/hub/index';
-import type { SqlExec } from '../src/index';
-import { makeSqlExec } from './helpers';
-import { createTestActorsOver, present } from '@kinu.run/test-utils';
-import type { ActorHandle } from '../src/identity/actor-handle';
+import { buildDrainBatch } from '../src/events/hub/drain';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import { deriveEventTrust, derivePriority, deriveFields } from '../src/events/hub/trust';
+import type { IngressDescriptor, SubagentTaskPayload, SubagentReportPayload } from '../src/events/hub/types';
+import { memoryHub } from './helpers';
+import { present } from '@kinu.run/test-utils';
 
 /** `EventLog` is actor-scoped, so the fixture binds the one actor through the production directory. */
-interface Hub {
-  readonly sql: SqlExec;
-  readonly actor: ActorHandle;
-}
-
-function makeSql(): Hub {
-  const db = new Database(':memory:');
-
-  return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
-}
 
 const taskPayload: SubagentTaskPayload = {
   from_workspace: 'jarvis',
@@ -69,36 +55,11 @@ describe('subagent event derivation', () => {
       trust: 'authenticated', priority: 'background', payload_visibility: 'redact',
     });
   });
-
-  test('a report is keyed by the sending sequence; an assignment down is not keyed', () => {
-    const base = {
-      id: 'e', trace_id: 'e', caused_by: null, ingress: 'subagent',
-      trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
-      received_at: 0, reply_channel: null, dedupe_key: null,
-    } satisfies Pick<KinuEvent,
-      'id' | 'trace_id' | 'caused_by' | 'ingress' | 'trust' | 'priority'
-      | 'payload_visibility' | 'received_at' | 'reply_channel' | 'dedupe_key'>;
-
-    const taskEvent: KinuEvent = { ...base, variant: 'subagent_task', payload: taskPayload };
-    const reportEvent: KinuEvent = { ...base, variant: 'subagent_report', payload: reportPayload };
-    // An assignment DOWN is a one-shot facet RPC with no redelivery loop.
-    expect(dedupeKeyFor(taskEvent)).toBeNull();
-    // A report up is replayable durable work; its sequence recognises the replay.
-    expect(dedupeKeyFor(reportEvent)).toBe('subagent_report:settle:msg-77');
-    expect(dedupeKeyFor({
-      ...reportEvent,
-      payload: { ...reportPayload, content: 'a later retry re-worded it' },
-    })).toBe('subagent_report:settle:msg-77');
-    expect(dedupeKeyFor({
-      ...reportEvent,
-      payload: { ...reportPayload, sequence_id: 'settle:msg-78' },
-    })).toBe('subagent_report:settle:msg-78');
-  });
 });
 
 describe('one report per sequence on the parent rail', () => {
   test('a replayed report lands on the row the first delivery wrote', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
@@ -112,7 +73,7 @@ describe('one report per sequence on the parent rail', () => {
   });
 
   test('two sequences are two reports', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
@@ -131,7 +92,7 @@ describe('one report per sequence on the parent rail', () => {
 
 describe('subagent event admission (EventLog round-trip)', () => {
   test('a published task admits and pends, and no drain may take it', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
@@ -151,7 +112,7 @@ describe('subagent event admission (EventLog round-trip)', () => {
   });
 
   test('a published report admits and drains with the subagent source line', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
@@ -168,7 +129,7 @@ describe('subagent event admission (EventLog round-trip)', () => {
   });
 
   test('binding a task to a turn removes it from pending (drain contract)', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const { id } = log.publish({ descriptor: taskDescriptor, now: 1000 });

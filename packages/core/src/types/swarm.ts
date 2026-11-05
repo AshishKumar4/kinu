@@ -22,7 +22,7 @@ export type BranchContext = (typeof SWARM_CONTEXTS)[number];
 /** How children are produced. `aggregate` is fan-in (k parents → one child), making a DAG. */
 export const SWARM_EXPANDS = ['sample', 'aggregate'] as const;
 
-export type SwarmExpand = (typeof SWARM_EXPANDS)[number];
+type SwarmExpand = (typeof SWARM_EXPANDS)[number];
 
 /** How a node is valued. Novelty is an archive admission rule on {@link SwarmAdvanceSetting}. */
 const SWARM_SCORES = ['verify', 'judge', 'none'] as const;
@@ -45,7 +45,7 @@ export type SwarmCarry = (typeof SWARM_CARRIES)[number];
 export type SwarmSettle = 'best' | 'archive' | 'front' | 'merge';
 
 /** Tagged so a value's parameter cannot exist without the value that owns it. */
-export type SwarmScoreSetting =
+type SwarmScoreSetting =
   | { readonly kind: 'verify' }
   | { readonly kind: 'none' }
   | {
@@ -56,7 +56,7 @@ export type SwarmScoreSetting =
 
 /** Tagged so an archive without a rejection test is unrepresentable. A preset resolving to
  *  `archive` must declare its own τ; this file never invents one. */
-export type SwarmAdvanceSetting =
+type SwarmAdvanceSetting =
   | { readonly kind: 'uct' }
   | { readonly kind: 'best-first' }
   | { readonly kind: 'pareto' }

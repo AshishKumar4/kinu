@@ -8,7 +8,7 @@ import {
 import { bumpProviderRevision, loadConfigFile, requireAuthConfig, storedSessionOrigin, updateConfigFile } from '../config';
 import { ACCENT, DIM, formatWhen, OK, WARN } from '../display';
 import { KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
-import { waitForAnswer } from '@kinu.run/core';
+import { untilAnswered } from '@kinu.run/core';
 
 export interface CliAuthCallbacks {
   /** `opened` is false where no browser could be seen (SSH, or no display): the person approves on another device. */
@@ -28,15 +28,16 @@ export function authenticateCli(
     callbacks.started?.({ verificationUrl: flow.verificationUrl, userCode: flow.userCode, opened });
 
     // The hub owns the deadline: the poll answers `expired` by itself.
-    const status = yield* Effect.promise(async () => waitForAnswer(async (): Promise<CliAuthPoll | undefined> => {
-      const poll = await pollCliAuth(origin, flow.deviceToken);
+    const poll = Effect.map(
+      Effect.promise(() => pollCliAuth(origin, flow.deviceToken)),
+      (polled): CliAuthPoll | undefined => (polled.status === 'pending' ? undefined : polled),
+    );
 
-      return poll.status === 'pending' ? undefined : poll;
-    }, { intervalMs: Math.max(1, flow.intervalSeconds) * 1000, onWaiting: () => callbacks.pending?.() }));
+    const status = yield* untilAnswered(poll, { intervalMs: Math.max(1, flow.intervalSeconds) * 1000, onWaiting: () => callbacks.pending?.() });
 
-    if (status.status === 'expired') return yield* Effect.die(new Error(status.message ?? 'The sign-in code expired. Run kinu auth again.'));
+    if (status.status === 'expired') return yield* Effect.fail(new KinuError('denied', status.message ?? 'The sign-in code expired. Run kinu auth again.'));
 
-    if (!status.token || !status.user) return yield* Effect.die(new Error('Sign-in was approved, but the server sent no token. Run kinu auth again.'));
+    if (!status.token || !status.user) return yield* Effect.fail(new KinuError('unavailable', 'Sign-in was approved, but the server sent no token. Run kinu auth again.'));
     yield* Effect.promise(async () => updateConfigFile((config) => {
       config.origin = status.origin ?? origin;
       config.accessToken = status.token;

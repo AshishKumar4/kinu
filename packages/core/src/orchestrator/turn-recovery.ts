@@ -13,6 +13,7 @@ import { cutsThrough, verifyClaimedProgram, type ClaimOutcome, type ContextRevis
 import { recordRecoverySettled, sameBuildOf } from './turn-recovery-events';
 import type { RunEventRecorder } from '../events/recorder';
 import type { ReportedTurn } from '../subagents/turn-reports';
+import { base64Bytes } from '../utils/base64';
 
 type ClosedBy = 'stopped' | 'answered' | 'record_unreadable' | 'stalled' | 'unverified';
 
@@ -225,7 +226,6 @@ function imageBytes(image: ImagePart): number {
   if (bytes instanceof URL) return 0;
 
   if (typeof bytes !== 'string') return bytes.byteLength;
-  const base64 = bytes.startsWith('data:') ? bytes.slice(bytes.indexOf(',') + 1) : bytes;
 
-  return Math.floor(base64.replace(/=+$/u, '').length * 3 / 4);
+  return base64Bytes(bytes);
 }

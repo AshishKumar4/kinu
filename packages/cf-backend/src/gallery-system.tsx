@@ -21,14 +21,15 @@ import { Empty } from "@/components/ui/Empty";
 import { FlowStep } from "@/components/ui/FlowCard";
 import { Field, TextArea, TextInput } from "@/components/ui/Field";
 import { Group } from "@/components/ui/Group";
-import { Loader, Skeleton } from "@/components/ui/Loader";
+import { Loader } from "@/components/ui/Loader";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { Menu } from "@/components/ui/Menu";
 import { Meter } from "@/components/ui/Meter";
-import { DialogBox } from "@/components/ui/Modal";
+import { DialogFace } from "@/components/ui/Modal";
 import { Notice } from "@/components/ui/Notice";
 import { Popover } from "@/components/ui/Popover";
 import { Pressable } from "@/components/ui/Pressable";
-import { Row, ROW_ACTION, RowTile } from "@/components/ui/Row";
+import { Row, RowAction, RowTile } from "@/components/ui/Row";
 import { SaveBar } from "@/components/ui/SaveBar";
 import { Segmented } from "@/components/ui/Segmented";
 import { Select } from "@/components/ui/Select";
@@ -473,7 +474,7 @@ function Rows() {
           <Row tile={<BrandMark brand="github" size={18} />} title="GitHub" meta="Issues, pull requests and code" status={<Status tone="success">Connected</Status>}
             action={<Menu name="GitHub" items={[{ label: "Docs", icon: <ArrowSquareOutIcon size={16} />, onSelect: () => undefined }, { label: "Remove", icon: <TrashIcon size={16} />, onSelect: () => undefined, danger: true, apart: true }]} />} attributes={{}} />
           <Row tile={<BrandMark brand="google" size={18} />} title="Google" meta="Gmail, Calendar, Drive, contacts"
-            action={<button type="button" aria-label="Connect Google" className={ROW_ACTION}><PlusIcon size={16} /></button>} attributes={{}} />
+            action={<RowAction aria-label="Connect Google"><PlusIcon size={16} /></RowAction>} attributes={{}} />
           <Row tile={<RowTile icon={DesktopTowerIcon} />} title="Workstation" meta="workstation · linux · nvidia0" status={<Status tone="success">Connected</Status>}
             control={<><span className="t-item p-text-2">Sandbox</span><Switch on onChange={() => undefined} label="Sandbox on Workstation" /></>}
             action={<Menu name="Workstation" items={[{ label: "Rename", icon: <PencilSimpleIcon size={16} />, onSelect: () => undefined }]} />}
@@ -620,12 +621,16 @@ function Overlays() {
           <SaveBarCycle />
           </div>
           <div className="grid gap-3">
-            <DialogBox title="Rename the workspace" width="sm" footer={<><Button size="sm" variant="ghost">Cancel</Button><Button variant="primary">Rename</Button></>}>
-              <Field label="Name"><TextInput defaultValue="API Worker" /></Field>
-            </DialogBox>
-            <DialogBox title="Disconnect Groq?" width="sm" footer={<><Button size="sm" variant="ghost">Cancel</Button><Button variant="destructive">Disconnect</Button></>}>
-              <p className="t-body">Its key and the model it serves go together.</p>
-            </DialogBox>
+            <div className="p-dialog p-dialog-sm">
+              <DialogFace heading={<h3 className="t-title">Rename the workspace</h3>} footer={<><Button size="sm" variant="ghost">Cancel</Button><Button variant="primary">Rename</Button></>}>
+                <Field label="Name"><TextInput defaultValue="API Worker" /></Field>
+              </DialogFace>
+            </div>
+            <div className="p-dialog p-dialog-sm">
+              <DialogFace heading={<h3 className="t-title">Disconnect Groq?</h3>} footer={<><Button size="sm" variant="ghost">Cancel</Button><Button variant="destructive">Disconnect</Button></>}>
+                <p className="t-body">Its key and the model it serves go together.</p>
+              </DialogFace>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <Popover trigger={<Button size="sm">Open a popover</Button>} title="Public link"><p className="t-body">Anyone with the link can open it.</p></Popover>
@@ -633,7 +638,7 @@ function Overlays() {
             <span className="p-tooltip rounded-[var(--r-control)] px-2 py-1">A tooltip at rest</span>
           </div>
           <Empty icon={HardDrivesIcon} title="Nothing in your Drive yet" action={<Button size="sm" variant="secondary">Upload a file</Button>}>Files here are in every workspace you own.</Empty>
-          <div className="flex items-center gap-4"><Loader size="sm" /><div className="flex-1"><Skeleton /></div></div>
+          <div className="flex items-center gap-4"><Loader size="sm" /><div className="flex-1 space-y-2"><Skeleton /><Skeleton /><Skeleton width="60%" /></div></div>
           <div className="space-y-3">{[40, 85, 100].map((value) => <Meter key={value} label={`${String(value)}% used`} value={value} shown={`${String(value)}%`} />)}</div>
           <Table>
             <Table.Header><Table.Row><Table.Head>Model</Table.Head><Table.Head>Turns</Table.Head></Table.Row></Table.Header>

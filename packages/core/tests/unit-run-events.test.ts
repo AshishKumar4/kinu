@@ -89,7 +89,7 @@ describe('a tool result round-trips as the value the tool returned', () => {
     const { recorder } = setup();
 
     // The ledger row must be the handle itself: `isBackgroundHandle` parses it to find the job id.
-    const handle = { background: true, jobId: 'bgjob-probe', kind: 'run', message: 'Spawned; the settled result will wake you.' };
+    const handle = { background: true, jobId: 'bgjob-probe', kind: 'run', movedBy: 'spawn', message: 'Spawned; the settled result will wake you.' };
     recorder.emit('run-1', {
       type: 'tool_call_end', name: 'run', toolCallId: 'call-1',
       args: { command: 'sleep 45 && echo ok' }, result: handle, outcome: { success: true },

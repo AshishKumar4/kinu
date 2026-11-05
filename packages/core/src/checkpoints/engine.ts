@@ -89,7 +89,7 @@ interface CheckpointRequest<C> {
 }
 
 /** What a request got: the checkpoint id (null when the directory is no work tree), or why none was taken. */
-export type CheckpointOutcome = { readonly id: string | null } | { readonly skipped: string };
+type CheckpointOutcome = { readonly id: string | null } | { readonly skipped: string };
 
 export interface CheckpointEngine<C> {
   status(): Promise<CheckpointAvailability>;

@@ -4,7 +4,8 @@
  * derived from UserDOs and `ControlPlaneDO.replaceUserWorkspaces` repairs them.
  * The per-isolate memo only decides whether a write is worth attempting; never read to answer a request.
  */
-import { diagnostics, toKinuError, settleLogged } from '@kinu.run/core/obs';
+import { attempt, diagnostics, settle, settleLogged } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import type { AuthIdentity } from '../auth/session';
 import { internalCaller } from './admin-caller';
 import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from './stub';
@@ -52,14 +53,14 @@ export function observeIdentity<Id>(
   if (!hasControlPlane(env)) return;
 
   if (!shouldWrite(identity.userId, now)) return;
-  options.retain.waitUntil(retained(identity.userId, false, async () => {
+  options.retain.waitUntil(settle(retained(identity.userId, false, async () => {
     await controlPlaneStub(env).observeUser(await internalCaller(env), {
       userId: identity.userId,
       email: identity.email,
       displayName: identity.displayName ?? null,
       at: now,
     });
-  }));
+  })));
 }
 
 /**
@@ -78,26 +79,20 @@ export function observeWorkspaceUse<Id>(
   const key = `${identity.userId}\u0000${workspace}`;
 
   if (!shouldWrite(key, now)) return;
-  options.retain.waitUntil(retained(key, true, async () => {
+  options.retain.waitUntil(settle(retained(key, true, async () => {
     // `touchWorkspace` preserves a title the create feed or a reconcile already supplied.
     await controlPlaneStub(env).touchWorkspace(await internalCaller(env), {
       userId: identity.userId, name: workspace, displayName: workspace, at: now,
     });
-  }));
+  })));
 }
 
 /** Dropping the memo entry on failure makes the next request retry instead of trusting a lost write. */
-async function retained(key: string, hasWorkspace: boolean, write: () => Promise<void>): Promise<void> {
-  try {
-    await write();
-  } catch (cause) {
+function retained(key: string, hasWorkspace: boolean, write: () => Promise<void>): Effect.Effect<void> {
+  return Effect.catch(attempt({ doing: 'recording a control-plane index observation', otherwise: 'unavailable' }, write), (failure) => Effect.sync(() => {
     observed.delete(key);
-    diagnostics.failure('control_plane.observe_failed', toKinuError({
-      doing: 'recording a control-plane index observation',
-      cause,
-      otherwise: 'unavailable',
-    }), { hasWorkspace });
-  }
+    diagnostics.failure('control_plane.observe_failed', failure, { hasWorkspace });
+  }));
 }
 
 /** A workspace created or renamed: its index row, with its title. Awaited, not retained: a create that returns before

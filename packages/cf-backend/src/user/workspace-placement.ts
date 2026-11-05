@@ -1,7 +1,9 @@
-// Where a new workspace's object runs: a region every model provider serves, near whoever made it. An object runs where
-// it was first reached and never moves, and one first reached from Asia with no hint, or with `apac`, can run in Hong
-// Kong, where Anthropic and OpenAI refuse every call (PLATFORM_CATALOG `do.placement.location_hint`).
+// Where a new workspace's or account's object runs: a region every model provider serves, near whoever made it. An object
+// runs where it was first reached and never moves, and one first reached from Asia with no hint, or with `apac`, can run
+// in Hong Kong, where Anthropic and OpenAI refuse every call (PLATFORM_CATALOG `do.placement.location_hint`). An account's
+// object is first reached by its first sign-in; one made before 2026-11-05 stays where that sign-in put it.
 import * as v from 'valibot';
+import type { ObjectNamespace } from '@kinu.run/core';
 
 /** The location hints whose data centers are all in countries the providers serve; never `apac`. */
 export const WorkspacePlacementSchema = v.picklist(['wnam', 'enam', 'weur', 'oc']);
@@ -29,4 +31,11 @@ export function placementFor(cf: Request['cf'] | Creator): WorkspacePlacement {
   if (continent === 'SA') return 'enam';
 
   return continent === 'OC' ? 'oc' : UNPLACED;
+}
+
+/** The account `userId`'s object, placed where every provider answers if this reach is the one that makes it: at
+ *  `placement` when the reach knows where its person is (a sign-in), else as an unknown place is. A hint is read only
+ *  when it makes the object, so every reach carries one and none can make it where a provider refuses. */
+export function accountNamed<Id, Stub>(namespace: ObjectNamespace<Id, Stub>, userId: string, placement: WorkspacePlacement = UNPLACED): Stub {
+  return namespace.get(namespace.idFromName(userId), { locationHint: placement });
 }

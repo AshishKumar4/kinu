@@ -11,6 +11,7 @@ import { diagnostics, KinuError } from '../obs/index';
 import { toolErrorOutput } from '../tools/outcome';
 import { serialQueue } from '@kinu.run/agent-utils';
 import { flushSignal, partialFlushCadence, type PartialFlushSignal } from './flush-cadence';
+import { isHighSurrogate } from '../utils/text';
 
 /** Reasoning reaches the row in windows, not per token (D23): a reasoning model streams tens of thousands. */
 const REASONING_WINDOW_DELTAS = 64;
@@ -467,15 +468,11 @@ export class SessionStream {
     part.bufferedDeltas = 0;
     part.bufferedBytes = 0;
 
-    if (!end && text.length > 0) {
-      const last = text.charCodeAt(text.length - 1);
-
-      if (last >= 0xd800 && last <= 0xdbff) {
-        part.buffered = text.slice(-1);
-        part.bufferedDeltas = 1;
-        part.bufferedBytes = utf8.encode(part.buffered).byteLength;
-        text = text.slice(0, -1);
-      }
+    if (!end && text.length > 0 && isHighSurrogate(text.charCodeAt(text.length - 1))) {
+      part.buffered = text.slice(-1);
+      part.bufferedDeltas = 1;
+      part.bufferedBytes = utf8.encode(part.buffered).byteLength;
+      text = text.slice(0, -1);
     }
 
     if (text !== '') return text;

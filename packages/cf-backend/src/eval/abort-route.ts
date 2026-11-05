@@ -5,7 +5,8 @@
  * `ctx.abort` rejects the stub call that asked for it: that rejection is the abort's receipt, not a failure.
  */
 import { Hono } from 'hono';
-import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
+import { chainOf, diagnostics, hold } from '@kinu.run/core/obs';
+import { Effect, Exit } from 'effect';
 import type { AuthIdentity } from '../auth/session';
 import { rawParam, type FamilyEnv } from '../api/context';
 import type { WorkspaceVariables } from '../api/workspace';
@@ -23,15 +24,10 @@ evalAbortRoutes.on('POST', [ABORT, `${ABORT}/`], async (c) => {
   if (!isEvalServiceIdentity(c.get('identity'))) return Response.json({ error: 'Not found' }, { status: 404 });
   const workspace = rawParam(c, 'name');
 
-  try {
-    await c.get('workspace').agent.evalAbortActivation();
-  } catch (cause) {
-    diagnostics.event('eval.activation_aborted', { workspace, receipt: renderThrownChain({ cause }) });
+  const aborted = await hold(Effect.promise(async () => c.get('workspace').agent.evalAbortActivation()));
 
-    return Response.json({ aborted: true }, { status: 202 });
-  }
-
-  diagnostics.event('eval.activation_abort_returned', { workspace });
+  if (Exit.isFailure(aborted)) diagnostics.event('eval.activation_aborted', { workspace, receipt: chainOf(aborted.cause) });
+  else diagnostics.event('eval.activation_abort_returned', { workspace });
 
   return Response.json({ aborted: true }, { status: 202 });
 });

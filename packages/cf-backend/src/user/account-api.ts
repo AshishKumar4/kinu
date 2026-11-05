@@ -6,14 +6,14 @@
 import { Effect } from 'effect';
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
-import { authoredRefusal, settle } from '@kinu.run/core/obs';
+import { authoredRefusal, detach, settle } from '@kinu.run/core/obs';
 import { err, json, JsonValueSchema, safeJson, SecretPositionSchema, type ObjectNamespace, type ProviderEnv, type UserCaller } from '@kinu.run/core';
 import { internalCaller, KINU_LISTINGS, type ControlSecretEnv } from '@kinu.run/core/control-plane';
 import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
 import type { ControlPlaneDO } from '../control-plane/control-plane-do';
 import type { IndexFeedSink } from '../control-plane/index-feed';
 import type { UserDO } from './user-do';
-import { listAvailableModels, testAvailableModel, type AvailableModelsEnv } from './available-models';
+import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import { readUserAccountUsage } from './account-usage';
 import { handleCreateWorkspaceRequest, notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv } from './workspace-access';
 import { handleInstallRequest, installedAssistant } from './blueprint-install';
@@ -23,7 +23,7 @@ import { rawParam, type FamilyEnv } from '../api/context';
 /** Every UserDO call these routes make. */
 type AccountApiAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
-  'listCredentials' | 'setCredential' | 'deleteCredential' | 'requestWorkspaceRemoval' | 'listDevices'
+  'listCredentials' | 'setCredential' | 'testModel' | 'cancelModelTest' | 'deleteCredential' | 'requestWorkspaceRemoval' | 'listDevices'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
   | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'
   | 'getConfig' | 'setConfig' | 'claimConfig' | 'getProfile' | 'userMcp_connectedPresets'
@@ -168,9 +168,20 @@ accountApi.post('/models/test', async (c) => {
 
   if (!body) return err(400, 'spec (string) required');
 
-  return json({ body: await testAvailableModel({
-    env: c.env, userId: c.get('account').userId, caller: c.get('owner'), spec: body.spec, signal: c.req.raw.signal,
-  }) });
+  // Made from the account's object, placed where every provider answers, not from wherever this Worker runs; a request
+  // that ends first stops it there.
+  const { stub } = c.get('account');
+  const owner = c.get('owner');
+  const testId = crypto.randomUUID();
+  const cancel = () => { detach(Effect.promise(async () => stub.cancelModelTest(owner, testId))); };
+
+  c.req.raw.signal.addEventListener('abort', cancel, { once: true });
+
+  try {
+    return json({ body: await stub.testModel(owner, body.spec, testId) });
+  } finally {
+    c.req.raw.signal.removeEventListener('abort', cancel);
+  }
 });
 
 accountApi.get('/usage', async (c) => json({ body: await readUserAccountUsage({

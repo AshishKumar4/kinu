@@ -15,7 +15,7 @@ import { nanoid } from '../utils/nanoid';
 import { PROPOSED_TASK_STATUSES, type ProposedTask } from '../types/proposals';
 
 export {
-  PROPOSED_TASK_STATUSES, type ProposedTask, type ProposedTaskStatus,
+  PROPOSED_TASK_STATUSES, type ProposedTask,
 } from '../types/proposals';
 
 const ProposedTaskStatusSchema = v.picklist(PROPOSED_TASK_STATUSES);

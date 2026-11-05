@@ -5,7 +5,7 @@ import { Cause, Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import type { TuiActionId } from './actions';
 import type { InputEffect, InputMachineEvent } from '@kinu.run/core';
-import type { ActiveSurface } from './chat-app';
+import type { ActiveSurface } from './chat-surface';
 
 interface PromptHistoryCursor {
   index: number;

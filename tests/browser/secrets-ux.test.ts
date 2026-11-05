@@ -47,7 +47,7 @@ describe('Settings › Secrets', () => {
 
       const saved = v.parse(SavedSchema, JSON.parse(await page.$eval('html', (root) => root.dataset.gallerySecretsSaved ?? '[]')));
       expect(saved).toEqual([{ names: ['OPENAI_API_KEY', 'WEBHOOK_SECRET'], grantTo: ['design-sys'] }]);
-      expect(await page.$eval('[data-secret="OPENAI_API_KEY"]', (row) => row.textContent ?? '')).toContain('In Kinu website');
+      expect(await page.$eval('[data-secret="OPENAI_API_KEY"]', (row) => row.textContent ?? '')).toContain('Kinu website');
       await page.close();
     });
   });

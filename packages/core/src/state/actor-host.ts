@@ -1,5 +1,5 @@
 import { Cause, Effect } from 'effect';
-import { markStoreChanged } from '@kinu.run/agent-utils';
+import { markStoreChanged, serialQueue } from '@kinu.run/agent-utils';
 // Runtime objects for each logical actor of one workspace database; its rows live in the workspace because the
 // SQL port is synchronous. State, serialization and `actor_id`-keyed stores are per actor and re-validate the
 // handle. Release invalidates the fence; rows survive until `retire` with `destroy: true`. Recovery reads
@@ -7,7 +7,8 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 
 import { KinuError } from '../obs/error';
 import type { Holds } from '../utils/held-reads';
-import type { SqlExec, SqlExecutor, Storage } from '../types/primitives';
+import { columnNames, listedTables, quoteIdent } from '../utils/sql';
+import type { SqlExec, Storage } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { ActorSession, type ActorSessionOptions } from '../orchestrator/actor-session';
 import type { AgentOrchestratorDeps } from '../orchestrator/agent-orchestrator';
@@ -156,27 +157,14 @@ interface HostSlot<A extends SeatedActor> {
   readonly actor: A;
   readonly seat: ActorSeat;
   readonly fence: ReleaseFence;
-  queue: Promise<unknown>;
+  readonly queue: ReturnType<typeof serialQueue>;
 }
 
-// Read from the live schema, not a maintained list. `workspace_actors` belongs to the directory;
-// virtual (FTS) tables are rebuilt from their sources.
-function actorScopedTables(sql: SqlExecutor): readonly string[] {
-  const rows = sql<{ name: string; sql: string }>`
-    SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL`;
-
-  const names: string[] = [];
-
-  for (const row of rows) {
-    if (row.name === 'workspace_actors' || row.name.startsWith('sqlite_')) continue;
-
-    if (/^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(row.sql)) continue;
-
-    if (!/\bactor_id\b/.test(row.sql)) continue;
-    names.push(row.name);
-  }
-
-  return names;
+// Read from the live schema, not a maintained list: a table holding an `actor_id` column. `workspace_actors` belongs to
+// the directory; an FTS index is rebuilt from its sources.
+function actorScopedTables(sql: SqlExec): readonly string[] {
+  return listedTables(sql).filter((table) => table.type === 'table' && table.name !== 'workspace_actors'
+    && columnNames(sql, table.name).includes('actor_id')).map((table) => table.name);
 }
 
 /** How a host composes an actor over its seeded runtime, and the turn it runs there, where it runs one. */
@@ -332,7 +320,7 @@ export function createSeatHost<A extends SeatedActor<R>, R extends AgentRuntime>
 
   const opened = flight(({ reference, seat }: { readonly reference: ActorReference; readonly seat: ActorSeat }) => Effect.ensuring(
     Effect.map(build(reference, seat), ({ actor, fence }) => {
-      slots.set(reference.actorId, { actor, fence, seat, queue: Promise.resolve() });
+      slots.set(reference.actorId, { actor, fence, seat, queue: serialQueue() });
 
       return actor;
     }),
@@ -371,11 +359,9 @@ export function createSeatHost<A extends SeatedActor<R>, R extends AgentRuntime>
 
   const queued = <T>(reference: ActorReference, work: (actor: A) => Promise<T>): Effect.Effect<T, KinuError> => Effect.gen(function* () {
     const slot = yield* requireSlot(reference);
-    // A failed operation cannot poison this actor's queue; other actors have their own tails.
-    const result = slot.queue.then(() => work(slot.actor));
-    slot.queue = Promise.allSettled([result]);
 
-    return yield* Effect.promise(() => result);
+    // A failed operation cannot poison this actor's queue; other actors have their own.
+    return yield* Effect.promise(() => slot.queue(() => work(slot.actor)));
   });
 
   const released = (reference: ActorReference): Effect.Effect<void, KinuError> => Effect.gen(function* () {
@@ -452,8 +438,8 @@ export function createSeatHost<A extends SeatedActor<R>, R extends AgentRuntime>
         if (retirement.destroy || retirement.interrupt) seating.turns?.interrupt(slot.actor);
 
         if (!retirement.destroy && seating.turns?.inFlight(slot.actor) === true) {
-          // A temporary agent reports from inside its turn, so its release waits; the queue settles, never rejects.
-          yield* Effect.promise(() => slot.queue);
+          // A temporary agent reports from inside its turn, so its release waits for what its queue holds.
+          yield* Effect.promise(() => slot.queue(async () => undefined));
 
           if (seating.turns.inFlight(slot.actor)) {
             return yield* new KinuError('denied', 'This actor holds a turn in flight; retire it once the turn settles.');
@@ -505,14 +491,13 @@ export function createSeatHost<A extends SeatedActor<R>, R extends AgentRuntime>
 
 // One transaction: a half-purged actor's id could be re-issued over leftover rows.
 function purgeActorRows(storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlExec, actorId: string): void {
-  const tables = actorScopedTables(storage.sql);
+  const tables = actorScopedTables(storage);
   storage.transactionSync(() => {
     // All actor-owned references disappear in this transaction; validate at commit, not discovery order.
     storage.exec('PRAGMA defer_foreign_keys = ON');
 
     for (const table of tables) {
-      // Table name comes from `sqlite_master` and is quoted, not caller text.
-      storage.exec(`DELETE FROM "${table.replace(/"/g, '""')}" WHERE actor_id = ?`, actorId);
+      storage.exec(`DELETE FROM ${quoteIdent(table)} WHERE actor_id = ?`, actorId);
     }
   });
   markStoreChanged(storage.sql);

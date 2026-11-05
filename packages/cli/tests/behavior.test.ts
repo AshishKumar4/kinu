@@ -12,14 +12,11 @@ import {
 } from "@kinu.run/core";
 import * as v from "valibot";
 import { chatCompletionBody, chatCompletionStream, chatResponse, present, runToExit, type ChatUsage } from "@kinu.run/test-utils";
+import { runCli } from './helpers/run-cli';
 
 /** Output to assertable text, stripped of terminal decoration. */
 function toText(output: string): string {
   return Bun.stripANSI(output).replaceAll('\r\n', '\n');
-}
-
-function newProjectDir(): string {
-  return scratchDir("test-project");
 }
 
 const repoRoot = resolve(__dirname, "../../..");
@@ -65,14 +62,6 @@ const LedgerRowSchema = v.object({
   event: v.objectWithRest({ type: v.string() }, JsonValueSchema),
 });
 
-function runCli(args: string[], opts: { home?: string; stdin?: string; env?: Record<string, string> } = {}) {
-  // No scheduler daemon: none of these rows is about it, and a detached one outlives the run and races `exec` for the
-  // conversation's driver lease.
-  const env = { ...process.env, KINU_SKIP_DAEMON: "1", ...opts.env, ...(opts.home !== undefined && { KINU_HOME: opts.home }) };
-
-  return runToExit([process.execPath, cliBin, ...args], { cwd: newProjectDir(), env, stdin: opts.stdin });
-}
-
 function runCliInPty(args: string[], opts: { home: string; stdin?: string }) {
   const command = [
     `KINU_HOME=${shellQuote(opts.home)}`,
@@ -81,7 +70,7 @@ function runCliInPty(args: string[], opts: { home: string; stdin?: string }) {
     ...args.map(shellQuote),
   ].join(" ");
 
-  return runToExit(["script", "-qefc", command, "/dev/null"], { cwd: newProjectDir(), stdin: opts.stdin });
+  return runToExit(["script", "-qefc", command, "/dev/null"], { cwd: scratchDir('test-project'), stdin: opts.stdin });
 }
 
 function writeConfig(home: string, body: JsonObject) {

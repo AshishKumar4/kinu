@@ -9,11 +9,14 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { PaletteIcon, XIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import * as v from "valibot";
-import { detach } from "@kinu.run/core/obs";
+import { detach, detachPromise } from "@kinu.run/core/obs";
 import { APP_ROUTES, DEFAULT_THEME, modeFor, PREFERS_LIGHT, THEME_NAMES, type ThemeName } from "@kinu.run/core";
 import { setMode, wearTheme, type ThemeMode } from "@/hooks/use-theme";
 import { CHAT_FACES, CHAT_FACE_NAMES, FACE_SCOPES, installChatFaces, type ChatFaceName, type FaceScope } from "@/gallery-chat-fonts";
 import { DEPLOY_FIXTURE_STATES, deployStateHref } from "@/gallery-deploy-fixture";
+
+/** Where the Activity switches show: the assistant's own. */
+const ACTIVITY_PAGE = "/workspace/personal-assistant/activity";
 
 const BACKGROUNDS = ["today", "quiet", "none"] as const;
 
@@ -23,6 +26,26 @@ const DEVICES = ["desktop", "phone"] as const;
 
 type Device = (typeof DEVICES)[number];
 
+/** A workspace's Activity: as it ships, or the single log proposed for review (gallery-activity-log.tsx). */
+const ACTIVITY_VIEWS = ["ships", "log"] as const;
+
+type ActivityViewName = (typeof ACTIVITY_VIEWS)[number];
+
+/** How times are worded: each surface's own, as it ships, or the one rule (audit #23, gallery-activity-log.tsx). */
+const TIME_WORDINGS = ["ships", "one"] as const;
+
+type TimeWording = (typeof TIME_WORDINGS)[number];
+
+/** The page's states for the review: as it would be mid-morning, at rest, before anything, reading, and failed. */
+export const ACTIVITY_STATES = [
+  { id: "live", label: "Working, and asking" },
+  { id: "rest", label: "At rest" },
+  { id: "fresh", label: "Nothing yet" },
+  { id: "reading", label: "Reading" },
+  { id: "failed", label: "Could not read" },
+] as const;
+
+
 export interface Design {
   readonly look: ThemeName;
   readonly mode: ThemeMode;
@@ -30,6 +53,8 @@ export interface Design {
   readonly scope: FaceScope;
   readonly background: Background;
   readonly device: Device;
+  readonly activity: ActivityViewName;
+  readonly times: TimeWording;
 }
 
 const MODES = ["light", "dark"] as const satisfies readonly ThemeMode[];
@@ -53,6 +78,8 @@ function readDesign(): Design {
     scope: oneOf(params.get("scope"), FACE_SCOPES, "everywhere"),
     background: oneOf(params.get("background"), BACKGROUNDS, "quiet"),
     device: oneOf(params.get("device"), DEVICES, "desktop"),
+    activity: oneOf(params.get("activity"), ACTIVITY_VIEWS, "ships"),
+    times: oneOf(params.get("times"), TIME_WORDINGS, "ships"),
   };
 }
 
@@ -164,8 +191,18 @@ const BACKGROUND_WHY: Record<Background, string> = {
 /** Pages no sidebar links: onboarding and self-deploy. Every other page is reached through the app's own sidebar. */
 const ELSEWHERE: readonly (readonly [string, string])[] = [["Home", "/"], ["New workspace", "/new"], ["Onboarding", "/welcome"], ["Self-deploy", "/deploy"]];
 
+const ACTIVITY_WHY: Record<ActivityViewName, string> = {
+  ships: "Activity as it ships: the chat's turns by day and its watches; helpers and jobs are read in the inspector's Work.",
+  log: "One log for the workspace: now, what needs you, what is coming, and everything done, by its agent, helpers, jobs and watches.",
+};
+
+const TIMES_WHY: Record<TimeWording, string> = {
+  ships: "Each surface's own: the chat's clock (2:10 AM), the pill's \"3 min\", the jobs' \"in 3m\", the roster's \"3m ago\".",
+  one: "One rule: \"just now\", \"12 min ago\" and \"in 20 min\" when near; the clock the same day; \"Yesterday, 4:10 PM\"; the weekday; the date.",
+};
+
 function summary(design: Design): string {
-  return [LOOK_NAMES[design.look], design.mode, `${CHAT_FACES[design.font].label} (${design.scope})`, `background ${design.background}`, design.device].join(" · ");
+  return [LOOK_NAMES[design.look], design.mode, `${CHAT_FACES[design.font].label} (${design.scope})`, `background ${design.background}`, design.device, `activity ${design.activity}`, `times ${design.times}`].join(" · ");
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -217,14 +254,32 @@ export function DesignBar() {
           <Choice label="Background on New workspace" value={design.background} options={BACKGROUNDS} name={(background) => BACKGROUND_NAMES[background]} onPick={(background) => detach(switchTo({ background }, pathname.startsWith(APP_ROUTES.newWorkspace) ? null : APP_ROUTES.newWorkspace))} />
           <p className="p-meta p-text-3" data-design-why="background">{BACKGROUND_WHY[design.background]}</p>
           <Choice label="Device" value={design.device} options={DEVICES} name={(device) => (device === "phone" ? "Phone" : "Desktop")} onPick={(device) => setDesign({ device })} />
+          <Choice label="A workspace's Activity" value={design.activity} options={ACTIVITY_VIEWS} name={(view) => (view === "log" ? "Single log" : "As it ships")}
+            onPick={(activity) => detach(switchTo({ activity }, pathname.endsWith("/activity") ? null : ACTIVITY_PAGE))} />
+          <p className="p-meta p-text-3" data-design-why="activity">{ACTIVITY_WHY[design.activity]}</p>
+          <Choice label="Times" value={design.times} options={TIME_WORDINGS} name={(times) => (times === "one" ? "One wording" : "As it ships")}
+            onPick={(times) => detach(switchTo({ times }, pathname.endsWith("/activity") ? null : ACTIVITY_PAGE))} />
+          <p className="p-meta p-text-3" data-design-why="times">{TIMES_WHY[design.times]}</p>
         </Section>
         <Section title="Go to">
           <div className="flex flex-wrap gap-1">
             {ELSEWHERE.map(([label, path]) => (
-              <button key={path} type="button" onClick={() => detach(Effect.promise(async () => navigate(path)))} className="rounded-md border p-border px-2 py-1 text-xs p-text-2 hover:p-text">{label}</button>
+              <button key={path} type="button" onClick={() => detachPromise(() => navigate(path))} className="rounded-md border p-border px-2 py-1 text-xs p-text-2 hover:p-text">{label}</button>
             ))}
           </div>
         </Section>
+        {pathname.endsWith("/activity") && design.activity === "log" && (
+          <Section title="This page's states">
+            <ul className="space-y-0.5">
+              {ACTIVITY_STATES.map((state) => (
+                <li key={state.id}>
+                  <button type="button" onClick={() => detachPromise(() => navigate(`${pathname}?activitystate=${state.id}`))} data-activity-state={state.id}
+                    className="block w-full rounded-md px-2 py-1 text-left t-meta p-text-2 hover:bg-[var(--c-hover)] hover:p-text">{state.label}</button>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        )}
         {pathname === "/deploy" && (
           <Section title="This page's states">
             <ul className="space-y-0.5">

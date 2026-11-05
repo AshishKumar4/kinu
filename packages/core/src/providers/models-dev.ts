@@ -247,7 +247,7 @@ export function getModelsDevProvider(
 }
 
 /** The API a catalog model speaks: its SDK's, which a model may override. */
-export interface ModelsDevWire {
+interface ModelsDevWire {
   readonly protocol: WireProtocol;
   readonly reasoning: boolean;
 }

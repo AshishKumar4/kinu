@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { convertFileListToFileUIParts, type FileUIPart } from "ai";
-import { dataUrlRawBytes } from "@kinu.run/core";
+import { base64Bytes } from "@kinu.run/core";
 import { Cause, Effect } from "effect";
 import { detach, diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 
@@ -21,12 +21,12 @@ function admitAttachments(
   offered: readonly FileUIPart[],
   limitBytes: number,
 ): AttachmentAdmission {
-  let budget = limitBytes - current.reduce((sum, part) => sum + dataUrlRawBytes(part.url), 0);
+  let budget = limitBytes - current.reduce((sum, part) => sum + base64Bytes(part.url), 0);
   const admitted: FileUIPart[] = [];
   const refused: string[] = [];
 
   for (const part of offered) {
-    const bytes = dataUrlRawBytes(part.url);
+    const bytes = base64Bytes(part.url);
 
     if (bytes <= budget) {
       admitted.push(part);

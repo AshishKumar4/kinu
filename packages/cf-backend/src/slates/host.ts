@@ -19,7 +19,7 @@ import {
 import type { KvStore } from '@kinu.run/agent-utils';
 import { attempt, ERROR_CODES, KinuError, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import type { ApprovalSpend } from '@kinu.run/core';
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { ONLY_A_PAGE_PUSHES, PAGE_KEEPS_NO_DATA, ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
 import { slateBatchStub } from './rpc-transport';
 import { type SlateBinding, type SlateBindingProps } from './bindings';
@@ -162,7 +162,7 @@ export class SlateHost {
         owner: id, root: source.root, project: source.project, read: await this.slateSources.reader(caller.cred, source), cred: caller.cred,
         ...(this.controller.live.isShared(id) && { scope: 'tree' as const }),
       }),
-      launch: (launch) => this.launch(launch),
+      launch: (launch) => settle(this.launch(launch)),
       // A socket-held invocation dies with the process that held it.
       // A socket-held request, and every request issued to the process, dies with it.
       ended: (held) => {
@@ -267,7 +267,7 @@ export class SlateHost {
 
     if (admission instanceof Response) return admission;
 
-    try {
+    const serving = Effect.promise(async () => {
       // A share's viewers use the slate itself: its durable app and its storage are the state everyone shares. What its
       // calls may reach is the shared server's to say (shared-server.ts), for every request alike.
       const send = async (): Promise<Response> => {
@@ -297,16 +297,18 @@ export class SlateHost {
       }
 
       return response;
-    } catch (cause) {
+    });
+
+    return settle(Effect.catchCause(serving, (failed) => Effect.sync(() => {
       this.invocations.delete(admission.invocation);
-      const error = toKinuError({ doing: `slate share ${handle}`, cause, otherwise: 'io' });
+      const error = toKinuError({ doing: `slate share ${handle}`, cause: Cause.squash(failed), otherwise: 'io' });
       admission.settle('error');
 
       return new Response(error.message, {
         status: error.code === 'denied' || error.code === 'missing' ? 404 : 500,
         headers: { 'cache-control': 'no-store' },
       });
-    }
+    })));
   }
 
   private readonly invocations = new Map<string, SlateInvocation & { readonly held?: string }>();
@@ -411,11 +413,14 @@ export class SlateHost {
     return this.surfaceCall({ caller: ROOT_SLATE_CALLER, id, name: 'workspace', lineage }, asked);
   }
 
-  async surfaceCall({ caller, id, name, lineage }: SlateCallFrom, request: JsonValue): Promise<SlateSurfaceResult> {
-    try {
+  /** A slate's call on the surface; whatever refuses or fails it is answered as a refusal, never thrown. */
+  surfaceCall({ caller, id, name, lineage }: SlateCallFrom, request: JsonValue): Promise<SlateSurfaceResult> {
+    const refused = ({ cause }: { readonly cause: unknown }): SlateSurfaceResult => ({ ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} ${name}`, cause, otherwise: 'io' })) });
+
+    const answering = Effect.promise(async (): Promise<SlateSurfaceResult> => {
       const parsed = v.safeParse(SlateCallRequestSchema, request);
 
-      if (!parsed.success) throw new KinuError('bad_input', 'A slate call is { path: string[], args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) });
+      if (!parsed.success) return refused({ cause: new KinuError('bad_input', 'A slate call is { path: string[], args: JSON[], invocation: string | null }', { cause: new v.ValiError(parsed.issues) }) });
 
       if (name === SLATE_HOST_BINDING) return this.hostCall(caller, id, parsed.output);
       const servers = this.controller.servers;
@@ -467,7 +472,7 @@ export class SlateHost {
       const source = await this.slateSources.resolve(caller.cred, id);
 
       if (source.kind === 'message' && !source.bound) {
-        throw new KinuError('denied', `Slate ${id} is a hired agent's page, drawn with no authority lent to it: its calls would not run where that agent's stores are`);
+        return refused({ cause: new KinuError('denied', `Slate ${id} is a hired agent's page, drawn with no authority lent to it: its calls would not run where that agent's stores are`) });
       }
 
       // An answer's page calls as its author as of now, in the mode the author's next turn runs in.
@@ -499,9 +504,9 @@ export class SlateHost {
           ...(parsed.output.authorize && { authorizeOnly: true }),
         }),
       });
-    } catch (cause) {
-      return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id} ${name}`, cause, otherwise: 'io' })) };
-    }
+    });
+
+    return settle(Effect.catchCause(answering, (failed) => Effect.succeed(refused({ cause: Cause.squash(failed) }))));
   }
 
   /**
@@ -577,23 +582,24 @@ export class SlateHost {
   }
 
   /** One Cap'n Web HTTP-batch RPC; the invocation id lives exactly as long as the call. */
-  async call(request: SlateAppCall): Promise<SlateCallResult> {
+  call(request: SlateAppCall): Promise<SlateCallResult> {
     const { caller, id, method, args, chain = [], viewer, admit } = request;
     const invocation = crypto.randomUUID();
+    const refused = ({ cause }: { readonly cause: unknown }): SlateCallResult => ({ ok: false, ...refusalOf(toKinuError({ doing: `slate ${id}.${method}`, cause, otherwise: 'io' })) });
 
-    try {
+    const calling = Effect.promise(async (): Promise<SlateCallResult> => {
       requireWorkModePermission(caller.workMode, false, 'Calling authored slate code');
 
-      if (!isSlateMethodName(method)) throw new KinuError('bad_input', `"${method}" is not an app method name`);
+      if (!isSlateMethodName(method)) return refused({ cause: new KinuError('bad_input', `"${method}" is not an app method name`) });
       const parsed = v.safeParse(v.array(JsonValueSchema), args);
 
-      if (!parsed.success) throw new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) });
+      if (!parsed.success) return refused({ cause: new KinuError('bad_input', 'Slate arguments must be JSON values', { cause: new v.ValiError(parsed.issues) }) });
 
-      return await onceMoreIfNotAdmitted(async () => {
+      return onceMoreIfNotAdmitted(async (): Promise<SlateCallResult> => {
         const process = await this.ensure(caller, id);
 
         if (!process.methods.includes(method)) {
-          throw new KinuError('bad_input', `Slate ${id} has no method ${method}; its class exports ${process.methods.join(', ')}`);
+          return refused({ cause: new KinuError('bad_input', `Slate ${id} has no method ${method}; its class exports ${process.methods.join(', ')}`) });
         }
 
         // Issued to the process it reaches, under each slate's sharing on its way now.
@@ -611,7 +617,7 @@ export class SlateHost {
           const raw: unknown = await stub[method](...parsed.output);
           const value = v.safeParse(JsonValueSchema, raw === undefined ? null : raw);
 
-          if (!value.success) throw new KinuError('bad_input', 'Slate method must return a JSON value', { cause: new v.ValiError(value.issues) });
+          if (!value.success) return refused({ cause: new KinuError('bad_input', 'Slate method must return a JSON value', { cause: new v.ValiError(value.issues) }) });
 
           return { ok: true, value: value.output };
         } finally {
@@ -619,15 +625,17 @@ export class SlateHost {
           stub[Symbol.dispose]();
         }
       });
-    } catch (cause) {
+    });
+
+    // A refusal that crossed RPC as text is read back as the refusal it was.
+    const answered = Effect.catchCause(calling, (failed) => Effect.sync((): SlateCallResult => {
+      const cause = Cause.squash(failed);
       const refusal = refusalFromThrown({ cause });
 
-      if (refusal !== null) return { ok: false, ...refusal };
+      return refusal === null ? refused({ cause }) : { ok: false, ...refusal };
+    }));
 
-      return { ok: false, ...refusalOf(toKinuError({ doing: `slate ${id}.${method}`, cause, otherwise: 'io' })) };
-    } finally {
-      this.invocations.delete(invocation);
-    }
+    return settle(Effect.ensuring(answered, Effect.sync(() => { this.invocations.delete(invocation); })));
   }
 
   /**
@@ -705,50 +713,52 @@ export class SlateHost {
   }
 
   /** A process for `launch`: the slate's bindings as its caller, and its outbound mediated as that caller's eval is. */
-  private async launch(launch: SlateLaunch<SlateSource>): Promise<ResidentSlateProcess> {
-    const { id, caller, source, image, app } = launch;
+  private launch(launch: SlateLaunch<SlateSource>): Effect.Effect<ResidentSlateProcess, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const { id, caller, source, image, app } = launch;
 
-    await this.servable(id, source.kind === 'message' || image.scope === 'tree');
+      yield* Effect.promise(() => this.servable(id, source.kind === 'message' || image.scope === 'tree'));
 
-    // Shared, the slate's server drives no browser of the owner's: only one its own call opened (Kitesurf).
-    const unshared = caller.share === undefined && caller.via === undefined && this.controller.servers.authorityOf(id).kind === 'owner';
-    // What the slate's sharing was when this launch chose its network: changed before it is running, it starts again.
-    // The shared slates it inherited its bound from are sealed into it as the hop sealed them (`SlateCaller.via`).
-    const lineage: SlateLineage = { incarnation: crypto.randomUUID(), generation: this.controller.generation(id), ancestors: { ...caller.via } };
-    const actor = unshared ? await this.deps.browserActor(caller) : null;
-    // Shared, it reaches the network as no one: its own preview hosts too, and it holds and spends none of the owner's secrets.
-    const ownerUserId = unshared ? this.deps.ownerUserId?.() ?? null : null;
-    const principal: EgressPrincipal = unshared ? { as: 'owner', workspace: this.deps.workspace, actorId: actor, ownerUserId } : { as: 'viewer', workspace: this.deps.workspace, actorId: null };
-    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ principal });
-    const secrets = unshared ? await this.deps.secrets?.() ?? {} : {};
+      // Shared, the slate's server drives no browser of the owner's: only one its own call opened (Kitesurf).
+      const unshared = caller.share === undefined && caller.via === undefined && this.controller.servers.authorityOf(id).kind === 'owner';
+      // What the slate's sharing was when this launch chose its network: changed before it is running, it starts again.
+      // The shared slates it inherited its bound from are sealed into it as the hop sealed them (`SlateCaller.via`).
+      const lineage: SlateLineage = { incarnation: crypto.randomUUID(), generation: this.controller.generation(id), ancestors: { ...caller.via } };
+      const actor = unshared ? yield* Effect.promise(() => this.deps.browserActor(caller)) : null;
+      // Shared, it reaches the network as no one: its own preview hosts too, and it holds and spends none of the owner's secrets.
+      const ownerUserId = unshared ? this.deps.ownerUserId?.() ?? null : null;
+      const principal: EgressPrincipal = unshared ? { as: 'owner', workspace: this.deps.workspace, actorId: actor, ownerUserId } : { as: 'viewer', workspace: this.deps.workspace, actorId: null };
+      const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ principal });
+      const secrets = unshared ? (yield* Effect.promise(async () => this.deps.secrets?.())) ?? {} : {};
 
-    if (caller.workMode === 'build' && globalOutbound === null) {
-      throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
-    }
+      if (caller.workMode === 'build' && globalOutbound === null) {
+        return yield* new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
+      }
 
-    const bindings: Record<string, Fetcher<SlateBinding>> = {};
+      const bindings: Record<string, Fetcher<SlateBinding>> = {};
 
-    // An answer's page keeps its data in workspace.db: its process holds no storage binding, whatever its code imports.
-    for (const name of source.kind === 'message' ? [SLATE_SURFACE, SLATE_HOST_BINDING] : [SLATE_SURFACE, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING]) {
-      const props: SlateBindingProps = { workspace: this.deps.workspace, id, name, caller, lineage };
-      bindings[name] = exports.SlateBinding({ props });
-    }
+      // An answer's page keeps its data in workspace.db: its process holds no storage binding, whatever its code imports.
+      for (const name of source.kind === 'message' ? [SLATE_SURFACE, SLATE_HOST_BINDING] : [SLATE_SURFACE, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING]) {
+        const props: SlateBindingProps = { workspace: this.deps.workspace, id, name, caller, lineage };
+        bindings[name] = exports.SlateBinding({ props });
+      }
 
-    const started = await this.resident.launch({ owner: id, root: source.root, bindings, secrets, globalOutbound, app: app === null ? null : { port: app.port } }, image);
+      const started = yield* Effect.promise(() => this.resident.launch({ owner: id, root: source.root, bindings, secrets, globalOutbound, app: app === null ? null : { port: app.port } }, image));
 
-    // Shared or unshared while it started: its network was chosen for what no longer holds, so it never runs as it is.
-    if (this.controller.generation(id) !== lineage.generation) {
-      await started.stop();
+      // Shared or unshared while it started: its network was chosen for what no longer holds, so it never runs as it is.
+      if (this.controller.generation(id) !== lineage.generation) {
+        yield* Effect.promise(() => started.stop());
 
-      return await this.launch(launch);
-    }
+        return yield* this.launch(launch);
+      }
 
-    const running = await this.sealed(id, lineage, started);
+      const running = yield* Effect.promise(() => this.sealed(id, lineage, started));
 
-    this.lineages.set(running, lineage);
-    this.heldLineage.set(heldSlateKey(caller, id), lineage);
+      this.lineages.set(running, lineage);
+      this.heldLineage.set(heldSlateKey(caller, id), lineage);
 
-    return running;
+      return running;
+    });
   }
 
   /**

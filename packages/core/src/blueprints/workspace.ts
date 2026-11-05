@@ -19,8 +19,6 @@ const WhenSchema = v.variant('kind', [
   v.strictObject({ kind: v.literal('every'), minutes: v.pipe(v.number(), v.integer(), v.minValue(5), v.maxValue(720)) }),
 ]);
 
-export type BlueprintWhen = v.InferOutput<typeof WhenSchema>;
-
 /** A schedule the new workspace holds: its main agent wakes with `prompt` each time it runs. `brief`: the one the
  *  installer's brief time moves. `connection`: the connection (an MCP preset id) it watches, armed only while the
  *  owner holds it, since without it each run is a turn that finds nothing. `check`: a watcher's program, which runs

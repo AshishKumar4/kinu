@@ -2,8 +2,7 @@
  * One composer for every chat surface. While a turn runs it offers Stop, Branch and Steer; which ones
  * show comes from `turnLiveness`, the same fold the transcript's live tail reads.
  */
-import { detach } from "@kinu.run/core/obs";
-import { Effect } from "effect";
+import { detach, detachPromise } from "@kinu.run/core/obs";
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Loader } from "@/components/ui/Loader";
 import {
@@ -13,14 +12,14 @@ import {
 import { fmtSpan, providerName, type TurnLiveness, type WorkMode } from "@kinu.run/core";
 import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
 import type { WorkspaceNotice } from "@kinu.run/core";
-import { composing } from "@/components/ui/form";
 import type { ProviderWaitShown } from "@/hooks/use-chat-owner";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
-import { TextArea } from "@/components/ui/Field";
+import { TextArea, composing } from "@/components/ui/Field";
 import { IconControl } from "@/components/ui/IconControl";
 import { PillButton } from "@/components/ui/Pill";
 import { ChromeButton } from "@/components/ui/ChromeButton";
 import { SlashMenu, type SlashMenuControl } from "@/components/SlashMenu";
+import { useHeldWhile } from "@/hooks/use-held-while";
 
 const CHAT_MODES: readonly WorkMode[] = ["build", "plan"];
 
@@ -306,14 +305,11 @@ export function Composer({
   const stranded = liveness.kind === "stranded";
   // A branch runs the draft's words as a parallel head: attachments alone give it nothing to run.
   const canBranch = Boolean(onBranch) && streaming && value.trim() !== "" && mode?.value !== "plan";
-  const [stopping, setStopping] = useState(false);
-  const [recovering, setRecovering] = useState(false);
-  const recoverLabel = RECOVER_LABEL[recovering ? "busy" : "idle"];
   // The runtime sends no stopped event; `streaming` going false confirms the stop.
-  useEffect(() => { if (!streaming) setStopping(false); }, [streaming]);
-  useEffect(() => { if (!stranded) setRecovering(false); }, [stranded]);
+  const [stopping, setStopping] = useHeldWhile(streaming);
+  const [recovering, setRecovering] = useHeldWhile(stranded);
+  const recoverLabel = RECOVER_LABEL[recovering ? "busy" : "idle"];
   // Enter while a turn runs steers it; it is never a no-op.
-  const submit = onSend;
   const menu = slash?.highlighted === undefined ? undefined : slash;
 
   return (
@@ -327,7 +323,7 @@ export function Composer({
 
       {attention}
 
-      <div className="p-composer relative">
+      <div className="p-composer relative" data-composer>
         {menu !== undefined && <SlashMenu menu={menu} />}
         {attachments && <AttachmentTray attachments={attachments} />}
 
@@ -343,7 +339,7 @@ export function Composer({
               if (e.key !== "Enter" || e.shiftKey) return;
 
               e.preventDefault();
-              submit();
+              onSend();
 
               return;
             }
@@ -363,12 +359,12 @@ export function Composer({
             {modelPicker && <div className="p-composer-model">{modelPicker}</div>}
             {stranded && onRecover && (
               <ChromeButton part="word" disabled={recovering}
-                onClick={() => detach(Effect.promise(async () => {
+                onClick={() => detachPromise(async () => {
                   setRecovering(true);
                   // The outcome is the workspace notice's to report; the button only waits.
                   await onRecover();
                   setRecovering(false);
-                }))}
+                })}
                 className="disabled:opacity-50"
                 aria-label="Recover this turn"
                 title="This turn's worker stopped without finishing. Settle it so the agent takes work again.">
@@ -385,7 +381,7 @@ export function Composer({
               </ChromeButton>
             )}
             <SendControls streaming={streaming} empty={empty} blocked={disabled} stopping={stopping}
-              onSend={submit} onStop={() => { setStopping(true); onStop(); }} />
+              onSend={onSend} onStop={() => { setStopping(true); onStop(); }} />
           </div>
         </div>
       </div>

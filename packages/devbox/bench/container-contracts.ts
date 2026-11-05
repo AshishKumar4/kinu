@@ -1,7 +1,8 @@
 /** D72: these contracts run on a throwaway Cloudflare container, never a local image. */
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
+import { Exit } from 'effect';
 import * as v from 'valibot';
-import { attempt, settle } from '../src/errors';
+import { attempt, hold, settle } from '../src/errors';
 import { describeThrown } from '../src/lifecycle';
 import { listFiles } from '../src/file-listing';
 import { Processes, boxEnv, TRUST } from '../src/processes';
@@ -32,10 +33,11 @@ const ROOT = '/var/tmp/devbox/processes';
 const SCRATCH = '/var/tmp/devbox-contracts';
 
 /**
- * A start's tools refresh (D110) on this box, from a store of the staged archive's files under their sha256 and its
+ * A start's tools refresh (D110, D120) on this box, from a store of the staged archive's files under their sha256 and its
  * manifest, as `devbox-tools.ts publish` fills one: a box a pin behind places the changed file alone, while the old
- * binary runs on, and drops what the pin dropped; a full install cut short leaves the box marked, and the next refresh
- * installs whole. It runs before the reinstall below, which spends the archive.
+ * binary runs on, and drops what the pin dropped; a box whose pin lacked a package, and missing another the pin left
+ * as it was, gets both back from the files apt names, without the tarball; a full install cut short leaves the box
+ * marked, and the next refresh installs whole. It runs before the reinstall below, which spends the archive.
  */
 async function toolsRefresh(container: Container, pin: string): Promise<void> {
   const store = `${SCRATCH}/store`;
@@ -60,8 +62,8 @@ async function toolsRefresh(container: Container, pin: string): Promise<void> {
     },
   };
 
-  await native(container, `set -e; rm -rf ${store}; mkdir -p ${store}/x ${store}/devbox-tools/files; tar -C ${store}/x -xzf ${SCRATCH}/tools.tgz usr/local/bin; `
-    + `for f in ${store}/x/usr/local/bin/*; do cp "$f" ${store}/devbox-tools/files/$(sha256sum < "$f" | cut -c1-64); done; `
+  await native(container, `set -e; rm -rf ${store}; mkdir -p ${store}/x ${store}/devbox-tools/files; tar -C ${store}/x -xzf ${SCRATCH}/tools.tgz usr; `
+    + `find ${store}/x -type f | while read -r f; do cp "$f" ${store}/devbox-tools/files/$(sha256sum < "$f" | cut -c1-64); done; rm -rf ${store}/x; `
     + `cp ${TOOLS_MANIFEST} ${store}/${toolsManifestKey(pin)}; ln -s ${SCRATCH}/tools.tgz ${store}/devbox-tools/${pin}.tgz`);
 
   // The previous pin's box: another binary as the block lower, running, and a tool this pin dropped.
@@ -75,6 +77,26 @@ async function toolsRefresh(container: Container, pin: string): Promise<void> {
   equal({ mode: behind.mode, files: behind.files, removed: behind.removed }, { mode: 'incremental', files: 1, removed: 1 });
   equal(await native(container, `kill -0 ${running} && echo running; cat ${TOOLS_STAMP}; echo; test -e ${dropped} || echo dropped; `
     + `(cd / && grep -v ' usr/local/lib/devbox/debs/' ${TOOLS_MANIFEST.slice(1)} | sha256sum -c --quiet) && echo verified; kill ${running} 2>/dev/null; true`), `running\n${pin}\ndropped\nverified`);
+  // The previous pin had no ripgrep, so its index and the ripgrep package differ from this pin's; xdotool, which this pin
+  // ships as it was, was removed since by hand. No tarball is in reach: only the files apt names may move.
+  await native(container, `set -e; dpkg -r ripgrep xdotool >/dev/null; printf previous > ${TOOLS_STAMP}; mv ${store}/devbox-tools/${pin}.tgz ${store}/held.tgz; `
+    + `sed -i -E 's#^[0-9a-f]{64}(  usr/local/lib/devbox/debs/(Packages|ripgrep_[^ ]*\\.deb))$#${'0'.repeat(64)}\\1#' ${TOOLS_MANIFEST}`);
+  const repackaged = await settle(refreshTools(ports));
+
+  // The decision log's measurement (D120): what a package delta moved and how long apt took.
+  console.log(JSON.stringify({ event: 'contract.tools_packages', ...repackaged }));
+
+  equal({ mode: repackaged.mode, after: await native(container, `rg --version >/dev/null && xdotool --version >/dev/null && echo installed; `
+    + `cat ${TOOLS_STAMP}; echo; test -e ${TOOLS_INSTALLING} && echo marked; test -d /usr/local/lib/devbox/debs && echo repository; true`) },
+  { mode: 'incremental', after: `installed\n${pin}` });
+  await native(container, `mv ${store}/held.tgz ${store}/devbox-tools/${pin}.tgz`);
+  // A package refresh whose apt fails once its files are placed leaves the box marked, as a cut-short full install does.
+  await native(container, `set -e; mkdir -p ${SCRATCH}/no-apt; printf '#!/bin/sh\\nexit 100\\n' > ${SCRATCH}/no-apt/apt-get; chmod +x ${SCRATCH}/no-apt/apt-get; `
+    + `printf previous > ${TOOLS_STAMP}; `
+    + `sed -i -E 's#^[0-9a-f]{64}(  usr/local/lib/devbox/debs/(Packages|ripgrep_[^ ]*\\.deb))$#${'0'.repeat(64)}\\1#' ${TOOLS_MANIFEST}`);
+  const halted = await hold(refreshTools({ ...ports, exec: async (command: string) => run(`PATH=${SCRATCH}/no-apt:$PATH\n${command}`) }));
+
+  equal({ halted: Exit.isFailure(halted), marked: await native(container, `test -e ${TOOLS_INSTALLING} && echo marked; true`) }, { halted: true, marked: 'marked' });
   // A full install whose apt fails after the archive is extracted, the extracted manifest naming this pin.
   await native(container, `set -e; mkdir -p ${SCRATCH}/no-apt; printf '#!/bin/sh\\nexit 100\\n' > ${SCRATCH}/no-apt/apt-get; chmod +x ${SCRATCH}/no-apt/apt-get; printf previous > ${TOOLS_STAMP}`);
   const cut = await run(`PATH=${SCRATCH}/no-apt:$PATH\n${toolsInstallCommand(`${SCRATCH}/tools.tgz`, pin)}`);
@@ -83,7 +105,7 @@ async function toolsRefresh(container: Container, pin: string): Promise<void> {
   const retried = await settle(refreshTools(ports));
 
   equal({ mode: retried.mode, reason: retried.reason, changed: retried.changed, after: await native(container, `cat ${TOOLS_STAMP}; test -e ${TOOLS_INSTALLING} && echo marked; true`) },
-    { mode: 'full', reason: 'the box\'s last full install did not finish', changed: 0, after: pin });
+    { mode: 'full', reason: 'the box\'s last install did not finish', changed: 0, after: pin });
   await native(container, `rm -rf ${store} ${SCRATCH}/no-apt`);
 }
 

@@ -6,7 +6,7 @@ import { specWithoutAccount } from '../providers/types';
 import type { TierId } from './catalog';
 import type { ResolvedTurnProfile, TierFallback, TierRoute } from './resolve';
 
-export type ModelRoutePolicy =
+type ModelRoutePolicy =
   | { readonly kind: 'invocation' }
   /** `effort`: the level the call wants, which each model of the tier's chain is asked at as near as it declares. */
   | { readonly kind: 'fixed'; readonly tier: TierId; readonly effort?: ReasoningEffort }
@@ -40,11 +40,6 @@ const MODEL_ROUTE_POLICY = {
 /** Producers whose model the turn profile decides — everything but `platform`. */
 export type ProfileRoutedSource = {
   [K in SpendSource]: (typeof MODEL_ROUTE_POLICY)[K] extends { kind: 'platform' } ? never : K
-}[SpendSource];
-
-/** Producers routed to one named tier slot regardless of the turn. */
-export type FixedTierSource = {
-  [K in SpendSource]: (typeof MODEL_ROUTE_POLICY)[K] extends { kind: 'fixed' } ? K : never
 }[SpendSource];
 
 function isProfileRouted(source: SpendSource): source is ProfileRoutedSource {

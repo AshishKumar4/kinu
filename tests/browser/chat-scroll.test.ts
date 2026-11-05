@@ -379,6 +379,8 @@ interface LongChat {
   readonly dragMs: number;
   /** A drag to the middle: the first page it read (`from-to`), and the history index of the first row in view once one landed. */
   readonly middle: { readonly read: string; readonly shown: number | null };
+  /** The same, under newest rows far taller than a page's, whose chat reads no newest page (it came with the seed). */
+  readonly middleTall: { readonly read: string; readonly shown: number | null };
 }
 
 interface Observed {
@@ -506,7 +508,7 @@ async function measureWalked(newPage: Gallery['newPage'], origin: string): Promi
   }
 }
 
-const LONG = '.p-thread-column.overflow-y-auto';
+const LONG = '[data-transcript].overflow-y-auto';
 
 /**
  * Every frame the page renders while `drive` runs, read in the page as it is presented: each rendering step is read
@@ -685,6 +687,36 @@ async function stillReaderLandings(newPage: Gallery['newPage'], origin: string, 
   await held.close();
 }
 
+/** The scrollbar dragged to the middle of a long chat: the first page it read, and the first row in view once it landed. */
+async function middleDrag(newPage: Gallery['newPage'], origin: string, query: string): Promise<LongChat['middle']> {
+  const halfway = await openLong(newPage, origin, query);
+  // A chat whose newest page came with its seed has read nothing yet: no empty first entry is counted.
+  const readsBefore = await halfway.evaluate(() => (document.documentElement.dataset.historyReads ?? '').split(' ').filter((read) => read !== '').length);
+  const rowsBefore = await halfway.$eval(LONG, (el) => el.children.length);
+
+  await halfway.$eval(LONG, (el) => {
+    el.scrollTop = Math.round((el.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0) / 2);
+  });
+  await untilLong(halfway, { kind: 'rowsAbove', rows: rowsBefore }, `the drag to the middle never landed a page (${query})`);
+  await nextPaint(halfway);
+  await nextPaint(halfway);
+
+  const landed = {
+    read: await halfway.evaluate((skip) => (document.documentElement.dataset.historyReads ?? '').split(' ').filter((read) => read !== '')[skip] ?? '', readsBefore),
+    shown: await halfway.$eval(LONG, (el) => {
+      const view = el.getBoundingClientRect();
+      const row = [...el.children].find((child) => !child.hasAttribute('data-scroll-edge') && child.getBoundingClientRect().bottom > view.top);
+      const index = /(?:Question|Answer) (\d+)/.exec(row?.textContent ?? '')?.[1];
+
+      return index === undefined ? null : Number(index);
+    }),
+  };
+
+  await halfway.close();
+
+  return landed;
+}
+
 async function measureLong(newPage: Gallery['newPage'], origin: string): Promise<LongChat> {
   const stillReader: LongFrame[][] = [];
   const uneven: LongFrame[][] = [];
@@ -694,6 +726,7 @@ async function measureLong(newPage: Gallery['newPage'], origin: string): Promise
   let dragAsks = 0;
   let dragMs = 0;
   let middle: LongChat['middle'] = { read: '', shown: null };
+  let middleTall: LongChat['middle'] = { read: '', shown: null };
 
   try {
     // Held pages: each older page lands when released, and nothing lands between a painted frame and its reading.
@@ -738,31 +771,12 @@ async function measureLong(newPage: Gallery['newPage'], origin: string): Promise
     await dragged.close();
 
     // The scrollbar dragged to the middle: the page read is the one under the reader, not the next one up.
-    const halfway = await openLong(newPage, origin, 'history=5000&historyLatency=250');
-    const readsBefore = await halfway.evaluate(() => (document.documentElement.dataset.historyReads ?? '').trim().split(' ').length);
-    const rowsBefore = await halfway.$eval(LONG, (el) => el.children.length);
+    middle = await middleDrag(newPage, origin, 'history=5000&historyLatency=250');
+    middleTall = await middleDrag(newPage, origin, 'history=5000&historyLatency=250&tallTail=1');
 
-    await halfway.$eval(LONG, (el) => {
-      el.scrollTop = Math.round((el.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0) / 2);
-    });
-    await untilLong(halfway, { kind: 'rowsAbove', rows: rowsBefore }, 'the drag to the middle never landed a page');
-    await nextPaint(halfway);
-    await nextPaint(halfway);
-    middle = {
-      read: await halfway.evaluate((skip) => (document.documentElement.dataset.historyReads ?? '').trim().split(' ')[skip] ?? '', readsBefore),
-      shown: await halfway.$eval(LONG, (el) => {
-        const view = el.getBoundingClientRect();
-        const row = [...el.children].find((child) => !child.hasAttribute('data-scroll-edge') && child.getBoundingClientRect().bottom > view.top);
-        const index = /(?:Question|Answer) (\d+)/.exec(row?.textContent ?? '')?.[1];
-
-        return index === undefined ? null : Number(index);
-      }),
-    };
-    await halfway.close();
-
-    return { refused: null, stillReader, uneven, tallTail, fling, drag, dragAsks, dragMs, middle };
+    return { refused: null, stillReader, uneven, tallTail, fling, drag, dragAsks, dragMs, middle, middleTall };
   } catch (err) {
-    return { refused: firstLine({ cause: err }), stillReader, uneven, tallTail, fling, drag, dragAsks, dragMs, middle };
+    return { refused: firstLine({ cause: err }), stillReader, uneven, tallTail, fling, drag, dragAsks, dragMs, middle, middleTall };
   }
 }
 
@@ -921,10 +935,11 @@ describe('a long workspace chat, as the reader sees it', () => {
     expect(observed.long.dragAsks).toBe(1);
   });
 
-  test('the thumb dragged to the middle reads the page under the reader in one round trip', () => {
-    const [from = NaN, to = NaN] = observed.long.middle.read.split('-').map(Number);
-    const shown = observed.long.middle.shown ?? NaN;
+  test.each(['middle', 'middleTall'] as const)('the thumb dragged to the middle reads the page under the reader in one round trip (%s)', (which) => {
+    const [from = NaN, to = NaN] = observed.long[which].read.split('-').map(Number);
+    const shown = observed.long[which].shown ?? NaN;
 
+    console.log(`${which}: read ${observed.long[which].read}, first row in view ${String(shown)}`);
     expect(shown).toBeGreaterThanOrEqual(2250);
     expect(shown).toBeLessThanOrEqual(2750);
     expect(from).toBeLessThanOrEqual(shown);

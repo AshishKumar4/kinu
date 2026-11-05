@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
 import { THEME_NAMES, type ThemeName } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
-import { Field } from "@/components/ui/form";
+import { Field } from "@/components/ui/Field";
 import { Switch } from "@/components/ui/Switch";
 import { Card } from "@/components/ui/Card";
 import { Choices } from "@/components/ui/Choices";

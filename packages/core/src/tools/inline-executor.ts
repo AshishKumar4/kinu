@@ -15,7 +15,7 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { commandAnswer, ExecPartsSchema } from '../execution/exec-result';
 import { shellExecOptions } from '../execution/shell-session';
-import { diagnostics, KinuError, refusalOf, settle, toKinuError } from '../obs/index';
+import { diagnostics, KinuError, refusalOf, settle, settleSync, toKinuError } from '../obs/index';
 import { Effect } from 'effect';
 import { isReservedCraftToolName } from '../craft/in-episode';
 import { craftPreference, craftPreferences, type CraftPreferenceRow } from '../craft/preference';
@@ -70,27 +70,6 @@ export interface InlineExecutorDeps {
   slate?: (operation: SlateOperation, turn?: string) => Promise<SlateCallResult>;
 }
 
-/** A path `workspace.*` found nothing at, or a directory it read as a file, says how paths are read here
- *  (`addressingHint`); code, errno and path are kept. */
-function withVfsGuidance(planes: PathPlanes, tools: ExecutorProvider['tools']): ExecutorProvider['tools'] {
-  const guided: ExecutorProvider['tools'] = {};
-
-  for (const [name, entry] of Object.entries(tools)) {
-    guided[name] = {
-      ...entry,
-      execute: async (...args: unknown[]) => {
-        try {
-          return await entry.execute(...args);
-        } catch (err) {
-          if (!isVfsError(err) || (err.code !== 'ENOENT' && err.code !== 'EISDIR')) throw err;
-          throw withVfsErrorHint(err, addressingHint(planes));
-        }
-      },
-    };
-  }
-
-  return guided;
-}
 
 /** The one statement of what `createTool` takes, rendered into the declaration the model reads. */
 const CREATE_TOOL_CONTRACT = 'Save a crafted tool, callable as `tools.<name>(args)` from the next program. `code` is '
@@ -202,7 +181,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             `createTool("${toolName}"): ${admitted.error}`)) };
         }
 
-        try {
+        // The craft store is local SQLite, so a failure it does not word is `io`.
+        return settleSync(Effect.catch(Effect.try({ try: (): JsonValue => {
           // Exact-name update is an upsert; a case-insensitive match on another name is a collision.
           const existing = craftStore.get(toolName);
           const desc = description;
@@ -262,19 +242,16 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           });
 
           return { ok: true, name: toolName, action: 'created' };
-        } catch (err) {
-          // The craft store is local SQLite, so an unrecognised failure is `io`.
-          const failure = toKinuError({
-            doing: `workspace.createTool ${toolName}`, cause: err, otherwise: 'io',
-          });
-
-          return { ok: false, ...refusalOf(failure) };
-        }
+        }, catch: (cause) => toKinuError({ doing: `workspace.createTool ${toolName}`, cause, otherwise: 'io' }) }),
+        (failure) => Effect.succeed<JsonValue>({ ok: false, ...refusalOf(failure) })));
       },
     },
   };
 
   const slate = deps.slate;
+
+  /** A slate operation's refusal as `workspace.slates` answers it to the program, which reads `success`. */
+  const slateRefusal = (refused: { readonly reason: string; readonly error: string }): JsonValue => ({ success: false, reason: refused.reason, error: refused.error });
 
   if (slate !== undefined) {
     // Captured and shadowed by `bindSlates`; the second argument is the program's own, stamped by the actor running it.
@@ -290,7 +267,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const program = v.safeParse(SlateProgramSchema, args[1]);
         const result = await slate(parsed.output, program.success ? program.output.turn : undefined);
 
-        return result.ok ? result.value : { success: false, reason: result.reason, error: result.error };
+        return result.ok ? result.value : slateRefusal(result);
       },
     };
   }
@@ -307,7 +284,15 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},
-    tools: withVfsGuidance(planes, tools),
+    // A path `workspace.*` found nothing at, or a directory it read as a file, says how paths are read here
+    // (`addressingHint`), code, errno and path kept; anything else it fails with is rethrown as it came.
+    tools: Object.fromEntries(Object.entries(tools).map(([name, entry]) => [name, {
+      ...entry,
+      execute: (...args: unknown[]) => settle(Effect.catchDefect(
+        Effect.promise(async () => await entry.execute(...args)),
+        (err) => (isVfsError(err) && (err.code === 'ENOENT' || err.code === 'EISDIR') ? Effect.fail(withVfsErrorHint(err, addressingHint(planes))) : Effect.die(err)),
+      )),
+    }])),
     positionalArgs: true,
     // No inbound TCP surface here; Worker slates use their separate host.
     async exposePort(port) {
@@ -323,15 +308,11 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     async listExposedPorts() { return []; },
   };
 
-  if (resourceLimits !== undefined) {
-    Object.assign(provider, { resourceLimits });
-  }
-
-  if (deps.unmeasured !== undefined) {
-    Object.assign(provider, { unmeasuredCapabilities: new Set(deps.unmeasured) });
-  }
-
-  return provider;
+  return {
+    ...provider,
+    ...(resourceLimits !== undefined && { resourceLimits }),
+    ...(deps.unmeasured !== undefined && { unmeasuredCapabilities: new Set(deps.unmeasured) }),
+  };
 }
 
 export interface NimbusWorkspaceExecutorOpts extends NimbusSessionOpts {

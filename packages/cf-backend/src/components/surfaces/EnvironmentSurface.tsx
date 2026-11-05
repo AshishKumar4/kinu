@@ -802,7 +802,7 @@ function UnavailableMount({ mount, exec }: { mount: EnvironmentInfo; exec: Execu
 
   return (
     <Absence icon={PlugIcon} title={`${executorLabel(mount.name)} is not available here`}>
-      {text}{" "}<a href={EXECUTION_DOCS} target="_blank" rel="noreferrer" className="p-accent-fg hover:underline">Learn more</a>
+      {text}{" "}<a href={EXECUTION_DOCS} target="_blank" rel="noreferrer" className="p-link">Learn more</a>
     </Absence>
   );
 }

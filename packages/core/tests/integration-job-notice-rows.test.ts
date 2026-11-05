@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import { BackgroundJobRunner, backgroundJobWakeTrigger } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
-import { initEventsHubTables } from '../src/events/hub/index';
+import { initEventsHubTables } from '../src/events/hub/schema';
 import { getChatHistoryPage } from '../src/read-models/status';
 import { keptMediaName } from '../src/session/chat-media';
 import { SessionHistory } from '../src/session/history';

@@ -13,6 +13,7 @@ import { describeToolCall } from "../tools/tool-call-summary";
 import { JsonObjectSchema, type JsonObject } from "../utils/json";
 import { andList } from "../utils/text";
 import type { AnyToolPart } from "./tool-call-grouping";
+import { basename } from '../utils/text';
 
 /** What a phase's calls did, as its line can say it. */
 interface PhaseFacts {
@@ -35,10 +36,6 @@ function argsOf(part: AnyToolPart): JsonObject | undefined {
   const parsed = v.safeParse(JsonObjectSchema, part.input);
 
   return parsed.success ? parsed.output : undefined;
-}
-
-function basename(path: string): string {
-  return path.split("/").filter(Boolean).at(-1) ?? path;
 }
 
 /** A call's words as its row would show them: its output, or why it failed. */

@@ -1,6 +1,5 @@
 /** Background jobs (auto-detached >30s tool calls) as Work cards, with cancel, retry and dismiss. */
 import { Effect } from 'effect';
-import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/Button";
 import {
   XCircleIcon, ArrowClockwiseIcon, TrashIcon, CheckCircleIcon,
@@ -8,7 +7,7 @@ import {
 } from "@phosphor-icons/react";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
 import { jobName, jobPhase, lastOutputLines, shortJobId, timeAgo, type InspectedWork } from "@kinu.run/core";
-import { showing, detach } from "@kinu.run/core/obs";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { toneInk, type StatusTone } from "@/components/ui/Status";
 import { GroupBlock } from "@/components/ui/Group";
@@ -95,27 +94,14 @@ interface JobCardProps {
 
 
 export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const { busy: running, error: err, run } = useLabelledStep(onRefresh);
+  const busy = running !== null;
 
-  const act = useCallback((method: "cancelBackgroundJob" | "retryBackgroundJob" | "dismissBackgroundJob") => detach(Effect.gen(function* () {
-    setBusy(true);
-    setErr(null);
+  const act = (method: "cancelBackgroundJob" | "retryBackgroundJob" | "dismissBackgroundJob"): void => run(method, () => Effect.gen(function* () {
+    const outcome = yield* Effect.promise(async () => rpc(method, [job.id]));
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const outcome = yield* Effect.promise(async () => rpc(method, [job.id]));
-
-      if (!outcome.ok) {
-        setErr(("error" in outcome ? outcome.error : undefined) ?? `${method.replace("BackgroundJob", "")} was refused`);
-
-        return;
-      }
-
-      onRefresh();
-    }), showing((chain) => {
-      setErr(`${method.replace("BackgroundJob", "")} failed: ${chain}`);
-    })), Effect.sync(() => { setBusy(false); }));
-  })), [rpc, onRefresh, job.id]);
+    if (!outcome.ok) return yield* Effect.fail(("error" in outcome ? outcome.error : undefined) ?? `${method.replace("BackgroundJob", "")} was refused`);
+  }));
 
   const m = statusMeta(job.status);
   const Icon = m.icon;

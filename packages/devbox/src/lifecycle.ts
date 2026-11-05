@@ -1,7 +1,7 @@
 /** Pure decisions: nothing here touches a container, a bucket or a clock. */
 
 import * as v from 'valibot';
-import { devboxFailure, startOverrun } from './errors';
+import { caught, devboxFailure, refuse, rethrow, startOverrun } from './errors';
 
 import type { StoredValue } from './storage';
 
@@ -113,11 +113,7 @@ export async function runRestoreStep<T>(
 ): Promise<StepOutcome<T>> {
   // A thrown step is returned as `failed`, not rethrown: every caller needs a reason to report
   // and a walk that continues.
-  try {
-    return await raceAllowance(allowanceMs, work, onLate, clock);
-  } catch (cause) {
-    return { kind: 'failed', cause };
-  }
+  return raceAllowance(allowanceMs, work, onLate, clock);
 }
 
 /** The only place a timer bounds container work; `withContainerStartDeadline` and
@@ -130,19 +126,15 @@ async function raceAllowance<T>(
 ): Promise<StepOutcome<T>> {
   let late = false;
 
-  // `then` is annotated, not cast: inference widens `{ kind: 'done' }` to `{ kind: string }`,
-  // and a cast would put a caller-selected type where a constructed one belongs.
-  const started = work(() => !late).then<StepOutcome<T>, StepOutcome<T>>(
-    (value) => ({ kind: 'done', value }),
-    (cause: LateStartFailure['cause']) => {
-      if (!late) throw cause;
-      onLate({ cause });
+  const started = caught(async () => work(() => !late)).then(async (settled): Promise<StepOutcome<T>> => {
+    if ('value' in settled) return { kind: 'done', value: settled.value };
 
-      // The race already answered `late`; this arm reports the failure instead of leaving
-      // an unhandled rejection, and returns a promise that never settles.
-      return Promise.withResolvers<StepOutcome<T>>().promise;
-    },
-  );
+    if (!late) return { kind: 'failed', cause: settled.cause };
+    onLate(settled);
+
+    // The race already answered `late`: the failure is reported, and this arm never settles.
+    return Promise.withResolvers<StepOutcome<T>>().promise;
+  });
 
   const { promise: expiry, resolve } = Promise.withResolvers<StepOutcome<T>>();
 
@@ -169,11 +161,11 @@ async function withContainerStartDeadline<T>(
   const budgetMs = budget.remainingMs();
   const raced = await raceAllowance(budgetMs, work, onOverrun, budget.clock);
 
-  if (raced.kind === 'late') throw startOverrun(label, budgetMs);
+  if (raced.kind === 'late') refuse(startOverrun(label, budgetMs));
 
   // A real failure is rethrown unwrapped so the attach's own error reaches the taxonomy
   // unchanged.
-  if (raced.kind === 'failed') throw raced.cause;
+  if (raced.kind === 'failed') rethrow(raced);
 
   return raced.value;
 }

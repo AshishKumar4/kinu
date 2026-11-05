@@ -11,13 +11,13 @@ import { MailThreadReader } from "@/components/mail/MailThreadReader";
 import { Compose } from "@/components/mail/MailEditor";
 import { ToolPage } from "@/components/ui/PageHeader";
 import { Segmented } from "@/components/ui/Segmented";
-import { Choice } from "@/components/ui/form";
+import { Select } from "@/components/ui/Select";
 import { Modal } from "@/components/ui/Modal";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { useLabelledStep } from "@/components/ui/ConfirmDialog";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { useAccount } from "@/hooks/use-account";
-import { useMediaQuery } from "@/hooks/use-media-query";
+import { WIDE_QUERY, useMediaQuery } from "@/hooks/use-media-query";
 import { createMailAddress, listMailThreads, readMailBoxes, type MailBoxes } from "@/lib/mail-api";
 import { MailAddressField, useMailUsername } from "@/components/mail/MailAddressField";
 import { TextInput } from "@/components/ui/Field";
@@ -116,8 +116,8 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   const [query, setQuery] = useState(routedQuery);
   const [composing, setComposing] = useState(false);
   const [installing, setInstalling] = useState(false);
-  const navigation = useLabelledStep(() => undefined);
-  const roomy = useMediaQuery("(min-width: 1024px)");
+  const navigation = useLabelledStep();
+  const roomy = useMediaQuery(WIDE_QUERY);
   const waiting = view === "important" && account.boxes.find((box) => box.kind === "person")?.workspace === null;
 
   // Router navigations transition; a controlled text input cannot wait for them.
@@ -187,7 +187,7 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   );
 
   const addresses = (
-    <div className="w-40 shrink-0" data-mail-address><Choice label="Address" size="sm" className="!h-7 w-full" value={path ?? "*"} onChange={(next) => at({ path: next === "*" ? null : next, address: null })}
+    <div className="w-40 shrink-0" data-mail-address><Select label="Address" size="sm" className="!h-7 w-full" value={path ?? "*"} onChange={(next) => at({ path: next === "*" ? null : next, address: null })}
       options={[{ value: "*", label: "All addresses" }, ...account.boxes.map((box) => ({ value: box.path, label: mailBoxLabel(box) }))]} /></div>
   );
 

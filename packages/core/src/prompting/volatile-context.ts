@@ -39,6 +39,7 @@ import { renderCraftedToolsDeclaration, type CraftedDeclaration, type ExternalTo
 import type { ConnectedServer } from '../tools/mcp-discovery';
 import { mcpPresetById } from '../mcp/presets';
 import { formatByteCap } from '../utils/format';
+import { estimateTokens } from '../token-estimate';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
@@ -421,10 +422,6 @@ const RECOVERY_ENTRY_CHARS = 480;
 
 const ENTRY_CHARS = 120;
 
-function clip(text: string, max = ENTRY_CHARS): string {
-  return oneLineClip(text, max);
-}
-
 interface SectionRow {
   readonly id: string;
   readonly line: string;
@@ -511,7 +508,7 @@ function secretsSection(secrets: SecretsInContext | undefined): RenderedSection 
 function mailSection(mail: ActiveRoster<MailInContext> | undefined): RenderedSection | null {
   return rosterSection(
     DYNAMIC_SECTION_TITLES.mail, mail ?? EMPTY_ROSTER, { cap: MAX_MAIL_IN_CONTEXT, keyed: false },
-    (m) => `- ${new Date(m.at).toISOString().slice(0, 16).replace('T', ' ')} UTC, from ${JSON.stringify(clip(m.from, 80))}${m.verified ? '' : ' (not verified)'}: ${JSON.stringify(clip(m.subject))}`,
+    (m) => `- ${new Date(m.at).toISOString().slice(0, 16).replace('T', ' ')} UTC, from ${JSON.stringify(oneLineClip(m.from, 80))}${m.verified ? '' : ' (not verified)'}: ${JSON.stringify(oneLineClip(m.subject, ENTRY_CHARS))}`,
   );
 }
 
@@ -519,7 +516,7 @@ function mailSection(mail: ActiveRoster<MailInContext> | undefined): RenderedSec
 function failingSlatesSection(failures: readonly string[]) {
   return rosterSection(
     DYNAMIC_SECTION_TITLES.failingSlates, { items: failures, total: failures.length }, { cap: MAX_RECOVERIES, keyed: false },
-    (failure) => `- ${clip(failure, RECOVERY_ENTRY_CHARS)}`,
+    (failure) => `- ${oneLineClip(failure, RECOVERY_ENTRY_CHARS)}`,
   );
 }
 
@@ -602,7 +599,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
   add('recoveries', rosterSection(
     DYNAMIC_SECTION_TITLES.recoveries,
     { items: ctx.recoveries ?? [], total: (ctx.recoveries ?? []).length }, { cap: MAX_RECOVERIES, keyed: false },
-    (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
+    (finding) => `- ${oneLineClip(finding, RECOVERY_ENTRY_CHARS)}`,
   ));
 
   add('failingSlates', failingSlatesSection(ctx.failingSlates ?? []));
@@ -644,25 +641,25 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
   add('tasks', rosterSection(
     DYNAMIC_SECTION_TITLES.tasks,
     ctx.tasks ?? EMPTY_ROSTER, { cap: MAX_TASK_ROWS, keyed: true },
-    (task) => `${task.parentId ? '  ' : ''}- ${task.id} [${task.status}] ${clip(task.title)}`,
+    (task) => `${task.parentId ? '  ' : ''}- ${task.id} [${task.status}] ${oneLineClip(task.title, ENTRY_CHARS)}`,
   ));
 
   add('jobs', rosterSection(
     DYNAMIC_SECTION_TITLES.jobs,
     ctx.jobs ?? EMPTY_ROSTER, { cap: MAX_JOBS, keyed: true },
-    (job) => `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}`,
+    (job) => `- ${job.id} (${job.kind})${job.label ? `: ${oneLineClip(job.label, ENTRY_CHARS)}` : ''}`,
   ));
 
   add('delegates', rosterSection(
     DYNAMIC_SECTION_TITLES.delegates,
     ctx.delegates ?? EMPTY_ROSTER, { cap: MAX_DELEGATES, keyed: true },
-    (d) => `- ${d.name} (${d.kind}), ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}`,
+    (d) => `- ${d.name} (${d.kind}), ${oneLineClip(d.phase, 40)}${d.task ? `: ${oneLineClip(d.task, ENTRY_CHARS)}` : ''}`,
   ));
 
   add('approvals', rosterSection(
     DYNAMIC_SECTION_TITLES.approvals,
     ctx.approvals ?? EMPTY_ROSTER, { cap: MAX_APPROVALS, keyed: false },
-    (a) => `- ${clip(a.kind, 40)}: ${clip(a.detail)}`,
+    (a) => `- ${oneLineClip(a.kind, 40)}: ${oneLineClip(a.detail, ENTRY_CHARS)}`,
   ));
 
   add('mail', mailSection(ctx.mail));
@@ -670,7 +667,7 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
   add('missingCapabilities', rosterSection(
     DYNAMIC_SECTION_TITLES.missingCapabilities,
     { items: ctx.missingCapabilities ?? [], total: (ctx.missingCapabilities ?? []).length }, { cap: MAX_MISSING_CAPABILITIES, keyed: false },
-    (m) => `- ${clip(m.source, 60)}: ${clip(m.reason)}`,
+    (m) => `- ${oneLineClip(m.source, 60)}: ${oneLineClip(m.reason, ENTRY_CHARS)}`,
   ));
 
   return sections;
@@ -903,7 +900,7 @@ export class DynamicContextLedger {
 
     for (const block of this.blocks) tokens += block.tokens;
 
-    for (const block of this.stored ?? []) tokens += Math.round(block.text.length / 4);
+    for (const block of this.stored ?? []) tokens += estimateTokens(block.text.length);
 
     return tokens;
   }
@@ -1062,7 +1059,7 @@ export class DynamicContextLedger {
 
   private block(index: number, text: string): LedgerBlock {
     return Object.freeze({
-      index, text, kind: blockKind(text), tokens: Math.round(text.length / 4),
+      index, text, kind: blockKind(text), tokens: estimateTokens(text.length),
       message: Object.freeze({ role: 'user', content: text }),
     });
   }

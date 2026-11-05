@@ -1,4 +1,3 @@
-import { compactToolCall } from '../src/evolution/tool-call-record';
 import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Layer decomposition of the turn pipeline plus each layer's deterministic assertion slice: literal fixtures,
 // injected clock/RNG, no model calls or I/O, so every slice is byte-reproducible.
@@ -22,6 +21,10 @@ import type { LexicalHit } from '../src/memory/hybrid-search';
 import type { ActiveSkill } from '../src/skills/types';
 import { workspaceSkillPath } from '../src/skills/discover';
 import type { PipelineSubjects } from './subjects';
+import { Effect, Result } from 'effect';
+import { settleSync } from '../src/obs/index';
+import type { FileEdited } from '../src/tools/file-edit';
+import type { FileRefusalError } from '../src/types/file-edits';
 import * as v from 'valibot';
 import type { RunEventInput } from '../src/events/types';
 import type { JsonValue } from '../src/utils/json';
@@ -30,6 +33,16 @@ import type { JsonValue } from '../src/utils/json';
 const PRUNED_SPEC = 'anthropic/claude-sonnet-4-5';
 
 /** Generic over the subjects record so a dependent package can define its own slice. */
+
+/** An edit's outcome as the probes record it: what it wrote, or the refusal's reason and words. */
+function editOutcome(effect: Effect.Effect<FileEdited, FileRefusalError>) {
+  const result = settleSync(Effect.result(effect));
+
+  return Result.isSuccess(result)
+    ? { ok: true, content: result.success.content, applied: result.success.applied, spans: result.success.spans }
+    : { ok: false, reason: result.failure.verdict, message: result.failure.message };
+}
+
 export interface Probe<S = PipelineSubjects> {
   /** `<layer>/<name>`: the baseline key. */
   readonly id: string;
@@ -1274,44 +1287,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   },
 
   {
-    id: 'delegation',
-    owns: 'the process evidence a turn leaves behind: how much work was delegated out versus ground through inline',
-    subjects: ['delegationFeatures', 'renderDelegationFeatures'],
-    probes: [
-      {
-        id: 'delegation/tool-call-counts',
-        asserts: 'hiring / exploration / messaging / eval calls are counted by agents action separately from total steps',
-        observe: (s) => s.delegationFeatures({
-          steps: 7,
-          durationMs: 95_000,
-          toolCalls: [
-            compactToolCall({ name: 'agents', args: { op: 'hire' }, result: null }),
-            compactToolCall({ name: 'agents', args: { op: 'dismiss' }, result: null }),
-            compactToolCall({ name: 'agents', args: { op: 'swarm' }, result: null }),
-            compactToolCall({ name: 'agents', args: { op: 'message' }, result: null }),
-            compactToolCall({ name: 'eval', args: {}, result: null }),
-            compactToolCall({ name: 'shell', args: {}, result: null }),
-          ],
-        }),
-      },
-      {
-        id: 'delegation/no-delegation-is-zero-not-absent',
-        asserts: 'a fully inline turn reports zeros, so "did not delegate" is measurable',
-        observe: (s) => s.delegationFeatures({ steps: 3, durationMs: 4_000, toolCalls: [compactToolCall({ name: 'shell', args: {}, result: null })] }),
-      },
-      {
-        id: 'delegation/render-duration-units',
-        asserts: 'the rendered evidence switches to minutes past a minute, with one decimal',
-        observe: (s) => [4_000, 59_999, 60_000, 630_000].map((wallClockMs) =>
-          s.renderDelegationFeatures({
-            stepCount: 5, teamCalls: 2, thinkCalls: 1, peerCalls: 0, executeCodemodeCalls: 3,
-            loopedCalls: 0, redundantCalls: 0, backtrackCalls: 0, wallClockMs,
-          })),
-      },
-    ],
-  },
-
-  {
     id: 'tool-contract',
     owns: 'the built-in tool contract the model reads: the summary and notes each schema description carries',
     subjects: ['renderToolSchemaDescription'],
@@ -1343,11 +1318,11 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const file = 'alpha\nbeta\nalpha\n';
 
           return [
-            ['unique', s.applyFileEdits(file, [{ oldText: 'beta', newText: 'BETA' }], '/f')],
-            ['repeated', s.applyFileEdits(file, [{ oldText: 'alpha', newText: 'A' }], '/f')],
-            ['absent', s.applyFileEdits(file, [{ oldText: 'gamma', newText: 'G' }], '/f')],
-            ['empty', s.applyFileEdits(file, [{ oldText: '', newText: 'G' }], '/f')],
-            ['no-op', s.applyFileEdits(file, [{ oldText: 'beta', newText: 'beta' }], '/f')],
+            ['unique', editOutcome(s.applyFileEdits(file, [{ oldText: 'beta', newText: 'BETA' }], '/f'))],
+            ['repeated', editOutcome(s.applyFileEdits(file, [{ oldText: 'alpha', newText: 'A' }], '/f'))],
+            ['absent', editOutcome(s.applyFileEdits(file, [{ oldText: 'gamma', newText: 'G' }], '/f'))],
+            ['empty', editOutcome(s.applyFileEdits(file, [{ oldText: '', newText: 'G' }], '/f'))],
+            ['no-op', editOutcome(s.applyFileEdits(file, [{ oldText: 'beta', newText: 'beta' }], '/f'))],
           ];
         },
       },
@@ -1355,18 +1330,18 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'file-plane/batch-is-atomic-and-original-anchored',
         asserts: 'every anchor matches the file as read, overlaps are refused, and one bad edit applies none',
         observe: (s) => [
-          ['chained', s.applyFileEdits('one\ntwo\n', [
+          ['chained', editOutcome(s.applyFileEdits('one\ntwo\n', [
             { oldText: 'one', newText: 'two' }, { oldText: 'two', newText: 'three' },
-          ], '/f')],
-          ['overlapping', s.applyFileEdits('abcdef\n', [
+          ], '/f'))],
+          ['overlapping', editOutcome(s.applyFileEdits('abcdef\n', [
             { oldText: 'abcd', newText: 'X' }, { oldText: 'cdef', newText: 'Y' },
-          ], '/f')],
-          ['one-bad', s.applyFileEdits('alpha\nbeta\n', [
+          ], '/f'))],
+          ['one-bad', editOutcome(s.applyFileEdits('alpha\nbeta\n', [
             { oldText: 'alpha', newText: 'A' }, { oldText: 'missing', newText: 'M' },
-          ], '/f')],
-          ['crlf-bom', s.applyFileEdits('\uFEFFa\r\nb\r\n', [{ oldText: 'a\nb', newText: 'c' }], '/f')],
-          ['mixed-endings', s.applyFileEdits('crlf\r\nlf\nT\r\n', [{ oldText: 'T', newText: 'X\nY' }], '/f')],
-          ['self-overlapping', s.applyFileEdits('aaa\n', [{ oldText: 'aa', newText: 'b' }], '/f')],
+          ], '/f'))],
+          ['crlf-bom', editOutcome(s.applyFileEdits('\uFEFFa\r\nb\r\n', [{ oldText: 'a\nb', newText: 'c' }], '/f'))],
+          ['mixed-endings', editOutcome(s.applyFileEdits('crlf\r\nlf\nT\r\n', [{ oldText: 'T', newText: 'X\nY' }], '/f'))],
+          ['self-overlapping', editOutcome(s.applyFileEdits('aaa\n', [{ oldText: 'aa', newText: 'b' }], '/f'))],
         ],
       },
       {
@@ -1486,8 +1461,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   {
     id: 'craft-fitness',
     owns: 'the in-episode fitness signal for crafted tools: which tools a submitted block actually called, ' +
-      'which of them a failure is attributable to, and what the whole turn therefore reports as crafted-tool use',
-    subjects: ['craftInvocationSites', 'craftFailureBlame', 'craftInvocationError'],
+      'and what the whole turn therefore reports as crafted-tool use',
+    subjects: ['craftInvocationSites'],
     probes: [
       {
         id: 'craft-fitness/call-sites',
@@ -1553,19 +1528,6 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               { toolName: 'eval', code: 'await tools.sum(2); await tools.fmt(3)' },
             ])],
             ['evolution-off', await turn([{ toolName: 'eval', code: 'await tools.sum(1)' }], false)],
-          ];
-        },
-      },
-      {
-        id: 'craft-fitness/blame-by-stamp-only',
-        asserts: 'only the tool the failure NAMES is scored; a block that broke on its own account blames nobody',
-        observe: (s) => {
-          const stamped = s.craftInvocationError('summarize', new Error('boom')).message;
-
-          return [
-            [stamped, s.craftFailureBlame(stamped, ['summarize', 'other'])],
-            ['TypeError: x is not a function', s.craftFailureBlame('TypeError: x is not a function', ['summarize'])],
-            [stamped, s.craftFailureBlame(stamped, ['other'])],
           ];
         },
       },

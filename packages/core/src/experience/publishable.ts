@@ -7,7 +7,7 @@ import type { CraftStore } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { craftPreference, craftPreferences, type CraftPreferenceRow } from '../craft/preference';
-import { isoDate, nowMs } from '../utils/date';
+import { isoDate } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { getLesson, listLessons } from '../evolution/lessons';
 import type { ScaffoldStatus } from '../types/scaffold';
@@ -146,7 +146,7 @@ function ownMisevolutionFlags(
 async function scaffoldCandidate(
   src: PublishSources,
   key: string,
-  now = nowMs(),
+  now = Date.now(),
 ): Promise<PublishableCandidate | PublishRefusal> {
   const version = Number(key);
 
@@ -218,7 +218,7 @@ export async function findPublishable(
   src: PublishSources,
   kind: ExperienceKind,
   key: string,
-  now = nowMs(),
+  now = Date.now(),
 ): Promise<PublishableCandidate | PublishRefusal> {
   switch (kind) {
     case 'craft': return craftCandidate(src, key, craftPreferences(src.sql));
@@ -233,7 +233,7 @@ export async function listPublishable(
   options: { limit?: number; now?: number } = {},
 ): Promise<PublishableCandidate[]> {
   const limit = Math.max(1, options.limit ?? 20);
-  const now = options.now ?? nowMs();
+  const now = options.now ?? Date.now();
   const rows = craftPreferences(src.sql);
 
   const crafts = src.craftStore.list()

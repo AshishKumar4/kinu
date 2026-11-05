@@ -5,7 +5,8 @@
  */
 import * as v from 'valibot';
 import { Effect } from 'effect';
-import { KinuError, settleSync } from '../obs/index';
+import { ftsPhrases } from '@kinu.run/agent-utils/memory';
+import { KinuError, settle, settleSync } from '../obs/index';
 import { mailAddressOf, mailLabelNumbered, mailLabelOf, type MailRecipient } from './address';
 import { mailVerdict } from './verdict';
 import { replySubject } from './words';
@@ -16,6 +17,7 @@ import type {
   MailSendState, MailTriaged, MailTriageItem, MailTriagePick, MailWake, MailWoke,
 } from './mailbox-api';
 import type { SqlExec } from '../types/primitives';
+import { DAY_MS } from '../utils/date';
 
 /** Trash empties itself 30 days after a thread went in (the owner, 2026-10-19). */
 const TRASH_DAYS = 30;
@@ -26,8 +28,6 @@ const BLOB_GRACE_DAYS = 31;
 
 /** A text part up to this size stays in the row; a longer one goes to R2. */
 const INLINE_TEXT_BYTES = 64 * 1024;
-
-const DAY = 86_400_000;
 
 /** What the store needs of a parsed message; the Mailbox reads it with postal-mime. */
 export interface ParsedMail {
@@ -96,11 +96,6 @@ const PartiesJson = v.pipe(v.string(), v.parseJson(), v.array(v.object({ name: v
 
 const rows = <T extends v.GenericSchema>(schema: T, found: { toArray(): unknown[] }): v.InferOutput<T>[] => found.toArray().map((row) => v.parse(schema, row));
 
-/** The search box's words, each quoted, so FTS5 reads none of them as syntax. */
-function ftsQuery(words: string): string {
-  return words.split(/\s+/u).filter(Boolean).map((word) => `"${word.replaceAll('"', '""')}"`).join(' ');
-}
-
 /** A Message-ID without its angle brackets, the form threading compares. */
 const bare = (id: string): string => id.trim().replace(/^<|>$/gu, '');
 
@@ -125,7 +120,7 @@ export class MailStore {
   private box(path: string): MailBox | null {
     const [row] = rows(BoxRow, this.deps.sql.exec("SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE path = ?", path));
 
-    return row === undefined ? null : this.boxOf(row);
+    return row === undefined ? null : this.boxOf(row, this.identity()?.username ?? '');
   }
 
   /** A box this call just wrote: its absence is a store that lost its own write, never a box to make up. */
@@ -135,10 +130,11 @@ export class MailStore {
     return box === null ? Effect.fail(new KinuError('io', `The box at "${path}" was written and cannot be read back.`)) : Effect.succeed(box);
   }
 
-  private boxOf(row: v.InferOutput<typeof BoxRow>): MailBox {
+  /** `username`: the person's, read once by the caller for every box it names. */
+  private boxOf(row: v.InferOutput<typeof BoxRow>, username: string): MailBox {
     return {
       path: row.path, kind: row.kind, workspace: row.workspace, actorId: row.actor_id, wake: row.wake,
-      address: mailAddressOf(this.identity()?.username ?? '', row.path, this.deps.domain),
+      address: mailAddressOf(username, row.path, this.deps.domain),
     };
   }
 
@@ -189,7 +185,7 @@ export class MailStore {
       'SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ?', owner.workspace, owner.actorId, owner.kind,
     ));
 
-    if (held !== undefined) return { made: this.boxOf(held) };
+    if (held !== undefined) return { made: this.boxOf(held, this.identity()?.username ?? '') };
 
     const label = mailLabelOf(owner.name) ?? (owner.kind === 'workspace' ? 'workspace' : 'agent');
 
@@ -252,14 +248,20 @@ export class MailStore {
    * agent a box names as its reader (the Personal assistant's main agent, the person's) that one too.
    */
   readableBy(caller: MailCaller): MailBox[] {
+    const username = this.identity()?.username;
+
     // No box is made before the person has an address of their own: every box sits under it.
-    if (this.identity() === null) return [];
+    if (username === undefined) return [];
 
     // The workspace's box first, so an agent's address sits under the workspace's label whoever asked first.
     const [home, own = home] = this.ownersOf(caller).map((owner) => this.boxFor(owner));
 
     if (home === undefined) return [];
-    const others = this.boxes().filter((box) => box.path !== own.path && box.workspace === caller.workspace && (box.kind === 'workspace' || box.actorId === caller.actorId));
+
+    const others = rows(BoxRow, this.deps.sql.exec(
+      "SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND path != ? AND (kind = 'workspace' OR actor_id = ?) ORDER BY path",
+      caller.workspace, own.path, caller.actorId,
+    )).map((row) => this.boxOf(row, username));
 
     return [own, ...others];
   }
@@ -395,8 +397,15 @@ export class MailStore {
     return asked === undefined ? readable[0]?.path ?? null : readable.find((box) => box.path === asked)?.path ?? null;
   }
 
+  /** Whether the person holds an address: `open` writes it with their box, and `unopen` takes both away. */
+  holdsAddress(): boolean {
+    return this.identity() !== null;
+  }
+
   boxes(): MailBox[] {
-    return rows(BoxRow, this.deps.sql.exec('SELECT path, kind, workspace, actor_id, wake FROM mail_addresses ORDER BY path')).map((row) => this.boxOf(row));
+    const username = this.identity()?.username ?? '';
+
+    return rows(BoxRow, this.deps.sql.exec('SELECT path, kind, workspace, actor_id, wake FROM mail_addresses ORDER BY path')).map((row) => this.boxOf(row, username));
   }
 
   setWake(path: string, wake: MailWake, allow?: readonly string[]): MailBox {
@@ -601,7 +610,7 @@ export class MailStore {
 
     if (query.query !== undefined && query.query.trim() !== '') {
       where.push('t.id IN (SELECT m.thread_id FROM mail_messages m WHERE m.rowid IN (SELECT rowid FROM mail_fts WHERE mail_fts MATCH ?))');
-      bindings.push(ftsQuery(query.query));
+      bindings.push(ftsPhrases(query.query).join(' ') || '""');
     }
 
     const ids = rows(v.object({ id: v.string(), latest: v.number(), unread: v.number() }), this.deps.sql.exec(
@@ -725,21 +734,29 @@ export class MailStore {
     return newest === null ? outgoing : { ...outgoing, inReplyTo: `<${newest}>` };
   }
 
-  async draft(asked: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
-    const outgoing = this.answering(filedRecipients(asked));
-    const box = this.box(outgoing.path);
+  draft(asked: MailOutgoing & { threadId?: string }): Promise<MailMessageView> {
+    return settle(Effect.map(this.filed(asked, 'draft'), (filed) => filed.view));
+  }
 
-    if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`)));
+  /** `asked` filed in `state` in its box, the thread's earlier draft dropped (one per thread), and read back. */
+  private filed(asked: MailOutgoing & { threadId?: string }, state: 'draft' | 'queued'): Effect.Effect<{
+    readonly outgoing: MailOutgoing; readonly view: MailMessageView; readonly id: string; readonly threadId: string;
+  }, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const outgoing = this.answering(filedRecipients(asked));
+      const box = this.box(outgoing.path);
 
-    // One draft per thread: a new one replaces the old.
-    if (outgoing.threadId !== undefined) this.dropDrafts(outgoing.threadId);
+      if (box === null) return yield* Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`));
 
-    const { id, threadId } = this.writeOut(box, outgoing, 'draft');
-    const view = await this.messageView(threadId, id);
+      if (outgoing.threadId !== undefined) this.dropDrafts(outgoing.threadId);
 
-    if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
+      const { id, threadId } = this.writeOut(box, outgoing, state);
+      const view = yield* Effect.promise(() => this.messageView(threadId, id));
 
-    return view;
+      if (view === null) return yield* Effect.fail(new KinuError('missing', `No message "${id}".`));
+
+      return { outgoing, view, id, threadId };
+    });
   }
 
   private dropDrafts(threadId: string): void {
@@ -753,30 +770,20 @@ export class MailStore {
   /** Sends sent from this account in the last day, against its cap (none for operators, 100 otherwise). */
   sentToday(): number {
     return rows(v.object({ n: v.number() }), this.deps.sql.exec(
-      "SELECT COUNT(*) AS n FROM mail_messages WHERE send_state = 'queued' AND at >= ?", this.deps.now() - DAY,
+      "SELECT COUNT(*) AS n FROM mail_messages WHERE send_state = 'queued' AND at >= ?", this.deps.now() - DAY_MS,
     ))[0]?.n ?? 0;
   }
 
-  /** Files a message to send, the person's word already given; the Mailbox then hands it to its outbox. */
-  /** Files a message to send; `outgoing` is the message as filed, which is what the outbox sends. */
-  async queue(asked: MailOutgoing & { threadId?: string }): Promise<{
+  /** Files a message to send, the person's word already given; `outgoing` is the message as filed, which the Mailbox
+   *  hands to its outbox. */
+  queue(asked: MailOutgoing & { threadId?: string }): Promise<{
     view: MailMessageView; from: string; inReplyTo: string | null; references: string | null; outgoing: MailOutgoing;
   }> {
-    const outgoing = this.answering(filedRecipients(asked));
-    const box = this.box(outgoing.path);
+    return settle(Effect.map(this.filed(asked, 'queued'), ({ outgoing, view, id, threadId }) => {
+      const inReplyTo = outgoing.inReplyTo ?? null;
 
-    if (box === null) return settleSync(Effect.fail(new KinuError('missing', `No box at "${outgoing.path}".`)));
-
-    if (outgoing.threadId !== undefined) this.dropDrafts(outgoing.threadId);
-
-    const { id, threadId } = this.writeOut(box, outgoing, 'queued');
-    const view = await this.messageView(threadId, id);
-
-    if (view === null) return settleSync(Effect.fail(new KinuError('missing', `No message "${id}".`)));
-
-    const inReplyTo = outgoing.inReplyTo ?? null;
-
-    return { view, from: view.from.address, inReplyTo, references: inReplyTo === null ? null : this.referencesOf(threadId, id, inReplyTo), outgoing };
+      return { view, from: view.from.address, inReplyTo, references: inReplyTo === null ? null : this.referencesOf(threadId, id, inReplyTo), outgoing };
+    }));
   }
 
   /** A message's state as shown: a draft is the row's; a sent message's is the outbox's, while it holds the send. */
@@ -802,7 +809,7 @@ export class MailStore {
   /** Empties the Trash of what has been in it 30 days: its rows and its search entries. The bytes no row names any more
    *  are kept {@link BLOB_GRACE_DAYS} days, then deleted unless a row names them again. */
   async purge(): Promise<number> {
-    const cutoff = this.deps.now() - TRASH_DAYS * DAY;
+    const cutoff = this.deps.now() - TRASH_DAYS * DAY_MS;
     const gone = rows(v.object({ id: v.string() }), this.deps.sql.exec('SELECT id FROM mail_threads WHERE trashed_at IS NOT NULL AND trashed_at <= ?', cutoff));
     const keys = new Set<string>();
 
@@ -819,7 +826,7 @@ export class MailStore {
       this.deps.sql.exec('DELETE FROM mail_threads WHERE id = ?', id);
     }
 
-    const due = this.deps.now() + BLOB_GRACE_DAYS * DAY;
+    const due = this.deps.now() + BLOB_GRACE_DAYS * DAY_MS;
 
     for (const unnamed of [...keys].filter((key) => !this.named(key))) {
       this.deps.sql.exec('INSERT INTO mail_blob_graves (key, due_at) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET due_at = MAX(due_at, excluded.due_at)', unnamed, due);
@@ -855,7 +862,7 @@ export class MailStore {
   nextPurgeAt(): number | null {
     const [row] = rows(v.object({ at: v.nullable(v.number()) }), this.deps.sql.exec('SELECT MIN(trashed_at) AS at FROM mail_threads WHERE trashed_at IS NOT NULL'));
     const [grave] = rows(v.object({ at: v.nullable(v.number()) }), this.deps.sql.exec('SELECT MIN(due_at) AS at FROM mail_blob_graves'));
-    const due = [row?.at == null ? null : row.at + TRASH_DAYS * DAY, grave?.at ?? null].filter((at) => at !== null);
+    const due = [row?.at == null ? null : row.at + TRASH_DAYS * DAY_MS, grave?.at ?? null].filter((at) => at !== null);
 
     return due.length === 0 ? null : Math.min(...due);
   }

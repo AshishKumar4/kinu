@@ -10,7 +10,9 @@ import { RUN_END_REASONS, creditedTurnId } from '../src/orchestrator/turn-lifecy
 import { declareTerminalRoster, type TerminalActor, type TerminalTurnFacts } from '../src/orchestrator/terminal-roster';
 import { MissionGovernor } from '../src/mission-budget';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
-import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import type { IngressDescriptor } from '../src/events/hub/types';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { AgentSignal } from '../src/types/signals';
 import type { CompletedTurn } from '../src/evolution/types';

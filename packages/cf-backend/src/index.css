@@ -238,8 +238,9 @@ html, body, #root {
      Kumo's components are compiled: their utilities (`bg-kumo-brand`,
      `border-kumo-hairline`, …) are baked into its dist bundle and cannot
      be restyled per call site. They resolve through Kumo's own custom
-     properties, so re-pointing those at the `--c-*` layer reskins the whole
-     library with no wrappers and no `!important` wars.
+     properties, so re-pointing those at the `--c-*` layer reskins its
+     colours with no wrappers; a part's padding, radius or shadow that a
+     token cannot reach is still overridden where its class sits below.
 
      Kumo declares them inside `@layer base` and keys its dark set on the
      same `[data-mode]` attribute we use; this block is unlayered, so it
@@ -368,6 +369,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-text-2 { color: var(--c-text-2); }
 @utility p-text-3 { color: var(--c-text-3); }
 @utility p-accent-fg { color: var(--c-accent-fg); }
+/* Words that go somewhere: the accent, underlined under a pointer. */
+@utility p-link { color: var(--c-accent-fg); &:hover { text-decoration: underline; } }
 @utility p-accent-mark { color: var(--c-accent-mark); }
 @utility p-accent { color: var(--c-accent); }
 @utility p-selected { background: var(--c-selected); }
@@ -477,8 +480,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-border-strong { border-color: var(--c-border-strong); }
 .p-border-dash { border-color: var(--c-dash); }
 
-.p-accent-bg      { background: var(--c-selected); }
-
 /* ── Status ────────────────────────────────────────────────────────── */
 
 /* Dot: a state's 6 dot alone (ui/Dot.tsx). */
@@ -517,20 +518,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 .p-tint-warning { background: var(--c-warning-tint); border-color: color-mix(in srgb, var(--c-warning) 30%, transparent); }
 
-/* Inline status notices. A notice is an object on the surface it interrupts, so
-   it carries the card's radius; the tone supplies tint, ink and edge. `neutral`
-   is the quiet rung — progress and "here is what just happened" — and exists so
-   a status row never has to be improvised out of `p-card` plus a text colour,
-   which is how the composer ended up with five differently-shaped ones. */
-.p-notice-success, .p-notice-warning, .p-notice-danger, .p-notice-info, .p-notice-neutral {
-  border-radius: var(--r-card);
-}
-.p-notice-neutral { background: var(--c-hover); color: var(--c-text-2); border: 1px solid var(--c-border); }
-.p-notice-success { background: var(--c-success-tint); color: var(--c-success); border: 1px solid color-mix(in srgb, var(--c-success) 30%, transparent); }
-.p-notice-warning { background: var(--c-warning-tint); color: var(--c-warning); border: 1px solid color-mix(in srgb, var(--c-warning) 30%, transparent); }
-.p-notice-danger  { background: var(--c-danger-tint);  color: var(--c-danger);  border: 1px solid color-mix(in srgb, var(--c-danger) 30%, transparent); }
-.p-notice-info    { background: var(--c-info-tint);    color: var(--c-info);    border: 1px solid color-mix(in srgb, var(--c-info) 30%, transparent); }
-
 /* ── Grouped rows — the mock's inner card: one bordered container whose
       members are separated by dashed rules, not borders of their own. ── */
 /* A group of rows is a card: the card's edge, ground and radius. */
@@ -552,8 +539,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-rows-dashed > :not(:last-child) { border-bottom: 1px dashed var(--c-dash); }
 
 
-/* ── Cards — quiet at rest; only cards that are actually interactive
-      react (`p-card-hover`), and with a surface step, never an accent flood. ── */
+/* ── Cards — quiet at rest, never an accent flood. ── */
 .p-card {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
@@ -561,7 +547,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   box-shadow: var(--shadow-card);
   transition: border-color var(--dur-state) ease-out, background-color var(--dur-state) ease-out;
 }
-.p-card-hover:hover { background: var(--c-hover); }
 
 /* Code wells retain their surface and scroll behavior. Shiki supplies syntax
    colors from its light/dark themes; inline code keeps its own ink.
@@ -682,11 +667,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   transition: color var(--dur-state) ease-out, border-color var(--dur-state) ease-out;
 }
 .p-tab:hover { color: var(--c-text-2); border-bottom-color: var(--c-border-strong); }
-.p-tab-active {
-  color: var(--c-accent-fg);
-  border-bottom-color: var(--c-accent);
-}
-.p-tab-active:hover { color: var(--c-accent-fg); border-bottom-color: var(--c-accent); }
 
 /* A strip inside a card scrolls over the card's ground. */
 .p-card-body .p-tabstrip { --scroll-ground: var(--c-surface); }
@@ -822,7 +802,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 /* Callout (ui/Callout.tsx): what the page waits on the person for, on the selected ground. */
 .p-callout { border-radius: var(--r-row); background: var(--c-selected); padding: 12px 16px; }
 /* Skeleton (ui/Skeleton.tsx): a line still being read. */
-.p-skeleton { display: block; height: 12px; border-radius: var(--r-pill); background: var(--c-fill); }
+.p-skeleton { display: block; height: 12px; border-radius: var(--r-pill); }
 /* FlowPage (ui/FlowCard.tsx): a flow's whole page, over the app, on the page's ground. */
 .p-flow-page { position: fixed; inset: 0; overflow-y: auto; background: var(--c-bg); color: var(--c-text); }
 /* A partner's mark on its white tile (ui/BrandMark.tsx CloudflareTile). */
@@ -1181,15 +1161,12 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 
 /* FlowCard: the 520 card of a flow and its dots (ui/FlowCard.tsx). */
-.p-flow-dot { display: block; width: 16px; height: 6px; border-radius: var(--r-pill); background: var(--c-fill); transition: width var(--dur-enter) var(--ease-out-strong); }
-.p-flow-dot-here { width: 32px; background: var(--c-accent-fg); }
-.p-flow-dot-done { background: color-mix(in srgb, var(--c-accent-fg) 40%, transparent); }
 .p-flow-card { overflow: hidden; background: var(--c-surface); border: 1px solid var(--c-border); border-radius: var(--r-card); }
 .p-flow-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--c-border); }
 
 /* Dialog: 440, 560 or 720, 24 inside, the card radius, on the overlay (ui/Modal.tsx). */
 .p-dialog {
-  display: flex; width: 100%; max-height: calc(100vh - 2rem); flex-direction: column; gap: 16px; overflow-y: auto; padding: 24px;
+  display: flex; width: 100%; max-height: calc(100dvh - 2rem); flex-direction: column; gap: 16px; overflow-y: auto; padding: 24px;
   background: var(--c-overlay); border: 1px solid var(--c-border); border-radius: var(--r-card); box-shadow: var(--shadow-overlay);
   animation: p-dialog-in var(--dur-enter) var(--ease-out-strong);
 }
@@ -1273,7 +1250,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   transition: color var(--dur-state) ease-out;
 }
 .p-attention-behind:hover { color: var(--c-text); }
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .p-attention-card { padding: 9px 11px; }
 }
 
@@ -1537,7 +1514,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: var(--c-text-2);
   transform: translateY(-50%);
 }
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .p-shot-grid { grid-template-columns: minmax(0, 1fr); }
   .p-lightbox-stage { padding: 4px 8px 24px; }
   .p-lightbox-step { display: none; }
@@ -1676,23 +1653,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   animation: p-shimmer 1.8s linear infinite;
 }
 
-/* Work with no progress to report: a sweep in the icon ink crosses a track. */
-.p-busy-bar {
-  position: relative;
-  overflow: hidden;
-  border-radius: var(--r-pill);
-  background-color: var(--c-border-strong);
-}
-.p-busy-bar::after {
-  content: "";
-  position: absolute;
-  inset-block: 0;
-  left: 0;
-  width: 40%;
-  border-radius: inherit;
-  background-color: var(--c-accent-mark);
-  animation: p-busy 1.4s ease-in-out infinite;
-}
 
 /* The workspace thread column: centred at 780px with the chat's side gutter.
    The message list, the device-consent rail below it and the composer all sit
@@ -1725,7 +1685,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 } /* end @layer components */
 
 @keyframes p-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
-@keyframes p-busy { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 
 /* ════════════════════════════════════════════════════════════════════
    Deliberately unlayered — these two have to outrank utilities.
@@ -1773,21 +1732,19 @@ body { background: var(--c-bg); color: var(--c-text); }
   padding-inline: 2.5rem;
 }
 
-@media (max-width: 64rem) {
+@media (max-width: 1023px) {
   .landing-shell { padding-inline: 1.5rem; }
 }
 
-@media (max-width: 40rem) {
+@media (max-width: 639px) {
   .landing-shell { padding-inline: 1.25rem; }
 }
 
-.landing-tabs [role="presentation"],
-.p-altitude-tabs [role="presentation"] {
+.landing-tabs [role="presentation"] {
   background: var(--c-accent) !important;
 }
 
-.landing-tabs [role="tab"][aria-selected="true"],
-.p-altitude-tabs [role="tab"][aria-selected="true"] {
+.landing-tabs [role="tab"][aria-selected="true"] {
   color: var(--c-accent-on) !important;
 }
 
@@ -1808,7 +1765,6 @@ body { background: var(--c-bg); color: var(--c-text); }
   .animate-fade-in, .animate-scale-in { animation: none; }
   /* The skeleton still marks where the transcript will land; it just holds. */
   .p-skeleton-bar { animation: none; }
-  .p-busy-bar::after { animation: none; left: 30%; }
   /* The caret still marks where the text is being written; it just holds. */
   .p-streaming > :last-child::after { animation: none; }
   /* The dot still marks the run as in progress; it just holds. */
@@ -2250,7 +2206,6 @@ body > .annotation-toolbar {
 .p-history-reserve { background-image: repeating-linear-gradient(to bottom, transparent 0 12px, color-mix(in srgb, currentColor 5%, transparent) 12px 20px, transparent 20px 28px); background-size: 60% 28px; background-repeat: repeat-y; }
 /* Work's Needs you (surfaces/WorkTab.tsx): the selected ground in an accent edge, its section's label in the accent's ink. */
 .p-needs-you { border: 1px solid color-mix(in srgb, var(--c-accent) 32%, transparent); }
-.p-needs-you .p-label { color: var(--c-accent-fg) !important; }
 /* A strip across the workbench's top saying the connection's state: reconnecting on the warning's tint, closed on the danger's. */
 .p-banner-warning { background: var(--c-warning-tint); }
 .p-banner-danger { background: var(--c-danger-tint); }
@@ -2647,9 +2602,6 @@ tr[data-opens]:hover { background: var(--c-hover); }
   border-radius: var(--r-row);
   background: var(--c-surface);
 }
-.p-pane-head { display: flex; flex-shrink: 0; align-items: center; gap: 2px; height: 36px; padding: 0 6px 0 12px; border-bottom: 1px solid var(--c-border); }
-.p-pane-url { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: 12px; color: var(--c-text-3); }
-.p-pane-body { min-height: 0; flex: 1; overflow: hidden; }
 
 /* An agent's status, read by shape as well as hue: a turning arc while it
    works, the accent with a slow halo when it needs the person, a small
@@ -2689,9 +2641,9 @@ tr[data-opens]:hover { background: var(--c-hover); }
   background: linear-gradient(100deg, var(--shimmer-base) 0 18%, var(--shimmer-peak) 42% 58%, var(--shimmer-base) 82% 100%) 100% 0 / 280% 100% no-repeat;
   -webkit-background-clip: text;
   background-clip: text;
-  animation: p-shimmer 2.8s ease-in-out infinite;
+  animation: p-status-shimmer 2.8s ease-in-out infinite;
 }
-@keyframes p-shimmer { to { background-position: 0 0; } }
+@keyframes p-status-shimmer { to { background-position: 0 0; } }
 .p-halo { isolation: isolate; }
 .p-bar-tab.p-halo[data-status="waiting"] .p-bar-link::before,
 [data-status="waiting"].p-halo:not(.p-bar-tab)::after {

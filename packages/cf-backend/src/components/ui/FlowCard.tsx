@@ -4,19 +4,14 @@
  */
 import type { ReactNode } from "react";
 import { KinuLogo } from "@/components/ui/KinuLogo";
+import { StepDots } from "@/components/ui/Meter";
 
 export function FlowStep({ title, steps, at, children, footer }: { title: string; steps: readonly string[]; at: number; children: ReactNode; footer?: ReactNode }) {
   return (
     <>
       <div className="mb-6 flex justify-center"><KinuLogo /></div>
       <h1 className="t-page-title text-center">{title}</h1>
-      <ol aria-label="Steps" className="mb-5 mt-6 flex items-center justify-center gap-1.5">
-        {steps.map((step, index) => (
-          <li key={step} aria-current={index === at ? "step" : undefined} aria-label={step}>
-            <span className={`p-flow-dot${index === at ? " p-flow-dot-here" : ""}${index < at ? " p-flow-dot-done" : ""}`} />
-          </li>
-        ))}
-      </ol>
+      <div className="mb-5 mt-6"><StepDots label="Steps" steps={steps} at={at} /></div>
       <section className="p-flow-card">
         {children}
         {footer !== undefined && <footer className="p-flow-foot">{footer}</footer>}

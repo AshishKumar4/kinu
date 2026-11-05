@@ -9,6 +9,7 @@ import { type Awaitable, type VFS, type VfsRevision, writeText } from '@nimbus-s
 
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
+import { createTestActorsOver } from '@kinu.run/test-utils';
 import type { SqlExecutor, SqlExec, RawSqlExec, Memory, Executor, RoutedLLM, Schedule, Identity, FiberCtx, ExecuteResult, ResolvedProvider } from '../src/types/primitives';
 import { extractJsonObject } from '../src/providers/structured';
 import type { AgentRuntime, CraftStore } from '../src/types/agent-runtime';
@@ -391,4 +392,11 @@ export function saidStep(text: string): HeadStep {
 /** What a journalled head step says. */
 export function stepText(step: HeadStep): string {
   return step.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
+}
+
+/** An in-memory database's SQL and the main actor over it: what an events hub suite drives. */
+export function memoryHub() {
+  const db = new Database(':memory:');
+
+  return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
 }

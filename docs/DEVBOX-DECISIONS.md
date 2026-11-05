@@ -3635,6 +3635,13 @@ restores and whether P's tags, manifest and layer still exist. Run
 Containers-scoped token, the Worker holds the deploy token as its secret;
 that is temporary, and the secret is swapped when the scoped token exists.
 
+The probes ended on 2026-10-12 at 216 h, when the owner cleared the registry's
+images, the life image among them; the Worker, application and bucket were
+deleted and the readings archived (`~/kinu-logs/research/d65-life10021741`, 27
+objects). Probe (b)'s days 28 to 36 were never read, so whether restoring a
+child keeps its parent past 30 days is unmeasured, and the 29-day rule from
+the lineage's root stands (ledger m1965a).
+
 Day 0 of (a), both bases: C's manifest names P's manifest as its `subject`
 and P as `parent_snapshot_id`, and does not name P's layer; C's one layer
 is an incremental btrfs stream (5,644 B on our image, 6,216 B on trixie)
@@ -5501,6 +5508,21 @@ save: green in a real container on 160d7fbcf (armada 20261030184103-9a4e9599, 6.
 the rest, nothing ran on the owner's box but its heartbeat, so setting the recovery aside drops no work. What held the first
 configuration for 30 s is unmeasured: no outbound call from it reached the workspace object, which answered other calls
 meanwhile.
+
+D120. A start whose pin changes a package moves only the files apt reads, and runs the full install's apt over them
+(2026-11-04, ledger 1024-h follow-up; amends D110's whole install for a package change). D110 left a package change to
+the whole tarball because a changed .deb installed by itself would move what the full install's apt leaves alone. The
+one re-pin since was one (11-02, ripgrep added: "the pin changes 3 package files"), and every box a pin behind installed
+the whole tarball: production 12.3 to 29.9 s of its 25 s start (6 boxes), staging 14.5 to 23.1 s (4). Running that same
+apt over the repository needs only the files it reads: the full install removes the repository after it, so a start
+places the delta's files, brings back the repository's index and its `wanted` list whether they changed or not, asks
+apt (`apt-get -s install`) what it would unpack, fetches each such .deb the delta lacks by the pin's sha256 for it, and
+runs the full install's own `apt-get install`; the box is marked as a full install marks it from the first file placed
+to the stamp, so a start cut short installs whole. The container tier's `tools` contract takes a box whose pin lacked
+ripgrep and whose xdotool was removed by hand, with the tarball out of reach: the start fetched 4 files (1.9 MB: the
+index, the list, ripgrep's .deb and xdotool's unchanged one), apt set up 2 packages in 425 ms, 851 ms in all, and both
+tools ran after (armada, kinu-devbox-contracts-lanes, 2026-11-04T22:48:44Z; red before the list came back: apt read no
+`wanted` and installed nothing).
 
 ## Open
 

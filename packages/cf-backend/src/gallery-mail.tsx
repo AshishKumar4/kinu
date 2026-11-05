@@ -6,6 +6,7 @@
  *   are pills in the chat; an agent's outgoing mail is an approval card on the composer.
  * The sidebar's footer is the shell's own (`SidebarFooter`); its Mail badge reads this frame's Important mail.
  */
+import { TextInput, TextArea } from "@/components/ui/Field";
 import { useState, type ReactNode } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import type { FileUIPart, UIMessage } from "ai";
@@ -30,7 +31,7 @@ import { Avatar } from "@/components/ui/Avatar";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 import { Segmented } from "@/components/ui/Segmented";
-import { Choice, inputCls } from "@/components/ui/form";
+import { Select } from "@/components/ui/Select";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { useMediaQuery } from "@/hooks/use-media-query";
 import { ImportantMailRow, MAIL_ROW, mailTime } from "@/components/mail/ImportantMailRow";
@@ -432,7 +433,7 @@ function Message({ mail, box, open, inChat, onToggle }: { mail: Mail; box: Addre
         <p data-mail-woke={mail.woke?.as} className="flex items-center gap-1.5 t-meta p-text-3">
           <AgentFaceIcon size={13} className="shrink-0" />
           {woke}
-          {!inChat && <> · <Link to={chat} className="inline-flex items-center gap-0.5 p-accent-fg hover:underline">Open chat<ArrowUpRightIcon size={11} /></Link></>}
+          {!inChat && <> · <Link to={chat} className="inline-flex items-center gap-0.5 p-link">Open chat<ArrowUpRightIcon size={11} /></Link></>}
         </p>
       )}
       {mail.html !== undefined ? <SealedHtml html={mail.html} /> : <Body text={mail.text} />}
@@ -467,7 +468,7 @@ function ReplyBox({ thread, opened, onSend }: { thread: Thread; opened: boolean;
   return (
     <div data-mail-reply-box className="space-y-2">
       <p className="t-meta p-text-3">From {box.address}</p>
-      <textarea value={text} onChange={(event) => setText(event.target.value)} rows={9} aria-label="Reply" className={`${inputCls} font-[inherit] leading-6`} />
+      <TextArea value={text} onChange={(event) => setText(event.target.value)} rows={9} aria-label="Reply" />
       <div className="flex gap-2">
         <Button variant="primary" size="md" data-mail-send disabled={text.trim() === ""} onClick={() => { onSend(text); setText(null); }}><PaperPlaneTiltIcon size={14} />Send</Button>
         <Button variant="ghost" size="sm" onClick={() => setText(null)}>Discard</Button>
@@ -532,15 +533,15 @@ function Compose({ onClose }: { onClose: () => void }) {
   const [from, setFrom] = useState(ADDRESSES[0].address);
 
   return (
-    <Modal title="New message" icon={<NotePencilIcon size={18} />} onClose={onClose} maxWidthClass="max-w-xl"
+    <Modal title="New message" icon={<NotePencilIcon size={18} />} onClose={onClose} width="md"
       footer={<div className="flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={onClose}>Discard</Button><Button variant="primary" size="md" onClick={onClose}><PaperPlaneTiltIcon size={14} />Send</Button></div>}>
       <div data-mail-compose-form className="space-y-2">
         <div className="flex items-center gap-2 t-meta p-text-3" data-mail-from>From
-          <div className="min-w-0 flex-1"><Choice label="From" value={from} onChange={setFrom} options={ADDRESSES.map((each) => ({ value: each.address, label: each.address }))} /></div>
+          <div className="min-w-0 flex-1"><Select label="From" value={from} onChange={setFrom} options={ADDRESSES.map((each) => ({ value: each.address, label: each.address }))} /></div>
         </div>
-        <input placeholder="To" aria-label="To" className={inputCls} />
-        <input placeholder="Subject" aria-label="Subject" className={inputCls} />
-        <textarea rows={8} placeholder="Message" aria-label="Message" className={`${inputCls} font-[inherit]`} />
+        <TextInput placeholder="To" aria-label="To" />
+        <TextInput placeholder="Subject" aria-label="Subject" />
+        <TextArea rows={8} placeholder="Message" aria-label="Message" />
       </div>
     </Modal>
   );
@@ -615,11 +616,11 @@ function MailPage() {
           <div className={`items-center gap-2 lg:justify-end ${thread === null ? "flex" : "hidden lg:flex"}`}>
             <label className="relative min-w-0 flex-1 lg:max-w-72">
               <MagnifyingGlassIcon size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 p-text-3" aria-hidden />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search mail" aria-label="Search mail" data-mail-search
-                className={`${inputCls} h-[34px] py-0 pl-8`} />
+              <TextInput value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search mail" aria-label="Search mail" data-mail-search
+                className="pl-8" />
             </label>
             <div className="w-40 shrink-0" data-mail-address>
-              <Choice label="Address" value={address} onChange={setAddress}
+              <Select label="Address" value={address} onChange={setAddress}
                 options={[{ value: "all", label: "All addresses" }, ...ADDRESSES.map((each) => ({ value: each.id, label: each.label }))]} />
             </div>
           </div>

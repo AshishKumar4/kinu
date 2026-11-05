@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
 import {
   createLiveRefreshAdmission,
   formatWorkspaceError,
@@ -311,12 +312,19 @@ describe('resource-scoped workspace notices', () => {
   });
 });
 
+type SnapshotArgs = Parameters<typeof loadWorkspaceSnapshot>;
+
+/** The load as the page runs it, its read a promise here: a rejection is the read failing. */
+function loadSnapshot(read: (...args: Parameters<SnapshotArgs[0]>) => Promise<void>, report: SnapshotArgs[1], admit: SnapshotArgs[2], seeded: SnapshotArgs[3]) {
+  return Effect.runPromise(loadWorkspaceSnapshot((...args) => Effect.promise(() => read(...args)), report, admit, seeded));
+}
+
 describe('loading the workspace snapshot', () => {
   test('a failure reports the bare reason once and hands the retry back to the caller', async () => {
     const errors = reporter();
     const admission = activeAdmission();
 
-    const outcome = await loadWorkspaceSnapshot(
+    const outcome = await loadSnapshot(
       () => Promise.reject(new Error(CONNECTION_LOST)),
       errors.report,
       (key) => admission.admit(TEST_ACTOR, key),
@@ -338,7 +346,7 @@ describe('loading the workspace snapshot', () => {
 
     const admission = activeAdmission();
 
-    const outcome = await loadWorkspaceSnapshot(
+    const outcome = await loadSnapshot(
       () => Promise.resolve(),
       errors.report,
       (key) => admission.admit(TEST_ACTOR, key),
@@ -355,7 +363,7 @@ describe('loading the workspace snapshot', () => {
     const admission = activeAdmission();
     const snapshotRead = Promise.withResolvers<void>();
 
-    const loading = loadWorkspaceSnapshot(
+    const loading = loadSnapshot(
       () => snapshotRead.promise,
       errors.report,
       (key) => admission.admit(TEST_ACTOR, key),
@@ -382,7 +390,7 @@ describe('loading the workspace snapshot', () => {
     const snapshotRead = Promise.withResolvers<string>();
     let memoryContent = 'before either read';
 
-    const loading = loadWorkspaceSnapshot(
+    const loading = loadSnapshot(
       async (
         isCurrent,
         isSourceCurrent: (source: LiveRefreshSource) => boolean,
@@ -419,11 +427,11 @@ describe('loading the workspace snapshot', () => {
     const older = Promise.withResolvers<void>();
     const newer = Promise.withResolvers<void>();
 
-    const olderLoad = loadWorkspaceSnapshot(
+    const olderLoad = loadSnapshot(
       () => older.promise, errors.report, (key) => admission.admit(TEST_ACTOR, key), SEEDED,
     );
 
-    const newerLoad = loadWorkspaceSnapshot(
+    const newerLoad = loadSnapshot(
       () => newer.promise, errors.report, (key) => admission.admit(TEST_ACTOR, key), SEEDED,
     );
 
@@ -441,7 +449,7 @@ describe('loading the workspace snapshot', () => {
     admission.activateActor('left-behind');
     const read = Promise.withResolvers<void>();
 
-    const loading = loadWorkspaceSnapshot(
+    const loading = loadSnapshot(
       () => read.promise, errors.report, (key) => admission.admit('left-behind', key), SEEDED,
     );
 

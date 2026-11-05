@@ -1,10 +1,12 @@
-/** Text rides the viewer RPC; images, PDFs and saves (PUT) ride the raw-bytes route. */
-import { useCallback, useEffect, useState } from "react";
+/** Text rides the viewer RPC; images, PDFs and saves (PUT) ride the raw-bytes route. Keyed by its path by its caller, so
+ *  a draft, a failure and the source toggle are one file's. */
+import { useCallback, useMemo, useState } from "react";
+import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import {
   CheckIcon, DownloadSimpleIcon, FileIcon, PencilSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { attemptInItsWords, settleSync } from "@kinu.run/core/obs";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { MarkdownContent, CodeBlock } from "./shared";
 import {
@@ -14,6 +16,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
 import { TextArea } from "@/components/ui/Field";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 export function FileViewer({ path, read, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;
@@ -29,8 +32,8 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   const name = path.slice(path.lastIndexOf("/") + 1);
   const kind = viewerKindOf(path);
   const [draft, setDraft] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const { busy, error: saveError, run, clear } = useLabelledStep();
+  const saving = busy !== null;
   const [conflict, setConflict] = useState(false);
   const [asSource, setAsSource] = useState(false);
 
@@ -51,36 +54,24 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   if (resource.status === "ready") file = resource.value;
   else if (resource.status === "error") file = { error: resource.message };
 
-  useEffect(() => {
-    setDraft(null);
-    setSaveError(null);
-    setConflict(false);
-    setAsSource(false);
-  }, [path]);
-
-  const save = useCallback(async (text: string) => {
+  const save = (text: string): void => {
     if (file?.revision === undefined) return;
-    setSaving(true);
-    setSaveError(null);
-    setConflict(false);
+    const base = file.revision;
 
-    try {
-      await putFileBytes(rawHref, text, file.revision);
-      setDraft(null);
-      reload();
-      onSaved?.();
-    } catch (error) {
-      if (error instanceof FileWriteConflict) {
-        setConflict(true);
-        // Keep `draft`: a peer won the CAS, not this editor's text.
+    setConflict(false);
+    run("save", () => attemptInItsWords("io", () => putFileBytes(rawHref, text, base)).pipe(
+      Effect.map(() => {
+        setDraft(null);
         reload();
-      } else {
-        setSaveError(renderThrownChain({ cause: error }));
-      }
-    } finally {
-      setSaving(false);
-    }
-  }, [file?.revision, onSaved, rawHref, reload]);
+        onSaved?.();
+      }),
+      // Keeps `draft`: a peer won the compare-and-swap, not this editor's text.
+      Effect.catchIf((failed) => failed.cause instanceof FileWriteConflict, () => Effect.sync(() => {
+        setConflict(true);
+        reload();
+      })),
+    ));
+  };
 
   const content = file?.content ?? "";
   const editable = kind === "text" && fileTextEditable(file);
@@ -101,10 +92,10 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
             )
           ) : (
             <>
-              <Button variant="ghost" size="sm" data-files-save disabled={saving} onClick={() => void save(draft)} title={`Save ${name}`}>
+              <Button variant="ghost" size="sm" data-files-save disabled={saving} onClick={() => save(draft)} title={`Save ${name}`}>
                 <CheckIcon size={12} />{saving ? "Saving…" : "Save"}
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setSaveError(null); }}>Cancel</Button>
+              <Button variant="ghost" size="sm" onClick={() => { setDraft(null); clear(); }}>Cancel</Button>
             </>
           )}
           <a data-files-download href={downloadHref} download={name} className="t-control flex items-center gap-1 p-text-2 hover:p-text p-1" title={`Download ${name}`}>
@@ -165,20 +156,24 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   );
 }
 
-function frontmatterAsCode(markdown: string): string {
-  let body: string;
+/** A markdown file's frontmatter shown as the YAML it is, above its body. Frontmatter that does not parse is shown as it
+ *  is written; any other failure is a defect, which stays one. */
+function frontmatterAsCode(markdown: string): Effect.Effect<string> {
+  return Effect.map(Effect.catchDefect(
+    Effect.sync(() => parseMarkdownFrontmatter(markdown).body),
+    (caught) => (caught instanceof MarkdownFrontmatterError ? Effect.succeed(markdown) : Effect.die(caught)),
+  ), (body) => {
+    if (body.length === markdown.length) return markdown;
+    const head = markdown.slice(0, markdown.length - body.length);
 
-  try {
-    body = parseMarkdownFrontmatter(markdown).body;
-  } catch (caught) {
-    if (caught instanceof MarkdownFrontmatterError) return markdown;
-    throw caught;
-  }
+    return `\`\`\`yaml\n${head.slice(head.indexOf("\n") + 1, head.lastIndexOf("\n---"))}\n\`\`\`\n\n${body}`;
+  });
+}
 
-  if (body.length === markdown.length) return markdown;
-  const head = markdown.slice(0, markdown.length - body.length);
+function MarkdownFile({ content }: { content: string }) {
+  const shown = useMemo(() => settleSync(frontmatterAsCode(content)), [content]);
 
-  return `\`\`\`yaml\n${head.slice(head.indexOf("\n") + 1, head.lastIndexOf("\n---"))}\n\`\`\`\n\n${body}`;
+  return <div className="p-3 prose-chat"><MarkdownContent content={shown} /></div>;
 }
 
 function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
@@ -196,7 +191,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
     return (
       <div className="t-meta p-4 space-y-2">
         <div className="p-danger break-words">{file.error}</div>
-        <a href={downloadHref} download={name} className="inline-flex items-center gap-1 p-accent-fg hover:underline">
+        <a href={downloadHref} download={name} className="inline-flex items-center gap-1 p-link">
           <DownloadSimpleIcon size={12} />Download instead
         </a>
       </div>
@@ -216,7 +211,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
     );
   }
 
-  if (body === "markdown") return <div className="p-3 prose-chat"><MarkdownContent content={frontmatterAsCode(content)} /></div>;
+  if (body === "markdown") return <MarkdownFile content={content} />;
 
   if (body === "html") {
     return (

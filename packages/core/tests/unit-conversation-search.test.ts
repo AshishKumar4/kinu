@@ -140,6 +140,16 @@ describe('ConversationSearchStore.search', () => {
     expect(await store.search('')).toEqual([]);
     expect(await store.search('"unbalanced (NEAR *')).toEqual([]);
   });
+
+  test('finds words in any script, accented and CJK alike', async () => {
+    const { store, record } = setup();
+    const accented = await record('s1', 'user', 'le café ferme à midi');
+    const cjk = await record('s2', 'user', '東京 の 会議 は 明日');
+    await record('s3', 'user', 'plain ascii only');
+
+    expect((await store.search('café')).map((hit) => hit.messageId)).toEqual([accented]);
+    expect((await store.search('会議')).map((hit) => hit.messageId)).toEqual([cjk]);
+  });
 });
 
 describe('ConversationSearchStore.scroll', () => {

@@ -4,7 +4,9 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestActorsOver, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-import { TriggerRegistry, buildDrainBatch, initEventsHubTables, type AlarmScheduler } from '../src/events/hub/index';
+import { buildDrainBatch } from '../src/events/hub/drain';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import { TriggerRegistry, type AlarmScheduler } from '../src/events/hub/triggers';
 import {
   EventLog, WatchClaims, checkAnswerOf, checkWatcher, createTimerTrigger, fireDueTriggers, parkWatcher, resumeWatcher,
   type WatchOutcome, type JsonValue, type RunCheck,

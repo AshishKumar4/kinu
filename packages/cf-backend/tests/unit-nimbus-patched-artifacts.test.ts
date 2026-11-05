@@ -4,7 +4,6 @@ import type { Connection } from 'agents';
 import { AwaitedList, scriptedTurnModel } from '@kinu.run/test-utils';
 import { Nimbus } from '@nimbus-sh/sdk';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import * as v from 'valibot';
 import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
@@ -14,6 +13,7 @@ mockAgentsSdk();
 const { orchestratorHarness, runInWorkspaceShell } = await import('./helpers/actor-harness');
 
 import { socketConnection } from './helpers/bindings';
+import { chatRequest, doneFrames } from './helpers/chat-frames';
 
 interface AdmissionSocket {
   readonly wire: Connection;
@@ -36,25 +36,6 @@ function connection(agent: { broadcast: (message: string, exclude?: string[]) =>
   });
 
   return { wire, sent, frame: (holds) => frames.until(holds) };
-}
-
-function chatRequest(id: string, text: string): string {
-  return JSON.stringify({
-    type: 'cf_agent_use_chat_request', id,
-    init: { method: 'POST', body: JSON.stringify({
-      messages: [{ id: `input-${id}`, role: 'user', parts: [{ type: 'text', text }] }],
-      trigger: 'submit-message',
-    }) },
-  });
-}
-
-function doneFrames(sent: readonly string[]): Array<{ id: string }> {
-  // Every frame on this socket is JSON the actor wrote; a non-JSON line is a harness failure, not a done frame.
-  return sent.flatMap((raw) => {
-    const done = v.safeParse(v.object({ type: v.literal('cf_agent_use_chat_response'), id: v.string(), done: v.optional(v.boolean()) }), JSON.parse(raw));
-
-    return done.success && done.output.done === true ? [{ id: done.output.id }] : [];
-  });
 }
 
 describe('installed Nimbus dependency integrity', () => {

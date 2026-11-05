@@ -24,13 +24,10 @@ import { utf8Bytes } from '../utils/text';
 import { cardWords } from '../read-models/event-summary';
 
 export type {
-  PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanDecisionOutcome, PlanEdit,
+  PlanDecisionOutcome, PlanEdit,
   DiffAnchor, DiffSide, GeneralNote, NoteReply, PassageNote, PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult,
   PlanReviewStatus, ReplyToCommentToolDeps, SubmitPlanToolDeps,
 } from '../types/plans';
-
-// Content plus annotations_json share one row capped at do.sqlite.row_bytes; this cap and MAX_PLAN_ANNOTATIONS_BYTES fit inside it together.
-export const MAX_PLAN_CONTENT_BYTES = 1536 * 1024;
 
 /** Read on call: the browser imports this module's schemas, and a module-scope read ships the whole catalog to it. */
 function planReviewRowBytes(): number {
@@ -162,29 +159,19 @@ export function initPlanReviewTable(execRaw: RawSqlExec): void {
     ON plan_reviews(actor_id, session_id, created_at DESC)`);
 }
 
-/** Line coordinates are one-indexed, inclusive, and refer to the pre-edit document for the batch. */
-export function validatePlanEdits(existingLines: readonly string[], edits: readonly PlanEdit[]): string | null {
-  if (edits.length === 0) return 'at least one edit is required';
+/**
+ * A batch of edits applied to the plan's lines, or why it cannot be: each edit's lines are one-indexed, inclusive, and
+ * name the document as it was before the batch. The tool's input schema already holds each line to an integer from 1.
+ */
+function editedPlan(existingLines: readonly string[], edits: readonly PlanEdit[]): { readonly content: string } | { readonly refused: string } {
   const lineCount = existingLines.length;
 
   for (const edit of edits) {
-    if (!Number.isInteger(edit.start) || edit.start < 1) {
-      return `start must be a positive integer >= 1, got ${edit.start}`;
-    }
+    if (edit.start > lineCount + 1) return { refused: `start (${edit.start}) exceeds file length + 1 (${lineCount + 1})` };
 
-    if (edit.start > lineCount + 1) {
-      return `start (${edit.start}) exceeds file length + 1 (${lineCount + 1})`;
-    }
+    if (edit.end != null && edit.end < edit.start) return { refused: `end (${edit.end}) must be >= start (${edit.start})` };
 
-    if (edit.end != null) {
-      if (!Number.isInteger(edit.end) || edit.end < edit.start) {
-        return `end (${edit.end}) must be an integer >= start (${edit.start})`;
-      }
-
-      if (lineCount > 0 && edit.end > lineCount) {
-        return `end (${edit.end}) exceeds file length (${lineCount})`;
-      }
-    }
+    if (edit.end != null && lineCount > 0 && edit.end > lineCount) return { refused: `end (${edit.end}) exceeds file length (${lineCount})` };
   }
 
   const sorted = [...edits].sort((a, b) => a.start - b.start);
@@ -197,41 +184,23 @@ export function validatePlanEdits(existingLines: readonly string[], edits: reado
     const previousEnd = previous.end ?? lineCount;
 
     if (current.start <= previousEnd) {
-      return `edits overlap: [${previous.start},${previousEnd}] and [${current.start},${current.end ?? 'end'}]`;
+      return { refused: `edits overlap: [${previous.start},${previousEnd}] and [${current.start},${current.end ?? 'end'}]` };
     }
   }
 
-  return null;
-}
+  const lines = [...existingLines];
+  let offset = 0;
 
-export function applyPlanEdits(existingLines: readonly string[], edits: readonly PlanEdit[]): string[] {
-  return settleSync(Effect.gen(function* () {
-    const invalid = validatePlanEdits(existingLines, edits);
+  for (const edit of sorted) {
+    const start = edit.start - 1 + offset;
+    const end = edit.end != null ? edit.end + offset : lines.length;
+    const replacement = edit.content ? edit.content.split('\n') : [];
+    const removed = end - start;
+    lines.splice(start, removed, ...replacement);
+    offset += replacement.length - removed;
+  }
 
-    if (invalid) return yield* Effect.die(new Error(invalid));
-
-    const lines = [...existingLines];
-    let offset = 0;
-
-    for (const edit of [...edits].sort((a, b) => a.start - b.start)) {
-      const start = edit.start - 1 + offset;
-      const end = edit.end != null ? edit.end + offset : lines.length;
-      const replacement = edit.content ? edit.content.split('\n') : [];
-      const removed = end - start;
-      lines.splice(start, removed, ...replacement);
-      offset += replacement.length - removed;
-    }
-
-    const content = lines.join('\n');
-
-    if (!content.trim()) return yield* Effect.die(new Error('plan content is empty after applying edits'));
-
-    if (utf8Bytes(content) > MAX_PLAN_CONTENT_BYTES) {
-      return yield* Effect.die(new Error('plan content exceeds the maximum size of 1.5 MiB'));
-    }
-
-    return lines;
-  }));
+  return { content: lines.join('\n') };
 }
 
 export function formatPlanWithLineNumbers(content: string): string {
@@ -511,57 +480,53 @@ export class PlanReviewStore {
   }
 
   submit(sessionId: string, edits: readonly PlanEdit[]): PlanReviewResult {
-    return settleSync(Effect.gen({ self: this }, function* (): Effect.gen.Return<PlanReviewResult> {
-      const current = this.getActive(sessionId);
+    const current = this.getActive(sessionId);
 
-      // A pending revision nobody has annotated is the author's to correct: a resubmit replaces it. Once the owner
-      // marks it up, it waits for their decision.
-      if (current?.status === 'pending' && freshNotes(current.annotations).length > 0) {
-        return { ok: false, error: `plan ${current.id} revision ${current.revision} is awaiting review`, plan: current };
-      }
+    // A pending revision nobody has annotated is the author's to correct: a resubmit replaces it. Once the owner
+    // marks it up, it waits for their decision.
+    if (current?.status === 'pending' && freshNotes(current.annotations).length > 0) {
+      return { ok: false, error: `plan ${current.id} revision ${current.revision} is awaiting review`, plan: current };
+    }
 
-      const revising = current?.status === 'changes_requested' || current?.status === 'pending' ? current : null;
-      const existingLines = revising ? revising.content.split('\n') : [];
+    const revising = current?.status === 'changes_requested' || current?.status === 'pending' ? current : null;
+    const existingLines = revising ? revising.content.split('\n') : [];
 
-      const edited = yield* Effect.matchCause(Effect.sync(() => applyPlanEdits(existingLines, edits).join('\n')), {
-        onSuccess: (content) => ({ content }),
-        onFailure: (failed) => ({ refused: renderThrownChain({ cause: Cause.squash(failed) }) }),
-      });
+    const edited = editedPlan(existingLines, edits);
 
-      if ('refused' in edited) return { ok: false, error: edited.refused, plan: current };
-      const { content } = edited;
+    if ('refused' in edited) return { ok: false, error: edited.refused, plan: current };
+    const { content } = edited;
 
-      if (content.trim() === '') return { ok: false, error: 'the plan is empty: write it in full with one edit starting at line 1', plan: current };
+    if (content.trim() === '') return { ok: false, error: 'the plan is empty: write it in full with one edit starting at line 1', plan: current };
 
-      // The threads of a revision sent back carry into the next one, read-only, so its replies stay in view.
-      const carried = JSON.stringify((revising?.annotations ?? []).map((note) => note.revision === undefined ? { ...note, revision: revising?.revision } : note));
+    // The threads of a revision sent back carry into the next one, read-only, so its replies stay in view.
+    const carried = JSON.stringify((revising?.annotations ?? []).map((note) => note.revision === undefined ? { ...note, revision: revising?.revision } : note));
 
-      const rowBytes = planReviewRowBytes();
+    const id = revising?.id ?? this.newId();
+    const rowBytes = planReviewRowBytes();
 
-      if (utf8Bytes(content) + utf8Bytes(carried) > rowBytes) {
-        return { ok: false, error: `plan content exceeds the stored row size of ${rowBytes} bytes`, plan: current };
-      }
+    // The row's text whole: its content and comments, and the names it is stored under.
+    if (utf8Bytes(content) + utf8Bytes(carried) + utf8Bytes(`${this.actorId}${id}${sessionId}pending`) > rowBytes) {
+      return { ok: false, error: `plan content exceeds the stored row size of ${rowBytes} bytes`, plan: current };
+    }
 
-      const id = revising?.id ?? this.newId();
-      const revision = revising ? revising.revision + 1 : 1;
-      const now = this.now();
-      void this.sql`INSERT INTO plan_reviews (
-      actor_id, id, session_id, revision, content, status, annotations_json, feedback,
-      handoff_accepted, created_at, updated_at
-    ) VALUES (
-      ${this.actorId}, ${id}, ${sessionId}, ${revision}, ${content}, 'pending', ${carried}, NULL,
-      0, ${now}, ${now}
-    )`;
-      markStoreChanged(this.sql);
+    const revision = revising ? revising.revision + 1 : 1;
+    const now = this.now();
+    void this.sql`INSERT INTO plan_reviews (
+    actor_id, id, session_id, revision, content, status, annotations_json, feedback,
+    handoff_accepted, created_at, updated_at
+  ) VALUES (
+    ${this.actorId}, ${id}, ${sessionId}, ${revision}, ${content}, 'pending', ${carried}, NULL,
+    0, ${now}, ${now}
+  )`;
+    markStoreChanged(this.sql);
 
-      if (revising) {
-        void this.sql`UPDATE plan_reviews SET writes=writes+1, status='superseded', updated_at=${now}
-        WHERE actor_id=${this.actorId} AND id=${revising.id} AND revision=${revising.revision}
-          AND status IN ('changes_requested', 'pending')`;
-      }
+    if (revising) {
+      void this.sql`UPDATE plan_reviews SET writes=writes+1, status='superseded', updated_at=${now}
+      WHERE actor_id=${this.actorId} AND id=${revising.id} AND revision=${revising.revision}
+        AND status IN ('changes_requested', 'pending')`;
+    }
 
-      return this.written(id, revision);
-    }));
+    return this.written(id, revision);
   }
 
   saveAnnotations(id: string, revision: number, annotations: { value: unknown }): PlanReviewResult {

@@ -1,32 +1,19 @@
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import {
-  initEventsHubTables, EventLog, ReplyChannelStore,
-  deriveEventTrust, derivePriority, deriveFields, dedupeKeyFor, renderForLLM,
-  buildDrainBatch,
-  type IngressDescriptor, type EmailPayload, type KinuEvent,
-  type ReplyDispatcher,
-} from '../src/events/hub/index';
+import { buildDrainBatch } from '../src/events/hub/drain';
+import { EventLog } from '../src/events/hub/log';
+import { ReplyChannelStore, type ReplyDispatcher } from '../src/events/hub/reply-channel';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import { deriveEventTrust, derivePriority, deriveFields } from '../src/events/hub/trust';
+import type { IngressDescriptor, EmailPayload } from '../src/events/hub/types';
+import { renderForLLM } from '../src/events/hub/visibility';
 import {
   classifyProgrammaticTurn, EmailInbox, EMAIL_INBOUND_RATE_PER_MIN, handedMailSignal, initWebhookRateLimitTables, mailThreadText,
-  spillEventContent, type MailArrival, type SqlExec,
+  spillEventContent, type MailArrival,
 } from '../src/index';
 import { createMemoryVfs, present } from '@kinu.run/test-utils';
-import { makeSqlExec } from './helpers';
-import { createTestActorsOver } from '@kinu.run/test-utils';
-import type { ActorHandle } from '../src/identity/actor-handle';
+import { memoryHub } from './helpers';
 
 /** `EventLog` is actor-scoped, so the fixture binds the one actor through the production directory. */
-interface Hub {
-  readonly sql: SqlExec;
-  readonly actor: ActorHandle;
-}
-
-function makeSql(): Hub {
-  const db = new Database(':memory:');
-
-  return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
-}
 
 function emailPayload(overrides: Partial<EmailPayload> = {}): EmailPayload {
   return {
@@ -77,7 +64,7 @@ describe('email trust + priority derivation', () => {
 
 describe('email dedupe', () => {
   test('Message-ID is the idempotency key', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: emailDescriptor('owner'), now: 1000 });
@@ -95,35 +82,23 @@ describe('email dedupe', () => {
   });
 
   test('missing Message-ID falls back to a content hash bucket', () => {
-    const base = emailPayload({ message_id: null });
+    const { sql, actor } = memoryHub();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql, actor);
 
-    const mk = (received_at: number, body?: string): KinuEvent => {
-      const payload: EmailPayload = { ...base };
+    const publish = (now: number, body_text = 'Is staging green?') =>
+      log.publish({ descriptor: emailDescriptor('owner', { message_id: null, body_text }), now });
 
-      if (body) payload.body_text = body;
-
-      return {
-        id: 'e', trace_id: 't', caused_by: null,
-        ingress: 'email_inbound', variant: 'email',
-        trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
-        received_at, reply_channel: null, dedupe_key: null,
-        payload,
-      };
-    };
-
-    const k1 = dedupeKeyFor(mk(1000));
-    const k2 = dedupeKeyFor(mk(2000));                    // same 5-min bucket
-    const k3 = dedupeKeyFor(mk(6 * 60 * 1000));           // next bucket
-    const k4 = dedupeKeyFor(mk(1000, 'different body'));
-    expect(k1).toBe(k2);
-    expect(k1).not.toBe(k3);
-    expect(k1).not.toBe(k4);
+    const first = publish(1000);
+    expect(publish(2000).id).toBe(first.id);
+    expect(publish(6 * 60 * 1000).admitted).toBe(true);
+    expect(publish(1000, 'different body').admitted).toBe(true);
   });
 });
 
 describe('email rendering for the LLM', () => {
   test('renderForLLM shows sender, subject, body and attachment count', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
@@ -143,7 +118,7 @@ describe('email rendering for the LLM', () => {
   });
 
   test('input carries no body: it names the sender and how to read it, as untrusted and not an instruction', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
@@ -161,7 +136,7 @@ describe('email rendering for the LLM', () => {
   });
 
   test('a turn mail wakes plans, the owner\'s as well: any effect waits for the owner in the app', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
 
@@ -170,7 +145,7 @@ describe('email rendering for the LLM', () => {
   });
 
   test('an email event drains into the wake batch', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     log.publish({ descriptor: emailDescriptor('owner'), now: 1000 });
@@ -183,7 +158,7 @@ describe('email rendering for the LLM', () => {
 
 describe('email_thread reply channels', () => {
   test('open → bindEvent → findOpenByEvent → reply dispatches through the email dispatcher', async () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const sent: unknown[] = [];
 
@@ -217,7 +192,7 @@ describe('email_thread reply channels', () => {
   });
 
   test('an expired email_thread channel refuses dispatch', async () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const store = new ReplyChannelStore(sql, actor, {});
 
@@ -235,7 +210,7 @@ describe('the agent inbox', () => {
   const NOW = 1_700_000_000_000;
 
   function inbox(ownerEmail: string | null = 'owner@example.com') {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     initWebhookRateLimitTables(sql);
     const log = new EventLog(sql, actor);

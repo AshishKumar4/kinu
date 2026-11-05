@@ -15,6 +15,7 @@ import { pruneStepToolOutputs, type StepPruneBudget } from './step-prune';
 import { normalizeReplayForDestination, type ReplayDestination, type ReplayProgress } from './replay-normalization';
 import type { DynamicContext, DynamicContextLedger, TurnInput } from './volatile-context';
 import type { ToolErrorStep } from './tool-error-feedback';
+import { estimateTokens } from '../token-estimate';
 
 /** The tail breakpoints each step re-rolls. The system prompt's own breakpoint rides the turn's `instructions`
  *  (chat.ts), not the step. */
@@ -125,7 +126,7 @@ function finishPrepareStep(
 
   // The weave runs after pruning (frozen positions refer to the final array); reserve what it adds before pruning,
   // or the request is priced too small.
-  const reserved = (pipeline.dynamic?.ledger.overheadTokens ?? 0) + Math.round((activated?.length ?? 0) / 4);
+  const reserved = (pipeline.dynamic?.ledger.overheadTokens ?? 0) + estimateTokens(activated?.length ?? 0);
 
   const pruned = pipeline.prune
     ? pruneStepToolOutputs(base, { ...pipeline.prune, reservedTokens: (pipeline.prune.reservedTokens ?? 0) + reserved })

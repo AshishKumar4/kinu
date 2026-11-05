@@ -2,14 +2,14 @@
  * A workspace blueprint's page on Explore: what it does, what a new workspace from it holds (its agents, its schedules
  * and watches, its slates, its layout and soul), what it needs of yours and what it asks you before acting; and Install.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { Page } from "@/components/ui/PageHeader";
 import { Link, useParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { ClockIcon, HandPalmIcon, HouseIcon, KeyIcon, LayoutIcon, RobotIcon, StarIcon, AppWindowIcon, DownloadSimpleIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
+import { APP_ROUTES, PERSONAL_ASSISTANT_ID, countOf } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { Status } from "@/components/ui/Status";
@@ -19,6 +19,7 @@ import { CATEGORY_WORDS } from "@/components/sharing/words";
 import { KindBadge, Maker, KinuBlueprintPicture } from "@/components/explore/ExploreCard";
 import { InstallDialog } from "@/components/explore/InstallDialog";
 import { useConnectedPreset } from "@/hooks/use-mcp-servers";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { readBlueprint, starBlueprint, type BlueprintPage, type ExploreNeed, type WorkspaceCard } from "@/lib/explore-api";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 import { useGallerySignedIn } from "@/hooks/use-gallery-signed-in";
@@ -28,7 +29,7 @@ import { Surface } from "@/components/ui/Surface";
 const ago = (at: number) => {
   const days = Math.round((Date.now() - at) / 864e5);
 
-  return days <= 0 ? "today" : `${String(days)} day${days === 1 ? "" : "s"} ago`;
+  return days <= 0 ? "today" : `${countOf(days, "day")} ago`;
 };
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -115,19 +116,11 @@ function BlueprintActions({ workspace, onInstall }: { workspace: WorkspaceCard; 
 export default function ExploreWorkspacePage() {
   const { blueprint = "" } = useParams();
   const signedIn = useGallerySignedIn();
-  const [page, setPage] = useState<BlueprintPage | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [tries, setTries] = useState(0);
+  const read = useCallback(() => readBlueprint(blueprint), [blueprint]);
+  const { resource, reload } = useAsyncResource(read);
+  const page = lastValue(resource);
 
-  useEffect(() => {
-    let current = true;
-
-    detach(Effect.catchCause(Effect.map(Effect.promise(() => readBlueprint(blueprint)), (read) => { if (current) setPage(read); }), showing((chain) => { if (current) setFailure(chain); })));
-
-    return () => { current = false; };
-  }, [blueprint, tries]);
-
-  if (failure !== null) return <div className="p-8"><LoadFailure what="this workspace" message={failure} onRetry={() => setTries((n) => n + 1)} /></div>;
+  if (resource.status === "error") return <div className="p-8"><LoadFailure what="this workspace" message={resource.message} onRetry={reload} /></div>;
 
   if (page === null) return <div className="flex h-full items-center justify-center"><Loader size="base" /></div>;
 

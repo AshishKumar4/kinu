@@ -19,7 +19,6 @@ import { JsonValueSchema, parseJsonValue } from '../utils/json';
 import { ArtifactEvidenceSchema } from './artifacts';
 import { fnv1a64 } from '../utils/fnv1a';
 import { nanoid } from '../utils/nanoid';
-import { nowMs } from '../utils/date';
 import { Effect } from 'effect';
 import { diagnostics, settleSync, toKinuError, tolerate } from '../obs/index';
 import { listTurnRatings } from './ratings';
@@ -426,7 +425,6 @@ function toRequest(row: Row): RefinementRequest {
  */
 const liveClaims = new Set<string>();
 
-/** Row, debt key and claim are per actor, so one actor's pass cannot claim a sibling's refinement. */
 /** The stages a dream ends in. */
 const DREAM_ENDS: ReadonlySet<RefinementStage> = new Set(['applied', 'rolled_back', 'refused']);
 
@@ -486,7 +484,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
         review_json = COALESCE(${review}, review_json),
         routes = COALESCE(${routes}, routes),
         detail = COALESCE(${patch.detail ?? null}, detail),
-        updated_at = ${patch.now ?? nowMs()}
+        updated_at = ${patch.now ?? Date.now()}
       WHERE actor_id = ${actorId} AND id = ${id}
         AND stage = ${guard.stage} AND claim IS ${guard.claim}`;
     markStoreChanged(sql);
@@ -510,7 +508,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       }
 
       const id = `refine-${nanoid()}`;
-      const at = input.now ?? nowMs();
+      const at = input.now ?? Date.now();
       void sql`INSERT INTO refinement_requests
         (actor_id, id, trigger, scope, stage, turn_ids, debt_key, proposal, routes, detail,
          created_at, updated_at)
@@ -577,7 +575,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       // Registered before the row is marked, so local recovery never sees the claim without its liveness.
       liveClaims.add(token);
       void sql`UPDATE refinement_requests SET stage = 'planning', claim = ${token},
-          updated_at = ${nowMs()}
+          updated_at = ${Date.now()}
         WHERE actor_id = ${actorId} AND id = ${id} AND stage = 'requested'`;
       markStoreChanged(sql);
       const claimed = one(id);
@@ -618,7 +616,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
         .filter((row) => row.claim === null || !liveClaims.has(row.claim));
 
       if (stale.length === 0) return 0;
-      const at = nowMs();
+      const at = Date.now();
 
       for (const row of stale) {
         // Guarded on the read token so a successor's claim is never wiped.

@@ -7,7 +7,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CaretRightIcon, ClockIcon, TerminalWindowIcon } from "@phosphor-icons/react";
-import { jobPhase, type AgentActivity, type BackgroundJob, type PanelAgent } from "@kinu.run/core";
+import { countOf, jobPhase, type AgentActivity, type BackgroundJob, type PanelAgent } from "@kinu.run/core";
 import { AgentStatusMark } from "@/components/AgentStatus";
 import { ChatMascot } from "@/components/ui/Marks";
 import { Popover } from "@/components/ui/Popover";
@@ -85,8 +85,6 @@ function useFinished(agents: readonly PanelAgent[], sheet: boolean): ReadonlySet
   return finished;
 }
 
-const plural = (n: number, one: string, many: string): string => `${String(n)} ${n === 1 ? one : many}`;
-
 function sinceLine(createdAt: number, now: number): string {
   const minutes = Math.max(0, Math.round((now - createdAt) / 60_000));
 
@@ -120,9 +118,7 @@ export function BackgroundWork({ workspace, agents, jobs, open, openWork }: {
   const idle = rows.length === 0 && running.length === 0;
 
   // The sheet goes with the last thing it listed, so work that comes after opens a closed pill.
-  useEffect(() => {
-    if (idle) setSheet(false);
-  }, [idle]);
+  if (idle && sheet) setSheet(false);
 
   if (idle) return null;
   const count = (state: Shown): number => rows.filter((row) => row.shown === state).length;
@@ -133,9 +129,9 @@ export function BackgroundWork({ workspace, agents, jobs, open, openWork }: {
   const parts = [
     needs > 0 ? `${String(needs)} need${needs === 1 ? "s" : ""} you` : null,
     failed > 0 ? `${String(failed)} failed` : null,
-    working > 0 ? plural(working, "agent", "agents") : null,
+    working > 0 ? countOf(working, "agent") : null,
     count("finished") > 0 ? `${String(count("finished"))} finished` : null,
-    running.length > 0 ? plural(running.length, "job", "jobs") : null,
+    running.length > 0 ? countOf(running.length, "job") : null,
   ].filter((part) => part !== null);
 
   const mark = markOf(needs, failed);

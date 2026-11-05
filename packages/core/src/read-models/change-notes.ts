@@ -8,6 +8,7 @@ import { parseJsonObject, type JsonObject } from '../utils/json';
 import { comparePaths } from './change-view';
 import { KinuError, toKinuError } from '../obs/index';
 import { attemptInItsWords, settle } from '../obs/effect';
+import { fenced } from '../utils/text';
 
 const CHANGE_NOTES_EVENT = 'change_notes';
 
@@ -141,13 +142,6 @@ function heading(anchor: DiffAnchor): string {
   const lines = anchor.lineStart === anchor.lineEnd ? `Line ${String(anchor.lineStart)}` : `Lines ${String(anchor.lineStart)}-${String(anchor.lineEnd)}`;
 
   return `${lines} (${anchor.side})`;
-}
-
-function fenced(quote: string): string {
-  const longest = Math.max(2, ...[...quote.matchAll(/`+/gu)].map((run) => run[0].length));
-  const fence = '`'.repeat(longest + 1);
-
-  return `${fence}\n${quote}\n${fence}`;
 }
 
 function said(note: ChangeNote): string {

@@ -1,10 +1,7 @@
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import {
-  boundEventQuery, initEventsHubTables, EventLog,
-  type IngressDescriptor,
-} from '../src/events/hub/index';
-import type { SqlExec } from '../src/index';
+import { boundEventQuery, EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import type { IngressDescriptor } from '../src/events/hub/types';
 
 /** Page policy is read from `boundEventQuery`, not restated, so the suite cannot drift from it. */
 const DEFAULT_PAGE = boundEventQuery().limit;
@@ -13,21 +10,10 @@ const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).li
 
 import type { JsonValue } from '../src/utils/json';
 import { setDiagnosticsSink, KinuError } from '../src/obs/index';
-import { makeSqlExec } from './helpers';
-import { createTestActorsOver, createRecordingLogger } from '@kinu.run/test-utils';
-import type { ActorHandle } from '../src/identity/actor-handle';
+import { memoryHub } from './helpers';
+import { createRecordingLogger } from '@kinu.run/test-utils';
 
 /** `EventLog` is actor-scoped, so the fixture binds the one actor through the production directory. */
-interface Hub {
-  readonly sql: SqlExec;
-  readonly actor: ActorHandle;
-}
-
-function makeSql(): Hub {
-  const db = new Database(':memory:');
-
-  return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
-}
 
 function chatDescriptor(text: string): IngressDescriptor {
   return {
@@ -49,7 +35,7 @@ function webhookDescriptor(deliveryId: string, body: JsonValue): IngressDescript
 describe('EventLog.publish + dedupe', () => {
 
   test('first publish admits; second publish with same dedupe key is idempotent', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: webhookDescriptor('d1', { x: 1 }), now: 1000 });
@@ -60,7 +46,7 @@ describe('EventLog.publish + dedupe', () => {
   });
 
   test('different bodies → different keys → both admit', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: webhookDescriptor('d1', { x: 1 }), now: 1000 });
@@ -71,7 +57,7 @@ describe('EventLog.publish + dedupe', () => {
   });
 
   test('chat events are NOT deduped (null dedupe_key)', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: chatDescriptor('hi'), now: 1 });
@@ -84,7 +70,7 @@ describe('EventLog.publish + dedupe', () => {
 
 describe('EventLog.pending', () => {
   test('returns events unbound to a turn, ordered by priority desc', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     log.publish({ descriptor: webhookDescriptor('w1', { x: 1 }), now: 1 });  // background (external? no — authenticated → normal)
@@ -96,7 +82,7 @@ describe('EventLog.pending', () => {
   });
 
   test('binding an event removes it from pending', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const { id } = log.publish({ descriptor: chatDescriptor('hi'), now: 1 });
@@ -106,7 +92,7 @@ describe('EventLog.pending', () => {
   });
 
   test('startup reconciliation re-pends only stale unfinished drain leases', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const stale = log.publish({ descriptor: chatDescriptor('stale'), now: 1 }).id;
@@ -125,7 +111,7 @@ describe('EventLog.pending', () => {
   });
 
   test('startup reconciliation atomically re-pends every qualifying lease', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const first = log.publish({ descriptor: chatDescriptor('first'), now: 1 }).id;
@@ -140,7 +126,7 @@ describe('EventLog.pending', () => {
 
 describe('EventLog.defer + dismiss', () => {
   test('defer puts event into deferred pool, surfaced when condition met', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const { id } = log.publish({ descriptor: chatDescriptor('later'), now: 1 });
@@ -152,7 +138,7 @@ describe('EventLog.defer + dismiss', () => {
   });
 
   test('dismiss removes the event from pending permanently', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const { id } = log.publish({ descriptor: chatDescriptor('drop'), now: 1 });
@@ -164,7 +150,7 @@ describe('EventLog.defer + dismiss', () => {
 
 describe('EventLog.traceEventCount', () => {
   test('counts events on a trace', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const r1 = log.publish({ descriptor: webhookDescriptor('d1', { x: 1 }), now: 1 });
@@ -176,7 +162,7 @@ describe('EventLog.traceEventCount', () => {
 // KINU-N019: `query`/`pending` clamp every caller to a finite positive integer before SQL;
 // `boundEventQuery` owns the ceiling for untrusted callers.
 function seededLog(count: number): EventLog {
-  const { sql, actor } = makeSql();
+  const { sql, actor } = memoryHub();
   initEventsHubTables(sql);
   const log = new EventLog(sql, actor);
 
@@ -281,7 +267,7 @@ describe('boundEventQuery is the one policy the boundary applies', () => {
 
 describe('EventLog skips corrupt payload rows', () => {
   test('one unreadable payload is reported with its row id and the rest is returned', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     const bad = log.publish({ descriptor: chatDescriptor('bad'), now: 1 }).id;
@@ -305,7 +291,7 @@ describe('EventLog skips corrupt payload rows', () => {
   });
 
   test('an aborted decode propagates instead of reading as an empty drain', () => {
-    const { sql, actor } = makeSql();
+    const { sql, actor } = memoryHub();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
     log.publish({ descriptor: chatDescriptor('good'), now: 1 });

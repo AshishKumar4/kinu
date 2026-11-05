@@ -1,5 +1,6 @@
 /** Rendered instead of an empty state: never report "none" for data that failed to load. */
 import { ArrowsClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
+import { Button } from "./Button";
 
 interface LoadFailureProps {
   /** Lower-case: "automations", "the changelog". */
@@ -17,13 +18,7 @@ export function LoadFailure({ what, message, onRetry, className }: LoadFailurePr
       <span data-failure className="min-w-0 break-words" title={message}>
         Could not load {what}{message ? `: ${message}` : ""}
       </span>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-[var(--r-control)] border p-border px-2 py-1 p-text-2 hover:p-text"
-      >
-        <ArrowsClockwiseIcon size={14} /> Retry
-      </button>
+      <Button size="sm" className="ml-auto shrink-0" icon={<ArrowsClockwiseIcon size={14} />} onClick={onRetry}>Retry</Button>
     </div>
   );
 }

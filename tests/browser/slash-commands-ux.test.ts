@@ -180,9 +180,9 @@ describe("a chat's slash commands", () => {
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&history=400`, { waitUntil: 'networkidle0' });
       await page.waitForSelector(FIELD);
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('Answer 399.') === true);
+      await page.waitForFunction(() => document.querySelector('[data-transcript]')?.textContent?.includes('Answer 399.') === true);
       // The tab holds the newest page alone.
-      expect(await page.evaluate(() => document.querySelector('.p-thread-column')?.textContent?.includes('Question 0:') ?? null)).toBe(false);
+      expect(await page.evaluate(() => document.querySelector('[data-transcript]')?.textContent?.includes('Question 0:') ?? null)).toBe(false);
 
       await draft(page, '/export');
       await page.keyboard.press('Enter');

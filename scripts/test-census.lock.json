@@ -124,54 +124,6 @@
       ]
     },
     {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different bodies → different keys :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "the webhook key blind to the body",
-          "file": "packages/core/src/events/hub/dedupe.ts",
-          "edits": [
-            [
-              "const bodyHash = sha256Hex(stableStringify(decodeJsonValue({ value: p.body })), 24);",
-              "const bodyHash = sha256Hex(stableStringify(decodeJsonValue({ value: p.webhook_id })), 24);"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different time buckets → different keys :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "the webhook key blind to time",
-          "file": "packages/core/src/events/hub/dedupe.ts",
-          "edits": [
-            [
-              "return `webhook:${p.webhook_id}:${bodyHash}:${bucket}`;",
-              "return `webhook:${p.webhook_id}:${bodyHash}`;"
-            ]
-          ]
-        }
-      ]
-    },
-    {
-      "key": "tautology_suspect :: packages/core/tests/unit-events-hub-dedupe.test.ts :: different webhook_id → different keys even for same body :: expected side computed by the code under test",
-      "count": 1,
-      "plants": [
-        {
-          "defect": "the webhook key blind to its hook",
-          "file": "packages/core/src/events/hub/dedupe.ts",
-          "edits": [
-            [
-              "return `webhook:${p.webhook_id}:${bodyHash}:${bucket}`;",
-              "return `webhook:${bodyHash}:${bucket}`;"
-            ]
-          ]
-        }
-      ]
-    },
-    {
       "key": "tautology_suspect :: packages/core/tests/unit-tool-call-id.test.ts :: the same native id in two responses cannot produce the same key :: expected side computed by the code under test",
       "count": 1,
       "plants": [

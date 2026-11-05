@@ -19,8 +19,6 @@ let failure: Error | undefined;
 class ParkingBox extends TestDevbox<unknown> {
   configures = 0;
 
-  protected override get ambientCheckpoints(): boolean { return false; }
-
   protected override get workerVersion(): string { return deployed; }
 
   protected override async configureContainer(reused?: boolean, naming?: boolean): Promise<void> {

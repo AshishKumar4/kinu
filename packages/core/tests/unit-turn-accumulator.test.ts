@@ -141,7 +141,7 @@ describe('TurnAccumulator', () => {
     expect(a.toolCalls).toEqual([{
       toolCallId: 'fixture-3', name: 'eval', argsWindow: '{"code":"1+1"}', resultWindow: '{"result":2}',
       program: '1+1', target: '1+1', op: null, argsDigest: fnv1a64('eval:{"code":"1+1"}'),
-      writtenPaths: [], revisitedPaths: [], outcome: { success: true },
+      outcome: { success: true },
     }]);
     expect(a.hadError).toBe(false);
     expect(toolEvents[0]).toMatchObject({ name: 'eval', toolCallId: 'fixture-3' });
@@ -173,7 +173,7 @@ describe('TurnAccumulator', () => {
     // One failure description in both ledgers.
     expect(a.toolCalls[0]).toEqual({
       toolCallId: 'fixture-6', name: 'shell', argsWindow: '{}', resultWindow: '{"error":"boom"}',
-      target: '', op: null, argsDigest: null, writtenPaths: [], revisitedPaths: [], outcome: { success: false, reason: null },
+      target: '', op: null, argsDigest: null, outcome: { success: false, reason: null },
     });
     expect(a.hadError).toBe(true);
     expect(toolEvents[0].error).toBe('boom');
@@ -190,7 +190,7 @@ describe('TurnAccumulator', () => {
       expect(a.toolCalls[0]).toEqual({
         toolCallId: 'fixture-7',
         name: 'eval', argsWindow: '{}', resultWindow: JSON.stringify({ error: FAILURE_WITHOUT_ERROR }),
-        target: '', program: '', op: null, argsDigest: null, writtenPaths: [], revisitedPaths: [], outcome: { success: false, reason: null },
+        target: '', program: '', op: null, argsDigest: null, outcome: { success: false, reason: null },
       });
       expect(classifyToolFailure({
         type: 'tool_call_end', eventIndex: 0, runId: 'r', timestamp: new Date().toISOString(),

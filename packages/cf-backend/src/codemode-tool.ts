@@ -6,9 +6,10 @@
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool } from 'ai';
-import { DESKTOP_MEMBERS, execCallArgs, execContext, readDeviceRequestChannel, scopedTurnSurface, SlateProgramSchema, type CodemodeSurface, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
+import { DESKTOP_MEMBERS, execCallArgs, execContext, readCraftRaised, readDeviceRequestChannel, scopedTurnSurface, SlateProgramSchema, type CodemodeSurface, type CraftRaised, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
 import { renderCodemodeDescription, nativeToolFunctions, programSurface, servedImpacts, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
-import { KinuError } from '@kinu.run/core/obs';
+import { KinuError, settle } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
 } from "./codemode-sandbox";
@@ -97,35 +98,31 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
 
   return {
     async callTool(surface, name, input, scope) {
-      const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, async () => {
+      const call = codemodeFunction(CRAFTED_TOOL_NAMESPACE, name, () => settle(Effect.gen({ self: this }, function* () {
         // A slate's call runs no program, so there is no eval to stop it with; `native` carries its Plan check.
         const functions = nativeToolFunctions(surface.native, undefined);
         const entry = Object.hasOwn(functions, name) ? functions[name] : undefined;
+        const unreached = new KinuError('denied', `${name} is not within this actor's reach right now`);
 
         if (entry !== undefined) {
-          if (!scope.reach.allowsTool(name)) throw new KinuError('denied', `${name} is not within this actor's reach right now`);
+          if (!scope.reach.allowsTool(name)) return yield* unreached;
 
-          return entry.execute(input);
+          return yield* Effect.promise(async () => entry.execute(input));
         }
 
-        if (name === 'eval' || (!scope.reach.allowsTool(name) && !scope.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) {
-          throw new KinuError('denied', `${name} is not within this actor's reach right now`);
-        }
+        if (name === 'eval' || (!scope.reach.allowsTool(name) && !scope.reach.allowsNamespace(CRAFTED_TOOL_NAMESPACE))) return yield* unreached;
 
-        if (!surface.craftedTools().some((tool) => tool.name === name)) {
-          throw new KinuError('missing', `tools has no member ${name}`);
-        }
-
+        if (!surface.craftedTools().some((tool) => tool.name === name)) return yield* new KinuError('missing', `tools has no member ${name}`);
         const execute = this.toolFor(surface, scope).execute;
 
-        if (execute === undefined) throw new KinuError('unavailable', 'The codemode executor is not callable');
+        if (execute === undefined) return yield* new KinuError('unavailable', 'The codemode executor is not callable');
 
-        const result = v.parse(v.object({ result: v.optional(JsonValueSchema) }), await execute({
+        const ran = yield* Effect.promise(async () => execute({
           code: `return await tools[${JSON.stringify(name)}](${JSON.stringify(input)});`,
         }, { toolCallId: `slate-${crypto.randomUUID()}`, messages: [], context: undefined }));
 
-        return result.result;
-      });
+        return v.parse(v.object({ result: v.optional(JsonValueSchema) }), ran).result;
+      })));
 
       return call(input);
     },
@@ -134,12 +131,12 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       // options, so a program's tool calls are stopped with its eval, and owned by it, only through what this binds.
       // `written`: the program as the agent wrote it, which the executor places (`programPlace`) before the vendor's
       // normalizer has wrapped it in a function, where an `import` no longer parses.
-      const build = (mode: WorkMode, program: ProgramContext, written?: string): Tool => {
+      const build = (mode: WorkMode, program: ProgramContext, written?: string, raised?: CraftRaised): Tool => {
         const signal = program.stop;
         // Read as the program starts, so a tool crafted a step ago is callable now; its body is defined in the prelude.
         const crafted = surface.craftedTools();
         // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
-        const { providers: reached, describe } = programSurface({ surface, namespaces: scope.namespaces(programExecutor(program)), reach: scope.reach, mode, signal, crafted });
+        const { providers: reached, describe } = programSurface({ surface, namespaces: scope.namespaces(programExecutor(program)), reach: scope.reach, mode, signal, crafted, raised });
         const { nested } = scope;
         const bound = nested === undefined ? reached : reached.map((provider) => guarded(provider, nested));
         const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'), describe, servedImpacts(bound), { cwd: surface.cwd, crafted });
@@ -179,9 +176,9 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
           const turn = scopedTurnSurface()?.key.turnId;
           const program = { stop: context.abortSignal, ...channel !== undefined && { channel }, ...turn !== undefined && { turn } };
           const written = v.is(v.object({ code: v.string() }), input) ? input.code : undefined;
-          const execute = build(currentWorkMode() === 'plan' ? 'plan' : 'build', program, written).execute;
+          const execute = build(currentWorkMode() === 'plan' ? 'plan' : 'build', program, written, readCraftRaised({ toolOptions: context })).execute;
 
-          if (execute === undefined) throw new Error('Codemode executor is not callable');
+          if (execute === undefined) return settle(Effect.fail(new KinuError('unavailable', 'Codemode executor is not callable')));
 
           return withCodemodeProgram(async () => (
             v.parse(v.object({ result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())) }), await execute(input, context))

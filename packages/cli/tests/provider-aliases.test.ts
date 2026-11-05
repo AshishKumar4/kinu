@@ -1,27 +1,18 @@
 import { scratchDir } from '../../test-utils/src/scratch';
-import { runToExit } from '@kinu.run/test-utils';
 import { writeFileSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
 import { describe, expect, test } from 'bun:test';
 import { canonicalProviderName } from '../src/commands/setup';
+import { runCli } from './helpers/run-cli';
 
 const repoRoot = resolve(__dirname, '../../..');
-
-const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
 function scratchHome(): string {
   const home = scratchDir('alias-home');
   writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {} }));
 
   return home;
-}
-
-async function runCli(home: string, args: string[]) {
-  return runToExit([process.execPath, cliBin, ...args], {
-    cwd: repoRoot,
-    env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' },
-  });
 }
 
 describe('canonicalProviderName', () => {
@@ -53,13 +44,13 @@ describe('canonicalProviderName', () => {
   });
 
   test('setup --provider cf reaches the Workers AI branch', async () => {
-    const r = await runCli(scratchHome(), ['setup', '--provider', 'cf', '--skip-cloud']);
+    const r = await runCli(['setup', '--provider', 'cf', '--skip-cloud'], { home: scratchHome(), cwd: repoRoot });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain('Workers AI needs a signed-in Kinu account');
   });
 
   test('provider disconnect workersai resolves like cloudflare', async () => {
-    const r = await runCli(scratchHome(), ['provider', 'disconnect', 'workersai']);
+    const r = await runCli(['provider', 'disconnect', 'workersai'], { home: scratchHome(), cwd: repoRoot });
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toContain('connect through your Kinu account');
   });
