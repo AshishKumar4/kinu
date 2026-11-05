@@ -109,7 +109,7 @@ import {
   EVAL_WORKSPACE_BEAT_MS, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG,
   RunEventSchema, SendStateSchema, STEER_STEP_METADATA_KEY, ChatHistoryEntrySchema, positionPageSchema, readConversation, renderSoulMarkdown, CommandResultSchema,
   type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type PositionPageRequest, type RunEvent, type SendState,
-  type SubagentInspectionRequest, type WorkMode, type WorkspaceSpend,
+  type ReasoningEffort, type SubagentInspectionRequest, type WorkMode, type WorkspaceSpend,
   QualityDaySchema, type QualityDay, betaSwarms,
   ChangelogEntrySchema, RefinementListingSchema, type ChangelogEntry, type RefinementListing,
 } from '../../packages/core/src/index';
@@ -1242,6 +1242,11 @@ export class KinuPublicSession {
   /** The agent's own learning setting, as Settings and `--no-auto-evolve` set it (`setEvolutionConfig`). */
   async setLearning(on: boolean): Promise<void> {
     await this.boundary(`setEvolutionConfig on ${this.input.origin}/${this.workspace}`, () => this.rpc('setEvolutionConfig', [{ learning: on }]));
+  }
+
+  /** The workspace's own reasoning effort, as `kinu effort` and the model menu set it (`setReasoningEffort`). */
+  async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
+    await this.boundary(`setReasoningEffort on ${this.input.origin}/${this.workspace}`, () => this.rpc('setReasoningEffort', [effort]));
   }
 
   /** The agent's own crafting setting (`setEvolutionConfig`): off, it is offered and makes no crafted tool. */

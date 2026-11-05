@@ -395,6 +395,42 @@ describe('CLI control routes', () => {
   });
 });
 
+describe('a workspace RPC with a CLI bearer', () => {
+  test('asks the account once, for the bearer and the workspace together', async () => {
+    const asked: string[] = [];
+
+    const account = cliAccount({
+      async verifyCliToken(_caller: UserCaller, token: string, workspace?: string) {
+        asked.push(`verify:${workspace ?? 'none'}`);
+
+        return {
+          ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null },
+          ...(workspace !== undefined && { admission: workspace === 'jarvis' ? { capabilityHash: null } : null }),
+        };
+      },
+      async workspaceAdmission(_caller: UserCaller, name: string) {
+        asked.push(`admission:${name}`);
+
+        return name === 'jarvis' ? { capabilityHash: null } : null;
+      },
+      async ensureWorkspaceCapability() {},
+    });
+
+    const agent = workspaceObject({
+      async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
+      async getAgentStatus() { return { name: 'jarvis', purpose: 'help', messageCount: 0 }; },
+    });
+
+    const env = testEnv({ idFromName: (name) => name, get: () => account }, { idFromName: (name) => name, get: () => agent });
+    const answered = await cli(rpcRequest('getAgentStatus'), env);
+    const unknown = await cli(rpcRequest('getAgentStatus', [], 'unknown'), env);
+
+    expect({ answered: answered?.status, unknown: unknown?.status, asked }).toEqual({
+      answered: 200, unknown: 404, asked: ['verify:jarvis', 'verify:unknown'],
+    });
+  });
+});
+
 describe('shared ownership claim status mapping', () => {
   function envWithClaimFailure(failure: Error) {
     const workspace = workspaceObject({ claimOwner: () => { throw failure; } });

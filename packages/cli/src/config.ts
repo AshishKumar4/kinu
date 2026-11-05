@@ -34,7 +34,14 @@ export const BIN_DIR = join(AGENT_HOME, 'bin');
 
 const KINU_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
-const DEFAULT_ORIGIN = 'https://kinu.run';
+const KINU_RUN_ORIGIN = 'https://kinu.run';
+
+/** The deployment whose launcher runs this CLI (its `/downloads/kinu` names itself), else kinu.run. */
+function defaultOrigin(): string {
+  const launcher = process.env.KINU_LAUNCHER_ORIGIN?.trim() ?? '';
+
+  return launcher === '' ? KINU_RUN_ORIGIN : launcher;
+}
 
 export type AgentMode = KinuAgentConfig['mode'];
 
@@ -269,7 +276,7 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
   // An empty `KINU_ORIGIN` is no origin, as an unset one.
   const environment = process.env.KINU_ORIGIN === '' ? undefined : process.env.KINU_ORIGIN;
 
-  return (opts?.origin ?? environment ?? loadConfigFile().origin ?? DEFAULT_ORIGIN).replace(/\/+$/, '');
+  return (opts?.origin ?? environment ?? loadConfigFile().origin ?? defaultOrigin()).replace(/\/+$/, '');
 }
 
 /** The session a command sends with. A `--origin` naming another deployment is refused, never sent the token: a token
@@ -292,7 +299,8 @@ export function requireStoredAuthConfig(): LocalCloudSession {
 
 /** The deployment a stored sign-in was made at (`kinu auth` saves it), which alone may receive its token. */
 export function storedSessionOrigin(config: KinuConfig): string {
-  return (config.origin ?? DEFAULT_ORIGIN).replace(/\/+$/, '');
+  // A sign-in saved with no origin predates saving it, and was made at kinu.run: never handed to another deployment.
+  return (config.origin ?? KINU_RUN_ORIGIN).replace(/\/+$/, '');
 }
 
 /** The stored session, refused where `KINU_ORIGIN` names another deployment: its token goes to its own alone. */

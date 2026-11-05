@@ -150,6 +150,8 @@ async function makeSandbox(options: SandboxOptions = {}): Promise<InstallSandbox
     'mkdir -p "$dir"',
     `sed "s/__BUN_VERSION__/$version/g" "${home}/bun-stub-template" > "$dir/bun"`,
     'chmod 755 "$dir/bun"',
+    // As bun.sh/install does: under zsh it appends its install dir to a writable .zshrc.
+    'if [ "$(basename "${SHELL:-}")" = zsh ] && [ -w "$HOME/.zshrc" ]; then printf "export BUN_INSTALL=%s\\n" "${BUN_INSTALL}" >> "$HOME/.zshrc"; fi',
   ].join('\n');
 
   writeFileSync(join(home, 'bun-installer.sh'), `${bunInstaller}\n`);
@@ -521,6 +523,17 @@ describe('Bun runtime resolution is one source of truth', () => {
     expect(result.output).toContain(managedBun);
     expect(existsSync(managedBun)).toBe(true);
     expect(result.exitCode).toBe(0);
+  });
+
+  test("the Bun Kinu installs for itself is not put on the user's own shell", async () => {
+    const script = await servedScript('/install.sh');
+    const launcher = await servedScript('/downloads/kinu');
+    const { home, stubBin, managedBun } = await makeSandbox({ ambientBun: null, launcher });
+    writeFileSync(join(home, '.zshrc'), '# mine\n');
+    const result = await runHeadlessInstall(script, home, stubBin, { SHELL: '/bin/zsh' });
+
+    expect({ exitCode: result.exitCode, installed: existsSync(managedBun), bunInProfile: readFileSync(join(home, '.zshrc'), 'utf8').includes('BUN_INSTALL') })
+      .toEqual({ exitCode: 0, installed: true, bunInProfile: false });
   });
 
   test('KINU_INSTALL_BUN=0 names the version it needs instead of installing one', async () => {

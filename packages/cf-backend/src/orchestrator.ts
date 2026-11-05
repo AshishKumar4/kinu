@@ -10236,15 +10236,32 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    */
   @callable()
   getWorkspaceOpening() {
+    // How long each read the tab waits on took, logged with the open: the open is as slow as its slowest.
+    const took = new Map<string, number>();
+
+    const timed = <A>(name: string, run: () => Promise<A>): (() => Promise<A>) => async () => {
+      const startedAt = Date.now();
+
+      try {
+        return await run();
+      } finally {
+        took.set(name, Date.now() - startedAt);
+      }
+    };
+
+    const openedAt = Date.now();
+
     return settle(Effect.gen({ self: this }, function* () {
       const [reads, subagents, pendingConsents, workspaceAgents] = yield* Effect.all([
-        attempt({ doing: 'reading what the Work tab draws', otherwise: 'io' }, () => this.workReads(WORK_TAB_JOBS)),
-        openingList('listing the subagent roster', () => this.listSubagents()),
-        openingList('listing the pending device consents', () => this.listPendingConsents()),
-        openingList("listing the workspace's agents", () => this.listWorkspaceAgents()),
+        attempt({ doing: 'reading what the Work tab draws', otherwise: 'io' }, timed('work', () => this.workReads(WORK_TAB_JOBS))),
+        openingList('listing the subagent roster', timed('subagents', () => this.listSubagents())),
+        openingList('listing the pending device consents', timed('consents', () => this.listPendingConsents())),
+        openingList("listing the workspace's agents", timed('agents', () => this.listWorkspaceAgents())),
       ], { concurrency: 'unbounded' });
 
-      const snapshot = yield* attempt({ doing: 'reading the workspace snapshot', otherwise: 'io' }, () => this.snapshotOf(reads.memoryContent, reads.presence));
+      const snapshot = yield* attempt({ doing: 'reading the workspace snapshot', otherwise: 'io' }, () => this.snapshotOf(reads.memoryContent, reads.presence, timed));
+
+      diagnostics.event('workspace.opening_reads', { totalMs: Date.now() - openedAt, ...Object.fromEntries(took) });
 
       return {
         ...snapshot,
@@ -10255,14 +10272,17 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     }));
   }
 
-  private async snapshotOf(memoryContent: string, presence: Parameters<typeof hasWorkspaceWork>[0]) {
+  private async snapshotOf(
+    memoryContent: string, presence: Parameters<typeof hasWorkspaceWork>[0],
+    timed: <A>(name: string, run: () => Promise<A>) => () => Promise<A> = (_name, run) => run,
+  ) {
     const [status, chat, tools, executors, tabPresence, { slates }] = await Promise.all([
-      this.getAgentStatus(),
-      this.mainSnapshot(),
-      this.getToolDescriptions(),
-      this.getExecutors(),
-      this.tabPresenceOf(presence),
-      this.listSlates(),
+      timed('status', () => this.getAgentStatus())(),
+      timed('chat', () => this.mainSnapshot())(),
+      timed('tools', async () => this.getToolDescriptions())(),
+      timed('executors', () => this.getExecutors())(),
+      timed('presence', () => this.tabPresenceOf(presence))(),
+      timed('slates', () => this.listSlates())(),
     ]);
 
     const executorOutputs = await Promise.all(

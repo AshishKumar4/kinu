@@ -74,7 +74,7 @@ export function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
       () => env.UserDO.get(userObject, { locationHint: UNPLACED }), (stub) => stub.workspaceAdmission(owner, workspaceName), { onRetry: logDoCallRetry }));
 
     if (admission === null) {
-      return refused<Agent>(404, `Workspace ${workspaceName} not in your registry. Create it via POST /api/user/workspaces first.`);
+      return refused<Agent>(404, `Workspace ${workspaceName} is not in your registry.`);
     }
 
     const workspaceObject = env.OrchestratorAgent.idFromName(workspaceName);

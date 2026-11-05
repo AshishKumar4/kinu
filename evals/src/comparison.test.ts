@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { compareEvalResults, evalGateVerdict, fisherExact, validateEvalResults, whyIncomplete } from './comparison';
+import { compareEvalResults, evalGateVerdict, fisherExact, passEveryTrial, validateEvalResults, whyIncomplete } from './comparison';
 import type { PlatformReport } from './platform';
 import { mannWhitney } from './shifts';
 import { DEFAULT_MODELS } from './config';
@@ -98,6 +98,19 @@ function trialsOf(passed: number, total: number, extra: Partial<Trial> = {}): Tr
 const BASE = { productSha: 'aaaaaaaa1', evalCommit: 'eeeeeee1' };
 
 const NEXT = { productSha: 'bbbbbbbb2', evalCommit: 'eeeeeee1' };
+
+describe('pass^k', () => {
+  test('counts on each side the tasks that passed every one of their trials, not the trials that passed', () => {
+    const side = (a: number, b: number, at: typeof BASE) => JSON.stringify({ testResults: [
+      fileResult('a', trialsOf(a, 3), at), fileResult('b', trialsOf(b, 3), at),
+    ] });
+
+    const comparison = compareEvalResults(side(3, 2, BASE), side(3, 3, NEXT));
+
+    expect([passEveryTrial(comparison.rows, 'baseline'), passEveryTrial(comparison.rows, 'candidate')])
+      .toEqual([{ tasks: 2, everyTrial: 1 }, { tasks: 2, everyTrial: 2 }]);
+  });
+});
 
 describe('fisherExact', () => {
   test('is two-sided and exact on small tables', () => {

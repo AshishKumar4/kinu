@@ -38,6 +38,30 @@ describe('a cloud create names the workspace only when the owner did', () => {
   });
 });
 
+describe('a cloud create of a name the account already holds', () => {
+  test('answers with that workspace, unchanged, and says it already existed', async () => {
+    const home = scratchDir('create-cloud-existing');
+
+    const result = await runToExit(['bun', '-e', `
+      import { createCliAgent } from './packages/cli/src/agent-create.ts';
+      globalThis.fetch = async (_input, init) => {
+        const { name } = JSON.parse(String(init?.body));
+
+        return Response.json({ name, displayName: name, createdAt: 1, lastVisited: 1, ...(name === 'jarvis' && { existed: true }) }, { status: name === 'jarvis' ? 200 : 201 });
+      };
+      const made = await createCliAgent({ name: 'fresh', purpose: 'p', mode: 'cloud' });
+      const held = await createCliAgent({ name: 'jarvis', purpose: 'p', mode: 'cloud' });
+      console.log(JSON.stringify([made.existed ?? false, held.existed ?? false]));
+    `], {
+      cwd: join(import.meta.dir, '../../..'),
+      env: { ...process.env, HOME: home, KINU_HOME: home, KINU_TOKEN: 'ptc_test_fixture_token_not_real', KINU_ORIGIN: 'https://kinu.test' },
+    });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual([false, true]);
+  });
+});
+
 describe('signed in is decided by the one session rule', () => {
   test('KINU_TOKEN with no stored session is signed in; an expired stored session is not', async () => {
     const home = scratchDir('signed-in-home');

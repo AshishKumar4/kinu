@@ -20,10 +20,10 @@ export interface CliBearerVariables<Authority> extends ApiVariables {
 
 /** The verified bearer, or the response refusing it. */
 export function authenticateCli<Authority extends CliAuthAuthority>(
-  request: Request, env: CliBearerEnv<Authority>,
+  request: Request, env: CliBearerEnv<Authority>, workspace?: string,
 ): Effect.Effect<CliTokenIdentity<Authority> | Response> {
   return Effect.catchCause(
-    Effect.map(Effect.promise(() => authenticateCliToken(request, env)), (result) => (Result.isSuccess(result) ? result.success : err(401, result.failure))),
+    Effect.map(Effect.promise(() => authenticateCliToken(request, env, workspace)), (result) => (Result.isSuccess(result) ? result.success : err(401, result.failure))),
     (failed) => {
       const e = Cause.squash(failed);
 

@@ -157,6 +157,33 @@ describe('a subscription sign-in kept in the Kinu account (--cloud)', () => {
     }
   });
 
+  test('disconnecting a provider the account never held removes nothing, and does not say it did', async () => {
+    const seen: string[] = [];
+
+    const server = Bun.serve({
+      port: 0, hostname: '127.0.0.1',
+      fetch(request) {
+        seen.push(`${request.method} ${new URL(request.url).pathname}`);
+
+        return request.method === 'GET' ? Response.json([]) : Response.json({ ok: true });
+      },
+    });
+
+    const home = kinuHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
+
+    try {
+      const res = await spawnRunner(home, `
+        const { providersCommand } = await import('./packages/cli/src/commands/providers.ts');
+        await providersCommand('disconnect', 'openai', undefined, {});
+      `, undefined);
+
+      expect({ exitCode: res.exitCode, deleted: seen.some((call) => call.startsWith('DELETE')), saidRemoved: res.stdout.includes('Removed') })
+        .toEqual({ exitCode: 0, deleted: false, saidRemoved: false });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test('ChatGPT\'s belongs to this machine, so it is refused and the web sign-in named', async () => {
     const res = await runSubscription(kinuHome({ origin: 'http://127.0.0.1:1', accessToken: 'ptc_test_token' }), { provider: 'chatgpt', account: 'work' });
 

@@ -5,6 +5,7 @@
 import { Cause, Effect, Result } from 'effect';
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from '../user/user-do';
+import type { AdmittedWorkspace } from '../user/workspace-ownership';
 import type { CliAuthDO } from './auth-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { objectNamed, randomToken, sha256Hex } from '@kinu.run/core';
@@ -120,6 +121,8 @@ export interface CliTokenIdentity<Authority = DurableObjectStub<UserDO>> {
   kind: 'session' | 'access';
   scopes: 'all' | AccessTokenScope[];
   userDO: Authority;
+  /** The workspace the request names, as its account admitted it in the bearer's own check. */
+  admitted?: AdmittedWorkspace;
 }
 
 export function tokenAllows(identity: Pick<CliTokenIdentity, 'scopes'>, scope: AccessTokenScope): boolean {
@@ -164,6 +167,7 @@ export function parseCliBearer(token: string): { userId: string; kind: 'session'
 export async function authenticateCliToken<Id, Authority extends CliAuthAuthority>(
   request: Request,
   env: Pick<CliAuthEnv<Id>, 'CREDENTIAL_ENCRYPTION_KEY'> & { UserDO: ObjectNamespace<Id, Authority> },
+  workspace?: string,
 ): Promise<CliTokenAuth<Authority>> {
   const token = readBearer(request);
 
@@ -173,9 +177,11 @@ export async function authenticateCliToken<Id, Authority extends CliAuthAuthorit
   if (!bearer) return Result.fail('Malformed CLI token');
   const userDO = accountNamed(env.UserDO, bearer.userId);
 
+  // The workspace the request names is admitted in the same call: a second round trip to the account cost every RPC
+  // as much again (staging 2026-11-05: two 127 ms calls in turn before the workspace's own 39 ms).
   const verified = bearer.kind === 'session'
-    ? await userDO.verifyCliToken(await ownerCaller(env), token)
-    : await userDO.verifyAccessToken(await ownerCaller(env), token);
+    ? await userDO.verifyCliToken(await ownerCaller(env), token, workspace)
+    : await userDO.verifyAccessToken(await ownerCaller(env), token, workspace);
 
   if (!verified.ok || !verified.user || !verified.tokenHash) {
     return Result.fail(verified.error ?? 'Invalid CLI token');
@@ -189,6 +195,7 @@ export async function authenticateCliToken<Id, Authority extends CliAuthAuthorit
     kind: bearer.kind,
     scopes: bearer.kind === 'session' ? 'all' : verified.scopes ?? [],
     userDO,
+    ...(workspace !== undefined && verified.admission !== undefined && { admitted: { name: workspace, admission: verified.admission } }),
   });
 }
 

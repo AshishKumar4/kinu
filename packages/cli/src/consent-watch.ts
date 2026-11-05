@@ -40,9 +40,13 @@ export function watchDeviceConsents(
 ): ConsentWatcher {
   const abort = new AbortController();
   const handled = new Set<string>();
+  // A poll that fails before the first listing fails for what the turn's own send meets and says (a workspace that is
+  // not there, a connection that never opened): said once, there, not here too.
+  let listed = false;
 
   const tick = Effect.gen(function* () {
     const pending = yield* Effect.promise(() => consents.listPending());
+    listed = true;
 
     if (abort.signal.aborted) return;
 
@@ -66,7 +70,7 @@ export function watchDeviceConsents(
     if (result.ok) opts.note('resolved', decisionFeedback(outcome));
     else opts.note('stale', 'That request is no longer waiting for an answer.');
   }).pipe(Effect.catchCause((failed) => Effect.sync(() => {
-    if (!abort.signal.aborted) opts.note('error', chainOf(failed));
+    if (!abort.signal.aborted && listed) opts.note('error', chainOf(failed));
   })));
 
   // Runs until `stop`; a failure past the tick's own reporting ends the loop and is recorded, never an unhandled rejection.

@@ -65,6 +65,8 @@ export interface CreatedCliAgent {
   purpose: string;
   model?: string;
   cloudName?: string;
+  /** A cloud workspace of that name was already this account's: nothing was created, and it is as it was. */
+  existed?: boolean;
   dbPath?: string;
   cwd?: string;
   workspaceId?: string;
@@ -125,7 +127,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
         cloudName: agent.name,
       }));
 
-      return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name } satisfies CreatedCliAgent;
+      return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name, ...(agent.existed === true && { existed: true }) } satisfies CreatedCliAgent;
     }));
   }
 

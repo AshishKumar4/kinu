@@ -105,6 +105,7 @@ export async function runOnExecutor(router: ExecutionRouter, executorId: string,
     onFailure: (error): ExecutorRun => ({ kind: 'failed', error: refusalOf(error).error, refusal: refusalOf(error) }),
     onSuccess: (result): ExecutorRun => (v.is(v.string(), result)
       ? { kind: 'ran', stdout: result, stderr: '', exitCode: 0 }
-      : { kind: 'ran', stdout: result.error, stderr: result.error, exitCode: 1, refusal: result }),
+      // A command that ran and failed: its words once, as its error, and the exit it ended with.
+      : { kind: 'ran', stdout: '', stderr: result.error, exitCode: result.execution?.exitCode ?? 1, refusal: result }),
   }));
 }

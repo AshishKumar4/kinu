@@ -59,7 +59,9 @@ export function buildProgram(): Command {
     .description('Create and chat with self-evolving agent workspaces')
     .version(VERSION, '-v, --version')
     .helpOption('-h, --help', 'Show help for this command')
-    .addHelpCommand(false);
+    .addHelpCommand(false)
+    // A subcommand may then hand everything after its operands on untouched (`executors`).
+    .enablePositionalOptions();
 
   const llmOpts = (cmd: Command) => cmd
     .option(`${MODEL_OPTION_FLAG} <id>`, 'Model ID (env: KINU_MODEL)')
@@ -227,7 +229,12 @@ export function buildProgram(): Command {
     .helpGroup(RUNNING)
     .description('List a workspace\'s executors, or run a command in one')
     .option('--json', 'Print raw JSON')
-    .action(executorsCommand);
+    // Past the workspace, every word is the command's own (`curl -s --json …`), never this command's options; a
+    // listing's own --json there is still read as it.
+    .passThroughOptions()
+    .action((name: string, executor: string | undefined, command: string[], opts: { json?: boolean }) => (executor === '--json' && command.length === 0
+      ? executorsCommand(name, undefined, [], { ...opts, json: true })
+      : executorsCommand(name, executor, command, opts)));
 
   program
     .command('stop <name>')
@@ -260,7 +267,7 @@ export function buildProgram(): Command {
     program
       .command('triggers <name> [action] [value]')
       .helpGroup(CONFIGURE)
-      .description('List, schedule, cancel or create workspace triggers')
+      .description('List a workspace\'s triggers; add one with every (a cron), at (a time) or webhook (a label); cancel one by its id')
       .option('--auth-mode <mode>', 'Webhook auth mode: hmac, bearer, or mtls')
       .option('--secret <value>', 'Webhook secret for hmac or bearer auth')
       .option('--content-type <type>', 'Accepted webhook content type')
@@ -448,7 +455,7 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['chat', 'kinu chat jarvis'],
   ['acp', 'kinu acp jarvis'],
   ['exec', 'kinu exec -w jarvis --json "run the test suite and report failures"'],
-  ['executors', 'kinu executors jarvis'],
+  ['executors', 'kinu executors jarvis computer uname -a'],
   ['stop', 'kinu stop jarvis'],
   ['model', 'kinu model jarvis anthropic/claude-sonnet-4-7'],
   ['effort', 'kinu effort jarvis high'],

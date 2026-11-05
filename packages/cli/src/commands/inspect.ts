@@ -244,8 +244,17 @@ export async function memoryCommand(name: string, queryParts: string[] = [], opt
       : { content: await readLocalMemory(target.localName) },
   });
 
-  if (opts.json || query) {
+  if (opts.json) {
     printData(data, opts);
+
+    return;
+  }
+
+  if (query) {
+    const found = v.safeParse(JsonArraySchema, data);
+
+    if (found.success && found.output.length === 0) console.log(DIM(`(nothing in memory matches "${query}")`));
+    else printData(data, opts);
 
     return;
   }
