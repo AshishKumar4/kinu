@@ -47,6 +47,11 @@ export class UserAccountMemory {
     return id;
   }
 
+  /** An eval workspace's teardown: the proposals it filed leave the queue, which the owner's open pages see. */
+  withdrawFrom(workspace: string): void {
+    if (this.store.withdrawFrom(workspace) > 0) this.pendingMoved();
+  }
+
   /** The owner's open pages: what waits on them, sent on the roster's socket, so their chats' stacks show it. */
   pendingMoved(sockets: readonly WebSocket[] = rosterSockets(this.host.ctx)): void {
     if (sockets.length === 0) return;
