@@ -24,8 +24,8 @@ import { encodeModelMessageValues } from '../session/message-codec';
 import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
-import { attempt, classifyErrorCode, diagnostics, hold, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
-import { Cause, Effect, Exit } from 'effect';
+import { attempt, classifyErrorCode, diagnostics, hold, renderThrownChain, settle, settleSync, toKinuError, type KinuError } from '../obs/index';
+import { Cause, Effect, Exit, Result } from 'effect';
 import { BUILTIN_TOOL_NAMES } from '../tools/registry';
 import { assembleActorTurn, withCompactionTrigger, type RunTurnSources, type TurnAssemblySources } from '../orchestrator/turn-assembly';
 import type { CompactionTriggerReader } from '../orchestrator/turn-context';
@@ -420,17 +420,16 @@ async function materializeMessages(session: ActorSession, references: readonly M
 
 /** A report that fails becomes the run's failure, joined to any it already had. */
 function reportConversation(deps: HeadInferenceDeps, input: HeadInput, conversation: readonly ModelMessage[], failure: KinuError | undefined): KinuError | undefined {
-  try {
-    deps.reportMessages?.(conversation);
-  } catch (cause) {
-    return toKinuError({
-      doing: `report agent ${input.id} conversation`,
-      cause: failure === undefined ? cause : new AggregateError([failure, cause], 'execution and conversation reporting failed'),
-      otherwise: 'unavailable',
-    });
-  }
+  const reported = Result.try(() => { deps.reportMessages?.(conversation); });
 
-  return failure;
+  if (Result.isSuccess(reported)) return failure;
+  const cause = reported.failure;
+
+  return toKinuError({
+    doing: `report agent ${input.id} conversation`,
+    cause: failure === undefined ? cause : new AggregateError([failure, cause], 'execution and conversation reporting failed'),
+    otherwise: 'unavailable',
+  });
 }
 
 interface HeadSummaryInput {
@@ -517,7 +516,11 @@ export async function runHeadInference(run: HeadRun): Promise<HeadReport> {
           }))
           : Effect.failCause(cause);
       },
-      onSuccess: (prepared) => Effect.promise(() => inferPrepared(prepared.input, prepared.deps, reserved, async (later) => (await run.prepare(later)).deps)),
+      onSuccess: (prepared) => Effect.promise(() => inferPrepared(prepared.input, prepared.deps, {
+        reserved,
+        rebind: async (later) => (await run.prepare(later)).deps,
+        assertActive: () => settleSync(stillActive(prepared.deps)),
+      })),
     }),
   ));
 }
@@ -529,17 +532,24 @@ interface BoundRound {
   readonly sources: TurnAssemblySources;
 }
 
-async function inferPrepared(
-  input: HeadInput, deps: HeadInferenceDeps, reserved: PreparingClaim, rebind: (capability: TurnCapability) => Promise<HeadInferenceDeps>,
-): Promise<HeadReport> {
+/** How a prepared run goes on: under the claim reserved for it, each later round bound by `rebind`, and `assertActive`
+ *  refusing a step once the run is aborted. */
+interface PreparedRun {
+  readonly reserved: PreparingClaim;
+  readonly rebind: (capability: TurnCapability) => Promise<HeadInferenceDeps>;
+  readonly assertActive: () => void;
+}
+
+/** The run's abort, as the step that meets it fails. */
+function stillActive(deps: Pick<HeadInferenceDeps, 'isAborted' | 'abortReason'>): Effect.Effect<void> {
+  return Effect.suspend(() => (deps.isAborted() ? Effect.die(new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError')) : Effect.void));
+}
+
+async function inferPrepared(input: HeadInput, deps: HeadInferenceDeps, { reserved, rebind, assertActive }: PreparedRun): Promise<HeadReport> {
   const { capture, clock } = deps;
   const startedAt = clock.now();
 
   let refusal: MissionBudgetRefusal | null = null;
-
-  const assertActive = (): void => {
-    if (deps.isAborted()) throw new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError');
-  };
 
   // One dense counter across every turn: `head_steps` is keyed by head and seq, so a per-turn
   // counter would overwrite earlier turns. Steps with no prose, reasoning or tool call are not recorded.
@@ -584,12 +594,12 @@ async function inferPrepared(
       const seq = recorded++;
 
       // A failed trace write must not kill the work; the sink can be an RPC.
-      try {
-        await current.deps.reportStep?.(seq, { parts });
-      } catch (err) {
+      const traced = await hold(Effect.promise(async () => current.deps.reportStep?.(seq, { parts })));
+
+      if (Exit.isFailure(traced)) {
         diagnostics.failure(
           'head.step_trace_failed',
-          toKinuError({ doing: 'record a head step trace', cause: err, otherwise: 'io' }),
+          toKinuError({ doing: 'record a head step trace', cause: Cause.squash(traced.cause), otherwise: 'io' }),
           { headId: input.id, seq },
         );
       }
@@ -606,7 +616,7 @@ async function inferPrepared(
   // The round's calls as the session's own ledger recorded them, a refused one included; its next turn starts it over.
   const roundCalls = (): void => { capture.toolCalls.push(...session.orchestrator.acc.toolCalls); };
 
-  try {
+  const driven = await hold(Effect.promise(async () => {
     // Restored while no round is active, so it replaces the history rather than staging a proposal. A run an execution
     // before this one answered keeps its branch, which holds the answer this one closes over without asking again.
     const answered = reserved.previous?.answered === true && reserved.previous.runId === reserved.runId;
@@ -697,13 +707,15 @@ async function inferPrepared(
         return turnId;
       },
     });
-  } catch (err) {
-    failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: err, otherwise: 'unavailable' });
+  }));
+
+  if (Exit.isFailure(driven)) {
+    failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: Cause.squash(driven.cause), otherwise: 'unavailable' });
     // Its first round never began: its claim ends with it.
     session.settleReserved(reserved, 'error');
-  } finally {
-    unbridgeCancel();
   }
+
+  unbridgeCancel();
 
   // Joined on every path: a run never settles past a step its mission has not been charged for.
   failure ??= await lastCharge(current.gate, input.id);

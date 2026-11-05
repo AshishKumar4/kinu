@@ -71,17 +71,6 @@ export interface ThresholdDeps {
 /** What a call moved to the background because the person wrote while it ran is told. */
 const RELEASED_FOR_PERSON = 'The person wrote while this ran; backgrounded: still running, not cancelled. The settled result will wake you.';
 
-/** Outcome is a value either way, so the race's loser is observed and never an unhandled rejection. */
-function settlement<T>(promise: Promise<T>): Promise<{ value: T } | { error: unknown }> {
-  return (async () => {
-    try {
-      return { value: await promise };
-    } catch (cause) {
-      return { error: cause };
-    }
-  })();
-}
-
 /** `promise` settles inline unless `trigger` fires first, when `onThreshold` detaches or keeps it. */
 function detachOn<T>(input: {
   readonly kind: string;
@@ -94,7 +83,9 @@ function detachOn<T>(input: {
   readonly moved: () => Moved;
 }): Effect.Effect<T | BackgroundHandle> {
   return Effect.gen(function* () {
-    const settled = settlement(input.promise);
+    // An outcome either way, so the race's loser is observed and never an unhandled rejection; one hop, as a trigger
+    // resolved already beats work that settles in the same tick.
+    const settled = Promise.allSettled([input.promise]);
     const winner = yield* Effect.promise(() => Promise.race([settled, input.trigger]));
 
     input.release?.();
@@ -109,7 +100,9 @@ function detachOn<T>(input: {
 
     const foreground = winner ?? (yield* Effect.promise(() => settled));
 
-    return 'error' in foreground ? yield* Effect.die(foreground.error) : foreground.value;
+    const [outcome] = foreground;
+
+    return outcome.status === 'fulfilled' ? outcome.value : yield* Effect.die(outcome.reason);
   });
 }
 
