@@ -13,7 +13,9 @@ import {
 import { createTestFactsStore, createJSONLLM, createScriptedLLM, createTestRuntime, present } from '@kinu.run/test-utils';
 import { KinuError } from '../src/obs';
 import type { SleepTimeTurn } from '../src/memory/sleep-time-compute';
-import type { MemoryNote } from '../src/memory/note';
+import { Database } from 'bun:sqlite';
+import { appendMemoryNote, memoryNotes } from '../src/memory/note';
+import { createMemoryMemory, createWorkspaceBundle } from './helpers';
 
 /** A rejection's shape, as a pass's failure carries it. */
 const FailureSchema = v.object({ code: v.string() });
@@ -493,47 +495,46 @@ describe('an idle wake dreams first', () => {
   });
 
   // 1105-memory-gaps (owner, 2026-11-05): the notes the agent keeps are consolidated into durable beliefs.
-  test("the agent's notes are folded into facts, each once, the newest of a subject holding", async () => {
+  test("the agent's notes are folded into facts, each once, the newest of a subject holding, two of one day alike", async () => {
     const { rt, stores, testSql } = createTestRuntime();
     initFactsTable(testSql.execRaw);
     initSleepTimeTables(testSql.execRaw);
     initEffectTombstoneTable(testSql.execRaw);
     stores.config.setSleepTimeComputeEnabled(true);
-    const kept: MemoryNote[] = [];
+    const db = new Database(':memory:');
+    const memory = createMemoryMemory(db, createWorkspaceBundle(db).vfs);
     const seen: string[] = [];
     const answered = turns(6);
     let read = 3;
-    const note = (content: string): MemoryNote => ({ path: 'memory/MEMORY.md', content, updatedAt: '2026-11-05', savedBy: null });
 
     // A fast tier that keeps, as a fact, each note it is shown: the database version it names.
     const fold = () => new SleepTimeLane({
       sql: rt.storage.sql, actor: rt.actor, config: stores.config, facts: stores.facts,
       transcript: () => ({ newestFirst: async (limit) => answered.slice(answered.length - read * 2).slice(0, limit) }),
       llm: () => ({ stream: () => { throw new Error('not streamed'); }, complete: () => { throw new Error('sleep-time asks for a schema'); }, object: async (prompt, schema) => {
-        const shown = kept.filter((each) => prompt.includes(each.content));
+        const shown = [...prompt.matchAll(/staging database runs (pg-\d+)/gu)].map((said) => said[1] ?? '');
 
-        seen.push(...shown.map((each) => each.content));
+        seen.push(...shown);
 
-        return v.parse(schema, {
-          upserts: shown.map((each) => ({ key: 'database', value: each.content.split(' ').at(-1), confidence: 0.9, rationale: 'a note' })),
-          decay: [],
-        });
+        return v.parse(schema, { upserts: shown.map((value) => ({ key: 'database', value, confidence: 0.9, rationale: 'a note' })), decay: [] });
       } }),
       transactionSync: (write) => write(),
       armWake: () => {},
       workspace: 'research',
-      notes: async () => kept,
+      notes: () => memoryNotes(memory),
     });
 
-    kept.push(note('The staging database runs pg-15'));
+    // Both notes on one day, as the memory tool writes them.
+    await appendMemoryNote(memory, 'The staging database runs pg-15');
     await fold().runTerminal();
     expect(stores.facts.recall('database')?.value).toBe('pg-15');
 
-    kept.push(note('Upgraded: the staging database runs pg-17'));
+    await appendMemoryNote(memory, 'Upgraded: the staging database runs pg-17');
     read = 6;
     await fold().runTerminal();
 
     expect(stores.facts.recall('database')?.value).toBe('pg-17');
-    expect(seen).toEqual(['The staging database runs pg-15', 'Upgraded: the staging database runs pg-17']);
+    expect(seen).toEqual(['pg-15', 'pg-17']);
+    db.close();
   });
 });

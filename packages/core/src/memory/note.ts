@@ -2,7 +2,6 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** The one note-save primitive: appends a dated `### Note` heading to `memory/MEMORY.md`, then indexes it. */
 
 import type { Memory } from '../types/primitives';
-import { isoDate } from '../utils/date';
 
 export const MEMORY_PATH = 'memory/MEMORY.md';
 
@@ -33,7 +32,8 @@ export async function appendMemoryNote(
   content: string,
   options?: { heading?: string; date?: string; by?: string },
 ): Promise<string> {
-  const date = options?.date ?? isoDate();
+  // To the millisecond: the sleep-time pass folds the notes written after the last one it folded.
+  const date = options?.date ?? new Date().toISOString();
   const heading = options?.heading ?? 'Note';
   const stamp = options?.by === undefined ? date : `${date} · ${options.by}`;
   await memory.append(MEMORY_PATH, `\n### ${heading} (${stamp})\n${content}\n`);
@@ -55,6 +55,8 @@ export interface MemoryNote {
   content: string;
   /** Falls back to the whole heading when unstamped. */
   updatedAt: string;
+  /** The stamp as an instant: a day-only stamp is its day's start; null where the stamp names no date. */
+  writtenAt: number | null;
   /** Null when the stamp names no actor. */
   savedBy: string | null;
 }
@@ -71,7 +73,9 @@ export function parseMemoryNotes(content: string): MemoryNote[] {
     if (heading === '' || body === '') continue;
     const [when, savedBy] = HEADING_STAMP.exec(heading)?.[1].split('·').map((part) => part.trim()) ?? [];
 
-    notes.push({ path: MEMORY_PATH, content: body, updatedAt: when ?? heading, savedBy: savedBy ?? null });
+    const writtenAt = when === undefined ? Number.NaN : Date.parse(when);
+
+    notes.push({ path: MEMORY_PATH, content: body, updatedAt: when ?? heading, writtenAt: Number.isFinite(writtenAt) ? writtenAt : null, savedBy: savedBy ?? null });
   }
 
   return notes;

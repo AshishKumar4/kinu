@@ -24,8 +24,11 @@ const SETTLED_AT = 'settled';
 
 const CLOSED_AT = 'closed';
 
-/** How many of the agent's notes a pass has folded into facts: its instant holds the count, not a time. */
+/** When the newest note a pass folded into facts was written: the next pass folds the notes written after it. */
 const NOTES_FOLDED = 'notes_folded';
+
+/** The notes a first pass folds: the newest, so a workspace with years of them is not read whole. */
+const FIRST_FOLD = 20;
 
 /**
  * One pass at a time over an actor's facts, whichever trigger starts it, each reading its window under the lock: an idle
@@ -239,9 +242,9 @@ export class SleepTimeLane {
     return this.deps.sql<{ at: number }>`SELECT at FROM sleep_time_marks WHERE actor_id = ${this.deps.actor.actorId} AND mark = ${mark}`[0]?.at ?? null;
   }
 
-  private mark(mark: string): void {
+  private mark(mark: string, at = Date.now()): void {
     this.deps.actor.assertCurrent();
-    void this.deps.sql`INSERT INTO sleep_time_marks (actor_id, mark, at) VALUES (${this.deps.actor.actorId}, ${mark}, ${Date.now()})
+    void this.deps.sql`INSERT INTO sleep_time_marks (actor_id, mark, at) VALUES (${this.deps.actor.actorId}, ${mark}, ${at})
       ON CONFLICT(actor_id, mark) DO UPDATE SET at = excluded.at`;
   }
 
@@ -298,7 +301,7 @@ export class SleepTimeLane {
       const summary = this.deps.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.deps.facts, update);
 
-        if (kept !== null) this.markCount(NOTES_FOLDED, kept.total);
+        if (kept !== null && kept.through !== null) this.mark(NOTES_FOLDED, kept.through);
 
         for (const [index, proposal] of proposals.entries()) {
           void this.deps.sql`INSERT INTO account_proposal_outbox (delivery, proposal_json)
@@ -363,18 +366,20 @@ export class SleepTimeLane {
     })));
   }
 
-  /** The notes not yet folded: past the count the last pass folded, or all of them once the notes were rewritten
-   *  shorter. A read that fails costs the pass its notes, never its turns. */
-  private keptNotes(): Effect.Effect<{ readonly fresh: readonly MemoryNote[]; readonly total: number } | null> {
+  /** The notes written after the newest one the last pass folded, and the newest of them; the newest few on a first
+   *  pass. A note with no date is never folded. A read that fails costs the pass its notes, never its turns. */
+  private keptNotes(): Effect.Effect<{ readonly fresh: readonly MemoryNote[]; readonly through: number | null } | null> {
     const read = this.deps.notes;
 
     if (read === undefined) return Effect.succeed(null);
 
     return attempt({ doing: "reading the agent's notes the pass folds into facts", otherwise: 'io' }, read).pipe(
       Effect.map((notes) => {
-        const folded = this.instant(NOTES_FOLDED) ?? 0;
+        const folded = this.instant(NOTES_FOLDED);
+        const dated = notes.filter((note): note is MemoryNote & { readonly writtenAt: number } => note.writtenAt !== null);
+        const fresh = folded === null ? dated.slice(-FIRST_FOLD) : dated.filter((note) => note.writtenAt > folded);
 
-        return { fresh: folded <= notes.length ? notes.slice(folded) : notes, total: notes.length };
+        return { fresh, through: fresh.reduce<number | null>((newest, note) => Math.max(newest ?? note.writtenAt, note.writtenAt), null) };
       }),
       Effect.catch((failure) => Effect.sync(() => {
         diagnostics.failure('memory.notes_read_failed', failure, { workspace: this.deps.workspace });
@@ -382,12 +387,6 @@ export class SleepTimeLane {
         return null;
       })),
     );
-  }
-
-  private markCount(mark: string, count: number): void {
-    this.deps.actor.assertCurrent();
-    void this.deps.sql`INSERT INTO sleep_time_marks (actor_id, mark, at) VALUES (${this.deps.actor.actorId}, ${mark}, ${count})
-      ON CONFLICT(actor_id, mark) DO UPDATE SET at = excluded.at`;
   }
 
   private finish(key: string): void {
