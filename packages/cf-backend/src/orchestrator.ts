@@ -306,6 +306,7 @@ import { initWorkspaceGenerationTable } from "@kinu.run/core/workspace";
 import { attributeWorkspace, installAnalyticsDiagnostics, recordToolRow, recordTtftRow, recordTurnRow } from "@kinu.run/core/analytics";
 import { TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from "./wake-jobs";
 import { callUserMcpTool } from "./user-mcp-call";
+import { RunWrites } from './run-events-routes';
 
 const RUN_EVENT_EMIT_FAILED = {
   tool_call_end: 'event.tool_call_end_emit_failed',
@@ -4484,7 +4485,12 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         // Its hirer hears it as a delivery of its own, whichever agent hired it.
         return await this.agentDeliveries(parentActorId).signals.send(signal);
       },
-    }, this.deleting.signal, (bound, call) => this.agentTurns.holds(actorId, bound, call), (turnId) => this.agentTurns.cutOff(actorId, turnId));
+    }, this.deleting.signal, {
+      fenced: (bound, call) => this.agentTurns.holds(actorId, bound, call),
+      cutOff: (turnId) => this.agentTurns.cutOff(actorId, turnId),
+      // A stream follows main's runs and this object's own (`getRunEventText`).
+      heard: () => { if (actorId === this.actorHandle().actorId) this._runWrites?.ring(); },
+    });
   }
 
   private agentBound(actorId: string): BoundActor {
@@ -9022,6 +9028,21 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    *  isolate; any other (a branch head's, the workspace's own lanes) is this object's. */
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
     return await this.runRead(runId, opts, (isolate, snapshot) => isolate.runEvents(snapshot, runId, opts ?? null), getRunEvents);
+  }
+
+  private _runWrites: RunWrites | null = null;
+
+  /** Not @callable: serves the run-event stream. The count of run-event writes once it passes `seen`, or after `ms`; made
+   *  at a stream's first ask, so no write rings anything while none follows. */
+  async awaitRunWrites(seen: number, ms: number): Promise<number> {
+    if (this._runWrites === null) {
+      const writes = new RunWrites(REAL_CLOCK);
+
+      this._runWrites = writes;
+      this.eventRecorder.observe(() => { writes.ring(); });
+    }
+
+    return await this._runWrites.after(seen, ms);
   }
 
   /** Not @callable: serves the run-event routes. */

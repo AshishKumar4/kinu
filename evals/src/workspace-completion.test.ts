@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  BackgroundJobRunner, BackgroundJobStore, initBackgroundJobsTable, listBackgroundJobs, silenceBoundMs, waitOn,
+  BackgroundJobRunner, BackgroundJobStore, initBackgroundJobsTable, listBackgroundJobs, silenceBoundMs,
   withBackgroundThreshold, type RunEvent,
 } from '@kinu.run/core';
 import { createTestActorsOver, createTestSql, handClock, hostDeliveries, present, type HandClock } from '@kinu.run/test-utils';
@@ -9,6 +9,15 @@ import type { PublicAgent, PublicBackgroundJob, PublicSubagent } from './session
 import {
   answered, HUNG_AFTER_MS, settle, TrialCancelled, TurnWatch, type WatchClock, type WatchedWorkspace, WorkspaceHang, type WorkspaceHeld,
 } from './workspace-completion';
+
+/** After `ms` on the hand clock: a job's work that takes that long. */
+function waitOn(clock: HandClock, ms: number): Promise<void> {
+  const { promise, resolve } = Promise.withResolvers<void>();
+
+  clock.after(ms, resolve);
+
+  return promise;
+}
 
 const START = Date.parse('2026-10-01T06:00:00.000Z');
 
