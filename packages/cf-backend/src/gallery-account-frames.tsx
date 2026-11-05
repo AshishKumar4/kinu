@@ -179,8 +179,20 @@ export const accountFrames: FrameTable = {
   control: () => controlFrame(),
   home: () => homeFrame(),
   usersettingsstate: () => userSettingsStateFrame(),
-  mail: async () => (await import("@/gallery-mail")).default(),
-  mailpage: async () => (await import("@/gallery-mailpage")).default(),
+  mail: async () => {
+    const { default: mailFrame } = await import("@/gallery-mail");
+
+    return mailFrame();
+  },
+  mailpage: async () => {
+    const { default: mailPageFrame } = await import("@/gallery-mailpage");
+
+    return mailPageFrame();
+  },
   // The free tier's screens (core limits/): `&state=` the account's stage, `&dialog=` a refusal (gallery-limits.tsx).
-  limits: async () => (await import("@/gallery-limits")).default(),
+  limits: async () => {
+    const { default: limitsFrame } = await import("@/gallery-limits");
+
+    return limitsFrame();
+  },
 };

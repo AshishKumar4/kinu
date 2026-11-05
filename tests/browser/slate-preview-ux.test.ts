@@ -762,10 +762,24 @@ async function openFromChat(page: Page, slate: string): Promise<void> {
   await drawn(page);
 }
 
-/** A press on the first match, brought to the middle of the chat first: scrolled only into view, the control at the
- *  chat's foot sits under the composer that floats over it. */
+/** A press on the first match where a reader sees it: brought to the middle of the chat (at its foot it sits under the
+ *  composer that floats over it), and pressed once it has held still for a few frames, as the frames it scrolled past
+ *  are hit-tested where the compositor last drew them until it draws them again. */
 async function pressInView(page: Page, selector: string): Promise<void> {
   await page.$eval(selector, (element) => element.scrollIntoView({ block: 'center' }));
+  await page.evaluate(async (target) => {
+    let last: number | undefined;
+    let still = 0;
+
+    while (still < 6) {
+      await new Promise<void>((resolve) => { requestAnimationFrame(() => { resolve(); }); });
+
+      const top = document.querySelector(target)?.getBoundingClientRect().top;
+
+      still = top !== undefined && top === last ? still + 1 : 0;
+      last = top;
+    }
+  }, selector);
   await page.click(selector);
 }
 
@@ -943,7 +957,7 @@ describe('inline slate previews in the chat', () => {
       const page = await newPage();
 
       // The bar's one toggle swaps the panes; its name says which pane it would show next.
-      const shown = (): Promise<string | null> => page.$eval('.p-bar [data-inspector-toggle]', (toggle) =>
+      const shown = (): Promise<string | null> => page.$eval('[data-inspector-toggle]', (toggle) =>
         (toggle.getAttribute('aria-label') === 'Show chat' ? 'Workspace' : 'Chat'));
 
       try {
@@ -954,7 +968,7 @@ describe('inline slate previews in the chat', () => {
         expect(await page.$(`${PAGES_NAV} button[aria-label="Board"][aria-current="true"]`)).not.toBeNull();
 
         // The two panes never share the screen, so back in the chat the board's preview is still unfolded.
-        await page.click('.p-bar [data-inspector-toggle]');
+        await page.click('[data-inspector-toggle]');
         await page.waitForFunction(() => document.querySelectorAll('[data-slate-inline]').length === 3);
         await drawn(page);
         expect(await inlinePreviews(page)).toEqual([['board', false], ['notes', true], ['board', true]]);

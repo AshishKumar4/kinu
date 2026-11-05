@@ -957,5 +957,9 @@ export const workspaceFrames: FrameTable = {
 
     return appFrame(workspacePageWire, seedFrameTranscript);
   },
-  "diff-design": async () => (await import("@/gallery-diff-design")).default(),
+  "diff-design": async () => {
+    const { default: diffDesignFrame } = await import("@/gallery-diff-design");
+
+    return diffDesignFrame();
+  },
 };

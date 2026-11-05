@@ -173,7 +173,9 @@ function SaveControl({ name, page, save, open }: { name: string; page: string; s
 
 /** No chrome: the frame sits in the answer, and its fold, save and open controls sit above it at its right, never over
  *  its page: shown on hover where there is hover, always where there is none, their room kept either way so nothing
- *  moves. Folded, it is one quiet line naming it and why. */
+ *  moves. Their own layer over the frames: a served page's frame is hit-tested as its own surface, which a fold's
+ *  clip does not bound, so a press on a control under a frame still unfolding would go to that frame. Folded, it is one
+ *  quiet line naming it and why. */
 export function SlateCard({ id, block, url, measure, save, children }: {
   id: string;
   block?: string;
@@ -213,7 +215,7 @@ export function SlateCard({ id, block, url, measure, save, children }: {
       {/* One element folded or not: the fold's own top bar is inside it, and a press must find it where it was. */}
       <span ref={register} className={folded
         ? "flex items-center gap-1 py-px"
-        : "p-slate-tools mb-1 ml-auto flex w-fit items-center gap-1 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/slate:opacity-100 [@media(hover:hover)]:group-focus-within/slate:opacity-100"}>
+        : "p-slate-tools relative z-10 mb-1 ml-auto flex w-fit items-center gap-1 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/slate:opacity-100 [@media(hover:hover)]:group-focus-within/slate:opacity-100"}>
         {tools}
       </span>
       <span id={body} className="p-fold" data-folded={folded ? "" : undefined} inert={folded}>
