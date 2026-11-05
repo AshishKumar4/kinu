@@ -53,8 +53,8 @@ interface Unmeasurable {
   readonly measured?: Readonly<Record<string, number>>;
 }
 
-/** No member reports "the verifier broke": a broken instrument throws, failing the run, and a throw is never
- *  converted into `Unmeasurable`. */
+/** No member reports "the verifier broke": a broken instrument throws, and a throw is never
+ *  converted into `Unmeasurable` — see {@link VerifierFault}. */
 export type Measurement = MeasuredValue | Unmeasurable;
 
 /** Closed set of resolvable verifier kinds. Lives beside the type (not the registry) so
@@ -80,6 +80,14 @@ export interface VerifierSpec {
 /** Only `VerifierSpec` is reachable from the tool surface. The closure arm is for in-process
  *  callers, unguarded by the registry, and never publishable. */
 type VerifierSource = VerifierSpec | Verifier;
+
+/** The instrument broke (threw, rejected, or returned a non-{@link Measurement}). Produced by the
+ *  harness; fails the run — nothing is scored, published, or recorded. */
+export interface VerifierFault {
+  readonly reason: 'unavailable';
+  /** What the verifier did instead of measuring, quoting any return value. */
+  readonly error: string;
+}
 
 /** A bound no correct solution may cross, so a cheat is detectable. Must be a proof. */
 export interface Floor {

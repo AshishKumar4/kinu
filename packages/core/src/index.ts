@@ -1387,9 +1387,9 @@ export {
   type NodeWorkspaceProvisioner,
 } from './strategy/node-workspace';
 
-export { type ExplorationRecord, type Floor, type ObjectiveIdentity, type PublicationState } from './types/objective';
+export { type ExplorationRecord, type Floor, type ObjectiveIdentity, type PublicationState, type VerifierFault } from './types/objective';
 
-export { NAMED_SWARM_PRESETS } from './types/swarm';
+export { NAMED_SWARM_PRESETS, SWARM_CARRIES, SWARM_SCORES, SWARM_UNITS } from './types/swarm';
 
 // Bench harness: pure math; the runner lives in scripts/bench.ts.
 export {

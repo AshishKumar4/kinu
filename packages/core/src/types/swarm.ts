@@ -4,6 +4,10 @@
 import type { Objective } from './objective';
 import type { Refusal } from '../obs/error';
 
+/** What one node produces: `answer` is an agent tool loop; `thought` is one toolless model call.
+ *  `generator`/`trajectory`/`step` are refused by name in `tools/swarm-input.ts`. */
+export const SWARM_UNITS = ['answer', 'thought'] as const;
+
 /**
  * What a child starts from, on the caller-to-root edge and every branch edge. `inherit` keeps
  * the parent's context verbatim (a shared cacheable prefix); `fresh` seeds only the parent's
@@ -18,12 +22,18 @@ export const SWARM_EXPANDS = ['sample', 'aggregate'] as const;
 
 type SwarmExpand = (typeof SWARM_EXPANDS)[number];
 
+/** How a node is valued. Novelty is an archive admission rule on {@link SwarmAdvanceSetting}. */
+export const SWARM_SCORES = ['verify', 'judge', 'none'] as const;
+
 /** Where the next unit of budget goes. */
 export const SWARM_ADVANCES = [
   'uct', 'best-first', 'pareto', 'archive', 'none',
 ] as const;
 
 export type SwarmAdvance = (typeof SWARM_ADVANCES)[number];
+
+/** What survives across iterations; `elites` and `artifacts` land in the records store. */
+export const SWARM_CARRIES = ['none', 'reflections', 'elites', 'artifacts'] as const;
 
 /** How a run reports its answer. Derived from `score` and `advance`, never supplied. */
 export type SwarmSettle = 'best' | 'archive' | 'front' | 'merge';
