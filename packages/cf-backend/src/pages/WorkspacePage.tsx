@@ -93,7 +93,7 @@ function useLiveSplices(entries: readonly { readonly message: UIMessage }[], car
 }
 
 /** A workspace's page, the one its route names; Home names the assistant's (`workspace`): its chat, with nothing above it. */
-interface WorkspacePageProps {
+export interface WorkspacePageProps {
   readonly workspace?: string;
   /** The layout the caller already knows, drawn until the workspace's own status says: Home's assistant is `focus`. */
   readonly layout?: WorkspaceLayout;

@@ -5,7 +5,7 @@ import { TrashIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon,
 } from "@phosphor-icons/react";
 import { SidebarHeader } from "./SidebarHeader";
 import { SidebarFooter } from "./SidebarFooter";
-import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-chat-owner";
+import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-workspace-rpc";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry, workspaceRoute } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
