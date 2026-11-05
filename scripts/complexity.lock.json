@@ -155,7 +155,7 @@
     },
     {
       "key": "packages/cf-backend/src/components/slates/BlueprintShareForm.tsx#BlueprintShareForm",
-      "complexity": 28
+      "complexity": 27
     },
     {
       "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",

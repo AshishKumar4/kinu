@@ -12,7 +12,7 @@ import { Surface } from "@/components/ui/Surface";
 import { Button } from "@/components/ui/Button";
 import { settingsPath } from "@/components/SettingsRail";
 import { dayTurnsAt, shownReadings } from "./limit-words";
-import { readStored, writeStored } from "@/lib/stored";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 /** How often the bar reads the limits again while the app stays open, beside every focus of the window. */
 const READ_EVERY_MS = 5 * 60_000;

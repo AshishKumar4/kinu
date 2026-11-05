@@ -2265,6 +2265,8 @@ export {
   type RoleChangeRefusal, type RoleStateStore,
 } from './profiles';
 
+export { createStore, type Store } from './utils/store';
+
 export { calendarDay, clockTime, countOf, fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
 export { ownedStream, relayedAnswer } from './utils/relayed-answer';

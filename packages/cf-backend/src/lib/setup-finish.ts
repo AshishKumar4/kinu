@@ -10,7 +10,7 @@ import { PERSONAL_ASSISTANT_ID } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import { completeOnboarding } from "@/lib/user-api";
 import { installBlueprint } from "@/lib/explore-api";
-import { createStore } from "@/lib/store";
+import { createStore } from "@kinu.run/core";
 
 type AssistantInstall =
   | { readonly state: "installing"; readonly name: string }

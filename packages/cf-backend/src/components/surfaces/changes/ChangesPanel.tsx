@@ -15,7 +15,7 @@ import { NotesFailure, SendFeedback, useNotes } from "./notes";
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
 import { Pressable } from "@/components/ui/Pressable";
-import { readStored, writeStored } from "@/lib/stored";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 // Lazy: plannotator's panel loads only with the first note.
 const NotesPanel = lazy(() => import("./notes-panel"));

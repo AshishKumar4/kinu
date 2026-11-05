@@ -10,7 +10,7 @@ import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { revealMisrepresenting, timeAgo, type Omitted, type PendingAction } from "@kinu.run/core";
 import { renderThrownChain, settle, detachPromise } from "@kinu.run/core/obs";
-import { createStore } from "@/lib/store";
+import { createStore } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { FileBody } from "@/components/surfaces/changes/ChangesPanel";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";

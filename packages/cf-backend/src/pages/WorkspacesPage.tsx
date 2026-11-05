@@ -14,7 +14,7 @@ import { Notice } from "@/components/ui/Notice";
 import { Button } from "@/components/ui/Button";
 import { TextInput } from "@/components/ui/Field";
 import { Surface } from "@/components/ui/Surface";
-import { readStored, writeStored } from "@/lib/stored";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 const VIEW_KEY = "kinu:workspaces-view";
 

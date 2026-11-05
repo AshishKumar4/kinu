@@ -19,7 +19,7 @@ import { navActive, PRIMARY_NAV } from "./nav";
 import { NavRow, NavRowButton } from "@/components/ui/NavRow";
 import { Surface } from "@/components/ui/Surface";
 import { Pressable } from "@/components/ui/Pressable";
-import { readStored, writeStored } from "@/lib/stored";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 const RAIL_KEY = "kinu:rail-open";
 
@@ -107,10 +107,10 @@ function RailAccount({ name }: { name: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
 
-  useCloseOnOutsideClick(open, ref, close);
+  const outside = useCloseOnOutsideClick(open, ref, close);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} {...outside} className="relative">
       <Pressable onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" title="Account" data-account-menu
         className="flex size-9 items-center justify-center">
         <Avatar name={name} size={24} />

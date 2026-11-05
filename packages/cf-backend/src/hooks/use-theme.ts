@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { DEFAULT_THEME, MODE_KEY, modeFor, PREFERS_LIGHT, themeNamed, type Mode, type ThemeName } from "@kinu.run/core";
-import { readStored, writeStored } from "@/lib/stored";
-import { createStore, type Store } from "@/lib/store";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
+import { createStore, type Store } from "@kinu.run/core";
 
 /**
  * The mode follows the system until a manual toggle persists it on this device, by core's one rule (`modeFor`), which

@@ -97,12 +97,12 @@ export function SourceMenu({ sets, source, initiallyOpen = false, onPick }: {
 }) {
   const [open, setOpen] = useState(initiallyOpen);
   const box = useRef<HTMLDivElement>(null);
-  useCloseOnOutsideClick(open, box, () => setOpen(false));
+  const outside = useCloseOnOutsideClick(open, box, () => setOpen(false));
 
   if (sets.length < 2) return null;
 
   return (
-    <div ref={box} className="relative shrink-0">
+    <div ref={box} {...outside} className="relative shrink-0">
       <Pressable look="compact" onClick={() => setOpen((value) => !value)} aria-haspopup="menu" aria-expanded={open} data-source-menu
         className="flex items-center gap-1 px-1 py-px -mx-2 p-text-2 hover:p-text">
         {sets.find((set) => set.source === source)?.label}

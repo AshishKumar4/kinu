@@ -20,7 +20,7 @@ import {
   type InspectorAccount, type InspectorEffects, type InspectorState, type InspectorTarget,
   type StoredInspectorLayout,
 } from "@kinu.run/core/web/inspector-layout";
-import { readStored, writeStored } from "@/lib/stored";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 const CHAT_PANEL_ID = "chat";
 

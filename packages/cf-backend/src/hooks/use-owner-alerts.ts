@@ -16,8 +16,8 @@ import { Effect } from "effect";
 import { detach, detachPromise } from "@kinu.run/core/obs";
 import { ownerIsAway, watchFrame, workspaceDisplayTitle, type AlertWatch, type OwnerAlert, type RosterEntry, workspaceRoute } from "@kinu.run/core";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
-import { readStored, writeStored } from "@/lib/stored";
-import { createStore } from "@/lib/store";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
+import { createStore } from "@kinu.run/core";
 
 const SOUND_KEY = "alert-sound";
 

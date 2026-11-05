@@ -2,7 +2,7 @@
  * Exploration: every run's search tree in one list and one canvas. A run can fill both
  * `search_nodes` and `head_journal`, so rows report `hasSearchTree` and `hasNodeTranscripts`.
  */
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import { Loader } from "@/components/ui/Loader";

@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { InlineAction } from "@/components/ui/InlineAction";
 import { CopyText } from "@/components/ui/CopyButton";
 import { Surface } from "@/components/ui/Surface";
-import { readStored, writeStored } from "@/lib/stored";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   add: { tone: "p-badge-success px-3", mark: "+" },

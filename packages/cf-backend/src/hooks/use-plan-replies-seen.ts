@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { readStored, writeStored } from "@/lib/stored";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 const seenKey = (planId: string): string => `kinu.plan-replies-seen.${planId}`;
 

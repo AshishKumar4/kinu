@@ -5,7 +5,7 @@ import { Loader } from "@/components/ui/Loader";
 import { DEVICE_CONNECT_DISCLOSURE, issuedDeviceConnected } from "@kinu.run/core";
 import { Effect } from "effect";
 import { chainOf, detachPromise, settle } from "@kinu.run/core/obs";
-import { createStore } from "@/lib/store";
+import { createStore } from "@kinu.run/core";
 import { registerDevice, type UserDevice } from "@/lib/user-api";
 import { Modal } from "@/components/ui/Modal";
 import { CopyField } from "@/components/ui/CopyField";
