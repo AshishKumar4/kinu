@@ -44,9 +44,10 @@ export class UnsupportedTestCapability extends Data.TaggedError('UnsupportedTest
   }
 }
 
-const refuse = (capability: string, option: string): never => {
-  throw new UnsupportedTestCapability(capability, option);
-};
+/** The refusal of work this runtime does not perform, as its caller sees it. */
+export function refuse(capability: string, option: string): never {
+  return settleSync(Effect.die(new UnsupportedTestCapability(capability, option)));
+}
 
 /** A spend sink for a suite that observes no spend: each report is dropped. */
 export const unobservedSpend: ModelCallSink = () => undefined;
