@@ -64,13 +64,13 @@ export { MailPreviewSchema, mailHostPreview, type MailPreview, type MailPurpose,
 export { mailRoutesOf, type MailRoutes, type MailRoutingEnv } from './mail-rules';
 
 export {
-  GITHUB_APP_NEW, GOOGLE_SETUP, GoogleClientSchema, convertedGithubApp, githubAppManifest, googleRedirect, kinuOrigin, setConnector,
-  type GithubApp, type OAuthClient,
+  ConnectorsBeforeSchema, GITHUB_APP_NEW, GOOGLE_SETUP, GoogleClientSchema, convertedGithubApp, githubAppManifest, googleRedirect, kinuOrigin, setConnector,
+  type ConnectorsBefore, type GithubApp, type HeldConnectors, type KinuWorker, type OAuthClient,
 } from './connectors';
 
 export {
-  DeployDomainsSchema, DeployPreflightSchema, DeployRunPlanSchema, DeployRunRequestSchema, DeploySessionSchema, accountChoices, cloudflareUser, deployedKinus,
-  domainsMatching, plannedRun, preflight, zoneHeld,
+  AddressAskSchema, DeployDomainsSchema, DeployPreflightSchema, DeployRunPlanSchema, DeployRunRequestSchema, DeploySessionSchema, accountChoices, cloudflareUser,
+  deployedKinus, domainsMatching, plannedOrigin, plannedRun, preflight, zoneHeld, type AddressAsk,
   type CloudflareUser, type DeployDomain, type DeployHeldZone, type DeployPendingZone, type DeployPreflight,
   type DeployRunPlan, type DeployRunRequest, type DeploySession, type DeployZone, type DeployedKinu,
 } from './account';

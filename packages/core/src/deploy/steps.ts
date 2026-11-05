@@ -13,7 +13,7 @@ import {
   FACT_UPLOAD_PEAK, FACT_VERSION_ID, FACT_WORKERS_SUBDOMAIN, kvFact, type DeployContext,
 } from './context';
 import {
-  COMPUTER_SECRETS, CREDITS_TOKEN_SECRET, DEPLOYMENT_RECORD_SECRET, MAIL_ROUTING_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, FIRST_OWNER_LINK_MS,
+  COMPUTER_SECRETS, CONNECTOR_SECRETS, CREDITS_TOKEN_SECRET, DEPLOYMENT_RECORD_SECRET, MAIL_ROUTING_SECRET, DEPLOYMENT_REFRESH_SECRET, DEPLOY_CLIENT_ID_KEY, FIRST_OWNER_LINK_MS,
   FIRST_OWNER_LINK_SECRET, MINTED_SECRETS, REFRESH_TOKEN_KEY, resourceName,
   type DeployAddress, type DeployInputs, type DeploymentRecord,
 } from './inputs';
@@ -1184,7 +1184,10 @@ async function versionMetadata(
 
   bindings.push(...varBindings(context, manifest));
 
-  for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...COMPUTER_SECRETS, MAIL_ROUTING_SECRET, CREDITS_TOKEN_SECRET, ...context.inputs.providerKeyNames]) {
+  // A connector's client the person made before the deploy (`connectors.ts`) is in the vault only when they did.
+  const connectors = Object.values(CONNECTOR_SECRETS).flatMap(({ id, secret }) => [id, secret]);
+
+  for (const name of [...MINTED_SECRETS, FIRST_OWNER_LINK_SECRET, ...COMPUTER_SECRETS, MAIL_ROUTING_SECRET, CREDITS_TOKEN_SECRET, ...connectors, ...context.inputs.providerKeyNames]) {
     const value = await context.vault.read(name);
 
     if (value !== null) bindings.push({ type: 'secret_text', name, text: value });

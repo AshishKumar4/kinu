@@ -131,12 +131,12 @@ const AccountIdSchema = v.pipe(v.string(), v.regex(ZONE_ID));
 
 const HostSchema = v.pipe(v.string(), v.regex(DOMAIN));
 
-const AddressAskSchema = v.variant('kind', [
+export const AddressAskSchema = v.variant('kind', [
   v.object({ kind: v.literal('workers') }),
   v.object({ kind: v.literal('domain'), zone: v.optional(v.pipe(v.string(), v.regex(ZONE_ID))), domain: v.optional(HostSchema), host: HostSchema }),
 ]);
 
-type AddressAsk = v.InferOutput<typeof AddressAskSchema>;
+export type AddressAsk = v.InferOutput<typeof AddressAskSchema>;
 
 const MailAskSchema = v.nullable(v.object({ host: HostSchema }));
 
@@ -481,6 +481,25 @@ function addressServing(transport: CloudflareTransport, account: string, host: s
     if (zone === undefined) return yield* new KinuError('bad_input', `${host} is not in a zone of this account, so the deployment's address cannot be kept.`);
 
     return { kind: 'zone', hostname: host, zoneId: zone.id };
+  });
+}
+
+/**
+ * Where a new Kinu named `name` will first answer, read before its run: its own domain once the domain's zone is
+ * active, else its workers.dev name once the account has a workers.dev subdomain. Null when the run makes either first
+ * (no subdomain yet, a domain still to be added or moved to), so nothing that must name the address can be made yet.
+ */
+export function plannedOrigin(transport: CloudflareTransport, account: string, name: string, asked: AddressAsk): Effect.Effect<string | null, KinuError> {
+  return Effect.gen(function* () {
+    if (asked.kind === 'domain') {
+      if (asked.zone === undefined) return null;
+
+      return (yield* zoneHeld(transport, asked.zone)).status === 'active' ? `https://${asked.host}` : null;
+    }
+
+    const subdomain = yield* workersSubdomain(transport, account);
+
+    return subdomain === null ? null : `https://${deploymentWorkers(name).front}.${subdomain}.workers.dev`;
   });
 }
 

@@ -7,8 +7,9 @@
  */
 import * as v from "valibot";
 import {
-  DEPLOY_GITHUB_PATH, DeployRunRequestSchema, FACT_ADDRESS, GITHUB_APP_NEW, GoogleClientSchema, SIGN_IN_AGAIN_NEED, deployRunView, githubAppManifest, judgeRefusal, updateOffer,
-  type CloudflareWords, type DeployDomain, type DeployedKinu, type DeployNeed, type DeployPreflight, type DeployRefusal, type DeployRunView, type DeploySession,
+  AddressAskSchema, DEPLOY_GITHUB_PATH, DeployRunRequestSchema, FACT_ADDRESS, GITHUB_APP_NEW, GoogleClientSchema, SIGN_IN_AGAIN_NEED, deployRunView, githubAppManifest, judgeRefusal,
+  updateOffer,
+  type CloudflareWords, type ConnectorsBefore, type DeployDomain, type DeployedKinu, type DeployNeed, type DeployPreflight, type DeployRefusal, type DeployRunView, type DeploySession,
   type DeployStepRow, type DeployZone, type MailPreview, type UpdateBuild,
 } from "@kinu.run/core/deploy";
 
@@ -108,6 +109,9 @@ const LATEST: UpdateBuild = { version: "0.1.0+694e257", sha: "694e257", builtAt:
 
 /** Whether the review gave its Kinus a Google client of their own, as Save on the deploy page does. */
 let googleOwn = false;
+
+/** What the review set up for a Kinu before deploying it: a Google client held for its run. */
+let googleBefore = false;
 
 /** A Kinu the session lists: core's offer for its build against the channel's, and every listed Kinu is the account's. */
 function kinu(host: string, current: UpdateBuild, available: UpdateBuild | null, account: string = ACCOUNT): DeployedKinu {
@@ -350,7 +354,7 @@ function goingFor(body: string | null): Going {
 /** What the door answers: its reads, a run begun, a hand-off, or a refusal in words. */
 type DoorAnswer =
   | DeploySession | DeployPreflight | readonly DeployDomain[] | MailPreview | DeployRunView | null | { readonly runId: string } | { readonly location: string }
-  | { readonly action: string; readonly manifest: string } | { readonly google: boolean }
+  | { readonly action: string; readonly manifest: string } | { readonly google: boolean } | ConnectorsBefore
   | { readonly error: string; readonly need?: DeployNeed; readonly refused?: DeployRefusal };
 
 function json(body: DoorAnswer, status = 200): Response {
@@ -427,22 +431,53 @@ export function deployFixture(path: string, method: string, body: string | null)
 
   if (route === "runs/current/continue" && method === "POST") return Promise.resolve(carryOn(state));
 
+  if (route === "connectors") return Promise.resolve(connectorsBefore(url.searchParams));
+
   return Promise.resolve(connectorAnswer(route, body));
+}
+
+/** Where a Kinu not deployed yet will answer: its domain, or its workers.dev name; a domain the run adds has none yet. */
+function plannedAt(name: string, zone: string | null, host: string): string | null {
+  if (zone === null) return stateNow() === "no-subdomain" ? null : `https://${name}.ada.workers.dev`;
+
+  return ZONES.some((each) => each.id === zone) ? `https://${host}` : null;
+}
+
+/** A Kinu not deployed yet: what the review held for it, GitHub's app by the slug its return named. */
+function connectorsBefore(params: URLSearchParams): Response {
+  // The page's address in the gallery is its `at`: GitHub's return lands there.
+  const made = new URL(new URLSearchParams(location.search).get("at") ?? "/deploy", location.origin).searchParams.get("github");
+  const origin = plannedAt(params.get("name") ?? "", params.get("zone"), params.get("host") ?? "");
+
+  return json({ github: made === null || made === "" ? null : made, google: googleBefore, origin });
 }
 
 /** The connectors' routes (GitHub's form for the Kinu asked, Google's own client set or taken away), and the door's
  *  answer to a route it has none for. */
 function connectorAnswer(route: string, body: string | null): Response {
   if (route === "github") {
-    const manifest = githubAppManifest(`https://${WORKERS}`, new URL(DEPLOY_GITHUB_PATH, location.origin).href);
+    const asked = v.parse(v.object({ name: v.string(), before: v.optional(AddressAskSchema) }), JSON.parse(body ?? "{}"));
+    const { before } = asked;
+    let at: string | null = `https://${WORKERS}`;
+
+    if (before?.kind === "domain") at = plannedAt(asked.name, before.zone ?? "", before.host);
+    else if (before !== undefined) at = plannedAt(asked.name, null, "");
+    const manifest = githubAppManifest(at ?? "", new URL(DEPLOY_GITHUB_PATH, location.origin).href);
 
     return json({ action: `${GITHUB_APP_NEW}?state=gallery`, manifest: JSON.stringify(manifest) });
   }
 
   if (route !== "google") return json({ error: "No such deploy route." }, 404);
-  const asked = v.safeParse(v.object({ client: v.nullable(GoogleClientSchema) }), JSON.parse(body ?? "{}"));
+  const asked = v.safeParse(v.object({ client: v.nullable(GoogleClientSchema), before: v.optional(AddressAskSchema) }), JSON.parse(body ?? "{}"));
 
   if (!asked.success) return json({ error: asked.issues[0]?.message ?? "That is not a Google client." }, 400);
+
+  if (asked.output.before !== undefined) {
+    googleBefore = asked.output.client !== null;
+
+    return json({ google: googleBefore });
+  }
+
   googleOwn = asked.output.client !== null;
 
   return json({ google: googleOwn });
