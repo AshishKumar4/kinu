@@ -584,7 +584,7 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { driveDeliveredRun, driveSeatedRun } from './heads/delivered-run';
 
-export { initWorkspaceActorTable, facetNamesGiven, WorkspaceActorDirectory, stoppedBelow, isSubagentOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, actorStanding, actorEnded, endedStandingOf } from './identity/workspace-actors';
+export { initWorkspaceActorTable, facetNamesGiven, WorkspaceActorDirectory, stoppedBelow, isSubagentOrigin, whenActorTakesInput, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, bearWorkspaceIdentity, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActor, type ActorOrigin, actorStanding, actorEnded, endedStandingOf } from './identity/workspace-actors';
 
 export {
   openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
@@ -760,6 +760,10 @@ export {
 } from './operations/operation';
 
 export { createTasksCodemodeProvider, type RoleSwitch } from './tools/tasks-operations';
+
+export { createAiCodemodeProvider, type AiDeps } from './tools/ai-operations';
+
+export { AI, type AiAnswer, type AiRunInput } from './operations/ai';
 
 export { TASKS } from './operations/tasks';
 
