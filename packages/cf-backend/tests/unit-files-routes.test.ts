@@ -1,6 +1,6 @@
 // Files route transfer contract, through a real workspace object and its own file plane: byte-exact chunking, the 413
 // before any large allocation, counted (not announced) request bytes, a streamed response, and the plane's own revisions.
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { serveFamily } from './helpers/api';
 import * as v from "valibot";
 import type { FilesRouteAgent } from "../src/files-routes";
@@ -34,8 +34,17 @@ interface Workspace {
   revision(): Promise<VfsRevision>;
 }
 
+/** Each case's workspace database, closed after the case: one holding a transfer's megabytes is not kept for the rest. */
+const databases: { close(): void }[] = [];
+
+afterEach(() => {
+  for (const db of databases.splice(0)) db.close();
+});
+
 function workspace(): Workspace {
-  const { agent } = orchestratorHarness();
+  const { agent, db } = orchestratorHarness();
+
+  databases.push(db);
   const files = workspaceFiles(agent);
 
   return {
@@ -75,6 +84,19 @@ function patternBytes(length: number): Uint8Array {
   return out;
 }
 
+/** Where `got` first differs from `wanted`, or -1: the bytes compared in place. Spreading a few MiB into number arrays
+ *  for `toEqual` took the file to 1.8 GB (a worker the suite runs it in was killed for memory, 2026-11-05). */
+function sameBytes(got: Uint8Array, wanted: Uint8Array) {
+  const shared = Math.min(got.byteLength, wanted.byteLength);
+  let at = 0;
+
+  while (at < shared && got[at] === wanted[at]) at += 1;
+
+  return { length: got.byteLength, firstDifference: at === shared && got.byteLength === wanted.byteLength ? -1 : at };
+}
+
+const intact = (bytes: Uint8Array) => ({ length: bytes.byteLength, firstDifference: -1 });
+
 function put(body: BodyInit | Uint8Array, headers: Record<string, string> = {}): Request {
   const payload = body instanceof Uint8Array ? new Blob([Uint8Array.from(body)]) : body;
 
@@ -106,18 +128,18 @@ async function collect(response: Response): Promise<Uint8Array> {
 describe("files route — PUT", () => {
   test("a multi-chunk upload lands byte-exact", async () => {
     const ws = workspace();
-    const whole = patternBytes(2 * FILE_CHUNK_BYTES + 5);
-    const response = await route(put(whole), ws.agent);
+    const sent = patternBytes(2 * FILE_CHUNK_BYTES + 5);
+    const response = await route(put(sent), ws.agent);
     expect(response.status).toBe(200);
     expect(v.parse(OkReplySchema, await response.json())).toEqual({ ok: true });
-    expect([...present(await ws.held(), "the uploaded blob.bin")]).toEqual([...whole]);
+    expect(sameBytes(present(await ws.held(), "the uploaded blob.bin"), sent)).toEqual(intact(sent));
   });
 
   test("an exact multiple of the chunk size is the boundary case and works", async () => {
     const ws = workspace();
-    const whole = patternBytes(3 * FILE_CHUNK_BYTES);
-    expect((await route(put(whole), ws.agent)).status).toBe(200);
-    expect([...present(await ws.held(), "the uploaded blob.bin")]).toEqual([...whole]);
+    const sent = patternBytes(3 * FILE_CHUNK_BYTES);
+    expect((await route(put(sent), ws.agent)).status).toBe(200);
+    expect(sameBytes(present(await ws.held(), "the uploaded blob.bin"), sent)).toEqual(intact(sent));
   });
 
   test("one byte past the total limit is a 413 that writes nothing", async () => {
@@ -317,12 +339,12 @@ describe("files route — PUT", () => {
 describe("files route — GET", () => {
   test("a multi-chunk download streams byte-exact bytes", async () => {
     const ws = workspace();
-    const whole = patternBytes(2 * FILE_CHUNK_BYTES + 11);
-    await ws.files.writeFile(PATH, whole);
+    const stored = patternBytes(2 * FILE_CHUNK_BYTES + 11);
+    await ws.files.writeFile(PATH, stored);
 
     const response = await route(new Request(URL_), ws.agent);
     expect(response.status).toBe(200);
-    expect([...await collect(response)]).toEqual([...whole]);
+    expect(sameBytes(await collect(response), stored)).toEqual(intact(stored));
   });
 
   test("a second GET of the same path reads the modified file", async () => {
