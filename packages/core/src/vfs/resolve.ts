@@ -141,7 +141,7 @@ export function referencedPath(reference: string, planes: PathPlanes): string | 
  * A plain path as this machine names it: `~` is the home, a relative path starts at `cwd`, and each `.` and `..` is
  * left to the walk, which takes `..` after a link: what a file operation and its approval are handed.
  */
-function walkedMachinePath(path: string, at: Pick<PathPlanes, 'cwd' | 'home'>): string {
+export function walkedMachinePath(path: string, at: Pick<PathPlanes, 'cwd' | 'home'>): string {
   return path === '~' || path.startsWith('~/') ? walkedPath(path.slice(2), at.home) : walkedPath(path, at.cwd);
 }
 

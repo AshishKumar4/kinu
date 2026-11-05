@@ -6,7 +6,7 @@
 import { Hono } from 'hono';
 import * as v from 'valibot';
 import {
-  bindingWebSearch, chainWebSearch, objectNamed, ownerCaller, safeJson, json, webSearchChainOf, USER_WEB_SEARCH_PATH, WebSearchRequestSchema,
+  bindingWebSearch, chainWebSearch, ownerCaller, safeJson, json, webSearchChainOf, USER_WEB_SEARCH_PATH, WebSearchRequestSchema,
   type AuthResolver, type OwnerCapabilityEnv, type ProfileCatalogEnvelope, type UserCaller, type WebSearchResponse, type WorkersAiWebSearch,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
@@ -15,6 +15,7 @@ import type { FamilyEnv } from '../api/context';
 import { inferenceProxyGate, type CliBearerEnv, type CliBearerVariables } from '../api/cli-bearer';
 import type { CliAuthAuthority } from '../cli/auth-store';
 import { userCredentials, type UserCredentialClient } from '../providers/agent-registry';
+import { accountNamed } from './workspace-placement';
 
 /** What a search reads of the account: its keys and Cloudflare login, and its catalog's chain. */
 export interface SearchingAccount {
@@ -60,7 +61,7 @@ webSearchRoutes.use(USER_WEB_SEARCH_PATH, inferenceProxyGate());
 
 webSearchRoutes.post(USER_WEB_SEARCH_PATH, async (c) => {
   const owner = await ownerCaller(c.env);
-  const stub = () => objectNamed(c.env.UserDO, c.get('cli').userId);
+  const stub = () => accountNamed(c.env.UserDO, c.get('cli').userId);
 
   return json({ body: await searchAsAccount(c.env, { getAuth: userCredentials(stub, owner).getAuth, catalog: () => stub().getProfileCatalog(owner) }, c.req.raw) });
 });

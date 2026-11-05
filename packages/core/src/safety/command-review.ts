@@ -10,7 +10,8 @@
  */
 
 import type { ShellCwd, ShellSession } from '../execution/shell-session';
-import { machinePath } from '../vfs/resolve';
+import { escapeGlob } from '@nimbus-sh/core/substrate/lifo/utils/glob.js';
+import { machinePath, walkedMachinePath } from '../vfs/resolve';
 import { workspacePath } from '../vfs/workspace-path';
 import {
   commandsRun, joinedWords, programOf, readShell, UNRESOLVED, wordRuns, type CommandRun, type CommandsRun, type ShellCommand, type ShellWord,
@@ -533,19 +534,50 @@ function globDirectory(word: ShellWord, cwd: string, home: string): string | nul
   return path.slice(0, path.lastIndexOf('/', glob === -1 ? path.length : glob));
 }
 
-/** Whether a word may name a path under `roots`, read from `cwd`: a known one by its path, unless it is an option (whose
- *  value `namesRoot` reads); one the shell expands by every path it may match. */
-function mayReach(word: ShellWord, cwd: string, home: string, roots: readonly string[]): boolean {
+/** The user's roots a session's paths are judged against, and its lookup of where a path lands. */
+interface Reach {
+  readonly roots: readonly string[];
+  readonly home: string;
+  readonly session: ShellSession;
+}
+
+/** Whether a word may name a path under `roots`, read from `cwd`: a known one by its path as written and where it lands,
+ *  unless it is an option (whose value `namesRoot` reads); one the shell expands by every path it may match, and where
+ *  each of the paths it does match lands. */
+async function mayReach(word: ShellWord, cwd: string, { roots, home, session }: Reach): Promise<boolean> {
   if (word.literal === null) {
     const directory = globDirectory(word, cwd, home);
 
-    return directory === null || underRoots(directory, roots) || roots.some((root) => root.startsWith(`${directory}/`));
+    if (directory === null || word.pattern === null || underRoots(directory, roots) || roots.some((root) => root.startsWith(`${directory}/`))) return true;
+    const matches = await session.expand(walkedMachinePath(word.pattern, { cwd: escapeGlob(cwd), home: escapeGlob(home) }));
+
+    return matches === null || await anyLands(matches, session, roots);
   }
 
   if (word.literal.startsWith('-')) return false;
   const path = shellPath(word.literal, cwd, home);
 
-  return path === null || underRoots(path, roots);
+  return path === null || underRoots(path, roots) || await anyLands([walkedMachinePath(word.literal, { cwd, home })], session, roots);
+}
+
+/** Whether any of `paths`, as walked, lands under `roots`, or may: one no lookup can follow. */
+async function anyLands(paths: readonly string[], session: ShellSession, roots: readonly string[]): Promise<boolean> {
+  for (const path of paths) {
+    const landed = await session.resolve(path);
+
+    if (landed === null || underRoots(landed, roots)) return true;
+  }
+
+  return false;
+}
+
+/** Whether any of `words` may name a path under the reach's roots, read from `cwd`. */
+async function anyReaches(words: readonly ShellWord[], cwd: string, reach: Reach): Promise<boolean> {
+  for (const word of words) {
+    if (await mayReach(word, cwd, reach)) return true;
+  }
+
+  return false;
 }
 
 /** On a user mount, by its first segment or once `..` resolves. */
@@ -594,10 +626,11 @@ function namesRoot(command: string, root: string): boolean {
 }
 
 /** The user's when the command names or reaches under one of their roots, or its session may be there. */
-function commandFilesOwner(executor: GatedExecutor, command: string, session: ShellCwd | undefined): FilesOwner {
-  const roots = executor.shellSession?.userRoots() ?? [];
+async function commandFilesOwner(executor: GatedExecutor, command: string, session: ShellCwd | undefined): Promise<FilesOwner> {
+  const shell = executor.shellSession;
+  const roots = shell?.userRoots() ?? [];
 
-  if (executor.filesOwner === 'user' || roots.length === 0) return executor.filesOwner;
+  if (executor.filesOwner === 'user' || shell === undefined || roots.length === 0) return executor.filesOwner;
 
   if (roots.some((root) => namesRoot(command, root))) return 'user';
 
@@ -611,10 +644,11 @@ function commandFilesOwner(executor: GatedExecutor, command: string, session: Sh
   // Every directory a relative path may be read from: a `cd` in a substitution, a subshell or a script moves only its
   // own scope, which this reading does not track, so each is kept beside the one before it, which only asks more.
   let cwds: Set<string> | null = new Set([session.cwd]);
+  const reach: Reach = { roots, home: session.home, session: shell };
 
   for (const { words } of runs) {
     for (const cwd of cwds) {
-      if (words.some((word) => mayReach(word, cwd, session.home, roots))) return 'user';
+      if (await anyReaches(words, cwd, reach)) return 'user';
     }
 
     cwds = movedThrough(cwds, words, session.home);
@@ -638,11 +672,13 @@ function copyTarget(step: ShellCommand): ShellWord | undefined {
   return long === undefined ? args.at(-1) : { literal: long.literal === null ? null : after(long.literal), text: after(long.text), pattern: long.pattern === null ? null : after(long.pattern) };
 }
 
-function overwritesUserFiles(executor: GatedExecutor, read: CommandsRun | null, session: ShellCwd | undefined, owner: FilesOwner): boolean {
-  const roots = executor.shellSession?.userRoots() ?? [];
+async function overwritesUserFiles(executor: GatedExecutor, read: CommandsRun | null, session: ShellCwd | undefined, owner: FilesOwner): Promise<boolean> {
+  const shell = executor.shellSession;
+  const roots = shell?.userRoots() ?? [];
   const home = session?.home ?? '/';
 
-  if (roots.length === 0) return false;
+  if (shell === undefined || roots.length === 0) return false;
+  const reach: Reach = { roots, home, session: shell };
 
   // A line whose writes this reading cannot see, that reaches the user's files, may replace one.
   if (read === null) return owner === 'user';
@@ -668,9 +704,9 @@ function overwritesUserFiles(executor: GatedExecutor, read: CommandsRun | null, 
     if (relative && cwds === null) return owner === 'user';
 
     for (const cwd of cwds ?? [home]) {
-      if (targets.some((target) => mayReach(target, cwd, home, roots))) return true;
+      if (await anyReaches(targets, cwd, reach)) return true;
       // A link the line makes to the user's files may carry any write it makes there.
-      linked ||= is(step, 'ln', 'link') && step.words.slice(1).some((word) => mayReach(word, cwd, home, roots));
+      linked ||= is(step, 'ln', 'link') && await anyReaches(step.words.slice(1), cwd, reach);
     }
 
     if (cwds !== null) cwds = movedThrough(cwds, step.words, home);
@@ -684,12 +720,12 @@ const OVERWRITE: ApprovalRuleHit = {
 };
 
 /** The rule table for whose files a command reaches, and any overwrite onto the user's mounts. */
-export function reviewShellCommand(executor: GatedExecutor, command: string, session: ShellCwd | undefined): ApprovalResult {
+export async function reviewShellCommand(executor: GatedExecutor, command: string, session: ShellCwd | undefined): Promise<ApprovalResult> {
   const line = lineRead(command);
-  const owner = commandFilesOwner(executor, command, session);
+  const owner = await commandFilesOwner(executor, command, session);
   const review = judged(line, owner);
 
-  if (!overwritesUserFiles(executor, line.read, session, owner)) return review;
+  if (!await overwritesUserFiles(executor, line.read, session, owner)) return review;
   const hits = [...review.hits, OVERWRITE];
 
   return { decision: dominant(hits), hits };

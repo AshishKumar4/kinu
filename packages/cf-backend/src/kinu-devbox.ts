@@ -10,7 +10,7 @@ import {
 } from "@kinu.run/devbox";
 import { getAgentByName } from "agents";
 import { settleLogged } from "@kinu.run/core/obs";
-import { computerStartAnswer, markDocument, objectNamed, ownerCaller, previewHostSuffix, workspaceHostLabel, type ComputerSize, type UserCaller } from '@kinu.run/core';
+import { computerStartAnswer, markDocument, ownerCaller, previewHostSuffix, workspaceHostLabel, type ComputerSize, type UserCaller } from '@kinu.run/core';
 import type { OrchestratorAgent } from "./orchestrator";
 import { lifecycleIncident, restoreNotices } from "./sandbox-lifecycle";
 import {
@@ -19,6 +19,7 @@ import {
 } from "./egress/outbound";
 import { revealedForJob } from './egress/send-out';
 import type { KinuEgress, KinuEvents } from './server';
+import { accountNamed } from './user/workspace-placement';
 
 
 /** The owning workspace's egress configuration, and its name: without it no root agent hears the box's notices. */
@@ -175,7 +176,7 @@ export class KinuDevbox extends Devbox<Env> {
     const params = await this.ctx.storage.get<KinuEgressParams>(EGRESS_CONFIG_KEY);
 
     if (params === undefined) return null;
-    const owner: ComputerLimitsClient = objectNamed(this.env.UserDO, params.ownerUserId);
+    const owner: ComputerLimitsClient = accountNamed(this.env.UserDO, params.ownerUserId);
 
     return { owner, caller: await ownerCaller(this.env), workspace: params.workspaceName };
   }

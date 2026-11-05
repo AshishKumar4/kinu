@@ -6,12 +6,13 @@
 
 import { Cause, Effect } from 'effect';
 import {
-  closeReason, createScrubStream, egressPlaceholdersIn, kinuUserAgent, objectNamed, observeGitHub, OwnerCapabilityUnavailableError,
+  closeReason, createScrubStream, egressPlaceholdersIn, kinuUserAgent, observeGitHub, OwnerCapabilityUnavailableError,
   ownerCaller, reoriginateRequest, revealHeader, revealUrl, scrubBytes, scrubText,
   type EgressInjectionResult, type EgressRequestFacts, type GitHubRecorder, type ObjectNamespace,
   type OwnerCapabilityEnv, type ScrubReplacement, type UserCaller,
 } from '@kinu.run/core';
 import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { accountNamed } from '../user/workspace-placement';
 
 /** Narrow on purpose, like `runtime.ts`'s `RuntimeUserDOClient`. */
 interface EgressVaultClient {
@@ -48,7 +49,7 @@ export function revealedForJob<Id>(
 ): Promise<Readonly<Record<string, string>>> {
   return settle(Effect.gen(function* () {
     if (params === undefined) return yield* new KinuError('unavailable', "This computer is not yet configured for its workspace, so it cannot ask for the values this job's agents may read.");
-    const owner: JobValuesClient = objectNamed(env.UserDO, params.ownerUserId);
+    const owner: JobValuesClient = accountNamed(env.UserDO, params.ownerUserId);
 
     return yield* attempt(
       { doing: "asking the account for the values this job's agents may read", otherwise: 'unavailable' },
@@ -89,7 +90,7 @@ export function sendOut<Id>(
     if (vault === null || egressPlaceholdersIn(facts).size === 0) return yield* forwarded(request, url, { substitutions: [] }, github);
 
     // Use the stub, never copy it: `Object.assign` of a JSRPC stub yields `{}` (methods live behind a Proxy).
-    const owner: EgressVaultClient = objectNamed(env.UserDO, vault.ownerUserId);
+    const owner: EgressVaultClient = accountNamed(env.UserDO, vault.ownerUserId);
 
     const resolved = yield* Effect.matchCause(Effect.promise(async (): Promise<EgressInjectionResult> => owner.resolveEgressInjection(
       await ownerCaller(env), facts, vault.workspaceName,

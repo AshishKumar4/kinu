@@ -15,6 +15,7 @@ import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { idempotent } from '@nimbus-sh/fabric/do-calls.js';
 import * as v from 'valibot';
 import { logDoCallRetry } from '../obs/do-call-retry';
+import { accountNamed } from '../user/workspace-placement';
 
 /** Routes map this (and only this) to HTTP 429. */
 export class RateLimitError extends KinuError {
@@ -170,7 +171,7 @@ export async function authenticateCliToken<Id, Authority extends CliAuthAuthorit
   const bearer = parseCliBearer(token);
 
   if (!bearer) return Result.fail('Malformed CLI token');
-  const userDO = objectNamed(env.UserDO, bearer.userId);
+  const userDO = accountNamed(env.UserDO, bearer.userId);
 
   const verified = bearer.kind === 'session'
     ? await userDO.verifyCliToken(await ownerCaller(env), token)
@@ -296,7 +297,7 @@ export function pollCliAuth<Id>(
       Effect.promise(async (): Promise<{ token: string; expiresAt: number }> => {
         const owner = await ownerCaller(env);
 
-        return await idempotent('UserDO.mintCliToken', () => objectNamed(env.UserDO, userId),
+        return await idempotent('UserDO.mintCliToken', () => accountNamed(env.UserDO, userId),
           (user) => user.mintCliToken(owner, userId, hash, deviceName), { onRetry: logDoCallRetry });
       }),
       (failed) => {
@@ -341,7 +342,7 @@ export function approveCliAuth<Id>(
 
     if (replayed !== null) return replayed;
     const owner = yield* Effect.promise(async () => ownerCaller(env));
-    yield* Effect.promise(() => idempotent('UserDO.ensureProfile', () => objectNamed(env.UserDO, identity.userId),
+    yield* Effect.promise(() => idempotent('UserDO.ensureProfile', () => accountNamed(env.UserDO, identity.userId),
       (user) => user.ensureProfile(owner, identity.email), { onRetry: logDoCallRetry }));
 
     // The object approves only a pending request, so one approved or expired since the read is answered as it stands.

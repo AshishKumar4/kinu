@@ -39,7 +39,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'fetch' | 'listWorkspaces' | 'touchWorkspace' | 'removeWorkspace' | 'requestWorkspaceRemoval' | 'hasWorkspace'
   | 'listDevices' | 'issueDeviceJoin' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'grantDeviceConsent' | 'revokeDeviceConsent'
-  | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'googleConnection' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders' | 'getAuth'
+  | 'listCredentials' | 'setCredential' | 'testModel' | 'cancelModelTest' | 'deleteCredential' | 'googleConnection' | 'checkpointCredentials' | 'restoreCredentials' | 'listActiveWorkspaces' | 'getAuthHeaders' | 'getAuth'
   | 'limits' | 'limits_inviteRedeemed'
   | 'getCodexStatus' | 'disconnectCodex' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'chatgptPlan' | 'startChatGptSignIn' | 'cancelChatGptSignIn' | 'startChatGptPasteSignIn' | 'finishChatGptPasteSignIn' | 'signOutChatGpt'

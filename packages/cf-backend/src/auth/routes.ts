@@ -7,7 +7,7 @@ import {
   consumeOAuthState, createOAuthState, createSession, revokeSession,
   type OAuthProfile, type SessionAuthority,
 } from './store';
-import { connectedPath, ConnectRunSchema, objectNamed, sanitizeReturnTo } from '@kinu.run/core';
+import { connectedPath, ConnectRunSchema, sanitizeReturnTo } from '@kinu.run/core';
 import { escapeHtml, json, KINU_USER_AGENT, nonEmptyString, scopeList, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts } from './builtin';
@@ -33,6 +33,7 @@ import type { OwnerCapabilityEnv } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { noHead, rawParam, type FamilyEnv } from '../api/context';
+import { accountNamed, placementFor } from '../user/workspace-placement';
 
 const CloudflareUserEnvelopeSchema = v.object({
   success: v.optional(v.boolean()), result: v.optional(JsonValueSchema),
@@ -108,7 +109,7 @@ authApiRoutes.post('/api/auth/dev-session', (c) => settle(Effect.gen(function* (
 
   if (email === null) return json({ body: { error: 'This request holds no dev identity.' } }, { status: 401 });
 
-  const session = yield* Effect.promise(async () => createSession(c.env, { provider: 'dev', providerSub: 'dev', email, emailVerified: true }));
+  const session = yield* Effect.promise(async () => createSession(c.env, { provider: 'dev', providerSub: 'dev', email, emailVerified: true }, placementFor(c.req.raw.cf)));
   const headers = new Headers({ 'cache-control': 'no-store' });
 
   headers.append('set-cookie', sessionCookie(session));
@@ -364,7 +365,7 @@ function completeOAuth<Id>(
       stage = 'profile';
       const profile = yield* fetchOAuthProfile(provider, as, client, tokens);
       stage = 'session';
-      const session = yield* Effect.promise(async () => createSession(env, profile));
+      const session = yield* Effect.promise(async () => createSession(env, profile, placementFor(request.cf)));
 
       if (provider.id === 'cloudflare') {
         // Never fails the sign-in: the person is signed in, and the "Connect Cloudflare Workers AI" notice reports an
@@ -454,7 +455,7 @@ function attachCloudflareWorkersAI<Id>(
 ): Effect.Effect<void, KinuError> {
   return Effect.catchCause(Effect.gen(function* () {
     const credential = yield* Effect.promise(async () => cloudflareTokenToCredential(tokens));
-    const userDO = objectNamed(env.UserDO, userId);
+    const userDO = accountNamed(env.UserDO, userId);
     yield* Effect.promise(async () => userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential));
     // No model seeding: the built-in default tier already names the native Workers AI model.
     notifyWorkspacesModelSettingsChanged(env, userDO, ctx);

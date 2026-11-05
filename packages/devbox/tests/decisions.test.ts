@@ -315,20 +315,18 @@ describe('the attach budget', () => {
   ): Promise<T> => racedRestoreSteps(openStartBudget(budgetMs)).attach(work, onOverrun);
 
   test('work that overruns is abandoned, and its late failure is still reported', async () => {
-    const late: string[] = [];
+    const told = Promise.withResolvers<string>();
     const { promise: work, reject: failWork } = Promise.withResolvers<never>();
 
     const run = attachWithin(0, () => work, failure => {
-      late.push(describeThrown({ cause: failure.cause }));
+      told.resolve(describeThrown({ cause: failure.cause }));
     });
 
     await expect(run).rejects.toMatchObject({ code: 'start-overrun' });
     // Abandoning a value is not the same as discarding an error: the late
     // rejection is usually the only diagnostic there is.
     failWork(new Error('the mount never came back'));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(late).toEqual(['the mount never came back']);
+    expect(await told.promise).toBe('the mount never came back');
   });
 
   test('a failure inside the budget propagates rather than becoming an overrun', async () => {
@@ -343,18 +341,16 @@ describe('the attach budget', () => {
   test('a step that outruns its allowance REPORTS, and its late failure is still told', async () => {
     // Post-attach policy: a silent listener or a process that will not start must not read as
     // an abandoned attach; the container is healthy and replacing it destroys a good box.
-    const late: string[] = [];
+    const told = Promise.withResolvers<string>();
     const { promise: work, reject: failWork } = Promise.withResolvers<never>();
 
     const outcome = await runRestoreStep(0, () => work, (failure) => {
-      late.push(describeThrown({ cause: failure.cause }));
+      told.resolve(describeThrown({ cause: failure.cause }));
     });
 
     expect(outcome).toEqual({ kind: 'late' });
     failWork(new Error('the server never bound'));
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(late).toEqual(['the server never bound']);
+    expect(await told.promise).toBe('the server never bound');
   });
 
 });

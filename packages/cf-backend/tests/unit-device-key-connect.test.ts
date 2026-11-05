@@ -12,7 +12,7 @@ import { DEVICE_CONNECT_SECRET, DEVICE_FRAMES } from '@kinu.run/core';
 import { killAndAwaitExit, present, recordedIn } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
-import { registerTestDevice, secretHash, testDeviceKey, type TestDeviceKey } from './helpers/device-key';
+import { registerTestDevice, secretHash, signReplace, testDeviceKey, TEST_HUB_ORIGIN, type TestDeviceKey } from './helpers/device-key';
 import { startDeviceBridge, type DeviceBridge } from './helpers/device-bridge';
 
 const DAEMON_PATH = join(import.meta.dir, '../../pc-agent/src/index.js');
@@ -364,5 +364,41 @@ describe('a machine linked on an earlier protocol', () => {
     const publicKey = present(createPublicKey(readFileSync(join(home, 'device.key'), 'utf8')).export({ format: 'jwk' }).x, 'the raw public key');
     expect(harness.sql.exec(`SELECT public_key FROM user_devices WHERE id = ?`, 'dev-earlier').toArray()).toEqual([{ public_key: publicKey }]);
     expect(await harness.userDO.listDevices(await testOwner())).toMatchObject([{ id: 'dev-earlier', connected: true }]);
+  });
+});
+
+// Audit 0916 M4: registration was unbounded. (A removed machine's row already goes at once unless it carries an incident
+// the owner must see, and acknowledging that removes it.)
+describe('an account links a bounded number of machines', () => {
+  test('the fifty-first is refused until one is removed, and a machine connected again replaces its own', async () => {
+    const harness = createTestUserDO({ durableObjectId: ACCOUNT });
+    const owner = await testOwner();
+
+    try {
+      const linked = [];
+
+      for (let n = 0; n < 50; n += 1) linked.push(await registerTestDevice(harness.userDO, `machine ${String(n)}`, owner));
+      await expect(registerTestDevice(harness.userDO, 'one more', owner)).rejects.toThrow('50 linked machines');
+      const [first] = linked;
+
+      const machine = present(first, 'a linked machine');
+      const next = testDeviceKey();
+      const asked = (key: TestDeviceKey) => ({ publicKey: key.publicKey, origin: TEST_HUB_ORIGIN, label: 'again' });
+
+      // At the cap: a machine connected again replaces its own row; a row a reset dropped is a new link, refused.
+      const replaced = await harness.userDO.registerDevice(owner, {
+        ...asked(next), replaces: { device: machine.deviceId, signature: signReplace(machine.key, { device: machine.deviceId, publicKey: next.publicKey }) },
+      });
+
+      await expect(harness.userDO.registerDevice(owner, { ...asked(testDeviceKey()), reenrol: 'dev-dropped' })).rejects.toThrow('50 linked machines');
+      await harness.userDO.revokeDevice(owner, replaced.deviceId);
+      const admitted = await registerTestDevice(harness.userDO, 'one more', owner);
+
+      expect({ admitted: admitted.deviceId.startsWith('dev-'), linked: harness.sql.exec(`SELECT COUNT(*) AS n FROM user_devices WHERE revoked_at IS NULL`).toArray() })
+        .toEqual({ admitted: true, linked: [{ n: 50 }] });
+    } finally {
+      await harness.joinFibers();
+      harness.close();
+    }
   });
 });

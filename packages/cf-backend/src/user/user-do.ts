@@ -58,6 +58,8 @@ import { GitHubHooks, type GitHubHookAsk } from './github-hooks';
 import { UserWorkspaces, type WorkspaceAdmission, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
+import { testAvailableModel } from './available-models';
+import type { ModelTestResult } from '@kinu.run/core';
 import {
   EffectApprovals, SlateConsentSchema, SlateConsentStore, partAiCall, partCallVerdict, resolvePartCall,
   type PartAiAnswer, type PartConnectionAnswer, type SlateAiRoute, type SlateConsent,
@@ -76,6 +78,7 @@ import type { SqlRow, UserObjectHost } from './user-host';
 import {
   initBuiltinAccounts, type Admission, type AttemptBucket, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount, type PasswordAccount, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
+import { accountNamed, UNPLACED } from './workspace-placement';
 
 const ROSTER_NUDGE_LANES = 4;
 
@@ -158,6 +161,9 @@ export class UserDO extends Agent<Env> {
   /** Why this account's storage may not be read: its repair could not bring it to this build. */
   private readonly storageRefusal: StoragePredatesReleaseError | undefined;
 
+  /** Settings' model tests running here, by the id the Worker gave each (`testModel`). */
+  readonly #modelTests = new Map<string, AbortController>();
+
   /** What this activation's repair did, for the deploy's walk; null where the storage was at this build. */
   private readonly schemaRepair: Repair | null;
 
@@ -219,7 +225,7 @@ export class UserDO extends Agent<Env> {
   private readonly shareCards = new ShareCardJobs({
     sql: this.ctx.storage.sql,
     owner: () => ({ userId: this.name, email: this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '' }),
-    recipient: (userId) => objectNamed(this.env.UserDO, userId),
+    recipient: (userId) => accountNamed(this.env.UserDO, userId),
     accountOf: (email) => accountIdFor(this.env, email),
     caller: () => ownerCaller(this.env),
     forget: (person, workspaces) => this.forgetPersonIn(person, workspaces),
@@ -340,6 +346,27 @@ export class UserDO extends Agent<Env> {
    * A slate's `workspace.ai` call for this account's own personal part: run with this account's
    * own catalog, credentials and spend (`slate-ai-account.ts`), never the slate owner's.
    */
+  /** Settings' test of a model and its key, made from this object: it runs where every provider answers
+   *  (`workspace-placement.ts`), and the Worker in front of it runs wherever the person is. `testId` names it to
+   *  `cancelModelTest`, which the Worker calls when the person's request ends first. */
+  async testModel(caller: UserCaller, spec: string, testId: string): Promise<ModelTestResult> {
+    await this.requireTier(caller, 'credentials.model');
+    const stop = new AbortController();
+
+    this.#modelTests.set(testId, stop);
+
+    try {
+      return await testAvailableModel({ env: this.env, account: () => this, caller, spec, signal: stop.signal });
+    } finally {
+      this.#modelTests.delete(testId);
+    }
+  }
+
+  async cancelModelTest(caller: UserCaller, testId: string): Promise<void> {
+    await this.requireTier(caller, 'credentials.model');
+    this.#modelTests.get(testId)?.abort();
+  }
+
   async slateAi(caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
     await this.requireTier(caller, 'credentials.model');
 
@@ -1416,7 +1443,7 @@ export class UserDO extends Agent<Env> {
     ...this.env,
     UserDO: {
       idFromName: (name) => (name === this.ctx.id.name ? this.ctx.id : this.env.UserDO.idFromName(name)),
-      get: (id) => (id === this.ctx.id ? this : this.env.UserDO.get(id)),
+      get: (id) => (id === this.ctx.id ? this : this.env.UserDO.get(id, { locationHint: UNPLACED })),
     },
   };
 

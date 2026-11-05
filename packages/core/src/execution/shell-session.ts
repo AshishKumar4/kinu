@@ -1,11 +1,17 @@
 import * as v from 'valibot';
+import { Effect } from 'effect';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { hasGlobChars, shellMatch } from '@nimbus-sh/core/substrate/lifo/utils/glob.js';
 import { KinuError, refusalOf } from '../obs/index';
+import { settle } from '../obs/effect';
 import { sha256Hex } from '../safety/argument-digest';
 import {
   ShellExecOptionsSchema, type OutputSink, type Shell, type ShellCallJob, type ShellExecOptions, type ShellExecResult,
 } from '../types/primitives';
 import { shellQuote } from '../utils/shell';
-import { shellPath } from '../safety/command-review';
+import { onUserRoots, shellPath } from '../safety/command-review';
+import type { VfsMountRouting } from '../vfs/mounts';
 
 /** A shell call's options, or a provider exec's context: a bare string is stdin; keys of neither are dropped. */
 export function shellExecOptions(input: { value: unknown }): ShellExecOptions {
@@ -231,6 +237,18 @@ function withoutTrailer(sink: OutputSink): OutputSink {
   };
 }
 
+/** What the review asks of the plane a shell runs over. */
+export type ShellPlane = Pick<VfsMountRouting, 'resolve'> & Pick<VFS, 'readdir'>;
+
+/** A glob segment's backslash quoting removed: the name it matches when it holds no glob character. */
+const unquoted = (pattern: string) => pattern.replace(/\\(.)/gsu, '$1');
+
+/** A directory's entries; one that is not there, or no directory, lists none, as the shell's expansion skips it. */
+const listing = (plane: ShellPlane, directory: string) => Effect.tryPromise({ try: async () => plane.readdir(directory), catch: (cause) => cause }).pipe(
+  Effect.catchIf((cause) => isVfsError(cause), () => Effect.succeed([])),
+  Effect.orDie,
+);
+
 export interface ShellCwd {
   readonly home: string;
   readonly cwd: string;
@@ -240,6 +258,13 @@ export interface ShellCwd {
 export interface ShellSession {
   readonly home: string;
   readonly userRoots: () => readonly string[];
+  /** Where `path`, as walked, lands: links followed (a `..` after one is the walk's) and a missing directory passing as
+   *  named, as the file tools resolve it; null where no lookup can follow it. A link an earlier call made carries a
+   *  later call's path onto the user's files. */
+  readonly resolve: (path: string) => Promise<string | null>;
+  /** The paths glob `pattern` (absolute, as globMatch reads it) names once the shell expands it, as walked; the word
+   *  as written when nothing matches. Null where it would list a directory on the user's files, which it never lists. */
+  readonly expand: (pattern: string) => Promise<readonly string[] | null>;
   /** Where a call starts: its `cwd`, under its name's directory (the home for none). */
   at(name: string | undefined, cwd: string | undefined): Promise<ShellCwd>;
   /** A named call ended in `cwd`; null: unknown, so the next call reads it again. */
@@ -256,6 +281,8 @@ export interface ShellSession {
 export interface ShellSessionOptions {
   readonly home: string;
   readonly userRoots: () => readonly string[];
+  /** The plane the shell runs over, which says where its paths land. Absent: every path lands where it is named. */
+  readonly plane?: () => ShellPlane;
   /** A name's directory as an earlier process left it; null: unreadable. Absent: every name starts at home. */
   readonly stored?: (name: string) => Promise<string | null>;
   /** The shell frees a name when its call's job detaches (Nimbus's `detach`): the job runs on, and keeps no name. */
@@ -275,10 +302,17 @@ interface HeldName {
   job: { readonly id: string; readonly since: number } | null;
 }
 
-export function createShellSession({ home, userRoots, stored, detachFrees = false }: ShellSessionOptions): ShellSession {
+export function createShellSession({ home, userRoots, plane, stored, detachFrees = false }: ShellSessionOptions): ShellSession {
   const directories = new Map<string, Promise<ShellCwd>>();
   const held = new Map<string, HeldName>();
   const unknown: ShellCwd = { home, cwd: home, mayBeUsers: true };
+
+  const landing = (path: string) => (plane === undefined
+    ? Effect.succeed<string | null>(path)
+    : Effect.tryPromise({ try: () => plane().resolve(path, { creating: true }), catch: (cause) => cause }).pipe(
+      Effect.catchIf((cause) => isVfsError(cause), () => Effect.succeed(null)),
+      Effect.orDie,
+    ));
 
   // A read that failed or found nothing is not kept: the next call reads again.
   const directory = (name: string): Promise<ShellCwd> => {
@@ -306,6 +340,38 @@ export function createShellSession({ home, userRoots, stored, detachFrees = fals
   return {
     home,
     userRoots,
+    resolve: (path) => settle(landing(path)),
+    expand: (pattern) => settle(Effect.gen(function* () {
+      if (plane === undefined) return [unquoted(pattern)];
+      let walked = ['/'];
+
+      // As the shell's expansion walks it (Nimbus's expandGlob, over the process's own view): a literal segment as
+      // written, a glob segment each name of its directory it matches.
+      for (const part of pattern.split('/').filter((segment) => segment !== '')) {
+        const next: string[] = [];
+
+        for (const parent of walked) {
+          const at = parent === '/' ? '' : parent;
+
+          if (!hasGlobChars(part)) {
+            next.push(`${at}/${unquoted(part)}`);
+            continue;
+          }
+
+          const landed = yield* landing(parent);
+
+          if (landed === null || onUserRoots(landed, userRoots())) return null;
+
+          for (const { name } of yield* listing(plane(), landed)) {
+            if (shellMatch(part, name)) next.push(`${at}/${name}`);
+          }
+        }
+
+        walked = next;
+      }
+
+      return walked.length > 0 ? walked : [unquoted(pattern)];
+    })),
     async at(name, cwd) {
       if (name === undefined) return sessionAt(home, cwd);
       const base = await directory(name);

@@ -3635,6 +3635,13 @@ restores and whether P's tags, manifest and layer still exist. Run
 Containers-scoped token, the Worker holds the deploy token as its secret;
 that is temporary, and the secret is swapped when the scoped token exists.
 
+The probes ended on 2026-10-12 at 216 h, when the owner cleared the registry's
+images, the life image among them; the Worker, application and bucket were
+deleted and the readings archived (`~/kinu-logs/research/d65-life10021741`, 27
+objects). Probe (b)'s days 28 to 36 were never read, so whether restoring a
+child keeps its parent past 30 days is unmeasured, and the 29-day rule from
+the lineage's root stands (ledger m1965a).
+
 Day 0 of (a), both bases: C's manifest names P's manifest as its `subject`
 and P as `parent_snapshot_id`, and does not name P's layer; C's one layer
 is an incremental btrfs stream (5,644 B on our image, 6,216 B on trixie)

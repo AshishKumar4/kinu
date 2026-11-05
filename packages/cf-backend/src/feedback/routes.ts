@@ -17,6 +17,7 @@ import type { ObjectNamespace } from '@kinu.run/core';
 import { answerFeedback, type WorkspaceAttribution } from './submit';
 import type { FamilyEnv } from '../api/context';
 import type { AuthIdentity } from '../auth/session';
+import { UNPLACED } from '../user/workspace-placement';
 
 export type FeedbackRegistry = Pick<UserDO, 'hasWorkspace'>;
 
@@ -47,7 +48,7 @@ async function attributeWorkspace<Id>(
     const caller = await ownerCaller(env);
     const userObject = env.UserDO.idFromName(userId);
 
-    const owned = await idempotent('hasWorkspace', () => env.UserDO.get(userObject),
+    const owned = await idempotent('hasWorkspace', () => env.UserDO.get(userObject, { locationHint: UNPLACED }),
       (stub) => stub.hasWorkspace(caller, workspace), { onRetry: logDoCallRetry });
 
     return owned ? { kind: 'owned', workspace } : { kind: 'refused' };

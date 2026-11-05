@@ -8,13 +8,14 @@ import { Hono, type Context } from "hono";
 import { diagnostics, renderThrownChain, toKinuError, type KinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 
-import { objectNamed, err, json } from "@kinu.run/core";
+import { err, json } from "@kinu.run/core";
 import { DEVICE_PTY_MAX_AXIS, DEVICE_SCREEN_PATH, DEVICE_TERMINAL_PATH } from "@kinu.run/core";
 import { terminalLane } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { WORKSPACE_TERMINAL_PATH } from "@kinu.run/core";
 import type { FamilyEnv } from "./api/context";
 import { LITERAL_WORKSPACE, type WorkspaceVariables } from "./api/workspace";
+import { accountNamed } from './user/workspace-placement';
 
 
 const DEVICE_EXECUTOR = "device";
@@ -224,7 +225,7 @@ async function toDeviceHolder(
   socketUrl.pathname = path;
   socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
 
-  return objectNamed(deps.UserDO, opened.user).fetch(new Request(socketUrl, request));
+  return accountNamed(deps.UserDO, opened.user).fetch(new Request(socketUrl, request));
 }
 
 /** The shell is the runtime's, inside the workspace object; keepalive/reset are guards as for a device. */
