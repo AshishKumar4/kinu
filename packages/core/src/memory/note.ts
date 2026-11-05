@@ -55,8 +55,8 @@ export interface MemoryNote {
   content: string;
   /** Falls back to the whole heading when unstamped. */
   updatedAt: string;
-  /** The stamp as an instant: a day-only stamp is its day's start; null where the stamp names no date. */
-  writtenAt: number | null;
+  /** The stamp as an instant: a day-only stamp is its day's start; absent where the stamp names no date. */
+  writtenAt?: number;
   /** Null when the stamp names no actor. */
   savedBy: string | null;
 }
@@ -75,7 +75,7 @@ export function parseMemoryNotes(content: string): MemoryNote[] {
 
     const writtenAt = when === undefined ? Number.NaN : Date.parse(when);
 
-    notes.push({ path: MEMORY_PATH, content: body, updatedAt: when ?? heading, writtenAt: Number.isFinite(writtenAt) ? writtenAt : null, savedBy: savedBy ?? null });
+    notes.push({ path: MEMORY_PATH, content: body, updatedAt: when ?? heading, ...(Number.isFinite(writtenAt) && { writtenAt }), savedBy: savedBy ?? null });
   }
 
   return notes;

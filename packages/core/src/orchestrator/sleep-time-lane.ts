@@ -376,7 +376,7 @@ export class SleepTimeLane {
     return attempt({ doing: "reading the agent's notes the pass folds into facts", otherwise: 'io' }, read).pipe(
       Effect.map((notes) => {
         const folded = this.instant(NOTES_FOLDED);
-        const dated = notes.filter((note): note is MemoryNote & { readonly writtenAt: number } => note.writtenAt !== null);
+        const dated = notes.filter((note): note is MemoryNote & { readonly writtenAt: number } => note.writtenAt !== undefined);
         const fresh = folded === null ? dated.slice(-FIRST_FOLD) : dated.filter((note) => note.writtenAt > folded);
 
         return { fresh, through: fresh.reduce<number | null>((newest, note) => Math.max(newest ?? note.writtenAt, note.writtenAt), null) };
