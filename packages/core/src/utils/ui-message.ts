@@ -7,6 +7,7 @@ import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import type { ChatHistoryEntry } from '../types/chat';
 import { turnTags } from '../types/turn-metadata';
+import { textOfPart } from './text';
 
 /** A UI message by its shape: what Kinu projects from its own rows is walked no deeper. */
 export const UIMessageSchema = v.custom<UIMessage>((value) =>
@@ -22,7 +23,7 @@ export function announcementOf(turnId: string): string {
 
 /** What a row says: an answer's last text (its earlier texts are narration), anything else's text whole. */
 export function rowText(row: { readonly role: string; readonly parts: readonly { readonly type?: unknown; readonly text?: unknown }[] }): string {
-  const texts = row.parts.flatMap((part) => part.type === 'text' ? [v.parse(v.string(), part.text)] : []);
+  const texts = row.parts.flatMap((part) => textOfPart(part) ?? []);
 
   return row.role === 'assistant' ? texts.at(-1) ?? '' : texts.join('');
 }

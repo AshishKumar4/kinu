@@ -6,9 +6,9 @@ import { SlateFiles, slateDirectory } from '../src/slates/files';
 import { WorkspaceSlateContentStore } from '../src/slates/content';
 import { SqliteSlateStore } from '../src/slates/store';
 import { WorkspaceSlates } from '../src/slates/runtime';
-import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpers';
+import { createTestWorkspace, createWorkspaceBundle, makeSqlExec, writeWorkspaceArchive } from './helpers';
 import { Database } from 'bun:sqlite';
-import { writeWorkspaceArchive, restoreWorkspaceArchive } from '../src/identity/archive';
+import { restoreWorkspaceArchive } from '../src/identity/archive';
 import { sqlStorageOver } from '../src/identity/inline-primitives';
 
 test('Slate source operations require Nimbus atomic-embedding rollback coherence', async () => {

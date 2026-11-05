@@ -26,11 +26,10 @@ import { abortableSleep } from '../../utils/abort';
 import type { ModelAttemptInfo, ProviderWaitInfo } from '../types';
 import { attemptKey, recordAttemptFailure, withAttemptIdentity, type AttemptIdentityCapture } from '../attempt-identity';
 import { MINUTE_MS } from '../../utils/date';
+import { doublingBackoffMs } from '../../utils/recovery-backoff';
 
 /** Full-jitter backoff; unmeasured. */
 const BASE_DELAY_MS = 2_000;
-
-const BACKOFF_FACTOR = 2;
 
 const MAX_DELAY_MS = 60_000;
 
@@ -404,7 +403,7 @@ interface ReportedWait {
 
 /** The most a full-jitter wait before retry `attempt` (1-based) may be; the wait is a uniform draw below it. */
 export function backoffCeiling(attempt: number): number {
-  return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32));
+  return doublingBackoffMs({ base: BASE_DELAY_MS, ceiling: MAX_DELAY_MS }, attempt);
 }
 
 function waitSource(header: number | null, stated: number | null): ProviderWaitInfo['source'] {

@@ -792,20 +792,6 @@ export function readWorkspaceArchivePage(
   }));
 }
 
-/** Whole archive in one call, for callers with no transport in between. */
-export async function writeWorkspaceArchive(sql: SqlExec, opts: ExportOptions): Promise<string[]> {
-  const lines: string[] = [];
-  let cursor: ArchiveCursor | null = null;
-
-  do {
-    const page = await readWorkspaceArchivePage(sql, { ...opts, cursor });
-    lines.push(...page.lines);
-    cursor = page.next;
-  } while (cursor);
-
-  return lines;
-}
-
 function storeRestore(open: (() => ArchiveStoreTarget) | undefined) {
   let target: ArchiveStoreTarget | null = null;
   const owed = new Set<string>();

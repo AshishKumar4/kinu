@@ -19,6 +19,7 @@ import {
   type Fact, type FactOrigin, type FactsStore,
 } from './facts';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
+import { stableStringify } from '../safety/argument-digest';
 
 /** One account note a query matched. */
 export interface AccountNoteHit {
@@ -128,7 +129,7 @@ export function initAccountMemoryTables(execRaw: RawSqlExec): void {
 
 /** Two proposals are the same ask when they name the same fact key and value, or the same note; importance aside. */
 function sameAsk(a: v.InferOutput<typeof AccountProposalSchema>, b: v.InferOutput<typeof AccountProposalSchema>): boolean {
-  if (a.kind === 'fact') return b.kind === 'fact' && a.key === b.key && JSON.stringify(a.value) === JSON.stringify(b.value);
+  if (a.kind === 'fact') return b.kind === 'fact' && a.key === b.key && stableStringify(a.value) === stableStringify(b.value);
 
   return b.kind === 'note' && a.content === b.content;
 }

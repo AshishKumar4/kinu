@@ -18,7 +18,7 @@ import type { ContextSelection } from './context';
 import { isServerCompaction } from '../providers/server-compaction';
 import { PLATFORM_LIMITS } from '../platform-limits';
 import { attachmentImage, imagesIn, walkImages, type MediaRef, type MediaUrl, type StoredImage } from './chat-media';
-import { utf8Bytes } from '../utils/text';
+import { utf8Bytes, textOfPart } from '../utils/text';
 import { nextLoopTurn } from '../types/clock';
 import { boundedInt } from '../utils/bounds';
 
@@ -454,7 +454,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
 
   /** Each text part among `references`, oldest first. */
   async narration(references: readonly ConversationPartReference[]): Promise<string[]> {
-    return (await this.parts(references)).flatMap((part) => (part.type === 'text' ? [v.parse(v.string(), part.text)] : []));
+    return (await this.parts(references)).flatMap((part) => textOfPart(part) ?? []);
   }
 
   async parts(references: readonly ConversationPartReference[], cache = new Map<string, readonly StoredPart[]>()): Promise<JsonObject[]> {

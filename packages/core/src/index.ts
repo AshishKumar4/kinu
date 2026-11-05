@@ -218,8 +218,7 @@ export { forkArtifactPath, type ForkConversationPlan } from './identity/fork-pla
 // Workspace archive: one backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION,
-  readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
-  ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
+  readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
   type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentPage,
   type ArchivePage, type ArchiveStoreSource,
 } from './identity/archive';
