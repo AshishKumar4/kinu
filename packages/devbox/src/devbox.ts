@@ -2719,17 +2719,22 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const waited = yield* Effect.promise(async () => Promise.race([taking, waitedOut]));
       const files = yield* Effect.promise(async () => Promise.race([counted, Promise.resolve(undefined)]));
 
-      yield* Effect.gen({ self: this }, function* () {
+      const stopping = yield* Effect.exit(Effect.gen({ self: this }, function* () {
         this.#invalidateGeneration();
         yield* this.#stopContainer();
         yield* this.#awaitContainerStopped();
-      }).pipe(Effect.ensuring(Effect.promise(async () => {
+      }));
+
+      // Told whatever the stop did; a failure telling it is the rest's failure, as a throw in a `finally` is.
+      yield* Effect.promise(async () => {
         // Already settled, the take wins the race: a settled promise's reaction runs before a later one's.
         const settled = await Promise.race([taking, Promise.resolve(late)]);
         const at = { restMs: Date.now() - began, waitedOut: waited === late, files, waitMs: this.#restSnapshotWaitFor(files) };
 
         await (settled === late ? this.#restSnapshotAbandoned(at) : this.#restSnapshotSettled(settled, at));
-      })));
+      });
+
+      return yield* stopping;
     });
   }
 
