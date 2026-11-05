@@ -19,7 +19,7 @@ rewrite what came before them.
 
 | Part | What is in it | Changes when | Code |
 |---|---|---|---|
-| Tool definitions | The native tools this agent may call in this work mode, then MCP and extension tools | The role, the work mode, an active skill's tool restriction, or an MCP server connecting | `profile.allowedTools`; `composeTurn` in `cf-backend/src/actor-agent.ts`, `composeNextRequest` in `cli-backend/src/local-session.ts` |
+| Tool definitions | The native tools this agent may call in this work mode, then MCP and extension tools | The role, the work mode, an active skill's tool restriction, or an MCP server connecting | `profile.allowedTools`; `composeTurn` in `cf-backend/src/orchestrator.ts`, `composeNextRequest` in `cli-backend/src/local-session.ts` |
 | System: core | Operating guidance, the execution environments this workspace has, the tool index, persistence, code execution, delegation, background work, verification, output format | The tool list, or a promoted prompt section | `buildSystemPromptSync`, `packages/core/src/prompt.ts` |
 | System: lead doctrine | Six sections on responsibility, briefing, parallel work, review, interruptions and delivery | Never between turns; only a root agent that can hire has it | same |
 | System: workspace | `SOUL.md`, approved `AGENTS.md`, the skills index, pinned skill bodies | The owner edits one of them, or a dream's skill lands at a cold turn | same |

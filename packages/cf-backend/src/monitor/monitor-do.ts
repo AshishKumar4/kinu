@@ -38,7 +38,7 @@ export class MonitorDO extends DurableObject<Env> {
     if (unmade) writeStamp(stamps, 'monitor');
     // No retry timer: the cron tick is the sweep and reconciles the outbox every run.
     this.outbox = new EmailOutbox(ctx.storage.sql);
-    // Own isolate, own sink (see `ActorAgent`'s constructor); without it outbox failures reach no dataset.
+    // Own isolate, own sink (see `OrchestratorAgent`'s constructor); without it outbox failures reach no dataset.
     installAnalyticsDiagnostics(env);
   }
 

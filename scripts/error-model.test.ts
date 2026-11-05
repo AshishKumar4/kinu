@@ -41,6 +41,9 @@ const lockOf = (counts: Readonly<Record<string, number>>): ErrorModelLock => ({ 
 
 const measured = (text: string, extra: readonly (readonly [string, string])[] = []) => measure(new Map([[FILE, text], ...extra]));
 
+/** One file's keys, measured beside the legacy fixture. */
+const keysOf = (file: string, body: string) => measured(LEGACY, [[file, body]]).filter(({ key }) => key.startsWith(file));
+
 const BASELINE = lockOf(Object.fromEntries(measured(LEGACY).map(({ key, value }) => [key, value])));
 
 test('each mechanism is counted where it appears, and not where the target model spells the same word', () => {
@@ -109,10 +112,27 @@ test('the boundary file grows in the mechanisms it declares and in no other', ()
   const boundary = 'packages/core/src/obs/effect.ts';
   const outcome = 'packages/core/src/tools/outcome.ts';
   const body = 'export const w = { ok: true, success: false }; export function f(): never { throw new Error("x"); }\n';
-  const keysOf = (file: string) => measured(LEGACY, [[file, body]]).filter(({ key }) => key.startsWith(file));
 
-  expect(keysOf(boundary)).toEqual([]);
-  expect(keysOf(outcome)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
+  expect(keysOf(boundary, body)).toEqual([]);
+  expect(keysOf(outcome, body)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
+});
+
+test('a VFS implementation\'s VfsError throw is its declared channel; any other throw there is still counted', () => {
+  const plane = 'packages/core/src/vfs/context-plane.ts';
+  const header = 'import { syscallError, VfsError as Nimbus } from \'@nimbus-sh/core/vfs/vfs-error.js\';\n';
+
+  const vfsErrors = header + 'export const files = { async stat(p: string) { throw syscallError(\'ENOENT\', \'stat\', p); }, '
+    + 'async mkdir(p: string) { throw new Nimbus(\'EACCES\', \'no\', p); } };\n';
+
+  const counted = (body: string) => keysOf(plane, body)[0]?.value ?? 0;
+
+  expect(counted(vfsErrors)).toBe(0);
+  expect(counted(`${vfsErrors}export function check(x: number) { if (x < 0) throw new KinuError('bad_input', 'x'); throw new Error('y'); }\n`)).toBe(2);
+  // A maker, or a class of that name not imported from Nimbus, is no VFS error made at the throw.
+  expect(counted(`${header}const absent = (p: string) => new Nimbus('ENOENT', 'gone', p);\nexport function f(p: string) { throw absent(p); }\n`)).toBe(1);
+  expect(counted('class VfsError extends Error {}\nexport function f() { throw new VfsError(\'x\'); }\n')).toBe(1);
+  // The same VfsError throws in a file that declares no VFS implementation stay legacy.
+  expect(keysOf('packages/core/src/vfs/other.ts', vfsErrors)).toEqual([{ key: 'packages/core/src/vfs/other.ts#throw', value: 2 }]);
 });
 
 test.each([

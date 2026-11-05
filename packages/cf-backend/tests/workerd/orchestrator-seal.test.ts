@@ -61,10 +61,10 @@ describe('a production OrchestratorAgent stub', () => {
 
     expect(await reached({
       ...deniedCalls(stub),
-      // Its own internals: the workspace it hosts, its soul and the profile its next turn resolves.
+      // Its own internals: the workspace it hosts, its soul and the actor it runs as.
       hostedWorkspace: () => stub.hostedWorkspace(),
       loadSoulText: () => stub.loadSoulText(),
-      currentProfile: () => stub.currentProfile(),
+      actorHandle: () => stub.actorHandle(),
     })).toEqual([]);
   });
 

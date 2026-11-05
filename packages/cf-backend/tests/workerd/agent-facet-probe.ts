@@ -186,7 +186,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     }, {
       hostNode: hostNodeSeat.bind(undefined, seams),
       journal: this.headJournal, logger: diagnostics,
-      reportModelCall: (report) => { this.reportModelCall(report); },
+      reportModelCall: (report) => { this.accounting.reportModelCall(report); },
       provisionHome: async () => home,
       nodeCodemode: nodeCodemodeTool.bind(undefined, seams), webSearch: seams.webSearch(),
     });
@@ -266,7 +266,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     }, {
       hostNode: hostNodeSeat.bind(undefined, seams),
       journal: this.headJournal, logger: diagnostics,
-      reportModelCall: (report) => { this.reportModelCall(report); },
+      reportModelCall: (report) => { this.accounting.reportModelCall(report); },
       provisionHome: async () => home,
       nodeCodemode: nodeCodemodeTool.bind(undefined, seams), webSearch: seams.webSearch(),
     });

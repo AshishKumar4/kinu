@@ -3,9 +3,7 @@
 
 export {
   EXPERIENCE_KINDS,
-  describePayload,
   experienceSearchText,
-  misevolutionSourceOf,
   parseExperiencePayload,
   type ExperienceEntry,
   type ExperienceKind,
@@ -21,27 +19,11 @@ export {
 } from './library';
 
 export {
-  findPublishable,
-  listPublishable,
-  type PublishRefusal,
-  type PublishSources,
-} from './publishable';
-
-export {
   bindPendingImports,
   initImportedExperienceTable,
   listImportedExperience,
   settleImportsForTurn,
-  stageImport,
-  type ImportOutcome,
   type ImportSettlement,
-  type ImportStatus,
   type ImportedExperienceRow,
 } from './imports';
 
-export {
-  runExperienceAction,
-  type ExperienceActionDeps,
-  type ExperienceActionInput,
-  type ExperienceLibraryClient,
-} from './actions';
