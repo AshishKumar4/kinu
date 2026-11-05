@@ -18,7 +18,7 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import { Cause, Effect, Exit } from 'effect';
 import * as v from 'valibot';
 import {
-  JsonObjectSchema, JsonValueSchema, newestOpener, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
+  JsonObjectSchema, JsonValueSchema, MESSAGE_AMENDED_FRAME, newestOpener, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
   UIMessageSchema, type SentWords, type ChatTransport, type ChatWindow, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, hold as holdExit, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
@@ -644,10 +644,10 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     for (const request of live.carried) this.done(request);
   }
 
-  /** An answer stamped after its end: its tabs are shown the window again, unless a turn is live, whose end carries it
-   *  (a window sent mid-turn would drop the answer streaming in). */
-  answerAmended(window: ChatWindow): void {
-    if (this.live === null) this.wire.broadcast(transcriptFrame(window));
+  /** An answer stamped after its end: its tabs are sent the one row, which each replaces where it holds it. A row, not a
+   *  window, so a live turn's streaming answer is untouched and an answer scrolled back to is reached. */
+  answerAmended(message: UIMessage): void {
+    this.wire.broadcast(JSON.stringify({ type: MESSAGE_AMENDED_FRAME, message }));
   }
 
   /** A turn whose agent did not live to tell its end: its window read from the agent's transcript. Every window a tab is

@@ -7,7 +7,7 @@ import { Chat } from '@ai-sdk/react';
 import { DefaultChatTransport, readUIMessageStream, type UIMessage, type UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList, createTestSql } from '@kinu.run/test-utils';
-import { INTERRUPTED_TURN, type JsonObject, type SendLanding, type SentWords, type SessionEvent } from '@kinu.run/core';
+import { INTERRUPTED_TURN, MESSAGE_AMENDED_FRAME, type JsonObject, type SendLanding, type SentWords, type SessionEvent } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { Connection } from 'agents';
 import { ChatWireTransport, type ChatWire } from '../src/chat-transport';
@@ -197,18 +197,17 @@ test('a turn ends on the window its agent told, publishing done with it', async 
   expect(h.broadcasts.at(-1)).toMatchObject({ frame: { type: 'cf_agent_chat_messages', messages: [{ id: 'answer' }] } });
 });
 
-test('an answer stamped after its end is shown again, unless a turn is live, whose own end carries it', async () => {
+test('an answer stamped after its end is sent as that one row, a live turn or not', async () => {
   const h = harness('turn', async () => { throw new Error('an amended answer reads no history'); });
-  const stamped: UIMessage[] = [{ id: 'answer', role: 'assistant', parts: [{ type: 'text', text: 'settled' }], metadata: { kinuSlatesChanged: ['board'] } }];
+  const stamped: UIMessage = { id: 'answer', role: 'assistant', parts: [{ type: 'text', text: 'settled' }], metadata: { kinuSlatesChanged: ['board'] } };
 
-  h.transport.answerAmended({ messages: stamped, older: null });
-  expect(h.broadcasts.at(-1)).toMatchObject({ frame: { type: 'cf_agent_chat_messages', messages: [{ id: 'answer', metadata: { kinuSlatesChanged: ['board'] } }] } });
+  h.transport.answerAmended(stamped);
+  expect(h.broadcasts.at(-1)).toMatchObject({ frame: { type: MESSAGE_AMENDED_FRAME, message: { id: 'answer', metadata: { kinuSlatesChanged: ['board'] } } } });
 
+  // A row replaces only itself, so the answer streaming in is untouched: sent mid-turn too.
   await h.transport.openTurn({ turnId: 'next', runId: 'run-next', messageId: 'next-answer', userTurn: false, carried: [], finishedSteps: 0 });
-  const shown = h.broadcasts.length;
-
-  h.transport.answerAmended({ messages: stamped, older: null });
-  expect(h.broadcasts).toHaveLength(shown);
+  h.transport.answerAmended(stamped);
+  expect(h.broadcasts.at(-1)).toMatchObject({ frame: { type: MESSAGE_AMENDED_FRAME, message: { id: 'answer' } } });
 });
 
 function chunks(parts: UIMessageChunk[]): ReadableStream<UIMessageChunk> {
