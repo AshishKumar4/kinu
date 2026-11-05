@@ -296,7 +296,9 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   async materializeParts(reference: MessageReference): Promise<readonly StoredPart[]> {
     const stored = await this.stored(reference);
 
-    return stored instanceof KinuError ? settle(Effect.fail(stored)) : stored.parts;
+    if (stored instanceof KinuError) return settle(Effect.fail(stored));
+
+    return stored.parts;
   }
 
   async materialize(reference: MessageReference): Promise<ModelMessage> {
@@ -560,7 +562,9 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     if (row.sealed_at !== null) return null;
     const parts = await this.streamed(messageId);
 
-    return parts instanceof KinuError ? settle(Effect.fail(parts)) : parts;
+    if (parts instanceof KinuError) return settle(Effect.fail(parts));
+
+    return parts;
   }
 
   seal(messageId: string, content: PreparedContent, envelope?: JsonObject): void {
