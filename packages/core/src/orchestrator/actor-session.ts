@@ -526,24 +526,26 @@ export class ActorSession {
     startedAt: number,
     metadata?: JsonObject,
   ): ActorTurnLease {
-    if (this.active !== null) throw new KinuError('denied', 'this actor already has an admitted turn');
-    const abort = new AbortController();
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (this.active !== null) return yield* Effect.fail(new KinuError('denied', 'this actor already has an admitted turn'));
+      const abort = new AbortController();
 
-    const lease: ActorTurnLease = Object.freeze({
-      actorId: this.actorId, runId: ids.runId, turnId: ids.turnId, signal: abort.signal,
-    });
+      const lease: ActorTurnLease = Object.freeze({
+        actorId: this.actorId, runId: ids.runId, turnId: ids.turnId, signal: abort.signal,
+      });
 
-    this.active = {
-      lease, abort, phase: 'preparing', context: null, profile: null, profileInputs: null,
-      reserved: null, claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
-    };
-    this.mode = mode;
-    this.turnMetadata = metadata;
-    this.landed.length = 0;
-    this.orchestrator.beginTurn(startedAt, metadata);
-    this.orchestrator.restrictTurnWorkMode(mode);
+      this.active = {
+        lease, abort, phase: 'preparing', context: null, profile: null, profileInputs: null,
+        reserved: null, claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
+      };
+      this.mode = mode;
+      this.turnMetadata = metadata;
+      this.landed.length = 0;
+      this.orchestrator.beginTurn(startedAt, metadata);
+      this.orchestrator.restrictTurnWorkMode(mode);
 
-    return lease;
+      return lease;
+    }));
   }
 
   /**
@@ -608,18 +610,20 @@ export class ActorSession {
   /** The bind transition, once, before any model or tool work: the profile the execution resolved, frozen under its key
    *  with the inputs it was resolved from. A recovered execution binds what it froze, which this keeps. */
   bindProfile(lease: ActorTurnLease, profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void {
-    const turn = this.requireTurn(lease);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const turn = this.requireTurn(lease);
 
-    if (turn.phase !== 'preparing' || turn.profile !== null || turn.reserved === null) {
-      throw new KinuError('denied', 'an actor turn profile is bound exactly once, under the claim it opened with, before execution');
-    }
+      if (turn.phase !== 'preparing' || turn.profile !== null || turn.reserved === null) {
+        return yield* Effect.fail(new KinuError('denied', 'an actor turn profile is bound exactly once, under the claim it opened with, before execution'));
+      }
 
-    if (this.mode === 'plan' && profile.workMode !== 'plan') throw new KinuError('denied', 'an actor profile cannot widen an admitted Plan turn');
-    this.turnFacts.bind(lease, { profile, inputs });
-    turn.profile = profile;
-    turn.profileInputs = inputs;
-    this.mode = profile.workMode;
-    this.orchestrator.restrictTurnWorkMode(this.mode);
+      if (this.mode === 'plan' && profile.workMode !== 'plan') return yield* Effect.fail(new KinuError('denied', 'an actor profile cannot widen an admitted Plan turn'));
+      this.turnFacts.bind(lease, { profile, inputs });
+      turn.profile = profile;
+      turn.profileInputs = inputs;
+      this.mode = profile.workMode;
+      this.orchestrator.restrictTurnWorkMode(this.mode);
+    }));
   }
 
   send(steer: UserSteer & { readonly id: string; readonly mode?: WorkMode }): Promise<SendOutcome> {
@@ -698,12 +702,14 @@ export class ActorSession {
 
   /** An unnamed outcome settles `indeterminate`, never `completed`. */
   finishTurn(lease: ActorTurnLease): void {
-    const active = this.requireTurn(lease);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const active = this.requireTurn(lease);
 
-    if (active.phase === 'running') throw new KinuError('denied', 'cannot release an actor while its program is running');
+      if (active.phase === 'running') return yield* Effect.fail(new KinuError('denied', 'cannot release an actor while its program is running'));
 
-    if (active.reserved !== null && !active.claimSettled) this.closeClaim(active, 'indeterminate')();
-    this.active = null;
+      if (active.reserved !== null && !active.claimSettled) this.closeClaim(active, 'indeterminate')();
+      this.active = null;
+    }));
   }
 
   /**
@@ -712,11 +718,13 @@ export class ActorSession {
    * settled, so a commit that rolls back leaves it open on both sides.
    */
   closeTurnClaim(lease: ActorTurnLease, outcome: ClaimOutcome): () => void {
-    const active = this.requireTurn(lease);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const active = this.requireTurn(lease);
 
-    if (active.reserved === null) throw new KinuError('denied', 'this actor turn holds no durable claim to settle');
+      if (active.reserved === null) return yield* Effect.fail(new KinuError('denied', 'this actor turn holds no durable claim to settle'));
 
-    return this.closeClaim(active, outcome);
+      return this.closeClaim(active, outcome);
+    }));
   }
 
   /** Whether the turn's claim is still to be settled. */

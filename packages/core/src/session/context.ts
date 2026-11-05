@@ -138,19 +138,21 @@ export class SessionContext {
   }
 
   entries(selection: ContextSelection): readonly ContextEntry[] {
-    this.actor.assertCurrent();
-    const actorId = this.actor.actorId;
-    const { contextId, revision } = selection;
-    const head = this.headOf(contextId);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
+      const actorId = this.actor.actorId;
+      const { contextId, revision } = selection;
+      const head = this.headOf(contextId);
 
-    if (head?.selection.revision === revision) return this.keptHead(head).entries;
+      if (head?.selection.revision === revision) return this.keptHead(head).entries;
 
-    if (this.sql`SELECT 1 AS found FROM context_revisions WHERE actor_id=${actorId} AND context_id=${contextId} AND revision=${revision}`.length === 0) {
-      throw new KinuError('missing', 'context revision does not exist');
-    }
+      if (this.sql`SELECT 1 AS found FROM context_revisions WHERE actor_id=${actorId} AND context_id=${contextId} AND revision=${revision}`.length === 0) {
+        return yield* Effect.fail(new KinuError('missing', 'context revision does not exist'));
+      }
 
-    return Object.freeze(this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${actorId} AND context_id=${contextId}
-      AND from_revision<=${revision} AND (to_revision IS NULL OR to_revision>${revision}) ORDER BY position`.map(entryOf));
+      return Object.freeze(this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${actorId} AND context_id=${contextId}
+        AND from_revision<=${revision} AND (to_revision IS NULL OR to_revision>${revision}) ORDER BY position`.map(entryOf));
+    }));
   }
 
   /** Selection and membership from one synchronous read boundary; the selection already names the head. */
@@ -219,7 +221,7 @@ export class SessionContext {
       const probe = this.headOf(null) ?? (expected === null ? emptyProbe(this.initialize()) : null);
 
       if (probe === null || (expected !== null && (probe.selection.contextId !== expected.contextId || probe.selection.revision !== expected.revision))) {
-        throw new KinuError('denied', 'context changed during preparation');
+        return yield* Effect.fail(new KinuError('denied', 'context changed during preparation'));
       }
 
       const head = this.keptHead(probe);
@@ -236,7 +238,7 @@ export class SessionContext {
         const entry = next[position];
 
         if (entry.position !== position || keptIds.has(entry.entryId) || ids.has(entry.entryId)) {
-          throw new KinuError('bad_input', 'context entries must have unique identities and dense positions');
+          return yield* Effect.fail(new KinuError('bad_input', 'context entries must have unique identities and dense positions'));
         }
 
         if (prior.get(entry.entryId)?.messageId !== entry.messageId) named.add(entry.entryId);
@@ -368,9 +370,9 @@ export class SessionContext {
       yield* assertIdle();
       const selected = this.selected();
 
-      if (selected?.contextId !== expected.contextId || selected.revision !== expected.revision) throw new KinuError('denied', 'context selection changed');
+      if (selected?.contextId !== expected.contextId || selected.revision !== expected.revision) return yield* Effect.fail(new KinuError('denied', 'context selection changed'));
 
-      if (this.head(target.contextId) !== target.revision) throw new KinuError('denied', 'branch selection must name its current revision');
+      if (this.head(target.contextId) !== target.revision) return yield* Effect.fail(new KinuError('denied', 'branch selection must name its current revision'));
       void this.sql`UPDATE actor_context_selection SET context_id=${target.contextId} WHERE actor_id=${this.actor.actorId}`;
     })));
   }

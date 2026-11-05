@@ -1,7 +1,7 @@
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
-import { settle } from '../obs/effect';
+import { settle, settleSync } from '../obs/effect';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { ActorReferenceSchema, bindActorHandle, type ActorHandle, type ActorReference } from './actor-handle';
 import { tableExists } from '../utils/sql';
@@ -194,10 +194,8 @@ export function facetNamesGiven(sql: SqlExecutor): number {
   return sql<{ given: number }>`SELECT COUNT(*) AS given FROM workspace_actors`[0]?.given ?? 0;
 }
 
-function requiredIdentity(value: string): string {
-  if (value.trim().length === 0) throw new KinuError('bad_input', 'Actor identity and name must not be empty.');
-
-  return value;
+function requiredIdentity(value: string): Effect.Effect<string, KinuError> {
+  return value.trim().length === 0 ? Effect.fail(new KinuError('bad_input', 'Actor identity and name must not be empty.')) : Effect.succeed(value);
 }
 
 function mayCreate(owner: WorkspaceActor, child: { readonly origin: ActorOrigin }): boolean {
@@ -317,20 +315,24 @@ export class WorkspaceActorDirectory {
   }
 
   describe(handle: ActorHandle): WorkspaceActor {
-    if (!this.handles.has(handle)) throw new KinuError('denied', 'The handle belongs to another actor directory.');
-    const row = this.retained(handle.actorId);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (!this.handles.has(handle)) return yield* Effect.fail(new KinuError('denied', 'The handle belongs to another actor directory.'));
+      const row = this.retained(handle.actorId);
 
-    if (!row || row.retiringAt !== null || row.deletedAt !== null) throw new KinuError('missing', 'The actor no longer exists in this workspace.');
+      if (!row || row.retiringAt !== null || row.deletedAt !== null) return yield* Effect.fail(new KinuError('missing', 'The actor no longer exists in this workspace.'));
 
-    return row;
+      return row;
+    }));
   }
 
   open(actorId: string, also?: () => Effect.Effect<void, KinuError>): ActorHandle {
-    const row = this.retained(actorId);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const row = this.retained(actorId);
 
-    if (!row || row.retiringAt !== null || row.deletedAt !== null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
+      if (!row || row.retiringAt !== null || row.deletedAt !== null) return yield* Effect.fail(new KinuError('missing', 'The actor is not registered in this workspace.'));
 
-    return this.issue(row, also);
+      return this.issue(row, also);
+    }));
   }
 
   /** Oldest first, main included. */
@@ -346,71 +348,77 @@ export class WorkspaceActorDirectory {
   }
 
   main(): ActorHandle {
-    const row = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE origin = 'system' AND deleted_at IS NULL`[0];
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const row = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
+        WHERE origin = 'system' AND deleted_at IS NULL`[0];
 
-    if (!row) throw new KinuError('missing', 'The workspace has no registered main actor.');
+      if (!row) return yield* Effect.fail(new KinuError('missing', 'The workspace has no registered main actor.'));
 
-    return this.open(row.actor_id);
+      return this.open(row.actor_id);
+    }));
   }
 
   createMain(input: { name: string }): ActorHandle {
-    const name = requiredIdentity(input.name);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const name = yield* requiredIdentity(input.name);
 
-    const current = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE origin = 'system'`[0];
+      const current = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
+        WHERE origin = 'system'`[0];
 
-    if (current) {
-      const row = this.retained(current.actor_id);
+      if (current) {
+        const row = this.retained(current.actor_id);
 
-      if (!row || row.name !== name) throw new KinuError('denied', 'The workspace already has a different main actor.');
+        if (!row || row.name !== name) return yield* Effect.fail(new KinuError('denied', 'The workspace already has a different main actor.'));
+
+        return this.issue(row);
+      }
+
+      const actorId = crypto.randomUUID();
+      this.insert({ actorId, parentActorId: null, name, storageKey: name, profile: MAIN_PROFILE, creationId: this.authority.workspaceId, ended: null });
+      const row = this.retained(actorId);
+
+      if (!row) return yield* Effect.fail(new KinuError('io', 'The main actor was not recorded.'));
 
       return this.issue(row);
-    }
-
-    const actorId = crypto.randomUUID();
-    this.insert({ actorId, parentActorId: null, name, storageKey: name, profile: MAIN_PROFILE, creationId: this.authority.workspaceId, ended: null });
-    const row = this.retained(actorId);
-
-    if (!row) throw new KinuError('io', 'The main actor was not recorded.');
-
-    return this.issue(row);
+    }));
   }
 
   create(input: CreateWorkspaceActor): ActorHandle {
-    const parent = this.describe(input.parent);
-    const creationId = requiredIdentity(input.creationId);
-    const name = requiredIdentity(input.name);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const parent = this.describe(input.parent);
+      const creationId = yield* requiredIdentity(input.creationId);
+      const name = yield* requiredIdentity(input.name);
 
-    if (input.origin !== 'swarm') requireSubagentActorName(name);
-    else if (!isExplorationActorKey(name)) throw new KinuError('bad_input', 'Exploration actor names must use the exploration address space.');
+      if (input.origin !== 'swarm') requireSubagentActorName(name);
+      else if (!isExplorationActorKey(name)) return yield* Effect.fail(new KinuError('bad_input', 'Exploration actor names must use the exploration address space.'));
 
-    const prior = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE parent_actor_id = ${parent.actorId} AND creation_id = ${creationId}`[0];
+      const prior = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
+        WHERE parent_actor_id = ${parent.actorId} AND creation_id = ${creationId}`[0];
 
-    if (prior) {
-      const existing = this.retained(prior.actor_id);
+      if (prior) {
+        const existing = this.retained(prior.actor_id);
 
-      if (!existing || existing.retiringAt !== null || existing.deletedAt !== null) throw new KinuError('missing', 'The admitted actor creation is retired.');
+        if (!existing || existing.retiringAt !== null || existing.deletedAt !== null) return yield* Effect.fail(new KinuError('missing', 'The admitted actor creation is retired.'));
 
-      if (existing.name !== name || !sameProfile(existing, actorPreset(input.origin, input.lifetime))) throw new KinuError('denied', 'The admitted actor creation cannot change its name or profile.');
+        if (existing.name !== name || !sameProfile(existing, actorPreset(input.origin, input.lifetime))) return yield* Effect.fail(new KinuError('denied', 'The admitted actor creation cannot change its name or profile.'));
 
-      return this.issue(existing);
-    }
+        return this.issue(existing);
+      }
 
-    if (this.childRow(parent.actorId, name)) throw new KinuError('denied', 'The sibling name already exists.');
-    const actorId = crypto.randomUUID();
-    // A hire whose name no actor of this workspace has had is keyed, and so housed (`actorHomeName`), by that name;
-    // a cousin's name, or one used before, keys nothing, and the fresh id does. `insert` decides it as it writes.
-    this.insert({
-      actorId, parentActorId: parent.actorId, name, storageKey: actorId, keyByName: isSubagentOrigin(input.origin) && !mimicsDerivedHome(name),
-      profile: actorPreset(input.origin, input.lifetime), creationId, ended: null,
-    });
-    const row = this.retained(actorId);
+      if (this.childRow(parent.actorId, name)) return yield* Effect.fail(new KinuError('denied', 'The sibling name already exists.'));
+      const actorId = crypto.randomUUID();
+      // A hire whose name no actor of this workspace has had is keyed, and so housed (`actorHomeName`), by that name;
+      // a cousin's name, or one used before, keys nothing, and the fresh id does. `insert` decides it as it writes.
+      this.insert({
+        actorId, parentActorId: parent.actorId, name, storageKey: actorId, keyByName: isSubagentOrigin(input.origin) && !mimicsDerivedHome(name),
+        profile: actorPreset(input.origin, input.lifetime), creationId, ended: null,
+      });
+      const row = this.retained(actorId);
 
-    if (!row) throw new KinuError('io', 'The child actor was not recorded.');
+      if (!row) return yield* Effect.fail(new KinuError('io', 'The child actor was not recorded.'));
 
-    return this.issue(row);
+      return this.issue(row);
+    }));
   }
 
   /** Every name and key this workspace's actors have had that is `base` or numbered from it (`base-2`), in one read. */
@@ -441,66 +449,73 @@ export class WorkspaceActorDirectory {
   }
 
   storagePath(reference: ActorReference): string[] {
-    const path: string[] = [];
-    const seen = new Set<string>();
-    let current = this.describe(this.open(reference.actorId));
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const path: string[] = [];
+      const seen = new Set<string>();
+      let current = this.describe(this.open(reference.actorId));
 
-    if (current.workspaceId !== reference.workspaceId || current.parentActorId !== reference.parentActorId) throw new KinuError('denied', 'The actor reference does not match its workspace and parent.');
+      if (current.workspaceId !== reference.workspaceId || current.parentActorId !== reference.parentActorId) return yield* Effect.fail(new KinuError('denied', 'The actor reference does not match its workspace and parent.'));
 
-    while (current.parentActorId !== null) {
-      if (seen.has(current.actorId)) throw new KinuError('denied', 'The actor ancestry contains a cycle.');
-      seen.add(current.actorId);
-      path.push(current.storageKey);
-      current = this.describe(this.open(current.parentActorId));
-    }
+      while (current.parentActorId !== null) {
+        if (seen.has(current.actorId)) return yield* Effect.fail(new KinuError('denied', 'The actor ancestry contains a cycle.'));
+        seen.add(current.actorId);
+        path.push(current.storageKey);
+        current = this.describe(this.open(current.parentActorId));
+      }
 
-    return path.reverse();
+      return path.reverse();
+    }));
   }
 
   validate(reference: ActorReference, storagePath: readonly string[]): ActorHandle {
-    const actor = this.open(reference.actorId);
-    const expected = this.storagePath(reference);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const actor = this.open(reference.actorId);
+      const expected = this.storagePath(reference);
 
-    if (expected.length !== storagePath.length || expected.some((key, index) => key !== storagePath[index])) {
-      throw new KinuError('denied', 'The actor reference does not match its physical parent path.');
-    }
+      if (expected.length !== storagePath.length || expected.some((key, index) => key !== storagePath[index])) {
+        return yield* Effect.fail(new KinuError('denied', 'The actor reference does not match its physical parent path.'));
+      }
 
-    return actor;
+      return actor;
+    }));
   }
 
-  private cancelCreation(input: CreateWorkspaceActor): WorkspaceActor {
-    const parent = this.describe(input.parent);
+  private cancelCreation(input: CreateWorkspaceActor): Effect.Effect<WorkspaceActor, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const parent = this.describe(input.parent);
 
-    const selected = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE parent_actor_id = ${parent.actorId} AND creation_id = ${input.creationId}`[0];
+      const selected = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
+        WHERE parent_actor_id = ${parent.actorId} AND creation_id = ${input.creationId}`[0];
 
-    if (selected) {
-      const row = this.retained(selected.actor_id);
+      if (selected) {
+        const row = this.retained(selected.actor_id);
 
-      if (!row) throw new KinuError('missing', 'The actor creation record disappeared.');
+        if (!row) return yield* Effect.fail(new KinuError('missing', 'The actor creation record disappeared.'));
 
-      if (row.name !== input.name || !sameProfile(row, actorPreset(input.origin, input.lifetime))) throw new KinuError('denied', 'The cancellation does not match the admitted creation.');
+        if (row.name !== input.name || !sameProfile(row, actorPreset(input.origin, input.lifetime))) return yield* Effect.fail(new KinuError('denied', 'The cancellation does not match the admitted creation.'));
 
-      if (actorStanding(row) === 'live') this.transitionRetirement(row.actorId, 'retire');
-      const updated = this.retained(row.actorId);
+        if (actorStanding(row) === 'live') this.transitionRetirement(row.actorId, 'retire');
+        const updated = this.retained(row.actorId);
 
-      if (!updated) throw new KinuError('missing', 'The actor creation record disappeared.');
+        if (!updated) return yield* Effect.fail(new KinuError('missing', 'The actor creation record disappeared.'));
 
-      return updated;
-    }
+        return updated;
+      }
 
-    const actorId = crypto.randomUUID();
+      const actorId = crypto.randomUUID();
 
-    this.insert({
-      actorId, parentActorId: parent.actorId, name: input.name, storageKey: actorId,
-      profile: actorPreset(input.origin, input.lifetime), creationId: input.creationId, ended: Date.now(),
+      this.insert({
+        actorId, parentActorId: parent.actorId, name: input.name, storageKey: actorId,
+        profile: actorPreset(input.origin, input.lifetime), creationId: input.creationId, ended: Date.now(),
+      });
+      const row = this.retained(actorId);
+
+      if (!row) return yield* Effect.fail(new KinuError('io', 'The cancelled creation was not recorded.'));
+
+      return row;
     });
-    const row = this.retained(actorId);
-
-    if (!row) throw new KinuError('io', 'The cancelled creation was not recorded.');
-
-    return row;
   }
+
   /** `ended` stamps a creation that is retired and released as it is recorded. */
   /**
    * `keyByName`: keyed by its name instead of `storageKey` when no actor of the workspace, under any parent, live or
@@ -525,68 +540,70 @@ export class WorkspaceActorDirectory {
   }
 
   apply(caller: ActorReference, path: readonly string[], operation: ChildActorOperation): ActorDirectoryResult {
-    const parent = this.validate(caller, path);
-    const parsed = v.safeParse(ChildActorOperationSchema, operation);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const parent = this.validate(caller, path);
+      const parsed = v.safeParse(ChildActorOperationSchema, operation);
 
-    if (!parsed.success) throw new KinuError('bad_input', 'Invalid child actor operation.');
-    const input = parsed.output;
-    let child: WorkspaceActor;
+      if (!parsed.success) return yield* Effect.fail(new KinuError('bad_input', 'Invalid child actor operation.'));
+      const input = parsed.output;
+      let child: WorkspaceActor;
 
-    if (input.action === 'register' || input.action === 'cancelCreation') {
-      const owner = this.describe(parent);
+      if (input.action === 'register' || input.action === 'cancelCreation') {
+        const owner = this.describe(parent);
 
-      if (!mayCreate(owner, input)) {
-        throw new KinuError('denied', 'This agent cannot create the requested kind of child.');
+        if (!mayCreate(owner, input)) {
+          return yield* Effect.fail(new KinuError('denied', 'This agent cannot create the requested kind of child.'));
+        }
+
+        const creation = { parent, name: input.name, origin: input.origin, lifetime: input.lifetime, creationId: input.creationId };
+        child = input.action === 'register' ? this.describe(this.create(creation)) : yield* this.cancelCreation(creation);
+      } else if (input.action === 'resolve') {
+        const existing = this.childRow(parent.actorId, input.name);
+
+        if (!existing) return yield* Effect.fail(new KinuError('missing', 'The child actor is not registered.'));
+        child = existing;
+      } else if (input.action === 'resolveStorage') {
+        const result = this.storageEntry(parent, input.storageKey);
+
+        if (!result) return yield* Effect.fail(new KinuError('missing', 'The physical actor key is not registered.'));
+
+        return result;
+      } else if (input.action === 'resolveCreation') {
+        const selected = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
+          WHERE parent_actor_id = ${parent.actorId} AND creation_id = ${input.creationId}`[0];
+
+        const row = selected ? this.retained(selected.actor_id) : null;
+
+        if (!row) return yield* Effect.fail(new KinuError('missing', 'The actor creation is not registered.'));
+        child = row;
+      } else {
+        const row = this.retained(input.reference.actorId);
+
+        if (!row) return yield* Effect.fail(new KinuError('missing', 'The child actor is not registered.'));
+
+        if (row.parentActorId !== parent.actorId || row.name !== input.name || row.workspaceId !== input.reference.workspaceId || row.parentActorId !== input.reference.parentActorId) {
+          return yield* Effect.fail(new KinuError('denied', 'The child reference does not match its parent and name.'));
+        }
+
+        if (input.action === 'validate' && actorStanding(row) !== 'live') return yield* Effect.fail(new KinuError('missing', 'The child actor is retired.'));
+
+        if (input.action === 'retire' && actorStanding(row) === 'live') {
+          this.transitionRetirement(row.actorId, 'retire');
+        }
+
+        if (input.action === 'release' && row.deletedAt === null) {
+          if (row.retiringAt === null) return yield* Effect.fail(new KinuError('denied', 'Retirement must start before its name is released.'));
+          this.transitionRetirement(row.actorId, 'release');
+        }
+
+        const updated = this.retained(row.actorId);
+
+        if (!updated) return yield* Effect.fail(new KinuError('missing', 'The child actor record disappeared.'));
+        child = updated;
       }
 
-      const creation = { parent, name: input.name, origin: input.origin, lifetime: input.lifetime, creationId: input.creationId };
-      child = input.action === 'register' ? this.describe(this.create(creation)) : this.cancelCreation(creation);
-    } else if (input.action === 'resolve') {
-      const existing = this.childRow(parent.actorId, input.name);
-
-      if (!existing) throw new KinuError('missing', 'The child actor is not registered.');
-      child = existing;
-    } else if (input.action === 'resolveStorage') {
-      const result = this.storageEntry(parent, input.storageKey);
-
-      if (!result) throw new KinuError('missing', 'The physical actor key is not registered.');
-
-      return result;
-    } else if (input.action === 'resolveCreation') {
-      const selected = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-        WHERE parent_actor_id = ${parent.actorId} AND creation_id = ${input.creationId}`[0];
-
-      const row = selected ? this.retained(selected.actor_id) : null;
-
-      if (!row) throw new KinuError('missing', 'The actor creation is not registered.');
-      child = row;
-    } else {
-      const row = this.retained(input.reference.actorId);
-
-      if (!row) throw new KinuError('missing', 'The child actor is not registered.');
-
-      if (row.parentActorId !== parent.actorId || row.name !== input.name || row.workspaceId !== input.reference.workspaceId || row.parentActorId !== input.reference.parentActorId) {
-        throw new KinuError('denied', 'The child reference does not match its parent and name.');
-      }
-
-      if (input.action === 'validate' && actorStanding(row) !== 'live') throw new KinuError('missing', 'The child actor is retired.');
-
-      if (input.action === 'retire' && actorStanding(row) === 'live') {
-        this.transitionRetirement(row.actorId, 'retire');
-      }
-
-      if (input.action === 'release' && row.deletedAt === null) {
-        if (row.retiringAt === null) throw new KinuError('denied', 'Retirement must start before its name is released.');
-        this.transitionRetirement(row.actorId, 'release');
-      }
-
-      const updated = this.retained(row.actorId);
-
-      if (!updated) throw new KinuError('missing', 'The child actor record disappeared.');
-      child = updated;
-    }
-
-    return this.result(child);
+      return this.result(child);
+    }));
   }
 
   private result(child: WorkspaceActor): ActorDirectoryResult {
@@ -636,10 +653,10 @@ export class WorkspaceActorDirectory {
       WHERE child.retiring_at IS NOT NULL AND child.deleted_at IS NULL
         AND parent.retiring_at IS NULL AND parent.deleted_at IS NULL ORDER BY child.created_at, child.actor_id`;
 
-    return rows.map((entry) => {
+    return settleSync(Effect.forEach(rows, (entry) => Effect.gen({ self: this }, function* () {
       const child = this.retained(entry.actor_id);
 
-      if (!child || !child.parentActorId) throw new KinuError('missing', 'The retiring actor has no parent.');
+      if (!child || !child.parentActorId) return yield* Effect.fail(new KinuError('missing', 'The retiring actor has no parent.'));
       const parent = this.open(child.parentActorId);
 
       return {
@@ -647,7 +664,7 @@ export class WorkspaceActorDirectory {
         parentPath: this.storagePath(parent), name: child.name,
         reference: { actorId: child.actorId, workspaceId: child.workspaceId, parentActorId: child.parentActorId },
       };
-    });
+    })));
   }
 }
 
@@ -739,13 +756,15 @@ export function bearWorkspaceIdentity(sql: SqlExecutor, birth: {
 }
 
 export function openWorkspaceMainActor(sql: SqlExecutor): ActorHandle {
-  if (!tableExists(sql, 'workspace_identity')) throw new KinuError('missing', 'The workspace has no durable identity.');
-  const rows = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
-  const owner = rows[0];
+  return settleSync(Effect.gen(function* () {
+    if (!tableExists(sql, 'workspace_identity')) return yield* Effect.fail(new KinuError('missing', 'The workspace has no durable identity.'));
+    const rows = sql<{ id: string; owner_user_id: string | null }>`SELECT id, owner_user_id FROM workspace_identity`;
+    const owner = rows[0];
 
-  if (!owner) throw new KinuError('missing', 'The workspace has no durable identity.');
+    if (!owner) return yield* Effect.fail(new KinuError('missing', 'The workspace has no durable identity.'));
 
-  if (rows.length !== 1) throw new KinuError('denied', 'The database has more than one workspace identity.');
+    if (rows.length !== 1) return yield* Effect.fail(new KinuError('denied', 'The database has more than one workspace identity.'));
 
-  return new WorkspaceActorDirectory(sql, { workspaceId: owner.id, ownerUserId: owner.owner_user_id }).main();
+    return new WorkspaceActorDirectory(sql, { workspaceId: owner.id, ownerUserId: owner.owner_user_id }).main();
+  }));
 }

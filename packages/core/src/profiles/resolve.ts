@@ -277,15 +277,17 @@ function checkedAuthority(input: ProfileAuthorityInputs): Effect.Effect<CheckedA
       defaultAssignment,
       assigned: (id) => envelope.catalog.tiers[id] ?? (id === 'fast' ? autoFast : undefined),
       serving(id, stored) {
-        if (servable(stored.model, stored.fallbacks ?? [])) return stored;
+        return settleSync(Effect.gen({ self: this }, function* () {
+          if (servable(stored.model, stored.fallbacks ?? [])) return stored;
 
-        const replacement = [defaultAssignment, BUILTIN_PROFILE_CATALOG.tiers.default]
-          .find((candidate) => candidate !== undefined && servable(candidate.model, candidate.fallbacks ?? []));
+          const replacement = [defaultAssignment, BUILTIN_PROFILE_CATALOG.tiers.default]
+            .find((candidate) => candidate !== undefined && servable(candidate.model, candidate.fallbacks ?? []));
 
-        if (replacement === undefined) throw unavailable(stored.model, stored.fallbacks ?? [], id);
-        diagnostics.event('profile.tier_model_unlisted', { tier: id, model: stored.model, served: replacement.model });
+          if (replacement === undefined) return yield* Effect.fail(unavailable(stored.model, stored.fallbacks ?? [], id));
+          diagnostics.event('profile.tier_model_unlisted', { tier: id, model: stored.model, served: replacement.model });
 
-        return replacement;
+          return replacement;
+        }));
       },
       requireAvailable(model, fallbacks, id) {
         return Effect.gen(function* () {
