@@ -1013,7 +1013,7 @@ SDK re-offered a `cf_agents_runs` row through `onFiberRecovered` inside
 (`fiberRecoveryHookTimeoutMs`, `fiberRecoveryScanDeadlineMs`); Kinu answered
 with a classifier and redelivery sleeps, and ran its fork reconcile from the
 alarm behind the in-memory `activationRecoveryPending`.
-What changes. Every lane runs under `ActorAgent.holdLane` (`keepAliveWhile`).
+What changes. Every lane runs under `OrchestratorAgent.holdLane` (`keepAliveWhile`).
 Terminal effects and delegation keep no lane row: their ledger rows already
 were the obligation. A background job's lane and the evolution lane write the
 CLI's own `fibers` row (`createSqlFiber`); the last statement of `onStart`

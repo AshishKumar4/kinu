@@ -11,10 +11,14 @@ import {
   type ExecutorTextFile, type ExecutorWriteResult, type ExposedPortList, type FilesPage, type FilesRequest, type RewindComputer,
 } from '@kinu.run/core';
 import type { HeldSlatePorts } from '@kinu.run/core/slates';
-import { authoredRefusal, diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { authoredRefusal, diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import type { CFRuntime } from './runtime';
 import type { WorkspaceTerminals } from './workspace-host';
-import { unownedWorkspace } from './actor-agent';
+
+/** No one has claimed this workspace yet: every path only an owner can take refuses it in these words. */
+export function unownedWorkspace(): KinuError {
+  return new KinuError('unavailable', 'This workspace has no owner yet: open it from the app or the CLI first.');
+}
 
 /** Transfer id is fresh per transfer, so two readers of one path cannot replace
  *  each other's snapshot. */

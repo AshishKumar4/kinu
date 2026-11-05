@@ -437,7 +437,8 @@ function startProcessMember({ handle, touch, environment, processJobs }: Compute
       const jobId = processJobs === undefined ? undefined : newJobId();
       const stamped = jobId === undefined ? env : { ...env, [JOB_STAMP_ENV]: jobId };
 
-      yield* retried(() => touch(() => handle.ensureReady()));
+      // Waking it is the owner's, but puts the computer in use only once the process it is for has started.
+      yield* retried(() => ownerComputerCall(() => handle.ensureReady()));
 
       const started = yield* Effect.promise(async () => touch(() => handle.startSupervisedProcess(command, {
         cwd, ...(stamped !== undefined && { env: stamped }), ...(env !== undefined && { reveal: caller === 'owner' }), ...(jobId !== undefined && { job: jobId }),

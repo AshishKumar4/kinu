@@ -7,13 +7,11 @@ How to add a model provider, an actor kind, or a turn extension without changing
 | Extension point | Interface | Lives in | Adds | Example use cases |
 |---|---|---|---|---|
 | `ModelProvider` | `core/providers/types.ts` | `packages/core/src/providers/` (platform agnostic) and `packages/cf-backend/src/providers/` (CF-specific) | A new LLM backend | Anthropic direct, Google Gemini, Groq, Bedrock, local Ollama |
-| `ActorAgent` | `cf-backend/src/actor-agent.ts` | `packages/cf-backend/src/` | A new *kind of agent* running the full turn loop | OrchestratorAgent |
 | `KinuExtension` | `core/extension.ts` | any package | Per-turn observation and light rewriting | compaction, mid-turn steering, event injection |
 
 Only `ModelProvider` has a production registry: `createAgentProviderRegistry`
 (`packages/cf-backend/src/providers/agent-registry.ts`) registers stateless
-implementations, and per-call state flows through `ProviderDeps`. `ActorAgent`
-works at class level. `KinuExtension` works per turn and has its own document,
+implementations, and per-call state flows through `ProviderDeps`. `KinuExtension` works per turn and has its own document,
 [EXTENSIONS.md](./EXTENSIONS.md).
 
 ## Registration is not reachability
@@ -53,76 +51,13 @@ credential.
 
 ## Adding a new actor kind
 
-`ActorAgent` (`cf-backend/src/actor-agent.ts`) is the base class. Extend
-it and supply its abstract members. Make your tables in your constructor: a native RPC
-can be an object's first event, and it runs no `onStart`.
-
-```ts
-export class MyAgent extends ActorAgent {
-  protected getOwnerUserId(): string | null { /* identity bootstrap */ }
-  protected actorKind(): AgentKind { /* which kind you are, for the roster */ }
-  protected workspaceBox(shellId: string): NimbusSandboxHandle { /* the box behind a shell id */ }
-  protected actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface> { /* every agent's turn surface */ }
-  protected ownTools(mode: WorkMode, scope: string | null): ActorToolsets { /* your own tools outside a turn */ }
-  protected ownAgentsToolDeps(mode: WorkMode): AgentsToolDeps { /* your own delegation, as your programs reach it */ }
-  protected get engine(): EvolutionEngine { /* your evolution engine */ }
-  protected notifyOwner(subject: string, body: string): void { /* … */ }
-  protected delegationBudget(): DelegationBudget { /* depth and spend below you */ }
-  protected actorHost(): ActorHost { /* the workspace's one host, which acquires every logical actor */ }
-  protected actorHandle(): ActorHandle { /* this actor's handle */ }
-  actorDirectory(operation: ChildActorOperation): Promise<ActorDirectoryResult> { /* child directory operations */ }
-  protected actorDirectoryStore(): WorkspaceActorDirectory { /* who belongs to this workspace */ }
-  protected hostedSeams(): HostedActorSeams { /* what every hosted actor's runner needs */ }
-  protected hostedChatWire(name: string): ChatWire | null { /* a hosted actor's chat wire */ }
-  protected owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[] { /* what a settled turn owes */ }
-  protected transcriptFor(actor: ActorHandle): SessionTranscript { /* an actor's own transcript */ }
-  protected ownMission(): string { /* the mission text titling names you after */ }
-  protected persistAutoTitle(displayName: string, origin: NameOrigin): Promise<boolean> { /* where a title lands */ }
-  protected promptIdentity(): Promise<PromptIdentity> { /* the identity the prompt renders */ }
-}
-```
-`ownMission()` and `persistAutoTitle()` carry auto-title: core plans the name
-and the class stores it. The subclass inherits everything else. The base class
-supplies CF runtime assembly, `BackendHost`, the shared `AgentOrchestrator`
-and `ActorSession`, `ExtensionHost` plus compaction, the dynamic-context
-ledger, and the prompt, model and tool caches.
-
-Three hooks are optional. `workspaceName()` returns `this.name`,
-`extraCodemodeProviders()` returns `[]`, and
-`isClientRpcMethodDenied(method)` returns `false`. Override the provider hook
-for extra sandbox namespaces: the orchestrator adds `agent.*` there, and a
-subagent does not get it. Override the RPC hook for methods a
-browser socket must not reach.
-
-The tool surface follows from one decision, core's `surfaceReach`
-(`packages/core/src/delegation/turn-reach.ts`): what an agent reaches by what
-it is (`actorReach`, from its roster policy) and by the lane its turn was
-admitted in (`turnReach`). `actorSurface` builds every agent's turn surface from
-it, the workspace agent's, a hire's, a head's, a swarm node's and a background
-run's alike, and gates each plane by it, never by asking what the agent is.
-`report` is wired only on a hirer's lane, through the turn reach, and code names
-it by core's `REPORT_TOOL`, so renaming a builtin moves every gate with it.
-`team` and `peers` gate `agents` actions through `agentsActionsFor`, which
-always sees a `swarm` marker, so every CF actor advertises `swarm`. No flag or
-allowlist decides any of this.
-
-`teamProfile()` returns `{ team }` while an actor has tree below it and `{}` at
-the depth cap, so the delegation budget stops recursion, not the class. The
-surface stays in the workspace: every agent's turn runs in its own Worker
-Loader isolate (`packages/cf-backend/src/agent-facet/`), with its conversation,
-turn claims, effect claims and run ledger in that isolate's own SQLite, and it
-calls each workspace tool back through `AgentWorkspaceRPC.executeTool` (D8, D13
-in `docs/ARCHITECTURE-DECISIONS.md`). Its files and named shell are the
-workspace's, through Nimbus's session surface. The owner's lane
-(`submit_plan` on an owner turn in Plan mode, `reply_to_comment`, `ask_owner`)
-commits in the agent's own store, so the isolate builds and runs it and the
-workspace only declares it. The narrowing keys on the turn, not on a class. An
-MCTS branch has no tool surface and acquires no execution plane, because it is
-built without one.
+An actor kind is a logical actor, not a class: a `workspace_actors` row the workspace's one host acquires,
+whose policy (`actorPolicy`, core `delegation/actor-policy.ts`) decides its reach and lifetime. The workspace's
+Durable Object class is `OrchestratorAgent` alone.
 
 `OwnedModelServices` (`packages/cf-backend/src/owned-model-services.ts`) holds
 per-actor model and provider state by composition: `providerRegistry()`,
-`resolveModel(spec)`, `getWebSearchProvider()`, `invalidate()`. `ActorAgent`
+`resolveModel(spec)`, `getWebSearchProvider()`, `invalidate()`. `OrchestratorAgent`
 constructs it with `ownerRequired: true`. Hosted exploration and subagent
 actors have no instance of their own. They bind model specs through the root's
 instance, via `ExplorationHostSeams.resolveModel` and
@@ -160,7 +95,7 @@ choice of tier would be arbitrary, as `openai-compat` and `openrouter` do.
 Those jobs then use the chat model.
 
 Keep `createModel` synchronous and keep auth and refresh in the AI SDK
-`customFetch`, so `ActorAgent.getModel()` stays synchronous. See
+`customFetch`, so `OrchestratorAgent.getModel()` stays synchronous. See
 `packages/core/src/providers/codex.ts` for retry-once-on-401.
 
 Do not hardcode `listModels`. Hydrate from models.dev:
@@ -360,7 +295,7 @@ truncates useful "when to use" guidance.
 - `AgentConfigStore`. Typed known-key accessors over `agent_config`
   (`packages/core/src/config/store.ts`). Add one accessor for a new tunable.
 - Provider and model cache invalidation. `invalidateModelCaches()`
-  (`packages/cf-backend/src/actor-agent.ts`) calls
+  (`packages/cf-backend/src/orchestrator.ts`) calls
   `ownedModelServices.invalidate()`, which drops the resolved model and the
   owner-bound registry together. It fires on owner claim, fork owner seeding,
   capability-token install, `setModel`, and UserDO's `onCredentialsChanged`
