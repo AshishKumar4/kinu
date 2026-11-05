@@ -2433,7 +2433,7 @@ export {
 } from './http/public-pages';
 
 export {
-  currentTakeIndex, takeChipLabel, cycleTakeIndex, hasComparableTakes,
+  currentTakeIndex, takeChipLabel, cycleTakeIndex, hasComparableTakes, describeTakePick,
 } from './read-models/alternate-takes';
 
 export {

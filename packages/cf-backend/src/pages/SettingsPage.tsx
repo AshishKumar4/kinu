@@ -1,7 +1,7 @@
 import { Effect, Cause } from 'effect';
 import { SaveBar } from "@/components/ui/SaveBar";
 import { startTransition, useState, useEffect, useCallback, useRef } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { GearSixIcon, KeyIcon, TrashIcon } from "@phosphor-icons/react";
@@ -200,6 +200,12 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   }, [connectionStatus, loadRpcFields]);
 
   const dirty = displayName.dirty || soul.dirty || layout.dirty || approval.dirty || advisor.dirty;
+  const { hash } = useLocation();
+
+  // A command or a link that names a card (`/instructions`, `/always`, `#automations`) opens the page at it.
+  useEffect(() => {
+    if (hash.length > 1) document.getElementById(decodeURIComponent(hash.slice(1)))?.scrollIntoView({ block: "start" });
+  }, [hash]);
 
   // Each field is marked saved as its own write lands, so a failed one is all that stays dirty and is named.
   const save = (): void => {
@@ -320,10 +326,9 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         </FieldState>
       </Card>
       <StandingApprovalsCard rpc={rpc} />
-      <InstructionApprovalsCard rpc={rpc} />
+      <div id="instructions"><InstructionApprovalsCard rpc={rpc} /></div>
 
-
-      <AlwaysActiveSkillsCard rpc={rpc} />
+      <div id="always-active"><AlwaysActiveSkillsCard rpc={rpc} /></div>
 
       <div id="automations"><Card><WorkspaceAutomations rpc={rpc} workspace={agentId} /></Card></div>
 
