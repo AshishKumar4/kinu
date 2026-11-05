@@ -115,6 +115,23 @@ test('the boundary file grows in the mechanisms it declares and in no other', ()
   expect(keysOf(outcome)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
 });
 
+test('a VFS implementation\'s VfsError throw is its declared channel; any other throw there is still counted', () => {
+  const plane = 'packages/core/src/vfs/context-plane.ts';
+
+  const vfsErrors = 'const absent = (path: string): Error => new VfsError(\'ENOENT\', \'gone\', path);\n'
+    + 'export const files = { async stat(path: string) { throw absent(path); }, async mkdir(path: string) { throw new VfsError(\'EACCES\', \'no\', path); } };\n';
+
+  const others = 'export function check(x: number) { if (x < 0) throw new KinuError(\'bad_input\', \'x\'); throw new Error(\'y\'); }\n';
+  const keysOf = (body: string) => measured(LEGACY, [[plane, body]]).filter(({ key }) => key.startsWith(plane));
+
+  expect(keysOf(vfsErrors)).toEqual([]);
+  expect(keysOf(vfsErrors + others)).toEqual([{ key: `${plane}#throw`, value: 2 }]);
+
+  // The same VfsError throws in a file that declares no VFS implementation stay legacy.
+  expect(measured(LEGACY, [['packages/core/src/vfs/other.ts', vfsErrors]]).filter(({ key }) => key.startsWith('packages/core/src/vfs/other.ts')))
+    .toEqual([{ key: 'packages/core/src/vfs/other.ts#throw', value: 2 }]);
+});
+
 test.each([
   ['a function it names', 'packages/core/src/providers/model-test.ts', 'result-literal',
     'export function testModel() { return { ok: true }; }\nexport function other() { return { ok: false }; }\n'],

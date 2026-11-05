@@ -44,6 +44,8 @@ interface Declaration {
   readonly reason: string;
   /** Only sites inside these named functions, methods, types or interfaces; absent, the whole file. */
   readonly within?: readonly string[];
+  /** Only a `throw` of this class: `new <thrown>(…)`, or a call to a same-file function whose body is one. */
+  readonly thrown?: string;
 }
 
 /** The declarations by file; a file may hold several, each for its own mechanisms and names. */
@@ -59,6 +61,12 @@ const OUTSIDE_PROVIDER = 'a hook read outside its provider: a render-time progra
 
 /** Files whose mechanisms are the target model's boundary, not a legacy site. */
 export const DECLARED = byFile([
+  // AGENTS.md: "the file plane alone fails with its VfsError (a POSIX code callers switch on with isVfsError)". A Nimbus
+  // `VFS` a mount serves throws it by that package's contract; any other throw in these files is still legacy.
+  ...['packages/core/src/vfs/context-plane.ts'].map(file => [file, {
+    mechanisms: ['throw'], thrown: 'VfsError',
+    reason: 'a Nimbus VFS implementation\'s errno failure, the file plane\'s declared channel',
+  }] as const),
   ...Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, {
     mechanisms: MECHANISMS, reason: `${surface.type}'s one runner rethrows its typed failure or a defect`,
   }] as const),
@@ -1019,9 +1027,48 @@ function mechanismOf(node: SyntaxNode): Mechanism | undefined {
   return undefined;
 }
 
+/** The class a `new` expression constructs, by name. */
+function constructed(expression: SyntaxNode['raw'] | null | undefined): string | undefined {
+  return expression?.type === 'NewExpression' && expression.callee.type === 'Identifier' ? expression.callee.name : undefined;
+}
+
+/** Whether a `throw` throws `name`: `throw new Name(…)`, or `throw make(…)` where `make` is a same-file function or arrow
+ *  whose body is `new Name(…)`. */
+function throwsClass(node: SyntaxNode, name: string): boolean {
+  const thrown = node.raw.type === 'ThrowStatement' ? node.raw.argument : null;
+
+  if (constructed(thrown) === name) return true;
+
+  if (thrown?.type !== 'CallExpression' || thrown.callee.type !== 'Identifier') return false;
+  const helper = thrown.callee.name;
+  let program: SyntaxNode = node;
+
+  while (program.parent !== undefined) program = program.parent;
+  let made = false;
+
+  walk(program, (candidate) => {
+    const { raw } = candidate;
+
+    if (raw.type === 'VariableDeclarator' && raw.id.type === 'Identifier' && raw.id.name === helper
+      && raw.init?.type === 'ArrowFunctionExpression' && raw.init.body.type !== 'BlockStatement') {
+      made ||= constructed(raw.init.body) === name;
+    }
+
+    if (raw.type === 'FunctionDeclaration' && raw.id?.name === helper && raw.body.body.length === 1) {
+      const [only] = raw.body.body;
+
+      made ||= only?.type === 'ReturnStatement' && constructed(only.argument) === name;
+    }
+  });
+
+  return made;
+}
+
 function isDeclared(file: string, mechanism: Mechanism, node: SyntaxNode): boolean {
   return (DECLARED.get(file) ?? []).some((declaration) => {
     if (!declaration.mechanisms.includes(mechanism)) return false;
+
+    if (declaration.thrown !== undefined && !throwsClass(node, declaration.thrown)) return false;
 
     if (declaration.within === undefined) return true;
 
@@ -1236,8 +1283,8 @@ if (import.meta.main) {
     console.log(`  stale: ${key} locked at ${String(was)}, now ${String(now)}; \`bun scripts/error-model.ts --lock\` lowers it`);
   }
 
-  for (const [file, { mechanisms, reason, within }] of [...DECLARED].flatMap(([path, all]) => all.map((one) => [path, one] as const))) {
-    console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}): ${reason}`);
+  for (const [file, { mechanisms, reason, within, thrown }] of [...DECLARED].flatMap(([path, all]) => all.map((one) => [path, one] as const))) {
+    console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}${thrown === undefined ? '' : ` of ${thrown}`}): ${reason}`);
   }
 
   const { bridges, flights, routes, held, react, findings } = bridgeSites(sources);
