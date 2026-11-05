@@ -70,37 +70,23 @@ The workspace hosts the shared services; every agent's turns, main's included, r
 ```mermaid
 graph TB
     A["Agent&lt;Env&gt;: agents SDK"]
-    AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · ChatSession ports"]
-    O["OrchestratorAgent<br/>agents: swarm · hire · assign · hireWorkspace · message · reply · list · dismiss<br/>codemode-only: agent · db · mail"]
+    O["OrchestratorAgent<br/>cf-backend/src/orchestrator.ts<br/>runtime · BackendHost · AgentOrchestrator · ExtensionHost<br/>agents: swarm · hire · assign · hireWorkspace · message · reply · list · dismiss<br/>codemode-only: agent · db · mail"]
     H["AgentFacet<br/>main · subagent · head · node · background<br/>own isolate and SQLite; workspace RPC for tools"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
 
-    A --> AA
-    AA --> O
+    A --> O
     O --> H
-    AA -.->|composition| OMS
+    O -.->|composition| OMS
 ```
 
-`ActorAgent` (`packages/cf-backend/src/actor-agent.ts`) extends the Agents SDK's
+`OrchestratorAgent` (`packages/cf-backend/src/orchestrator.ts`) extends the Agents SDK's
 `Agent<Env>` for SQL, sockets, schedules, and fibers. Core's `ActorSession` and
 `ChatSession` own inference and recovery, in each agent's isolate (`FacetChat`,
-`packages/cf-backend/src/agent-facet/agent-chat.ts`). `ActorAgent` owns once what
-the workspace serves every agent: the Cloudflare runtime assembly, the
-`BackendHost`, the shared `AgentOrchestrator`, `ExtensionHost` plus prompt, model,
-and tool caches, and main's tool surface. A subclass supplies the abstract
-members: the actor's identity and host (`getOwnerUserId`, `actorHandle`,
-`actorDirectory`, `actorKind`, `actorHost`, `actorDirectoryStore`,
-`hostedSeams`), its tools and policy (`workspaceBox`, `actorSurface`, `ownTools`,
-`ownAgentsToolDeps`, `engine`,
-`notifyOwner`, `delegationBudget`, `ownMission`, `persistAutoTitle`,
-`promptIdentity`), and the ports every agent's isolate is reached through: its
-room (`mainChatWire`, `hostedChatWire`), its stores (`agentStores`,
-`readInheritedContext`, `transcriptFor`), its open turn (`mainChatTurn`,
-`mainChatSurface`) and its plans and questions (`hostedPlanReviews`,
-`hostedQuestions`). It may override three hooks (`workspaceName`,
-`extraCodemodeProviders`, `isClientRpcMethodDenied`). One subclass exists: the
-orchestrator. Every other actor is a logical row the orchestrator's host
-acquires, not a class.
+`packages/cf-backend/src/agent-facet/agent-chat.ts`). The workspace object owns once what
+it serves every agent: the Cloudflare runtime assembly, the `BackendHost`, the shared
+`AgentOrchestrator`, `ExtensionHost` plus prompt, model, and tool caches, and main's tool
+surface. It is the one Durable Object class per workspace: every other actor is a logical row
+its host acquires, not a class.
 
 Tool gating is structural; no prompt decides it. What a turn reaches is core's
 one decision, `surfaceReach` (`packages/core/src/delegation/turn-reach.ts`):
@@ -527,7 +513,7 @@ changelog (`evolution/changelog.ts`). See [EVOLUTION.md](./EVOLUTION.md) and
 graph TB
     subgraph pkgs["packages/"]
         Core["core/<br/>ChatSession + runChat + ExtensionHost, workspace filesystem,<br/>ExecutionRouter, swarm engine, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
-        CF["cf-backend/<br/>ActorAgent → OrchestratorAgent (one DO class),<br/>each agent in its own AgentFacet, UserDO, React UI"]
+        CF["cf-backend/<br/>OrchestratorAgent (one DO class),<br/>each agent in its own AgentFacet, UserDO, React UI"]
         Utils["agent-utils/<br/>stores, VFS types"]
         AC["agent-core/<br/>vendored runtime (dist); slate record types"]
         Compact["compaction/<br/>@better-compact/core ladder + Kinu codec"]
@@ -585,7 +571,7 @@ local process. Both drive the same core `ChatSession`.
 | Subagents | Hosted `subagent` actors (`host.acquire` + `host.run`, report lane) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
 
 The full contract and the three extension points (`ModelProvider`,
-`ActorAgent`, `KinuExtension`) are in [EXTENSIBILITY.md](./EXTENSIBILITY.md).
+`KinuExtension`) are in [EXTENSIBILITY.md](./EXTENSIBILITY.md).
 One client contract, `AgentClient`, reaches either backend.
 [AGENT-CLIENT-ARCHITECTURE-SPEC.md](./AGENT-CLIENT-ARCHITECTURE-SPEC.md) holds
 it: which side owns which state, the connect-ticket exchange, the

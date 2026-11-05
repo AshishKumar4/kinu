@@ -367,7 +367,7 @@ export async function grantDeviceAccess(
   };
 
   // The workspace's device transport serves a TTL-cached snapshot and its
-  // authoritative refresh runs at TURN start (actor-agent.ts) — so a freshly
+  // authoritative refresh runs at TURN start (orchestrator.ts) — so a freshly
   // created workspace answers the very first `executeInExecutor('device', …)`
   // with "not available" while the kick its own status() read started is still
   // in flight. Warm-up wears two shapes: the transport's ("not available", "no
