@@ -577,8 +577,8 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     if (Object.values(FAILURE_SURFACES).some(surface => file === surface.adapter) || HOST_BOUNDARIES.has(file)) continue;
     const parsed = parse(file, text);
     const runners = new Set<string>();
-    const syncRunners = new Set<string>();
-    const settleNames = new Set<string>();
+    /** Each runner's local name, by the platform callback whose whole return it may be. */
+    const platformOf = new Map<string, 'transactionSync' | 'blockConcurrencyWhile'>();
     const flightNames = new Set<string>();
     const detachNames = new Set<string>();
 
@@ -595,9 +595,9 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && RUNNERS.includes(specifier.imported.name)) {
           runners.add(specifier.local.name);
 
-          if (specifier.imported.name === 'settleSync') syncRunners.add(specifier.local.name);
+          if (specifier.imported.name === 'settleSync') platformOf.set(specifier.local.name, 'transactionSync');
 
-          if (specifier.imported.name === 'settle') settleNames.add(specifier.local.name);
+          if (specifier.imported.name === 'settle') platformOf.set(specifier.local.name, 'blockConcurrencyWhile');
 
           if (specifier.imported.name === 'detach') detachNames.add(specifier.local.name);
         }
@@ -679,14 +679,13 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
 
       const callback = holder.raw.type === 'ReturnStatement' ? holder : { parent: holder };
 
-      if ((syncRunners.has(raw.callee.name) && platformCallback(callback, 'transactionSync'))
-        || (settleNames.has(raw.callee.name) && platformCallback(callback, 'blockConcurrencyWhile'))) {
+      if (platformCallback(callback, platformOf.get(raw.callee.name))) {
         bridges.push(site);
 
         return;
       }
 
-      const owner = bridgeOwner(holder.raw.type === 'ReturnStatement' ? holder : { parent: holder });
+      const owner = bridgeOwner(callback);
 
       if (owner === null) findings.push(`${site}: a runner returned outside an exported function or public member`);
       else bridges.push(site);
@@ -965,7 +964,9 @@ function bridgeOwner(statement: Pick<SyntaxNode, 'parent'>): SyntaxNode | null {
 }
 
 /** Whether the return belongs directly to a function passed as the platform method `method`'s argument. */
-function platformCallback(statement: Pick<SyntaxNode, 'parent'>, method: 'transactionSync' | 'blockConcurrencyWhile'): boolean {
+function platformCallback(statement: Pick<SyntaxNode, 'parent'>, method: 'transactionSync' | 'blockConcurrencyWhile' | undefined): boolean {
+  if (method === undefined) return false;
+
   let node: SyntaxNode | undefined = statement.parent;
 
   while (node !== undefined && !isFunctionLike(node)) node = node.parent;
