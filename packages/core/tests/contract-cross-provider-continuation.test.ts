@@ -10,9 +10,9 @@ import {
   isPortableToolCallId,
   ANTHROPIC_CRED_KEY,
   parseJsonObject,
-  type ChatEvent, type JsonObject, type ModelCallDeps, type AuthResolution,
+  type ChatEvent, type JsonObject,
 } from '../src/index';
-import { createMockFetch, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
+import { createMockFetch, type MockFetchHandle, type RecordedRequest, modelCallDeps } from '@kinu.run/test-utils';
 import { namedSseBody } from '@kinu.run/test-utils';
 
 /** Answers each call with the next script, holding the last one once they run out. */
@@ -36,19 +36,6 @@ const COMPAT_NATIVE_ID = 'call_source_minted';
 const COMPAT_REASONING = 'I should use the lookup tool.';
 
 const COMPAT_BASE = 'https://compat.example/v1';
-
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
-  const store = new Map(Object.entries(creds));
-
-  return {
-    env: {},
-    sessionAffinity: 'kinu-test',
-    workspaceAffinity: 'kinu-test',
-    fetch: fetchFn,
-    async getAuth(key) { return store.get(key) ?? null; },
-    async hasCredential(key) { return store.has(key); },
-  };
-}
 
 /** One side effect counted across both turns: a re-issued completed call shows up here. */
 function countingTools() {
@@ -231,7 +218,7 @@ async function truncatedAnthropicTurn(tools: ToolSet): Promise<{
     respond: replayingScripts(scripts),
   }]);
 
-  const deps = makeDeps({
+  const deps = modelCallDeps({
     [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
   }, mock.fetch);
 
@@ -264,7 +251,7 @@ async function replayOnCompat(
     }),
   }]);
 
-  const deps = makeDeps({
+  const deps = modelCallDeps({
     'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: COMPAT_BASE },
   }, mock.fetch);
 
@@ -301,7 +288,7 @@ async function reasonedCompatTurn(tools: ToolSet): Promise<{
     respond: replayingScripts(scripts),
   }]);
 
-  const deps = makeDeps({
+  const deps = modelCallDeps({
     'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: COMPAT_BASE },
   }, mock.fetch);
 
@@ -331,7 +318,7 @@ async function replayOnAnthropic(
     }),
   }]);
 
-  const deps = makeDeps({
+  const deps = modelCallDeps({
     [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
   }, mock.fetch);
 
@@ -499,7 +486,7 @@ describe('a search the provider ran itself, replayed', () => {
   test('its result is handed back under the same id as its call', async () => {
     const mock = createMockFetch([{ match: 'api.anthropic.com', respond: replayingScripts([ANTHROPIC_SERVER_SEARCH]) }]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
     }, mock.fetch);
 

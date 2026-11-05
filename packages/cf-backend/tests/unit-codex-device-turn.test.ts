@@ -2,11 +2,12 @@
 // turn through the production seam (the root's ActorSession), and with no machine the turn is refused in so many words.
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { CODEX_CRED_KEY, asFetchFunction, requestUrl, type JsonValue, DEVICE_FRAMES, DEVICE_METHOD } from '@kinu.run/core';
+import { CODEX_CRED_KEY, requestUrl, type JsonValue, DEVICE_FRAMES, DEVICE_METHOD } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import {
   agentSql, catalogTurn, driveUntil, hostedSubagentHarness, makeEnv, orchestratorHarness, wakeForDelegatedTask, mainDatabase } from './helpers/actor-harness';
 import { registerTestDevice } from './helpers/device-key';
+import { holdFetch } from '@kinu.run/test-utils';
 
 const OWNER_USER_ID = 'fedcba9876543210fedcba9876543210';
 
@@ -39,13 +40,13 @@ function answer(body: string, text: string): Response {
   });
 }
 
-const originalFetch = globalThis.fetch;
+const network = holdFetch();
 
 beforeEach(() => {
-  globalThis.fetch = asFetchFunction(async (input) => { throw new Error(`unexpected network call to ${requestUrl(input)}`); });
+  network.stub(async (input) => { throw new Error(`unexpected network call to ${requestUrl(input)}`); });
 });
 
-afterEach(() => { globalThis.fetch = originalFetch; });
+afterEach(network.restore);
 
 interface CodexWorkspace {
   readonly user: TestUserDO;

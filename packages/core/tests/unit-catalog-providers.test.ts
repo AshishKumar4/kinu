@@ -15,12 +15,12 @@ import {
   modelsDevCompatBaseURL,
   reasoningEffortOptions,
   silenceBoundMs,
-  type ModelCallDeps, type AuthResolution, type JsonObject, type ModelProvider,
+  type JsonObject, type ModelProvider,
 } from '../src/index';
 import { describeProviderError } from '../src/providers/util';
 import { getModelsDevModelEndpoint, listModelsDevProviderModels } from '../src/providers/models-dev';
 import { renderThrownChain } from '../src/obs/index';
-import { createMockFetch, present, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY } from '@kinu.run/test-utils';
+import { createMockFetch, present, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY, modelCallDeps } from '@kinu.run/test-utils';
 
 const CATALOG = {
   groq: {
@@ -62,20 +62,6 @@ const CATALOG = {
     models: { 'some-model': { id: 'some-model', tool_call: true } },
   },
 };
-
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
-  const store = new Map(Object.entries(creds));
-
-  return {
-    env: {},
-    sessionAffinity: 'kinu-test',
-    workspaceAffinity: 'kinu-test',
-    fetch: fetchFn,
-    async getAuth(key) { return store.get(key) ?? null; },
-    async hasCredential(key) { return store.has(key); },
-    async listCredentialKeys() { return [...store.keys()]; },
-  };
-}
 
 function catalogMock(extraHandlers: Parameters<typeof createMockFetch>[0] = []) {
   return createMockFetch([
@@ -163,7 +149,7 @@ describe('models.dev provider metadata', () => {
     const sarvam = source.get('sarvam');
 
     if (sarvam === undefined) throw new Error('Catalog provider was not registered');
-    const deps = makeDeps({ 'sarvam.bearer': { headers: {} } }, mock.fetch);
+    const deps = modelCallDeps({ 'sarvam.bearer': { headers: {} } }, mock.fetch);
     expect(await getModelsDevProvider('groq', deps)).toMatchObject({ id: 'groq', api: 'https://api.groq.com/openai/v1' });
     expect((await sarvam.listModels(deps))[0]?.reasoningEfforts).toEqual(['low', 'medium', 'high']);
   });
@@ -202,7 +188,7 @@ describe('models.dev dynamic catalog source', () => {
     const mock = catalogMock();
     const source = createModelsDevCatalogSource();
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [catalogCredKey('groq')]: { headers: { Authorization: 'Bearer gsk' } },
       [catalogCredKey('sap-ai-core')]: { headers: { Authorization: 'Bearer sk' } }, // not satisfiable
       'codex.oauth': { headers: {} },                                              // not a .bearer key
@@ -218,7 +204,7 @@ describe('models.dev dynamic catalog source', () => {
     expect(source.get('cloudflare-workers-ai')).toBeUndefined();
     const mock = catalogMock();
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [catalogCredKey('cloudflare-workers-ai')]: { headers: { Authorization: 'Bearer t' } },
     }, mock.fetch);
 
@@ -265,7 +251,7 @@ describe('registry with dynamic catalog source', () => {
       { match: 'mixed.test', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
 
-    const deps = makeDeps({ 'mixed.bearer': { headers: { Authorization: 'Bearer first-key' } } }, mock.fetch);
+    const deps = modelCallDeps({ 'mixed.bearer': { headers: { Authorization: 'Bearer first-key' } } }, mock.fetch);
     const registry = makeRegistry();
     const responseModel = registry.resolve('mixed/response', deps);
 
@@ -303,7 +289,7 @@ describe('registry with dynamic catalog source', () => {
       { match: 'https://responses.test/v1/chat/completions', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
 
-    const deps = makeDeps({ 'responses.bearer': { headers: { Authorization: 'Bearer key' } } }, mock.fetch);
+    const deps = modelCallDeps({ 'responses.bearer': { headers: { Authorization: 'Bearer key' } } }, mock.fetch);
     const registry = makeRegistry();
 
     await call(registry.resolve('responses/default', deps));
@@ -324,7 +310,7 @@ describe('registry with dynamic catalog source', () => {
       { match: 'https://go.test/v1/chat/completions', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
 
-    const deps = makeDeps({ 'opencode-go.bearer': { headers: { Authorization: 'Bearer key' } } }, mock.fetch);
+    const deps = modelCallDeps({ 'opencode-go.bearer': { headers: { Authorization: 'Bearer key' } } }, mock.fetch);
     const model = makeRegistry().resolve('opencode-go/glm', deps);
     await generateText({ model, prompt: 'hello', providerOptions: reasoningEffortOptions('high', 'opencode-go/glm-5.3') });
 
@@ -337,12 +323,12 @@ describe('registry with dynamic catalog source', () => {
   test('a bring-your-own endpoint is spoken to at its credential\'s base URL, and refused without one', async () => {
     const mock = createMockFetch([{ match: 'https://groq.example/v1/chat/completions', respond: { status: 200, body: CHAT_COMPLETION_BODY } }]);
 
-    const keyed = makeDeps({ 'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://groq.example/v1/' } }, mock.fetch);
+    const keyed = modelCallDeps({ 'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://groq.example/v1/' } }, mock.fetch);
 
     await generateText({ model: createOpenAICompatProvider().createModel('llama-4', keyed), prompt: 'hello', maxRetries: 0 });
     expect(mock.requests.map((request) => request.url)).toEqual(['https://groq.example/v1/chat/completions']);
 
-    const keyOnly = makeDeps({ 'openai-compat.default': { headers: { Authorization: 'Bearer k' } } }, mock.fetch);
+    const keyOnly = modelCallDeps({ 'openai-compat.default': { headers: { Authorization: 'Bearer k' } } }, mock.fetch);
 
     const [refused] = await Promise.allSettled([generateText({ model: createOpenAICompatProvider().createModel('llama-4', keyOnly), prompt: 'hello', maxRetries: 0 })]);
 
@@ -374,7 +360,7 @@ describe('registry with dynamic catalog source', () => {
       },
     ]);
 
-    const deps = makeDeps({ 'responses.bearer': { headers: { Authorization: 'Bearer key' } } }, mock.fetch);
+    const deps = modelCallDeps({ 'responses.bearer': { headers: { Authorization: 'Bearer key' } } }, mock.fetch);
     const model = makeRegistry().resolve('responses/test', deps);
     const streamed = streamText({ model, prompt: 'hello' });
 
@@ -397,7 +383,7 @@ describe('registry with dynamic catalog source', () => {
 
     const registry = makeRegistry();
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [catalogCredKey('groq')]: { headers: { Authorization: 'Bearer gsk-test' } },
     }, mock.fetch);
 
@@ -415,7 +401,7 @@ describe('registry with dynamic catalog source', () => {
     const mock = catalogMock();
     const registry = makeRegistry();
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [catalogCredKey('groq')]: { headers: { Authorization: 'Bearer gsk' } },
     }, mock.fetch);
 
@@ -436,7 +422,7 @@ describe('registry with dynamic catalog source', () => {
     registry.register(staticProvider('openai', 'gpt-5.5', () => { staticCreates++; }));
     registry.registerDynamic(createModelsDevCatalogSource());
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [catalogCredKey('openai')]: { headers: { Authorization: 'Bearer sk' } },
       [catalogCredKey('groq')]: { headers: { Authorization: 'Bearer gsk' } },
     }, mock.fetch);
@@ -465,7 +451,7 @@ describe('registry with dynamic catalog source', () => {
   test('no credential → 401 short-circuit without an upstream call', async () => {
     const mock = catalogMock();
     const registry = makeRegistry();
-    const deps = makeDeps({}, mock.fetch);
+    const deps = modelCallDeps({}, mock.fetch);
     const model = registry.resolve('groq/llama-3.3-70b-versatile', deps);
     await expect(call(model)).rejects.toThrow();
     expect(mock.requests.filter((r) => r.url.includes('api.groq.com'))).toHaveLength(0);
@@ -475,7 +461,7 @@ describe('registry with dynamic catalog source', () => {
     const mock = catalogMock();
     const registry = makeRegistry();
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [catalogCredKey('unlisted')]: { headers: { Authorization: 'Bearer x' } },
     }, mock.fetch);
 
@@ -518,7 +504,7 @@ describe('a catalog model whose models.dev read lands inside its first call', ()
     const registry = createProviderRegistry();
 
     registry.registerDynamic(createModelsDevCatalogSource());
-    const deps = makeDeps({ 'thinking.bearer': { headers: { Authorization: 'Bearer key' } } }, fetchFn);
+    const deps = modelCallDeps({ 'thinking.bearer': { headers: { Authorization: 'Bearer key' } } }, fetchFn);
     const result = streamText({ model: registry.resolve('thinking/m', deps), prompt: 'hello', maxRetries: 0 });
     const IDLE_MS = silenceBoundMs('provider.stream.idle_ms');
 

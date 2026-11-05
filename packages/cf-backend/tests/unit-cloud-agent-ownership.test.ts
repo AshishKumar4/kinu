@@ -4,7 +4,7 @@ import { serveFamily } from './helpers/api';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  actorScaffoldPath, asFetchFunction, BUILTIN_PROFILE_CATALOG, MAIN_AGENT, profileCatalogDigest, type ProfileCatalogEnvelope,
+  actorScaffoldPath, BUILTIN_PROFILE_CATALOG, MAIN_AGENT, profileCatalogDigest, type ProfileCatalogEnvelope,
 } from '@kinu.run/core';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { testOwner } from './helpers/user-do';
@@ -22,7 +22,7 @@ import type { AuthIdentity } from '../src/auth/session';
 import type { IndexFeedSink } from '../src/control-plane/index-feed';
 import { bootstrappedProfile, userAccount, workspaceObject, workerContext } from './helpers/bindings';
 import { NO_RELAY_MACHINE } from './helpers/user-credentials';
-import { createRecordingLogger } from '@kinu.run/test-utils';
+import { createRecordingLogger, holdFetch } from '@kinu.run/test-utils';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -168,8 +168,8 @@ describe('cloud agent ownership safety', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    const network = holdFetch();
+    network.stub(async () => new Response('{}', { status: 503 }));
 
     try {
       const entry = await createCloudWorkspaceForUser({
@@ -221,7 +221,7 @@ describe('cloud agent ownership safety', () => {
       expect(explicitlyTitled.displayName).toBe('Jarvis');
       expect(calls).toContain('initial-title:Jarvis:user');
     } finally {
-      globalThis.fetch = originalFetch;
+      network.restore();
     }
   });
 
@@ -279,8 +279,8 @@ describe('cloud agent ownership safety', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    const network = holdFetch();
+    network.stub(async () => new Response('{}', { status: 503 }));
 
     try {
       await expect(createCloudWorkspaceForUser({
@@ -296,7 +296,7 @@ describe('cloud agent ownership safety', () => {
         },
       })).rejects.toThrow('jarvis belongs to another account');
     } finally {
-      globalThis.fetch = originalFetch;
+      network.restore();
     }
 
     expect(calls).toContain('register:jarvis:Jarvis');
@@ -336,8 +336,8 @@ describe('cloud agent ownership safety', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    const network = holdFetch();
+    network.stub(async () => new Response('{}', { status: 503 }));
 
     try {
       await expect(createCloudWorkspaceForUser({
@@ -351,7 +351,7 @@ describe('cloud agent ownership safety', () => {
         },
       })).rejects.toThrow('jarvis belongs to another account');
     } finally {
-      globalThis.fetch = originalFetch;
+      network.restore();
     }
 
     // Filed as the undo's own fault, not as the tolerated fail-closed teardown.
@@ -395,8 +395,8 @@ describe('cloud agent ownership safety', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    const network = holdFetch();
+    network.stub(async () => new Response('{}', { status: 503 }));
 
     try {
       await expect(createCloudWorkspaceForUser({
@@ -410,7 +410,7 @@ describe('cloud agent ownership safety', () => {
         },
       })).rejects.toThrow('the workspace could not seed its soul');
     } finally {
-      globalThis.fetch = originalFetch;
+      network.restore();
     }
 
     const tolerated = recording.emitted.find(
@@ -477,8 +477,8 @@ describe('cloud agent ownership safety', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    const network = holdFetch();
+    network.stub(async () => new Response('{}', { status: 503 }));
 
     try {
       await createCloudWorkspaceForUser({
@@ -492,7 +492,7 @@ describe('cloud agent ownership safety', () => {
         },
       });
     } finally {
-      globalThis.fetch = originalFetch;
+      network.restore();
     }
 
     expect(index.observed).toEqual([`${USER_ID}/jarvis`]);
@@ -539,8 +539,8 @@ describe('cloud agent ownership safety', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    const network = holdFetch();
+    network.stub(async () => new Response('{}', { status: 503 }));
     let first;
     let second;
 
@@ -567,7 +567,7 @@ describe('cloud agent ownership safety', () => {
         },
       });
     } finally {
-      globalThis.fetch = originalFetch;
+      network.restore();
     }
 
     expect(first).toEqual({
@@ -627,8 +627,8 @@ describe('cloud agent ownership safety', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
 
-    const originalFetch = globalThis.fetch;
-    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    const network = holdFetch();
+    network.stub(async () => new Response('{}', { status: 503 }));
 
     try {
       await createCloudWorkspaceForUser({
@@ -644,7 +644,7 @@ describe('cloud agent ownership safety', () => {
         },
       });
     } finally {
-      globalThis.fetch = originalFetch;
+      network.restore();
     }
 
     // A workspace can run turns without being opened, so its identity must exist before first visit.

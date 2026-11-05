@@ -2,8 +2,8 @@
 // tried once more when Google refuses the held one; every answer comes back as Google gave it, with what a caller paces
 // or revalidates by.
 import { afterEach, describe, expect, test } from 'bun:test';
-import { asFetchFunction } from '../src/providers/fetch-shim';
 import { callGoogle, type GoogleCall } from '../src/google/calls';
+import { holdFetch } from '@kinu.run/test-utils';
 
 const LIST: GoogleCall = { method: 'GET', url: 'https://gmail.googleapis.com/gmail/v1/users/me/messages' };
 
@@ -11,7 +11,7 @@ const LIST: GoogleCall = { method: 'GET', url: 'https://gmail.googleapis.com/gma
 function google(...answers: Response[]): string[] {
   const sentWith: string[] = [];
 
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     const request = new Request(input, init);
     const condition = request.headers.get('if-none-match');
 
@@ -23,9 +23,9 @@ function google(...answers: Response[]): string[] {
   return sentWith;
 }
 
-const realFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(network.restore);
 
 describe('a Google call', () => {
   test('goes with the held token; a refused token is renewed and the call made once more', async () => {

@@ -21,6 +21,8 @@ export * from './runtime-context';
 
 export * from './merge-policy';
 
+export * from './model-call-deps';
+
 export * from './network';
 
 export * from './chat-completions';

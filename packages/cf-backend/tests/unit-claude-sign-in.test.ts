@@ -1,7 +1,7 @@
 // The web's Claude sign-in, from the routes to Claude's token endpoint, over the flow `kinu provider connect claude` runs.
 import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { asFetchFunction, CLAUDE_CRED_KEY, type UserCaller } from '@kinu.run/core';
+import { CLAUDE_CRED_KEY, type UserCaller } from '@kinu.run/core';
 import { serveFamily } from './helpers/api';
 import { createTestUserDO, testOwner, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
@@ -9,6 +9,7 @@ import { acrossRpc } from './helpers/jsrpc-stub';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import * as v from 'valibot';
+import { holdFetch } from '@kinu.run/test-utils';
 
 const IDENTITY: AuthIdentity = { userId: '0123456789abcdef0123456789abcdef', email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now() };
 
@@ -20,15 +21,15 @@ const FinishedSchema = v.object({ connected: v.boolean(), error: v.optional(v.st
 
 const RefusalSchema = v.looseObject({ error: v.string() });
 
-const realFetch = globalThis.fetch;
+const network = holdFetch();
 
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(network.restore);
 
 /** Claude's token endpoint, answering every exchange with `answer`; the requests it saw, in order. */
 function claudeTokenEndpoint(answer: () => Response | Promise<Response>): v.InferOutput<typeof TokenRequestSchema>[] {
   const seen: v.InferOutput<typeof TokenRequestSchema>[] = [];
 
-  globalThis.fetch = asFetchFunction(async (input, init) => {
+  network.stub(async (input, init) => {
     const request = new Request(input, init);
 
     expect(request.url).toBe(TOKEN_URL);

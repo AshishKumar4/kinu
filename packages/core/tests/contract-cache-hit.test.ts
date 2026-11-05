@@ -22,7 +22,7 @@ import type { HarnessMode } from '../src/config/harness-mode';
 import type { TurnSinks } from '../src/orchestrator/turn-accumulator';
 import { Database } from 'bun:sqlite';
 import { freezeTree } from '../src/utils/freeze';
-import { createMockFetch, testActorHandle, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
+import { createMockFetch, testActorHandle, type MockFetchHandle, type RecordedRequest, modelCallDeps } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql } from './helpers';
 
 interface WireView {
@@ -322,20 +322,6 @@ interface ProviderCase {
 
 const SESSION_KEY = 'kinu-cache-hit-gate';
 
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
-  const store = new Map(Object.entries(creds));
-
-  return {
-    env: {},
-    sessionAffinity: SESSION_KEY,
-    workspaceAffinity: SESSION_KEY,
-    fetch: fetchFn,
-    async getAuth(key) { return store.get(key) ?? null; },
-    async hasCredential(key) { return store.has(key); },
-  };
-}
-
-
 const CACHING_PROVIDERS: readonly ProviderCase[] = [
   {
     label: 'anthropic', providerId: 'anthropic', modelId: 'claude-opus-4-7', dialect: 'anthropic',
@@ -503,7 +489,7 @@ async function driveTurn(
     },
   }]);
 
-  const deps = makeDeps(entry.credentials, mock.fetch);
+  const deps = modelCallDeps(entry.credentials, mock.fetch, SESSION_KEY);
   const recorded: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0][] = [];
   const acc = new TurnAccumulator({ onStepEvent: (step) => { recorded.push(step); } });
   acc.reset(0);
@@ -704,7 +690,7 @@ describe('a stable prefix reads back as a nonzero cache hit', () => {
       },
     }]);
 
-    const model = entry.model(makeDeps(entry.credentials, mock.fetch));
+    const model = entry.model(modelCallDeps(entry.credentials, mock.fetch, SESSION_KEY));
     const mutable: ModelMessage = { role: 'user', content: 'the first words' };
     const frozen: ModelMessage = Object.freeze({ role: 'user', content: 'a settled question' });
 
