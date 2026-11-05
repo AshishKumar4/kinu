@@ -21,6 +21,8 @@ export default defineConfig({
   },
   resolve: {
     alias: {
+      // A workspace's Activity, as it ships or as the single log under review (gallery-activity-log.tsx); before "@".
+      "@/components/workspaces/ActivityView": resolve(galleryRoot, "src/gallery-activity-log.tsx"),
       "@": resolve(galleryRoot, "src"),
       "node:crypto": resolve(galleryRoot, "client-node-stubs.ts"),
       "node:async_hooks": resolve(galleryRoot, "client-node-stubs.ts"),

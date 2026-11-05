@@ -2,6 +2,7 @@
  * Design-system gallery: the real components over mock data, so signed-in surfaces can be screenshotted without auth.
  * Served by gallery.vite.config.ts; `?frame=` selects a frame (full list: the dispatch in `mount()`). /api/user/* GETs are stubbed in-page.
  */
+import { ActivityView } from "@/gallery-activity-log";
 import { TextInput } from "@/components/ui/Field";
 import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
@@ -8316,6 +8317,8 @@ async function mount() {
     ["usermcp", { node: <UserMcpFrame />, entries: ["/user/settings/mcp"] }],
     ["characters", { node: <CharactersFrame />, entries: ["/"] }],
     ["devices-empty", { node: <DevicesFrame />, entries: ["/user/settings#devices"] }],
+    // A workspace's Activity alone, as it ships or (`&activity=log`) as the single log under review.
+    ["activity-review", { node: <ActivityView workspace={WORKSPACE_PAGE_NAME} title="API Worker" rpc={galleryRpc()} now={null} />, entries: ["/"] }],
   ]);
 
   const fixture = fixtureFrames.get(frame);
