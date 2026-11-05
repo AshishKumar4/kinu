@@ -8,6 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { DELEGATION_MAX_DEPTH, delegationExhausted, SubagentRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, type OwedReads, delegationDepthRefusal, receiveSubagentEvent, type SubagentEventResult, type SubagentReportHandoff, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubagentHandoff, type SubagentRuntime, type TemporaryAgentPort, type WorkMode, type AgentsOp, type CodemodeResult, callOperation, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubagentLifecycles, codemodeFunction, failedToolOutcome, successfulToolOutcome, withCodemodeProgram } from '../src/index';
 import { createAgentsTool } from '../src/delegation/agents-operations';
+import { attemptInItsWords, settle } from '../src/obs/index';
 import { createMemoryVfs, seedFiles } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
 import type { ActorReference } from '../src/identity/actor-handle';
@@ -131,22 +132,22 @@ function makeScene(options: {
   const log = new EventLog(eventSql, directory.main());
 
   const runtime: SubagentRuntime = {
-    async spawn(input) {
+    spawn: (input) => attemptInItsWords('unavailable', async () => {
       calls.push(`spawn:${input.name}`);
       births.push(input);
 
       if (options.fail === 'spawn') throw new Error('the facet substrate is unavailable');
 
       return directory.apply(directory.main(), [], { action: 'register', name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime }).reference;
-    },
-    async cancelBirth(input) {
+    }),
+    cancelBirth: (input) => attemptInItsWords('unavailable', async () => {
       const actor = directory.apply(directory.main(), [], { action: 'cancelCreation', name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime });
 
       if (actor.state !== 'deleted') directory.apply(directory.main(), [], { action: 'release', name: input.name, reference: actor.reference });
 
       return actor.reference;
-    },
-    async assign(name, input) {
+    }),
+    assign: (name, input) => attemptInItsWords('unavailable', async () => {
       calls.push(`assign:${name}`);
       briefs.push(input.body);
       assignments.push(input);
@@ -155,19 +156,19 @@ function makeScene(options: {
       await options.duringAssignment?.();
 
       return HANDOFF;
-    },
-    async status() {
+    }),
+    status: () => attemptInItsWords('unavailable', async () => {
       return { lastActivity: null, recentSteps: [] };
-    },
-    async message() { return HANDOFF; },
-    async dismiss(name, { keepHistory }) {
+    }),
+    message: () => attemptInItsWords('unavailable', async () => { return HANDOFF; }),
+    dismiss: (name, { keepHistory }) => attemptInItsWords('unavailable', async () => {
       calls.push(`dismiss:${name}:${keepHistory}`);
 
       if (options.failRelease) throw new Error('the release failed');
 
       return { stoppedJobs: [] };
-    },
-    async rename() { /* not reached by this rung */ },
+    }),
+    rename: () => attemptInItsWords('unavailable', async () => { /* not reached by this rung */ }),
   };
 
   const retires: Promise<void>[] = [];
@@ -177,7 +178,7 @@ function makeScene(options: {
     runtime,
     createName: (role: string) => `${role}-a1b2c3`,
     now: () => NOW,
-    afterTurn: (_child, work) => { retires.push(work()); },
+    afterTurn: (_child, work) => { retires.push(settle(work)); },
   };
 
   const temporary = createTemporaryAgentPort(portInput);

@@ -29,7 +29,7 @@ import { isWorkMode, turnTags, type RunCheck, type UserProfile, type WatchCheck,
 import { ActorClaimStore, agentArtifactDirectory, prepareOutput, agentHome, CHAT_SESSION_ID, EventLog, SubagentRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { answeredAs, present, admitTestClaim } from '@kinu.run/test-utils';
 import {
-  createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, toKinuError, type Logger,
+  createCompositeLogger, createConsoleLogger, renderCauseChain, setDiagnosticsSink, settle, toKinuError, type Logger,
 } from '@kinu.run/core/obs';
 import type { UserDO } from '../../src/user/user-do';
 import type { McpToolCall, McpToolSurface } from '../../src/user/mcp-servers';
@@ -2075,7 +2075,7 @@ export async function hostedSubagentHarness(
     creationId: crypto.randomUUID(),
   };
 
-  const reference = await workspace.agent.observeSubagentRuntime().spawn(seed);
+  const reference = await settle(workspace.agent.observeSubagentRuntime().spawn(seed));
   const actor = await workspace.agent.observeActorHost().acquire(reference, { kind: 'actor' });
 
   return { actor, workspace };

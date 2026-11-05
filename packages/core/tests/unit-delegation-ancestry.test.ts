@@ -10,13 +10,15 @@ import { createTestActor } from './helpers';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { actorReferenceOf } from '../src/identity/actor-handle';
 import { hireLifecycle } from '../src/subagents/hire-lifecycle';
+import { Effect } from 'effect';
 import { KinuError } from '../src/obs/error';
+import { settle } from '../src/obs/effect';
 import { delegationBudgetOf } from '../src/subagents/depth';
 import { agentsActionsFor, dispatchAgentsCall, type AgentsToolDeps } from '../src/delegation/agents-tool';
 import { makeTeam } from './helpers-agents';
 import * as v from 'valibot';
 
-const unused = async (): Promise<never> => { throw new KinuError('unsupported', 'A refused hire asks nothing else.'); };
+const unused = (): Effect.Effect<never, KinuError> => Effect.fail(new KinuError('unsupported', 'A refused hire asks nothing else.'));
 
 /** A workspace with `subagent` hired by main, its ancestry then rewritten by `corrupt` as an import might leave it. */
 function hirerWith(corrupt: (sql: ReturnType<typeof createTestSql>, ids: { readonly subagent: string; readonly second: string }) => void) {
@@ -55,7 +57,7 @@ describe('a hirer whose line of hirers cannot be walked', () => {
       void database.sql`UPDATE workspace_actors SET parent_actor_id = 'actor-gone' WHERE actor_id = ${subagent}`;
     });
 
-    expect(lifecycle.spawn(seed)).rejects.toThrow(/no longer recorded.*unknown/u);
+    expect(settle(lifecycle.spawn(seed))).rejects.toThrow(/no longer recorded.*unknown/u);
     expect(directory.list().some((actor) => actor.name === 'third')).toBe(false);
   });
 
@@ -64,7 +66,7 @@ describe('a hirer whose line of hirers cannot be walked', () => {
       void database.sql`UPDATE workspace_actors SET parent_actor_id = ${second} WHERE actor_id = ${subagent}`;
     });
 
-    expect(lifecycle.spawn(seed)).rejects.toThrow(/lead back to one another.*unknown/u);
+    expect(settle(lifecycle.spawn(seed))).rejects.toThrow(/lead back to one another.*unknown/u);
     expect(directory.list().some((actor) => actor.name === 'third')).toBe(false);
   });
 });

@@ -173,7 +173,8 @@ export function createTemporaryAgentPort(deps: {
   /** From what the hire was first asked (its brief), else its role (`agentNamer`). */
   createName(role: string, brief: string | null): string;
   now(): number;
-  afterTurn(child: ActorReference, work: () => Promise<void>): void;
+  /** `work` run once the hire's turn has settled, by its backend, never awaited by this one. */
+  afterTurn(child: ActorReference, work: Effect.Effect<void, KinuError>): void;
 }): TemporaryAgentPort {
   return {
     start: (request) => settle(Effect.gen(function* () {
@@ -221,7 +222,7 @@ export function createTemporaryAgentPort(deps: {
 
       if (!actor) return;
       deps.roster.dismiss(name, deps.now());
-      deps.afterTurn(actor, async () => { await deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor); });
+      deps.afterTurn(actor, Effect.asVoid(deps.runtime.dismiss(name, { keepHistory: true, interrupt: false }, actor)));
     },
 
   };

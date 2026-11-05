@@ -22,7 +22,7 @@ import {
   type WriteObserver, actorPolicy, isSubagentOrigin, type TierRefusals, currentOperationProfile, providerAccounts,
 } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
+import { attemptInItsWords, flight, KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
 import { Cause, Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks, type WorkspaceBoxUse } from './runtime';
 import type { AdoptsJobs, CommandEnvironment, LiveRead } from '@kinu.run/core';
@@ -188,7 +188,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
       }));
     },
 
-    runtimeFor: async (bound: BoundActor): Promise<CFRuntime> => {
+    runtimeFor: (bound: BoundActor) => attemptInItsWords('io', async (): Promise<CFRuntime> => {
       // Placement from the policy: the workspace agent lives in the workspace's own runtime, which its opener holds.
       const workspaceHome = actorPolicy(bound.record).workspaceAgent ? seams.workspaceAgentHome?.() : undefined;
 
@@ -262,7 +262,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost<C
       runtimes.set(bound.handle, runtime);
 
       return runtime;
-    },
+    }),
     scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record),
       vfs: seams.workspaceBox(hostedActorPlacement(bound.record).shellId).store({ home: WORKSPACE_ROOT }) }),
 

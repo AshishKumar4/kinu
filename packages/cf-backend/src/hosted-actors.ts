@@ -4,7 +4,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { actorPolicy, hireLifecycle, type HireLifecyclePorts, type SeatedHire, publishSubagentReport, type OwedAdmission, type ConversationRecall, type HeadReport, type SubagentReportLedger, type CodemodeBuilder, type SeatedActor, type ServedStores, type TierId } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import { EventLog, titleActorFromMessage, spawnSeatedHead, receiveSubagentEvent, subagentForkContext, type SubagentInheritedContext, inheritedAsModelMessage, explorationActorKey, reclaimSettledRunActors, actorReferenceOf, registeredParent, terminalTaskReport, hireTurnSettled, defaultLoopOrigin, type OwedReads, type ActorHost, type ActorReference, type BoundActor, type HeadId, type HeadInput, type RunInference, type HeadSplitRequest, type HeadSplitResult, type HeadStep, type HostedNodeSeat, type StepLoopJobSeat, type JobRetirement, type LoopOrigin, type MissionScope, type NodeIdentity, type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile, type SpawnedHead, type SqlExec, type SubagentEventResult, type SubagentReportOrigin, type SubagentReportHandoff, type SubagentReportStatus, type SubagentRosterStore, type SubagentRuntime, type TaskTurnEnding, type TemporaryAgentPort, type WebSearchProvider, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver } from '@kinu.run/core';
-import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { attempt, attemptInItsWords, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type {
   AgentToolDescriptor, ArtifactOverrides, DiscoverOpts, DynamicReads, ExecutionKey, ExecutionLane, FrozenAuthority, HeadCapture, HeadSeat, HiredTurn, JsonObject, OperationProfile, OwedReport, PreparedAgentTurn,
   ReceiptExecution, ReportDeps, RunTurnSources, TaskPlan, TurnAssemblySources, TurnLedgers,
@@ -210,23 +210,22 @@ function hostedLifecyclePorts(seams: HostedActorSeams, parent: () => BoundActor)
     actor, handle: actor.handle, exec: seams.exec, turnInFlight: () => seams.turnInFlight(actor.reference),
   });
 
+  // The host and its seams answer in promises; each act is carried, its refusal kept in its own words.
   return {
     parent: () => parent(),
     directory: seams.directory,
-    born: async (reference, _name, seed) => {
-      await seams.host.run(reference, { kind: 'actor' }, (actor) => {
-        seed(actor.stores.config);
+    born: (reference, _name, seed) => attemptInItsWords('unavailable', () => seams.host.run(reference, { kind: 'actor' }, (actor) => {
+      seed(actor.stores.config);
 
-        return Promise.resolve();
-      });
-    },
-    asHire: (reference, _name, body) => seams.host.run(reference, { kind: 'actor' }, async (actor) => await body(seated(actor))),
-    deliver: (hire, admit) => seams.deliver(hire.actor, admit),
+      return Promise.resolve();
+    })),
+    asHire: (reference, _name, body) => attemptInItsWords('unavailable', () => seams.host.run(reference, { kind: 'actor' }, (actor) => settle(body(seated(actor))))),
+    deliver: (hire, admit) => attemptInItsWords('unavailable', () => seams.deliver(hire.actor, admit)),
     hirerName: (hire) => seams.hirerName(hire.actor),
     announce: (hire) => { seams.announce(hire.actor); },
-    retireJobs: (actorId) => seams.retireJobs(actorId),
+    retireJobs: (actorId) => attemptInItsWords('unavailable', () => seams.retireJobs(actorId)),
     roster: (hirer) => seams.roster(seams.host.bindStores(hirer)),
-    retire: (owner, retirement) => seams.host.retire(owner, retirement),
+    retire: (owner, retirement) => attemptInItsWords('unavailable', () => seams.host.retire(owner, retirement)),
   };
 }
 

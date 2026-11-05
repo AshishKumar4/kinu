@@ -131,7 +131,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, op
 
       return { path: actorScaffoldPath(bound.record), vfs: planeFor(bound.record.actorId) };
     },
-    runtimeFor: (bound) => {
+    runtimeFor: (bound) => Effect.sync(() => {
       const plane = planeFor(bound.record.actorId);
 
       return {
@@ -143,7 +143,7 @@ function build(donor?: Database, unreadableActor?: string, automatic = false, op
         identity: scaffoldIdentity(bound.record, plane, sql, bound.record.actorId),
         release: () => { released.push(bound.record.name); },
       };
-    },
+    }),
     loopFor: () => ({ origin: { kind: 'builtin' }, parent: null }),
     orchestrationFor,
     // Null: this fixture asserts hosting, not context auditing.

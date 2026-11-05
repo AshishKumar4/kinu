@@ -1,5 +1,7 @@
 import { actorScaffoldPath, createActorHost, EventLog, type ActorHost, type ActorHostDeps, type BoundActor } from '@kinu.run/core';
 import { createLocalOrchestration, type LocalOrchestration, type LocalSessionOwner } from './orchestration';
+import { attemptInItsWords } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { buildLocalActorRuntime, type CLIRuntime } from './runtime';
 import { localActorScaffoldSource } from './schema-genesis';
 
@@ -22,12 +24,11 @@ export function createLocalActorHost(deps: LocalActorHostDeps): ActorHost {
   return createActorHost({
     ...deps,
     tracing: undefined,
-    runtimeFor: async (bound, seat) => {
-      await scaffoldFor(bound);
-
-      return await (seat.kind === 'actor' ? deps.actorRuntimeFor(bound, seat)
-        : buildLocalActorRuntime(deps.parentRuntimeFor(bound), bound, seat.kind, seat.writes));
-    },
+    runtimeFor: (bound, seat) => Effect.andThen(
+      attemptInItsWords('io', () => scaffoldFor(bound)),
+      seat.kind === 'actor' ? deps.actorRuntimeFor(bound, seat)
+        : attemptInItsWords('io', () => buildLocalActorRuntime(deps.parentRuntimeFor(bound), bound, seat.kind === 'head' ? 'head' : 'node', seat.writes)),
+    ),
     filesFor: (bound) => deps.parentRuntimeFor(bound).filesForActor(bound.handle),
     scaffoldFor,
     orchestrationFor: (bound) => {

@@ -1,4 +1,5 @@
 import { sqlStorageOver } from '@kinu.run/core/identity';
+import { Effect } from 'effect';
 import type { Database } from 'bun:sqlite';
 import { withHostDeliveries } from '@kinu.run/test-utils';
 import {
@@ -129,7 +130,7 @@ export function localTestActorHost(
     },
     directory,
     installedBuild: null,
-    runtimeFor: (bound, seat) => buildLocalActorRuntime(parent, bound, seat.kind === 'node' ? 'node' : 'head', seat.writes ?? writes?.get(bound.reference.actorId)),
+    runtimeFor: (bound, seat) => Effect.promise(() => buildLocalActorRuntime(parent, bound, seat.kind === 'node' ? 'node' : 'head', seat.writes ?? writes?.get(bound.reference.actorId))),
     loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent }),
     orchestrationFor: (bound) => (withHostDeliveries({
       host: {
