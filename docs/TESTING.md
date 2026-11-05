@@ -476,7 +476,7 @@ test('sends Authorization: Bearer', async () => {
 
 ## What Bun cannot load
 
-The `agents` package imports `cloudflare:email`, which only Workers resolves. So `ActorAgent`, its subclasses, and the auth/routes dispatcher cannot load in `bun test`.
+The `agents` package imports `cloudflare:email`, which only Workers resolves. So `OrchestratorAgent` and the auth/routes dispatcher cannot load in `bun test`.
 
 - `bun run test:workerd` runs the `tests/workerd/` suites in vitest/workerd. They import `cloudflare:workers` and `cloudflare:test`. Root `bunfig.toml` excludes `**/tests/workerd/**` and `packages/cf-backend/vitest.config.ts:540` includes them. `scripts/ladder.test.ts` requires the three `test:workerd:*` rows to partition that set, and every file bun excludes to have a runner.
 - The eval tier vitest arms cover episodes that need `bun:sqlite` in vitest.

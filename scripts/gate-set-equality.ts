@@ -31,7 +31,7 @@
  *   9. `schema-drift` enumerated `git ls-files 'packages/*'` + `/src/**` + `/*.ts`.
  *      Git's `**` needs an intervening directory, so it matched 454 of 616
  *      product files and every file sitting DIRECTLY in a `src/` was invisible —
- *      `actor-agent.ts` among them, the largest DDL surface in the repo, in a
+ *      `orchestrator.ts` among them, the largest DDL surface in the repo, in a
  *      gate that reported drift-free over it for months.
  *  10. `typecheck-coverage` walked the filesystem matching `.test.ts` only, so
  *      `packages/pc-agent/tests` (`daemon.test.js`) was never required to be
@@ -717,7 +717,7 @@ if (import.meta.main) {
       found: violation.detail,
       silently: 'the gate reports green over a population narrower than the one it claims. Every '
         + 'file outside its private criterion is ungoverned and nothing says so — which is how '
-        + 'three git spawns hid in scripts/, how 162 product files including actor-agent.ts were '
+        + 'three git spawns hid in scripts/, how 162 product files including orchestrator.ts were '
         + 'never examined for schema drift, and how a denominator certified 463 files while the '
         + 'rule governed 646',
       fix: `import the enumeration and a named predicate from ${ENUMERATOR}. If the narrower set `

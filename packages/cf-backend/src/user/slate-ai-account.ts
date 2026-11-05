@@ -59,7 +59,7 @@ function recordSlateAi<Id>(host: AccountSlateAiHost<Id>, workspace: string, repo
 export async function accountSlateAi<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
   const { workspace } = request;
 
-  // The rate is the account's own provider catalog's, read as a workspace reads its model's (`ActorAgent.catalogEntry`).
+  // The rate is the account's own provider catalog's, read as a workspace reads its model's (`OrchestratorAgent.catalogEntry`).
   const pricing = new ModelCatalogSession({
     effectiveSpec: () => '', lookup: async (spec) => specModelInfo(services.providerRegistry().registry, services.providerRegistry().deps, spec), measured: () => null,
   });

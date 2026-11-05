@@ -26,8 +26,10 @@ export function processRetryTool(box: NimbusSandboxHandle): ToolSet[string] {
       const started = yield* Effect.promise(() => startJobProcess(box, { command, ...(cwd !== undefined && { cwd }), jobId: job.id }));
 
       if ('success' in started) return yield* new KinuError(started.reason, started.error);
-      // Its job's cancel ends it.
-      options.abortSignal?.addEventListener('abort', () => { detach(started.stopping); }, { once: true });
+
+      // Its job's cancel ends it, one that came while it was starting too.
+      if (options.abortSignal?.aborted === true) yield* started.stopping;
+      else options.abortSignal?.addEventListener('abort', () => { detach(started.stopping); }, { once: true });
 
       return yield* Effect.promise(() => started.ended);
     })),

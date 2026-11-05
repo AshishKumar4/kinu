@@ -46,7 +46,7 @@
  * config loader verbatim across cli-backend and cli, one cookie-reading loop
  * under two names, one line-counting helper under two names, one event fan-out
  * duplicated across the two agent clients, `parsePositiveInt` three times), 1 is
- * arguable (two adjacent thin RPC wrappers in `actor-agent.ts`), and none is a
+ * arguable (two adjacent thin RPC wrappers in `orchestrator.ts`), and none is a
  * coincidental shape collision. Going lower stops holding: the groups below 26
  * are mostly SQL-row-fetch and React-handler boilerplate, which is duplication a
  * blocking gate should not die on.

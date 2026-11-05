@@ -82,7 +82,7 @@ describe('reasoning_effort plumbing', () => {
 
 describe('provider options layer per namespace', () => {
   test('inside one provider namespace the override beats the base it is layered over', () => {
-    // The second argument is the request and wins over the plan (`chat.ts`, `actor-agent.ts` layer this way).
+    // The second argument is the request and wins over the plan (`chat.ts`, `orchestrator.ts` layer this way).
     // A shared and a unique key together: a wholesale override would lose the cache key.
     expect(mergeProviderOptions(
       { openai: { promptCacheKey: 'session-1', reasoningEffort: 'low' } },
