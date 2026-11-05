@@ -18,6 +18,7 @@ import {
 import { sqlCheckList } from '../utils/sql';
 import { sha256Hex } from '../safety/argument-digest';
 import { galleryPagePath } from '../slates/gallery-api';
+import { DAY_MS } from '../utils/date';
 
 export type { ControlPlaneSql } from './sql';
 
@@ -25,8 +26,6 @@ export type { ControlPlaneSql } from './sql';
 export const CONTROL_PAGE_DEFAULT = 50;
 
 export const CONTROL_PAGE_MAX = 200;
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 const DDL = [
   `CREATE TABLE IF NOT EXISTS cp_users (
@@ -329,7 +328,6 @@ export function forgetWorkspace(
      WHERE user_id = ? AND name = ? AND removed_at IS NULL`,
     target.at ?? now, target.userId, target.name);
 }
-
 
 /** What forgetting an account deleted that the caller has more to do for: its feedback's screenshots. */
 export interface ForgottenUser {

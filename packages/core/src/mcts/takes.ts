@@ -13,7 +13,6 @@ import {
 } from '../identity/effect-tombstones';
 import type { TurnPairReader } from '../identity/conversation-store';
 import { nanoid } from '../utils/nanoid';
-import { nowMs } from '../utils/date';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 
 /** One branch settlement's take set; set ids are fresh, so replays are caught by settlement key. */
@@ -132,7 +131,7 @@ export function recordBranchTakeSet(
     { nodeId: `${id}-branch`, text: branchText, origin: 'branch' },
   ];
 
-  const now = input.now ?? nowMs();
+  const now = input.now ?? Date.now();
   void sql`INSERT INTO alternate_takes
         (actor_id, id, turn_id, session_id, task, chosen_node_id, candidates,
          settlement_key, created_at)
@@ -204,7 +203,7 @@ export async function recordTakePick(
 
   if (!chosen) return settle(Effect.die(new Error(`Node "${input.nodeId}" is not a candidate of take set "${input.takeId}"`)));
 
-  const now = input.now ?? nowMs();
+  const now = input.now ?? Date.now();
   const changedAnswer = chosen.nodeId !== set.winnerNodeId;
 
   void sql`UPDATE alternate_takes

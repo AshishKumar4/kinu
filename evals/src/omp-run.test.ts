@@ -25,7 +25,7 @@ describe('the frozen held-out set', () => {
 
 describe('a kept shell call answered from its record', () => {
   const call = (name: string, argsWindow: string, resultWindow: string) => ({
-    name, argsWindow, resultWindow, target: '', op: null, argsDigest: null, writtenPaths: [], revisitedPaths: [],
+    name, argsWindow, resultWindow, target: '', op: null, argsDigest: null,
   });
 
   test("the same command the turn ran is answered with what it answered; any other is not", () => {

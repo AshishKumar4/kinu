@@ -8,11 +8,10 @@ import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { SqlExecutor } from '../types/primitives';
 import { DEFAULT_CONFIG } from '../config';
 import { evidenceWindow } from '../utils/evidence-window';
+import { DAY_MS } from '../utils/date';
 
 /** A tool's last raise, as much of it as its declaration shows. */
 const BROKEN_CHARS = 300;
-
-const MS_PER_DAY = 86_400_000;
 
 export interface CraftPreferenceRow {
   readonly name: string;
@@ -98,5 +97,5 @@ export function rateCraftedTools(sql: SqlExecutor, chosen: readonly string[], sc
 export function unchosen(row: CraftPreferenceRow, now: number): boolean {
   const { offersBeforeRetirement, unchosenDays } = DEFAULT_CONFIG.craftStore;
 
-  return row.offered >= offersBeforeRetirement && now - row.last_used_at >= unchosenDays * MS_PER_DAY;
+  return row.offered >= offersBeforeRetirement && now - row.last_used_at >= unchosenDays * DAY_MS;
 }

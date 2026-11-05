@@ -15,13 +15,13 @@ export type PlanReviewStatus = 'pending' | 'changes_requested' | 'approved' | 's
 
 export type PlanReviewDecision = 'request_changes' | 'approve';
 
-export interface PlanAnnotationTextPosition {
+interface PlanAnnotationTextPosition {
   readonly parentTagName: string;
   readonly parentIndex: number;
   readonly textOffset: number;
 }
 
-export interface PlanAnnotationMathTarget {
+interface PlanAnnotationMathTarget {
   readonly blockId: string;
   readonly tex: string;
   readonly displayMode: boolean;

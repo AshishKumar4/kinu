@@ -18,7 +18,6 @@ import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
 import { nanoid } from '../utils/nanoid';
-import { nowMs } from '../utils/date';
 import { ToolOutcomeSchema } from '../tools/outcome';
 import { StruggleSchema } from './struggles';
 import type { CompletedTurn } from './types';
@@ -39,8 +38,6 @@ export const CompletedTurnSchema = v.object({
     program: v.optional(v.string()),
     op: v.nullable(v.string()),
     argsDigest: v.nullable(v.string()),
-    writtenPaths: v.array(v.string()),
-    revisitedPaths: v.array(v.string()),
   })),
   /** Crafted tools this turn called, per the craft clock. Not derivable from `toolCalls`:
    *  crafted tools are codemode-only. Empty = observed none; absent = not observed. */
@@ -303,7 +300,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       // cannot lose it and a replay cannot dispatch it twice.
       const review = opts.awaitsFollowup ? 'awaiting_followup' : 'queued';
       const id = opts.id ?? `turn-${nanoid()}`;
-      const now = opts.now ?? nowMs();
+      const now = opts.now ?? Date.now();
       // DO NOTHING: a replay must not reset the state the original row reached.
       void sql`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at)
           VALUES (${actorId}, ${id}, ${encoded}, ${null}, 1, ${review}, ${now})
@@ -429,7 +426,7 @@ export function createCompletedTurnStore(sql: SqlExecutor, actor: ActorHandle): 
       return settleSync(Effect.matchCauseEffect(Effect.sync(() => JSON.stringify(turn)), {
         onSuccess: (encoded) => Effect.sync(() => {
           void sql`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at)
-              VALUES (${actorId}, ${`rev-${nanoid()}`}, ${encoded}, ${followup}, 0, 'queued', ${nowMs()})`;
+              VALUES (${actorId}, ${`rev-${nanoid()}`}, ${encoded}, ${followup}, 0, 'queued', ${Date.now()})`;
 
           return 'queued' as const;
         }),

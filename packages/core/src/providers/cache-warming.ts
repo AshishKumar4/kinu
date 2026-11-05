@@ -231,7 +231,7 @@ export class CacheWarmStore {
 }
 
 /** What one warm did, for the caller that has to record it. */
-export interface WarmOutcome {
+interface WarmOutcome {
   /** The provider's report for the warm request, `{}` when it said nothing. */
   readonly usage: Usage;
   readonly account?: CallAccount | undefined;

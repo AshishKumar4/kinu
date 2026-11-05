@@ -29,7 +29,7 @@ function refusalOf(answer: GoogleAnswer): KinuError {
 }
 
 /** Where an agent's Google write waits on the owner: the workspace's approval queue, as every parked action does. */
-export interface GoogleWriteApprovals {
+interface GoogleWriteApprovals {
   ask(id: string, write: GoogleWrite): { readonly outcome: 'approved' } | { readonly outcome: 'asked' | 'denied'; readonly approval: string };
   /** The approval taken as the call is made; null where it is no longer approved. */
   take(id: string): ApprovalSpend | null;

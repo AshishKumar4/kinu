@@ -1,11 +1,11 @@
 /** In-episode evidence: derived from what the runtime saw; prose mentions are not calls, a block that failed on its
- *  own account blames nobody, and a stamped raise marks its tool broken until a clean return. */
+ *  own account blames nobody, and a raise its census heard marks its tool broken until a clean return. */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql } from './helpers';
 import {
-  craftFailureBlame, craftFailureMarker, craftInvocationError, craftInvocationSites,
+  craftInvocationSites,
   createCraftLedger, observeCraftCall, type CraftLedger,
 } from '../src/craft/in-episode';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
@@ -71,7 +71,7 @@ describe('a call is credited with creating a tool only when it asked for one', (
   /** The tools a call's program could have created: the store grew by `w` while it ran. */
   const grown: CraftLedger = { names: () => ['w'], broke: () => {}, repaired: () => {} };
 
-  const created = (code: string): readonly string[] => observeCraftCall(grown, { code, before: new Set(), result: '{}', failed: false })?.created ?? [];
+  const created = (code: string): readonly string[] => observeCraftCall(grown, { code, before: new Set(), raised: new Map(), failed: false })?.created ?? [];
 
   test('a real call counts; a mention in a stored body does not', () => {
     expect(created('await workspace.createTool("a","b","c")')).toEqual(['w']);
@@ -83,33 +83,28 @@ describe('a call is credited with creating a tool only when it asked for one', (
   });
 });
 
-describe('craftFailureBlame — attribution by stamp only', () => {
-  test('the stamped tool is blamed', () => {
-    const err = craftInvocationError('summarize', new Error('boom'));
-    expect(err.message).toBe('[crafted:summarize] boom');
-    expect(err.cause).toBeInstanceOf(Error);
-    expect(craftFailureBlame(err.message, ['summarize', 'other'])).toEqual(['summarize']);
+describe('observeCraftCall — blame by what raised', () => {
+  const ledger: CraftLedger = { names: () => ['summarize', 'other'], broke: () => {}, repaired: () => {} };
+
+  const observe = (heard: ReadonlyMap<string, string>, code = 'await tools.summarize(1); await tools.other(2)') =>
+    observeCraftCall(ledger, { code, before: new Set(['summarize', 'other']), raised: heard, failed: true });
+
+  test('only the tool whose census heard a raise is blamed', () => {
+    expect(observe(new Map([['summarize', 'boom']]))?.raised).toEqual(['summarize']);
   });
 
   test('a block that failed on its own account blames nobody', () => {
-    expect(craftFailureBlame('TypeError: x is not a function', ['summarize'])).toEqual([]);
+    expect(observe(new Map())?.raised).toEqual([]);
   });
 
   test('only tools the block actually called can be blamed', () => {
-    const text = craftFailureMarker('ghost');
-    expect(craftFailureBlame(text, ['summarize'])).toEqual([]);
-  });
-
-  test('a non-Error throw still carries the stamp', () => {
-    expect(craftInvocationError('t', 'plain string').message).toBe('[crafted:t] plain string');
+    expect(observe(new Map([['other', 'boom']]), 'await tools.summarize(1)')?.raised).toEqual([]);
   });
 });
 
-/** A call of `name` that raised: its failure names it. */
+/** A call of `name` that raised `error`, as its census heard it. */
 function raised(ledger: CraftLedger, name: string, error = 'boom'): void {
-  const failure = craftInvocationError(name, new Error(error)).message;
-
-  observeCraftCall(ledger, { code: `await tools.${name}(1)`, before: new Set([name]), result: `Error: ${failure}\n    at program`, failed: true });
+  observeCraftCall(ledger, { code: `await tools.${name}(1)`, before: new Set([name]), raised: new Map([[name, error]]), failed: true });
 }
 
 function ledgerFixture() {
@@ -162,7 +157,7 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     expect(() => ledger.names()).toThrow('not initialized');
   });
 
-  test('a raise marks the tool broken with its stamped error, and a clean return clears it', () => {
+  test('a raise marks the tool broken with its error, and a clean return clears it', () => {
     const { ledger, db } = ledgerFixture();
     db.run(`INSERT INTO crafted_tools (name) VALUES ('summarize')`);
     const broken = () => db.query<{ broken: string | null }, []>(`SELECT broken FROM crafted_tools WHERE name='summarize'`).get()?.broken;
@@ -172,7 +167,7 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     // Still offered: a broken tool stays callable, and its declaration says so.
     expect(ledger.names()).toEqual(['summarize']);
 
-    observeCraftCall(ledger, { code: 'return await tools.summarize(1)', before: new Set(['summarize']), result: '{"result":1}', failed: false });
+    observeCraftCall(ledger, { code: 'return await tools.summarize(1)', before: new Set(['summarize']), raised: new Map(), failed: false });
     expect(broken()).toBeNull();
   });
 

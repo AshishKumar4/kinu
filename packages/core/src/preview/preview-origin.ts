@@ -189,6 +189,8 @@ export function extractPreviewUrl(
 ): string | null {
   const scan = (text: string): string | null =>
     (text.match(/https?:\/\/[^\s"'<>\\)]+/gi) ?? [])
+      // A sentence's or a list's punctuation after a URL is no part of it.
+      .map((url) => url.replace(/[\],.;:!?]+$/u, ''))
       .find((url) => isPreviewUrl(url, configuredSuffix)) ?? null;
 
   if (v.is(v.string(), output)) return scan(output);

@@ -2,7 +2,7 @@
 // renderer read it. Every object is loose: the reporter adds fields freely and only these are relied on.
 import { basename } from 'node:path';
 import * as v from 'valibot';
-import { BACKGROUND_POLICY, BackgroundHandleSchema, backgroundedBy, JsonValueSchema, summarizeSteps, type JsonValue, type RunEvent } from '@kinu.run/core';
+import { BACKGROUND_POLICY, BackgroundHandleSchema, JsonValueSchema, summarizeSteps, type JsonValue, type RunEvent } from '@kinu.run/core';
 import { TURN_OUTCOMES } from './task';
 
 const JsonRecordSchema = v.record(v.string(), JsonValueSchema);
@@ -60,7 +60,7 @@ const WaitedCallSchema = v.object({ actor: v.string(), tool: v.string(), ran: v.
 /** Where a trial's agent waited (`measureWaits`). */
 const TrialWaitsSchema = v.object({
   /** Each shell command or program that became a job, and what moved it: its foreground window, or a person writing. */
-  backgrounded: v.array(v.object({ ...WaitedCallSchema.entries, by: v.picklist(['window', 'person']) })),
+  backgrounded: v.array(v.object({ ...WaitedCallSchema.entries, by: BackgroundHandleSchema.entries.movedBy })),
   /** The trial's slowest calls, slowest first. */
   slowest: v.array(WaitedCallSchema),
   /** How long its calls held the agent past the 30 s a person-watched turn waits: what the 300 s window of a turn a
@@ -220,7 +220,7 @@ export function measureWaits(ledgers: readonly ActorLedger[]): TrialWaits {
     // A spawn hands back its job by design; only a shell command or a program waits out a window.
     const handle = v.safeParse(BackgroundHandleSchema, result);
 
-    return handle.success && (call.tool === 'shell' || call.tool === 'eval') ? [{ ...call, by: backgroundedBy(handle.output) }] : [];
+    return handle.success && (call.tool === 'shell' || call.tool === 'eval') ? [{ ...call, by: handle.output.movedBy }] : [];
   });
 
   return {

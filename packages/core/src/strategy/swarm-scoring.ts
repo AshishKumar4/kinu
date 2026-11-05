@@ -1,4 +1,5 @@
 import { Effect } from 'effect';
+import { serialQueue } from '@kinu.run/agent-utils';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Scoring one candidate: the report gate, the instrument path (`measureChild`) and the
@@ -44,36 +45,30 @@ export function reportGate(input: {
   readonly verifier: ResolvedVerifier;
 }): (candidate: string) => Promise<string | null> {
   const { ctx, verifier } = input;
-  let lane: Promise<unknown> = Promise.resolve();
+  // One measurement at a time, advancing on the measurement, not its caller: a node cancelled in between cannot leave
+  // the next one measuring its file.
+  const inOrder = serialQueue();
 
-  return (candidate: string): Promise<string | null> => {
-    const measured = lane.then(() => settle(Effect.gen(function* () {
-      // The write sits inside the attempt so the returned promise never rejects.
-      const measurement: Measurement = yield* Effect.tryPromise({
-        try: async () => {
-          await writeText(ctx.vfs, verifier.artifact, candidate);
+  return (candidate: string): Promise<string | null> => inOrder(() => settle(Effect.gen(function* () {
+    // The write sits inside the attempt so the returned promise never rejects.
+    const measurement: Measurement = yield* Effect.tryPromise({
+      try: async () => {
+        await writeText(ctx.vfs, verifier.artifact, candidate);
 
-          return verifier.verify(ctx);
-        },
-        catch: (error) => `the verifier could not run over what you reported: `
-          + `${renderThrownChain({ cause: error })}. Fix the answer and report again.`,
-      });
+        return verifier.verify(ctx);
+      },
+      catch: (error) => `the verifier could not run over what you reported: `
+        + `${renderThrownChain({ cause: error })}. Fix the answer and report again.`,
+    });
 
-      if (measurement.kind === 'unmeasurable') {
-        return `the verifier ran and could not measure what you reported: ${measurement.detail}. `
-          + 'Fix the answer and report again: a report the instrument cannot read is a '
-          + 'candidate the search cannot score.';
-      }
+    if (measurement.kind === 'unmeasurable') {
+      return `the verifier ran and could not measure what you reported: ${measurement.detail}. `
+        + 'Fix the answer and report again: a report the instrument cannot read is a '
+        + 'candidate the search cannot score.';
+    }
 
-      return null;
-    }).pipe(Effect.catch((refusal) => Effect.succeed(refusal)))));
-
-    // Advance on the measurement, not the caller, so a node cancelled in between
-        // cannot leave the next one measuring its file.
-    lane = measured;
-
-    return measured;
-  };
+    return null;
+  }).pipe(Effect.catch((refusal) => Effect.succeed(refusal)))));
 }
 
 /**

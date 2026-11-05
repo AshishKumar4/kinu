@@ -5,6 +5,7 @@
 import * as v from 'valibot';
 import type { SqlExec } from '../types/primitives';
 import { STORED_CLASSES, type StoredClass } from './policy';
+import { isoDate } from '../utils/date';
 
 const rows = <T extends v.GenericSchema>(schema: T, found: { toArray(): unknown[] }): v.InferOutput<T>[] => found.toArray().map((row) => v.parse(schema, row));
 
@@ -23,11 +24,6 @@ const RUNNING_STALE_MS = 5 * HEARTBEAT_MS;
 /** A UTC calendar month, `YYYY-MM`: the computer-hours period. */
 export function monthOf(at: number): string {
   return new Date(at).toISOString().slice(0, 7);
-}
-
-/** A UTC day, `YYYY-MM-DD`: the platform-model period. */
-export function dayOf(at: number): string {
-  return new Date(at).toISOString().slice(0, 10);
 }
 
 /** When the period `at` falls in ends: the next UTC month's or day's first instant. */
@@ -196,13 +192,13 @@ export class AccountLimitsStore {
     this.sql.exec(
       `INSERT INTO account_model_usage (day, tokens, steps) VALUES (?, ?, 1)
        ON CONFLICT (day) DO UPDATE SET tokens = tokens + excluded.tokens, steps = steps + 1`,
-      dayOf(now), Math.max(0, Math.round(tokens)),
+      isoDate(now), Math.max(0, Math.round(tokens)),
     );
   }
 
   /** Platform-model tokens spent on the day `now` falls in. */
   tokensToday(now: number): number {
-    return rows(CountRow, this.sql.exec('SELECT tokens AS n FROM account_model_usage WHERE day = ?', dayOf(now)))[0]?.n ?? 0;
+    return rows(CountRow, this.sql.exec('SELECT tokens AS n FROM account_model_usage WHERE day = ?', isoDate(now)))[0]?.n ?? 0;
   }
 
   /** Records the assistant's mention of `limit` near its end in `period`; whether this was the first. */

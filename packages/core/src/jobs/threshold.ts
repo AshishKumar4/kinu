@@ -25,14 +25,18 @@ export function invocationBackgroundPolicy(
   return base.wakesAfterTurn === wakesAfterTurn ? base : { ...base, wakesAfterTurn };
 }
 
-/** What a call moved to the background answers in place of its result: the job that holds it now, and why it moved. */
-export const BackgroundHandleSchema = v.object({ background: v.literal(true), jobId: v.string(), kind: v.string(), message: v.string() });
+/** What a call moved to the background answers in place of its result: the job that holds it now, and why it moved:
+ *  its foreground window ran out, the person wrote while it ran, or it announced its spawn. */
+export const BackgroundHandleSchema = v.object({
+  background: v.literal(true), jobId: v.string(), kind: v.string(), movedBy: v.picklist(['window', 'person', 'spawn']), message: v.string(),
+});
 
 export type BackgroundHandle = v.InferOutput<typeof BackgroundHandleSchema>;
 
-/** Why a call moved to the background: its foreground window ran out, or the person wrote while it ran. */
-export function backgroundedBy(handle: BackgroundHandle): 'window' | 'person' {
-  return handle.message === RELEASED_FOR_PERSON ? 'person' : 'window';
+/** What moved a call to the background, and what the call is told of it. */
+interface Moved {
+  readonly by: BackgroundHandle['movedBy'];
+  readonly message: string;
 }
 
 /** Same discriminator over the serialized result, the only form the tool-result extension seam carries. */
@@ -87,7 +91,7 @@ function detachOn<T>(input: {
   readonly release?: () => void;
   readonly onThreshold: ThresholdDeps['onThreshold'];
   /** Read once the trigger fired: what moved the call decides what it is told. */
-  readonly message: () => string;
+  readonly moved: () => Moved;
 }): Effect.Effect<T | BackgroundHandle> {
   return Effect.gen(function* () {
     const settled = settlement(input.promise);
@@ -97,7 +101,12 @@ function detachOn<T>(input: {
 
     const answered = winner === null ? yield* Effect.promise(async () => input.onThreshold(input.kind, input.promise)) : null;
 
-    if (answered?.detached === true) return { background: true, jobId: answered.jobId, kind: input.kind, message: input.message() };
+    if (answered?.detached === true) {
+      const moved = input.moved();
+
+      return { background: true, jobId: answered.jobId, kind: input.kind, movedBy: moved.by, message: moved.message };
+    }
+
     const foreground = winner ?? (yield* Effect.promise(() => settled));
 
     return 'error' in foreground ? yield* Effect.die(foreground.error) : foreground.value;
@@ -112,16 +121,21 @@ export function withBackgroundThreshold<T>(
   const thresholdMs = deps.thresholdMs ?? BACKGROUND_POLICY.interactive.detachAfterMs;
   const promise = exec();
   const { promise: trigger, resolve: expire } = Promise.withResolvers<null>();
-  let message = `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded: still running, not cancelled. The settled result will wake you.`;
+
+  let moved: Moved = {
+    by: 'window',
+    message: `Outran the ${Math.round(thresholdMs / 1000)}s foreground window; backgrounded: still running, not cancelled. The settled result will wake you.`,
+  };
+
   const cancel = (deps.clock ?? REAL_CLOCK).after(thresholdMs, () => { expire(null); });
 
   const unregister = deps.released?.(() => {
-    message = RELEASED_FOR_PERSON;
+    moved = { by: 'person', message: RELEASED_FOR_PERSON };
     expire(null);
   });
 
   return settle(detachOn({
-    kind, promise, trigger, onThreshold: deps.onThreshold, message: () => message,
+    kind, promise, trigger, onThreshold: deps.onThreshold, moved: () => moved,
     release: () => {
       cancel();
       unregister?.();
@@ -139,7 +153,7 @@ export function withSpawnDetach<T>(
   const { promise: trigger, resolve: announce } = Promise.withResolvers<null>();
 
   return settle(detachOn({
-    kind, promise: exec(() => { announce(null); }), trigger, onThreshold: deps.onThreshold, message: () => 'Spawned; the settled result will wake you.',
+    kind, promise: exec(() => { announce(null); }), trigger, onThreshold: deps.onThreshold, moved: () => ({ by: 'spawn', message: 'Spawned; the settled result will wake you.' }),
   }));
 }
 

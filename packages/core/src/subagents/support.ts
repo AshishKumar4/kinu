@@ -152,8 +152,6 @@ export function admitSubagentTask(log: EventLog, input: {
   deliverable?: string;
   inheritedContext?: SubagentInheritedContext;
   creationId?: string;
-  messageId?: string;
-  idempotencyKey?: string;
   mode: WorkMode;
   now: number;
 }): PublishResult {
@@ -175,10 +173,6 @@ export function admitSubagentTask(log: EventLog, input: {
     if (inheritedContext) Object.assign(payload, { inherited_context: inheritedContext });
 
     if (input.creationId !== undefined) Object.assign(payload, { creation_id: yield* requiredText(input.creationId, 'creationId') });
-
-    if (input.messageId !== undefined) Object.assign(payload, { message_id: yield* requiredText(input.messageId, 'messageId') });
-
-    if (input.idempotencyKey !== undefined) Object.assign(payload, { idempotency_key: requiredText(input.idempotencyKey, 'idempotencyKey') });
 
     return log.publish({
       descriptor: {

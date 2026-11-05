@@ -4,8 +4,8 @@ import { describe, test, expect } from 'bun:test';
 import {
   AGENTS_OPS, BUILTIN_TOOLS,
 } from '../src/index';
-import { renderForLLM } from '../src/events/hub/index';
-import type { KinuEvent } from '../src/events/hub/index';
+import { renderForLLM } from '../src/events/hub/visibility';
+import type { KinuEvent } from '../src/events/hub/types';
 import { BACKEND_CONFORMANCE, compareSurface, normalizeObservedTables, observedOpEnum, phantomCallables, renderConformanceFindings, type ConformanceManifest, type ObservedSurface, type RootStatuses } from '@kinu.run/test-utils/conformance';
 
 function observing(planes: ObservedSurface['planes']): ObservedSurface {

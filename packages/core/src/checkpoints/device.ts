@@ -10,6 +10,7 @@ import {
   CHECKPOINTS_NO_DEVICE, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema, FileRestoreResultSchema,
   type CheckpointAvailability, type FileCheckpointReads,
 } from './types';
+import { boundedInt } from '../utils/bounds';
 
 interface DeviceRpcHub {
   deviceRpc(caller: UserCaller, method: string, params: JsonValue[]): Promise<string | undefined>;
@@ -58,7 +59,7 @@ export function deviceFileCheckpoints(input: DeviceCheckpointsInput): FileCheckp
     },
     list: (opts) => call(
       'checkpointList',
-      [input.workspace, Math.max(1, Math.min(DEVICE_LIST_LIMIT_MAX, opts?.limit ?? DEVICE_LIST_LIMIT_DEFAULT)), opts?.turnId ?? null],
+      [input.workspace, boundedInt(opts?.limit, DEVICE_LIST_LIMIT_DEFAULT, 1, DEVICE_LIST_LIMIT_MAX), opts?.turnId ?? null],
       v.array(FileCheckpointEntrySchema),
     ),
     plan: (dir, id) => call('checkpointPlan', [input.workspace, dir, id], FileRestorePlanSchema),

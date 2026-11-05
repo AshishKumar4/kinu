@@ -15,7 +15,7 @@ import { walkedPath, workspacePath } from '../vfs/workspace-path';
 import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { execIdsOf, principalExecId } from './secrets-caller';
-import { commandTool, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
+import { commandTool, LogLimitsSchema, type ExecutorCapability, type ExecutorProvider, type ExecutorStatus, type ExecutorTool, type PortExposureResult, type PreviewRouteCheck } from './types';
 import { attempt, detach, hold, KinuError, logged, refusalOf, renderThrownChain, settle, toKinuError, type Refusal } from '../obs/index';
 import { Cause, Effect, Exit } from 'effect';
 import { newJobId, type AdoptsJobs } from '../types/jobs';
@@ -101,14 +101,7 @@ function workspaceNoListenerReason(port: number): string {
     + `once it listens. For an authored Worker slate, use its declared preview operation when available.`;
 }
 
-/** Session RPC failures default to `io`; abort, timeout and memory-wall keep the classifier's precise code. */
-function nimbusFailure(input: { doing: string; cause: unknown }): KinuError {
-  return toKinuError({ ...input, otherwise: 'io' });
-}
-
 const StringSchema = v.string();
-
-const LogLimitsSchema = v.optional(v.object({ lines: v.optional(v.number()), bytes: v.optional(v.number()) }), {});
 
 function stringifyResult(input: { value: unknown }): string {
   const text = v.safeParse(v.string(), input.value);
@@ -178,7 +171,7 @@ export async function startJobProcess(
   try {
     pid = (await touch(() => control.startProcess(command, { ...(cwd !== undefined && { cwd }), execId: principalExecId(jobId) }))).pid;
   } catch (err) {
-    return refusalOf(nimbusFailure({ doing: `nimbus startProcess \`${command}\``, cause: err }));
+    return refusalOf(toKinuError({ doing: `nimbus startProcess \`${command}\``, cause: err, otherwise: 'io' }));
   }
 
   const processId = String(pid);
@@ -262,7 +255,7 @@ function stopProcessMember({ box, touch }: NimbusReach): ExecutorTool {
       try {
         return { stopped: v.parse(KilledSchema, await touch(() => kill(pid))).ok };
       } catch (err) {
-        return refusalOf(nimbusFailure({ doing: `nimbus stopProcess ${String(pid)}`, cause: err }));
+        return refusalOf(toKinuError({ doing: `nimbus stopProcess ${String(pid)}`, cause: err, otherwise: 'io' }));
       }
     },
   };
@@ -284,7 +277,7 @@ function listProcessesMember({ box, touch }: NimbusReach): ExecutorTool {
 
         return rows.filter((row) => row.longRunning).map((row) => ({ processId: String(row.pid), pid: row.pid, status: row.state, command: row.command }));
       } catch (err) {
-        return refusalOf(nimbusFailure({ doing: 'nimbus listProcesses', cause: err }));
+        return refusalOf(toKinuError({ doing: 'nimbus listProcesses', cause: err, otherwise: 'io' }));
       }
     },
   };
@@ -311,7 +304,7 @@ function logsMember({ box, touch }: NimbusReach): ExecutorTool {
       try {
         return v.parse(LoggedSchema, await touch(() => readLogs(pid, limits))).text;
       } catch (err) {
-        return refusalOf(nimbusFailure({ doing: `nimbus logs ${String(pid)}`, cause: err }));
+        return refusalOf(toKinuError({ doing: `nimbus logs ${String(pid)}`, cause: err, otherwise: 'io' }));
       }
     },
   };

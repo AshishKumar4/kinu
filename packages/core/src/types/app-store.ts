@@ -16,7 +16,7 @@ export const APP_TABLE_SCOPE = {
 /** The mutations that leave evidence; the `db_op` run event carries {@link DbOpRecord}. */
 export const APP_MUTATIONS = ['createTable', 'dropTable', 'insert', 'update', 'delete', 'sql'] as const;
 
-export type AppMutation = (typeof APP_MUTATIONS)[number];
+type AppMutation = (typeof APP_MUTATIONS)[number];
 
 export interface DbOpRecord {
   readonly op: AppMutation;

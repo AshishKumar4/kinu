@@ -12,7 +12,8 @@ import {
   createActorHost, childContextResolver, hostedChildTree, recoverActorTurns,
   type ActorHost, type BoundActor,
 } from '../src/state/actor-host';
-import { initEventsHubTables, EventLog } from '../src/events/hub/index';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
 import { initCompletedTurnTable } from '../src/evolution/session-window';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { listRecoveryFindings } from '../src/evolution/recovery';

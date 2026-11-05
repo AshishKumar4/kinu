@@ -16,6 +16,7 @@ import { CommandResultSchema } from '../execution/exec-result';
 import { attempt, diagnostics, KinuError, renderThrownChain, settle, tolerate, type ErrorCode } from '../obs/index';
 import { shellQuote } from '../utils/shell';
 import { SHARED_ROOTS, UPLOADS_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { sameBytes } from '../utils/text';
 
 /**
  * A side past this is listed as large, without a body (a write's preview too). Nimbus's diff does not say whether it
@@ -166,10 +167,6 @@ function sideOf(files: CredentialedVfs, path: string, { type, size }: Present): 
 
     return { bytes, text: bytes.includes(0) ? null : new TextDecoder().decode(bytes), size };
   });
-}
-
-function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
-  return a.byteLength === b.byteLength && a.every((byte, i) => byte === b[i]);
 }
 
 /** Why a side of this size has no text: past {@link bodyMaxBytes}, or binary. */

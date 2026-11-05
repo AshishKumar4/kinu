@@ -135,7 +135,7 @@ export type SessionEvent =
   // `runId` names the execution that ended: its recovery continues the run, its Retry starts another.
   /** `epoch`: the admitted claim the turn ran under, which its close names (design v2 §3); null for one never admitted. */
   | { type: 'turn-end'; turn: CompletedTurn; turnId: string; runId: string; epoch: number | null }
-  | { type: 'error'; message: string }
+  | { type: 'error'; message: string; interrupted?: true }
   | { type: 'evolution'; event: string; message: string }
   // Kept apart from `evolution`: an agent with learning off says no evolution while its jobs may still settle.
   | { type: 'background'; event: string; message: string }
@@ -1089,9 +1089,10 @@ export class ChatSession {
 
     if (card === undefined && this.turnInFlight()) {
       const { id } = opts;
-      const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = { text, id, ...(opts.mode !== undefined && { mode: opts.mode }) };
 
-      if (files !== undefined && files.length > 0) Object.assign(steer, { files });
+      const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = {
+        text, id, ...(opts.mode !== undefined && { mode: opts.mode }), ...(files !== undefined && files.length > 0 && { files }),
+      };
 
       if (landing !== null) this.landings.set(id, landing);
       const outcome = await this.actorSession.send(steer);
@@ -2236,7 +2237,7 @@ export class ChatSession {
 
     await close?.(end);
     // A Stop ends the turn in its one name, whatever failed under it: its tabs read that as a Stop, not a failure.
-    this.emit({ type: 'error', message: end.reason === 'aborted' ? INTERRUPTED_TURN : message });
+    this.emit(end.reason === 'aborted' ? { type: 'error', message: INTERRUPTED_TURN, interrupted: true } : { type: 'error', message });
     this.emit({ type: 'turn-end', turn: turn(), turnId: lease.turnId, runId: lease.runId, epoch: this.actorSession.closeEpoch(lease) });
 
     return end.reason;

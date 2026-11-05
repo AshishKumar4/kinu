@@ -13,7 +13,8 @@ import type {
 } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { TurnFileLedger } from '../../core/src/vfs/file-ledger';
-import { initEventsHubTables, EventLog } from '../../core/src/events/hub/index';
+import { EventLog } from '../../core/src/events/hub/log';
+import { initEventsHubTables } from '../../core/src/events/hub/schema';
 import { createTestRuntime, makeSqlExec } from '../../core/tests/helpers';
 import { createSandboxedExecutor } from '../src/executor';
 

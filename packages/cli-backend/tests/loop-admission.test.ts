@@ -10,7 +10,7 @@ import * as v from 'valibot';
 import { AwaitedList, scratchPath, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
-import { EventLog } from '../../core/src/events/hub/index';
+import { EventLog } from '../../core/src/events/hub/log';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';

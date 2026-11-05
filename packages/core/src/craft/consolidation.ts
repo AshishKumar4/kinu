@@ -5,7 +5,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import { craftPreferences, unchosen } from './preference';
-import { isoDate, nowMs } from '../utils/date';
+import { isoDate } from '../utils/date';
 import { appendMemoryNote } from '../memory/note';
 
 /** Retires each tool offered often that no turn chose lately, never the whole store, and says so in memory. */
@@ -14,7 +14,7 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
 
   if (allTools.length === 0) return;
 
-  const now = nowMs();
+  const now = Date.now();
   const rows = craftPreferences(rt.storage.sql);
 
   const toRetire = allTools.flatMap((tool) => {

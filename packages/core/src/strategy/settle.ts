@@ -428,9 +428,8 @@ const result: SwarmResult = {
           ? []
           : [{ candidate, evidence: candidate.pareto }]),
     ).map(({ candidate }) => candidate),
+  ...(runProfile && { profile: runProfile }),
 };
-
-if (runProfile) Object.assign(result, { profile: runProfile });
 
 return result;
 }

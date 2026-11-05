@@ -9,7 +9,7 @@ import { observingCrafts } from '../src/delegation/actor-tools';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { TurnCraftLedger } from '../src/craft/turn-ledger';
 import type { CraftLedger } from '../src/craft/in-episode';
-import { craftInvocationError } from '../src/craft/in-episode';
+import { readCraftRaised } from '../src/craft/in-episode';
 import { runWorkModeInvocation } from '../src/execution/work-mode';
 import type { JsonValue } from '../src/utils/json';
 import { present, toolExecute } from '@kinu.run/test-utils';
@@ -41,15 +41,18 @@ function recording(): TurnCraftLedger {
 
 let calls = 0;
 
-/** One `eval` call through the observer: its program may create `creates` as it runs, then returns `result` or throws
- *  `failure`. */
+/** One `eval` call through the observer: its program may create `creates` as it runs, have the crafted tools in `raises`
+ *  throw (their census hears each, as a program's does), then returns `result` or throws `failure`. */
 async function block(turn: TurnCraftLedger, ledger: ReturnType<typeof fakeLedger>, code: JsonValue, opts: {
-  creates?: string; result?: JsonValue; failure?: string;
+  creates?: string; raises?: readonly string[]; result?: JsonValue; failure?: string;
 } = {}): Promise<void> {
   const program: ToolSet[string] = tool({
     inputSchema: jsonSchema<{ code: JsonValue }>({ type: 'object' }),
-    execute: async () => {
+    execute: async (_input, options) => {
       if (opts.creates !== undefined) ledger.tools.push(opts.creates);
+      const raised = readCraftRaised({ toolOptions: options });
+
+      for (const name of opts.raises ?? []) raised?.(name, 'boom');
 
       if (opts.failure !== undefined) throw new Error(opts.failure);
 
@@ -92,7 +95,7 @@ describe('craft observation — the trigger', () => {
     const turn = recording();
 
     await block(turn, ledger, 'return await tools.slow(1)', {
-      result: { background: true, jobId: 'j1', kind: 'eval', message: 'still running' },
+      result: { background: true, jobId: 'j1', kind: 'eval', movedBy: 'window', message: 'still running' },
     });
     expect(ledger.observations).toEqual([]);
     expect(turn.snapshot()).toBeNull();
@@ -171,11 +174,11 @@ describe('craft observation — the fitness signal', () => {
     });
   });
 
-  test('a raised crafted call is scored against the tool the failure names', async () => {
+  test('a raised crafted call is scored against the tool that raised', async () => {
     const ledger = fakeLedger(['sum', 'other']);
     const turn = recording();
 
-    await block(turn, ledger, 'await tools.sum(1); await tools.other(2)', { failure: craftInvocationError('sum', new Error('boom')).message });
+    await block(turn, ledger, 'await tools.sum(1); await tools.other(2)', { raises: ['sum'], failure: '[crafted:sum] boom' });
     expect(ledger.observations).toEqual([{ names: ['sum'], verdict: 'blame' }]);
     const snap = present(turn.snapshot(), 'the craft-cycle snapshot');
     expect(snap.raised).toBe(1);
@@ -183,25 +186,15 @@ describe('craft observation — the fitness signal', () => {
   });
 
   test('a raise the model CAUGHT is still a raise', async () => {
-    // The stamp is evidence about the artifact, not the block's own verdict.
+    // The raise is evidence about the artifact, not the block's own verdict.
     const ledger = fakeLedger(['sum']);
     const turn = recording();
 
     await block(turn, ledger, 'try { await tools.sum(1) } catch (e) { console.log(e.message); return "recovered" }', {
-      result: { result: 'recovered', logs: [craftInvocationError('sum', new Error('boom')).message] },
+      raises: ['sum'], result: { result: 'recovered', logs: ['[crafted:sum] boom'] },
     });
     expect(ledger.observations).toEqual([{ names: ['sum'], verdict: 'blame' }]);
     expect(present(turn.snapshot(), 'the craft-cycle snapshot').returned).toBe(0);
-  });
-
-  test('a failure payload too long to parse is still a failure', async () => {
-    // A bounded prefix makes a verbose failure unparseable JSON; that is not a success.
-    const ledger = fakeLedger(['sum']);
-    const turn = recording();
-    const stamped = craftInvocationError('sum', new Error('x'.repeat(50))).message;
-
-    await block(turn, ledger, 'await tools.sum(1)', { result: `{"error":"${stamped} ${'y'.repeat(50)}` });
-    expect(ledger.observations).toEqual([{ names: ['sum'], verdict: 'blame' }]);
   });
 
   test('a block that broke on its own account scores nobody', async () => {
@@ -218,7 +211,7 @@ describe('craft observation — the fitness signal', () => {
     const turn = recording();
 
     await block(turn, ledger, 'await tools.sum(1)', {
-      result: { result: null, error: craftInvocationError('sum', new Error('boom')).message },
+      raises: ['sum'], result: { result: null, error: '[crafted:sum] boom' },
     });
     expect(ledger.observations).toEqual([{ names: ['sum'], verdict: 'blame' }]);
   });
@@ -227,7 +220,7 @@ describe('craft observation — the fitness signal', () => {
     const ledger = fakeLedger(['sum']);
     const turn = recording();
 
-    await block(turn, ledger, 'await tools.sum(1)', { failure: craftInvocationError('sum', new Error('boom')).message });
+    await block(turn, ledger, 'await tools.sum(1)', { raises: ['sum'], failure: '[crafted:sum] boom' });
     expect(present(turn.snapshot(), 'the craft-cycle snapshot').broke).toEqual(['sum']);
   });
 });
@@ -238,7 +231,7 @@ describe('craft observation — what it refuses to guess at', () => {
     const turn = recording();
 
     await block(turn, ledger, 'await tools.sum(1)');
-    await block(turn, ledger, 'await tools.other(2)', { failure: craftInvocationError('other', new Error('boom')).message });
+    await block(turn, ledger, 'await tools.other(2)', { raises: ['other'], failure: '[crafted:other] boom' });
 
     expect(ledger.observations).toEqual([
       { names: ['sum'], verdict: 'credit' },

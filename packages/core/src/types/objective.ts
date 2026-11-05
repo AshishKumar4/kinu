@@ -46,7 +46,7 @@ export interface MeasuredValue {
 }
 
 /** The candidate produced no usable answer. Scored at the direction's worst, with the reason. */
-export interface Unmeasurable {
+interface Unmeasurable {
   readonly kind: 'unmeasurable';
   /** Required: an unexplained zero is indistinguishable from a broken verifier. */
   readonly detail: string;
@@ -79,7 +79,7 @@ export interface VerifierSpec {
 
 /** Only `VerifierSpec` is reachable from the tool surface. The closure arm is for in-process
  *  callers, unguarded by the registry, and never publishable. */
-export type VerifierSource = VerifierSpec | Verifier;
+type VerifierSource = VerifierSpec | Verifier;
 
 /** The instrument broke (threw, rejected, or returned a non-{@link Measurement}). Produced by the
  *  harness; fails the run — nothing is scored, published, or recorded. */
@@ -137,8 +137,7 @@ export type PublicationVerdict =
       readonly breach: FloorBreach;
     };
 
-/** `carry` values whose purpose is publication. A containment test pins it against
- *  `SWARM_CARRIES`. */
+/** `carry` values whose purpose is publication. */
 export const PUBLISHING_CARRIES = ['elites', 'artifacts'] as const;
 
 export type PublishingCarry = (typeof PUBLISHING_CARRIES)[number];
@@ -154,7 +153,7 @@ export interface CarrySuppression {
 }
 
 /** A checkable certificate: a witness plus the predicate it must satisfy. */
-export interface WitnessObjective {
+interface WitnessObjective {
   readonly kind: 'witness';
   readonly witness: string;
   /** Returns a {@link Measurement} with `value` 1 when satisfied, 0 otherwise. */

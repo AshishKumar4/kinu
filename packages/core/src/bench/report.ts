@@ -56,7 +56,7 @@ export function caseIsUnstable(c: BenchCaseScore): boolean {
   return unstable(c.passesA) || unstable(c.passesB);
 }
 
-export interface DevSplitReport {
+interface DevSplitReport {
   tasks: number;
   stats: PairedBinaryStats;
   /** Per-task detail only here: the dev split is the one adaptation may see. */
@@ -366,7 +366,7 @@ export interface GainReport {
   headline: string;
 }
 
-export interface GainArmCostSummary {
+interface GainArmCostSummary {
   attempts: number;
   /** null when any attempt was unmeasured. */
   totalTokens: number | null;
@@ -380,7 +380,7 @@ export interface GainArmCostSummary {
   errors: number;
 }
 
-export interface GainCostSummary {
+interface GainCostSummary {
   stateless: GainArmCostSummary;
   stateful: GainArmCostSummary;
 }

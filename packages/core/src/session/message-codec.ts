@@ -10,6 +10,7 @@ import { isParsedJsonObject, type JsonObject, type JsonValue } from '../utils/js
 import * as v from 'valibot';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
+import { sameBytes } from '../utils/text';
 
 type NativeValue =
   | string | number | boolean | null | undefined
@@ -241,14 +242,6 @@ function sameEntries(left: NativeObject, right: NativeObject): boolean {
   while (at < rightKeys.length && right[rightKeys[at]] === undefined) at += 1;
 
   return at === rightKeys.length;
-}
-
-function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.byteLength !== right.byteLength) return false;
-
-  for (let index = 0; index < left.byteLength; index++) if (left[index] !== right[index]) return false;
-
-  return true;
 }
 
 export function encodeModelMessage(message: ModelMessage): JsonObject {

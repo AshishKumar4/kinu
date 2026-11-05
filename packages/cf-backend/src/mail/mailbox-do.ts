@@ -345,6 +345,11 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return settle(this.served(() => this.store.boxes()));
   }
 
+  /** Whether the person holds an address, which a turn asks without listing every box. */
+  holdsAddress(): Promise<boolean> {
+    return settle(this.served(() => this.store.holdsAddress()));
+  }
+
   deliver(input: { raw: Uint8Array; envelopeFrom: string; recipient: MailRecipient }): Promise<MailDelivery | null> {
     return settle(this.served(() => this.store.deliver(input)));
   }

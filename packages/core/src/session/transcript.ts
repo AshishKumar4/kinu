@@ -18,6 +18,7 @@ import { PLATFORM_LIMITS } from '../platform-limits';
 import { attachmentImage, imagesIn, walkImages, type MediaRef, type MediaUrl, type StoredImage } from './chat-media';
 import { utf8Bytes } from '../utils/text';
 import { nextLoopTurn } from '../types/clock';
+import { boundedInt } from '../utils/bounds';
 
 const outputUtf8 = new TextEncoder();
 
@@ -313,7 +314,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   /** Newest first, tool rows skipped; a cursor names a position, so any stretch is one indexed read. */
   pageIds(request: PositionPageRequest = {}): Page<{ readonly id: string; readonly position: number }, PositionCursor> {
     this.actor.assertCurrent();
-    const limit = Math.max(1, Math.min(200, Math.floor(request.limit ?? 100)));
+    const limit = boundedInt(request.limit, 100, 1, 200);
     const before = request.cursor?.before ?? Number.MAX_SAFE_INTEGER;
 
     const rows = this.sql<{ id: string; position: number }>`SELECT id,position FROM conversation_entries
@@ -485,7 +486,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
    */
   async drawnPage(request: DrawnPageRequest): Promise<Page<DrawnEntry, PositionCursor>> {
     this.actor.assertCurrent();
-    const rows = Math.min(Math.max(1, Math.floor(request.limit ?? DRAWN_PAGE_ROWS)), DRAWN_PAGE_ROWS);
+    const rows = boundedInt(request.limit, DRAWN_PAGE_ROWS, 1, DRAWN_PAGE_ROWS);
     // One past the page, so a row left over says there is more.
     const read = this.entriesBefore(request.cursor?.before ?? Number.MAX_SAFE_INTEGER, rows + 1);
     const page = read.slice(0, rows);

@@ -7,9 +7,9 @@ import { Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import { attemptInItsWords, settle } from '../obs/index';
-import { ADMISSION_REFUSAL_MARK } from '../turn-failure';
 import { COMPUTER_SIZE_ORDER, isLimited, LIMIT_IDS, type AccountClass, type ComputerSize, type FreeTier, type LimitId } from './policy';
-import { dayOf, monthOf, periodEnd, type RunningComputer } from './store';
+import { monthOf, periodEnd, type RunningComputer } from './store';
+import { isoDate } from '../utils/date';
 
 /** What of its limits an account has used, as its object reads it now. */
 export interface AccountUse {
@@ -89,7 +89,7 @@ export function admitComputerStart({ klass, tier, use, now }: Admission, workspa
   }
 
   if (use.computerSeconds >= tier.computerHoursPerMonth * 3600) {
-    const resets = new Date(periodEnd('month', now)).toISOString().slice(0, 10);
+    const resets = isoDate(periodEnd('month', now));
 
     return refused(`This account's computers have run their free ${String(tier.computerHoursPerMonth)} hours this month (${shownHours(use.computerSeconds)}); `
       + `the hours start again on ${resets}. Until then, ${OWN_KINU}`);
@@ -121,14 +121,12 @@ export function startSize({ klass, tier }: Pick<Admission, 'klass' | 'tier'>, si
   return COMPUTER_SIZE_ORDER.indexOf(size) > COMPUTER_SIZE_ORDER.indexOf(tier.computerSize) ? tier.computerSize : size;
 }
 
-/**
- * A turn on one of the platform's own models: within the day's tokens. Led by the admission mark, so the turn is never
- * retried as a transient failure (turn-failure.ts).
- */
+/** A turn on one of the platform's own models: within the day's tokens. A `budget` refusal, so the turn is never
+ *  retried as a transient failure (turn-failure.ts). */
 export function admitPlatformTurn({ klass, tier, use }: Admission): KinuError | null {
   if (!isLimited(klass) || use.tokensToday < tier.modelTokensPerDay) return null;
 
-  return refused(`${ADMISSION_REFUSAL_MARK}: today's free model use is spent (${use.tokensToday.toLocaleString('en-US')} of `
+  return refused(`Request refused before submission: today's free model use is spent (${use.tokensToday.toLocaleString('en-US')} of `
     + `${tier.modelTokensPerDay.toLocaleString('en-US')} tokens); it starts again at 00:00 UTC. To go on now, connect ChatGPT or Claude, `
     + `or add an API key, in Settings under Models, ${OWN_KINU}`);
 }
@@ -211,7 +209,7 @@ const isNoted = (id: LimitId): id is keyof typeof NEAR_NOTE => id in NEAR_NOTE;
 
 /** The period a near limit is mentioned once in: its own for one that resets, else for as long as its number holds. */
 function noticePeriod(limit: LimitReading, now: number): string {
-  if (limit.id === 'model_tokens') return dayOf(now);
+  if (limit.id === 'model_tokens') return isoDate(now);
 
   return limit.id === 'computer_hours' ? monthOf(now) : `at:${String(Math.floor(limit.limit))}`;
 }

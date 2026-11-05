@@ -70,7 +70,6 @@
     "packages/core/src/orchestrator/terminal-effects.ts#throw": 1,
     "packages/core/src/orchestrator/terminal-transition.ts#catch": 3,
     "packages/core/src/orchestrator/terminal-transition.ts#throw": 1,
-    "packages/core/src/plans/plan-annotation-save.ts#promise-rejection": 1,
     "packages/core/src/profiles/model-route.ts#throw": 1,
     "packages/core/src/profiles/resolve.ts#throw": 1,
     "packages/core/src/prompting/attachment-sanitizer.ts#catch": 1,

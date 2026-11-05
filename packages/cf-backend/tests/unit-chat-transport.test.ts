@@ -1097,7 +1097,7 @@ describe('ChatWireTransport', () => {
     const { answered } = await h.open(conn, 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     await h.transport.observe(chunks([{ type: 'start' }, { type: 'abort' }]));
-    await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
+    await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN, interrupted: true });
     h.transport.closeTurn('input-req-1', { messages: [...h.history], older: null });
     await h.land(answered);
 
@@ -1255,7 +1255,7 @@ describe('a tab that reconnects mid-turn', () => {
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]));
 
-    if (stopped) await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
+    if (stopped) await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN, interrupted: true });
     h.transport.closeTurn('input-req-1', { messages: [...h.history], older: null });
     await h.land(answered);
 

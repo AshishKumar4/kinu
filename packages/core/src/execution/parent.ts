@@ -17,7 +17,7 @@ import { parseInput } from '../utils/json';
 
 const StringSchema = v.string();
 
-export interface ParentExecResult {
+interface ParentExecResult {
   stdout: string;
   stderr: string;
   exitCode: number;

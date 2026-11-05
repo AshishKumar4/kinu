@@ -17,7 +17,6 @@ import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
 } from '../../types/peers';
-import { countMsgReceived } from '../../obs/msg-counters';
 import type { SqlExec } from '../../types/primitives';
 import type { WorkMode } from '../../types/turn';
 import {
@@ -89,17 +88,7 @@ export async function receivePeerMessage(
   const same_owner = await deps.isSameOwner(msg.sender_user_id);
   const serialized = JSON.stringify(msg.body);
 
-  const counted = (admitted: boolean): void => countMsgReceived({
-    from: msg.sender_agent_name,
-    topic: msg.topic,
-    messageId: msg.sender_event_id,
-    chars: serialized.length,
-    admitted,
-  });
-
   if (!same_owner) {
-    counted(false);
-
     return { admitted: false, reason: 'a workspace admits peers of its own owner only' };
   }
 
@@ -119,29 +108,14 @@ export async function receivePeerMessage(
 
   if (spilled?.unsaved !== undefined) payload.body_unsaved = spilled.unsaved;
 
-  return settleSync(Effect.try({
-    try: () => deps.log.publish({
-      descriptor: {
-        ingress: 'peer_async',
-        variant: 'peer_agent',
-        payload,
-        same_owner,
-      },
-      now,
-    }),
-    catch: (cause) => ({ cause }),
-  }).pipe(
-    // Reported as a hop failure: a refusal would dead-letter for good.
-    Effect.tapError(() => Effect.sync(() => counted(false))),
-    Effect.catch((failed) => Effect.die(failed.cause)),
-    Effect.map((published): ReceiveResult => {
-      counted(published.admitted);
+  const published = deps.log.publish({
+    descriptor: { ingress: 'peer_async', variant: 'peer_agent', payload, same_owner },
+    now,
+  });
 
-      if (published.admitted && msg.reply_expected) deps.openPeerBackChannel?.(published.id, msg);
+  if (published.admitted && msg.reply_expected) deps.openPeerBackChannel?.(published.id, msg);
 
-      return { admitted: published.admitted, event_id: published.id };
-    }),
-  ));
+  return { admitted: published.admitted, event_id: published.id };
 }
 
 /** Receiver refusals dead-letter immediately. */
@@ -367,9 +341,8 @@ export class PeerHub {
       topic: queued.topic,
       body: queued.body,
       mode: queued.mode,
+      ...(queued.reply_expected === true && { reply_expected: true }),
     };
-
-    if (queued.reply_expected) Object.assign(wire, { reply_expected: true });
 
     return Effect.tryPromise({ try: () => this.deps.deliver(queued.receiver_agent_name, wire), catch: (cause) => ({ cause }) }).pipe(Effect.match({
       onFailure: (failed): OutboxDisposition => ({ status: 'retry', reason: renderThrownChain(failed) }),

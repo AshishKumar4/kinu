@@ -1,8 +1,7 @@
 import { describe, test, expect } from 'bun:test';
-import {
-  boundEventQuery, initEventsHubTables, EventLog,
-  type IngressDescriptor,
-} from '../src/events/hub/index';
+import { boundEventQuery, EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import type { IngressDescriptor } from '../src/events/hub/types';
 
 /** Page policy is read from `boundEventQuery`, not restated, so the suite cannot drift from it. */
 const DEFAULT_PAGE = boundEventQuery().limit;

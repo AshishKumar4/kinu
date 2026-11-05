@@ -97,7 +97,7 @@ export type EgressInjectionResult =
   | { readonly kind: 'forward'; readonly substitutions: readonly EgressInjection[]; readonly withholdAuthorization?: true }
   | { readonly kind: 'refuse'; readonly status: number; readonly reason: string };
 
-export interface EgressInjection {
+interface EgressInjection {
   readonly placeholder: string;
   readonly secret: string;
 }

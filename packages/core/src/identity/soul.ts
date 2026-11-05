@@ -2,7 +2,6 @@ import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // SOUL.md is an ordinary file of the workspace, and the only copy of the soul: every agent edits it, the owner
 // too, and the next turn reads what it holds.
 
-import * as v from 'valibot';
 import type { AgentSignal } from '../types/signals';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 
@@ -123,7 +122,7 @@ export const SOUL_FILE = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
 /** Null when absent, blank, or anything but a file (a link is not followed); one lookup when absent, as every turn asks. */
 export async function readSoul(vfs: VFS): Promise<string | null> {
   if ((await vfs.stat(SOUL_FILE, { follow: false }))?.type !== 'file') return null;
-  const text = v.parse(v.string(), await readText(vfs, SOUL_FILE));
+  const text = await readText(vfs, SOUL_FILE);
 
   return text.trim() ? text : null;
 }

@@ -15,7 +15,7 @@ import { evidenceWindow } from '../utils/evidence-window';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
 import { sqlCheckList } from '../utils/sql';
 import { nanoid } from '../utils/nanoid';
-import { nowMs, isoDate } from '../utils/date';
+import { isoDate, DAY_MS } from '../utils/date';
 import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stats';
 import { KinuError, settle } from '../obs/index';
 import type { QualityDay, QualityWindow } from '../types/quality';
@@ -306,7 +306,7 @@ export function recordTurnRating(sql: SqlExecutor, actor: ActorHandle, input: Re
        ${evidenceWindow(input.request, EVIDENCE_BUDGETS.storedUserMessage)}, ${input.actions ?? ''},
        ${evidenceWindow(input.answer, EVIDENCE_BUDGETS.storedAssistantResponse)}, ${followup},
        ${input.scaffoldVersion ?? null}, ${input.artifacts === undefined || input.artifacts === null ? null : JSON.stringify(input.artifacts)},
-       ${input.picks === undefined || input.picks === null ? null : JSON.stringify(input.picks)}, ${input.rejects ?? null}, ${input.now ?? nowMs()})`;
+       ${input.picks === undefined || input.picks === null ? null : JSON.stringify(input.picks)}, ${input.rejects ?? null}, ${input.now ?? Date.now()})`;
   markStoreChanged(sql);
 
   return id;
@@ -469,8 +469,6 @@ export function renderQualitySeries(days: readonly QualityDay[]): string {
   ].join('\n');
 }
 
-const DAY_MS = 86_400_000;
-
 /** The first instant of the UTC day `days - 1` days before `now`'s, so the window is `days` UTC days, today included. */
 function windowStart(now: number, days: number): number {
   return Math.floor(now / DAY_MS) * DAY_MS - (days - 1) * DAY_MS;
@@ -493,7 +491,7 @@ function reviewedTurns(sql: SqlExecutor, actor: ActorHandle, since: number): Map
 export function qualitySeries(
   sql: SqlExecutor, actor: ActorHandle, opts: { readonly days?: number; readonly now?: number } = {},
 ): QualityDay[] {
-  const now = opts.now ?? nowMs();
+  const now = opts.now ?? Date.now();
   const days = opts.days ?? 30;
   const since = windowStart(now, days);
   const byDay = new Map<string, TurnRating[]>();
@@ -525,7 +523,7 @@ export function qualitySeries(
 export function qualityWindow(
   sql: SqlExecutor, actor: ActorHandle, opts: { readonly days?: number; readonly now?: number } = {},
 ): QualityWindow {
-  const now = opts.now ?? nowMs();
+  const now = opts.now ?? Date.now();
   const since = windowStart(now, opts.days ?? 7);
   const ratings = listTurnRatings(sql, actor, { since });
   const turns = [...reviewedTurns(sql, actor, since).values()].reduce((sum, count) => sum + count, 0);

@@ -12,7 +12,6 @@ import { AGENTS_OPS, type AgentsOp } from '../operations/agents';
 import { SwarmConfigSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
 import {
   PEER_REPLY_TOPIC,
-  type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
   type PeersToolDeps,
 } from '../types/peers';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
@@ -70,10 +69,6 @@ import {
   parseJsonObject,
   type JsonObject, type JsonValue,
 } from '../utils/json';
-import {
-  countedMsgSend,
-  type MsgSendResult,
-} from '../obs/msg-counters';
 import { AGENT_TREE_LIMIT, type AgentTreeView } from './agent-tree';
 
 export {
@@ -112,7 +107,7 @@ export interface SubagentRosterEntry {
  */
 export type SubagentDelivery = 'starts_now' | 'queued';
 
-export interface SubagentPhase {
+interface SubagentPhase {
   busy: boolean;
   lastActivityAt: number | null;
   workingOn: string | null;
@@ -214,31 +209,6 @@ const ASSIGN_NOTES = {
   starts_now: 'Assigned. The subagent was idle and starts on it now.',
   queued: 'Queued behind the subagent\'s current or already-admitted work as its own turn.',
 } satisfies Record<SubagentDelivery, string>;
-
-// Counter readers: translate each transport's outcome for the counter. Kept beside the outcome types
-// so a new outcome case fails to compile here.
-
-function peerSendCount(outcome: PeerSendOutcome): MsgSendResult {
-  return outcome.status === 'rejected'
-    ? { outcome: 'rejected' }
-    : { outcome: outcome.status, messageId: outcome.message_id };
-}
-
-/** A send-and-await: `replied`, not `delivered`, because its wait includes the answering turn. */
-function peerAskCount(outcome: PeerAskOutcome): MsgSendResult {
-  return { outcome: outcome.status === 'replied' ? 'replied' : 'rejected' };
-}
-
-function peerReplyCount(outcome: PeerReplyOutcome): MsgSendResult {
-  return { outcome: outcome.ok ? 'delivered' : 'rejected' };
-}
-
-function handoffCount(handoff: SubagentHandoff): MsgSendResult {
-  return {
-    outcome: handoff.delivery === 'queued' ? 'queued' : 'delivered',
-    messageId: handoff.eventId,
-  };
-}
 
 /** What an actor needs to run a search: a model and a workspace. Wired under `swarm` on {@link AgentsToolDeps}. */
 export interface AgentsSwarmDeps {
@@ -724,9 +694,7 @@ async function runSwarmAction({ deps, fields, mode, toolOptions, budget }: Swarm
     const label = mission.scope.labels[0];
     const snapshot = label !== undefined ? mission.governor.snapshot(label)[0] : undefined;
 
-    if (snapshot) {
-      Object.assign(output, { mission_budget: parseJsonObject(JSON.stringify(snapshot)) });
-    }
+    if (snapshot) output.mission_budget = parseJsonObject(JSON.stringify(snapshot));
   }
 
   return output;
@@ -811,17 +779,13 @@ async function hireWorkspace({ deps, fields, mode, toolOptions, spawnDepthRefusa
       + 'hire a subagent here instead, or run a search.');
   }
 
-  const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
+  return await peers.spawnWorkspace({
     purpose: fields.mission,
     message: fields.message,
     mode,
-  };
-
-  if (fields.agent) Object.assign(request, { name: fields.agent });
-
-  if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-
-  return await peers.spawnWorkspace(request);
+    ...(fields.agent !== undefined && fields.agent !== '' && { name: fields.agent }),
+    ...(toolOptions?.abortSignal && { signal: toolOptions.abortSignal }),
+  });
 }
 
 interface CreateHireCall extends Omit<AgentsActionCall<HireFields>, 'toolOptions'> {
@@ -857,18 +821,14 @@ async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall
 
     if ('error' in delegatedTask) return badInput(delegatedTask.error);
 
-    const request: TemporaryRunRequest = {
+    return await temporary.start({
       role: delegatedTask.resolved.role.id,
       roleLabel: fields.role,
       task: fields.message,
       mode,
-    };
-
-    if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
-
-    if (fields.name !== undefined) Object.assign(request, { name: fields.name });
-
-    return await temporary.start(request);
+      ...(inheritedContext !== undefined && { inheritedContext }),
+      ...(fields.name !== undefined && { name: fields.name }),
+    } satisfies TemporaryRunRequest);
   }
 
   const delegated = resolveDelegatedProfile(ctx, fields.role, fields.tier);
@@ -877,19 +837,14 @@ async function hireCreate({ deps, team, fields, mode, lifetime }: CreateHireCall
   // Only an explicit tier is stored; the child re-derives its role's default.
   const resolvedTier = fields.tier !== undefined ? delegated.resolved.tier : undefined;
 
-  const request: Parameters<TeamToolDeps['spawn']>[0] = {
+  return await team.spawn({
     role: delegated.resolved.role.id,
     mission: fields.message,
     mode,
-  };
-
-  if (inheritedContext !== undefined) Object.assign(request, { inheritedContext });
-
-  if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
-
-  if (fields.name) Object.assign(request, { name: fields.name });
-
-  return await team.spawn(request);
+    ...(inheritedContext !== undefined && { inheritedContext }),
+    ...(resolvedTier !== undefined && { tier: resolvedTier.id }),
+    ...(fields.name !== undefined && fields.name !== '' && { name: fields.name }),
+  });
 }
 
 interface RosterCall {
@@ -905,15 +860,7 @@ async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, to
   const asked = requestedTopic(fields.topic);
 
   if (team && await isSubagent(fields.agent)) {
-    const assignment: Parameters<TeamToolDeps['assign']>[0] = { name: fields.agent, task: fields.message, mode };
-
-    if (fields.deliverable) Object.assign(assignment, { deliverable: fields.deliverable });
-
-    const handoff = await countedMsgSend(
-      { action: 'assign', transport: 'subagent', addressing: 'agent', target: fields.agent, chars: fields.message.length },
-      () => team.assign(assignment),
-      handoffCount,
-    );
+    const handoff = await team.assign({ name: fields.agent, task: fields.message, mode, ...(fields.deliverable !== undefined && fields.deliverable !== '' && { deliverable: fields.deliverable }) });
 
     return {
       status: 'working',
@@ -924,15 +871,9 @@ async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, to
   }
 
   if (peers) {
-    const request: Parameters<PeersToolDeps['ask']>[0] = { agent: fields.agent, topic: asked.topic, message: fields.message, mode };
-
-    if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-
-    return await countedMsgSend(
-      { action: 'assign', transport: 'peer', addressing: 'agent', target: fields.agent, chars: fields.message.length },
-      () => peers.ask(request),
-      peerAskCount,
-    );
+    return await peers.ask({
+      agent: fields.agent, topic: asked.topic, message: fields.message, mode, ...(toolOptions?.abortSignal && { signal: toolOptions.abortSignal }),
+    });
   }
 
   return badInput(`unknown agent "${fields.agent}": check the roster with op:"list"`);
@@ -947,21 +888,13 @@ async function messageAgent(deps: AgentsToolDeps, fields: MessageFields, { mode,
   const sent = requestedTopic(fields.topic);
 
   if (team && await isSubagent(agent)) {
-    const handoff = await countedMsgSend(
-      { action: 'message', transport: 'subagent', addressing: 'agent', target: agent, chars: message.length },
-      () => team.message({ name: agent, content: message, mode }),
-      handoffCount,
-    );
+    const handoff = await team.message({ name: agent, content: message, mode });
 
     return { status: handoff.delivery === 'queued' ? 'queued' : 'delivered', agent, ...renderHandoff(handoff) };
   }
 
   if (peers) {
-    return await countedMsgSend(
-      { action: 'message', transport: 'peer', addressing: 'agent', target: agent, chars: message.length },
-      () => peers.send({ agent, topic: sent.topic, message, mode }),
-      peerSendCount,
-    );
+    return await peers.send({ agent, topic: sent.topic, message, mode });
   }
 
   return badInput(`unknown agent "${agent}": check the roster with op:"list"`);
@@ -977,17 +910,13 @@ async function roster(deps: AgentsToolDeps, fields: ListFields): Promise<object>
   const peerRoster = peers ? await peers.listPeers() : undefined;
   const counts = view?.counts;
   const alone = counts === undefined || counts.running + counts.waiting + counts.idle + counts.failed + counts.retired === 0;
-  const listed: UnifiedRosterResult = {};
-
-  if (view) Object.assign(listed, { tree: view.tree, counts: view.counts });
-
-  if (peerRoster) Object.assign(listed, { peers: peerRoster });
-
   const note = alone && (peerRoster?.length ?? 0) === 0 ? 'No subagents yet: create one with op:"hire".' : view?.note;
 
-  if (note !== undefined) Object.assign(listed, { note });
-
-  return listed;
+  return {
+    ...(view && { tree: view.tree, counts: view.counts }),
+    ...(peerRoster && { peers: peerRoster }),
+    ...(note !== undefined && { note }),
+  } satisfies UnifiedRosterResult;
 }
 
 /** The operations that create or wake an agent, checked against the mission cap before they run. */
@@ -1069,11 +998,7 @@ export async function dispatchAgentsCall(
         if (!peers) throw new KinuError('denied', 'answering an event needs the peer transport, which this actor does not have');
         const { eventId, message } = call.fields;
 
-        return await countedMsgSend(
-          { action: 'reply', transport: 'peer', addressing: 'event', target: eventId, chars: message.length },
-          () => peers.reply({ eventId, message }),
-          peerReplyCount,
-        );
+        return await peers.reply({ eventId, message });
       }
 
       case 'list':

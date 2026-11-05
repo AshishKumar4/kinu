@@ -58,25 +58,20 @@ export async function createTimerTrigger(
   if (opts.cron && nextFireAt === null) return settleSync(Effect.fail(new KinuError('bad_input', `Unsupported cron expression: ${opts.cron}`)));
 
   if (!opts.cron && nextFireAt === null) return settleSync(Effect.fail(new KinuError('bad_input', 'Timer trigger requires cron or atMs')));
-  const triggerSpec: JsonObject = {};
 
-  if (opts.cron !== undefined) Object.assign(triggerSpec, { cron: opts.cron });
-
-  if (opts.timeZone !== undefined) Object.assign(triggerSpec, { time_zone: opts.timeZone });
-
-  if (opts.label !== undefined) Object.assign(triggerSpec, { label: opts.label });
-
-  if (opts.payload !== undefined) Object.assign(triggerSpec, { payload: opts.payload });
-
-  if (opts.missionLabel !== undefined) Object.assign(triggerSpec, { mission_label: opts.missionLabel });
-
-  if (opts.check !== undefined) Object.assign(triggerSpec, { check: v.parse(WatchCheckSchema, opts.check) });
-
-  if (opts.tier !== undefined) Object.assign(triggerSpec, { tier: opts.tier });
+  const triggerSpec = {
+    ...(opts.cron !== undefined && { cron: opts.cron }),
+    ...(opts.timeZone !== undefined && { time_zone: opts.timeZone }),
+    ...(opts.label !== undefined && { label: opts.label }),
+    ...(opts.payload !== undefined && { payload: opts.payload }),
+    ...(opts.missionLabel !== undefined && { mission_label: opts.missionLabel }),
+    ...(opts.check !== undefined && { check: v.parse(WatchCheckSchema, opts.check) }),
+    ...(opts.tier !== undefined && { tier: opts.tier }),
+  } satisfies TimerSpec;
 
   const id = await registry.register({
     kind,
-    spec: triggerSpec satisfies TimerSpec,
+    spec: triggerSpec,
     creator_trust: opts.trust ?? 'authenticated',
     next_fire_at: nextFireAt ?? undefined,
   }, now);

@@ -35,11 +35,9 @@ import {
 } from '../types/swarm';
 
 export {
-  SWARM_ADVANCES, SWARM_CONTEXTS, SWARM_EXPANDS,
-  type BranchContext, type SwarmAdvance, type SwarmAdvanceSetting, type SwarmCarry,
-  type SwarmCarrySetting, type SwarmConfig, type SwarmExpand, type SwarmInput,
-  type SwarmNodeAssignment, type SwarmRefusal, type SwarmScore, type SwarmScoreSetting,
-  type SwarmSettle, type SwarmUnit, type SwarmUnitSetting,
+  SWARM_CONTEXTS,
+  type BranchContext, type SwarmAdvance, type SwarmCarrySetting, type SwarmConfig, type SwarmInput,
+  type SwarmNodeAssignment, type SwarmRefusal, type SwarmSettle, type SwarmUnitSetting,
 } from '../types/swarm';
 
 import type { SwarmProfileSnapshot } from '../profiles/snapshot';
@@ -214,9 +212,9 @@ export function judgeCallPool(samples: number): number {
   return samples + 1;
 }
 
-export type SwarmCapOrigin = 'call' | 'preset';
+type SwarmCapOrigin = 'call' | 'preset';
 
-export interface ResolvedCap {
+interface ResolvedCap {
   readonly value: number;
   readonly origin: SwarmCapOrigin;
 }
@@ -797,7 +795,7 @@ export type BranchVerdict =
  * *The publication seal* governs the store, not the settle report; this marker says
  * whether the answer is publishable. Interpret the state only via `admitsPublication`.
  */
-export interface SwarmPublicationMarker {
+interface SwarmPublicationMarker {
   readonly state: PublicationState;
   /** Null when publishable. */
   readonly caveat: string | null;

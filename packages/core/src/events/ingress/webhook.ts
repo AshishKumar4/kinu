@@ -29,7 +29,7 @@ import type { WebhookSecretStore } from './secrets';
 
 const HMAC_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
-export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls' | 'github';
+type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls' | 'github';
 
 /** A GitHub signature covers no time, so a claimed one is held as long as its secret can verify it: a replay, ever, is a
  *  duplicate. A rotated secret, or a revoked trigger, forgets its claims ({@link forgetClaims}). */

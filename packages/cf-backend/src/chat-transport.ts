@@ -18,7 +18,7 @@ import type { UIMessage, UIMessageChunk } from 'ai';
 import { Cause, Effect, Exit } from 'effect';
 import * as v from 'valibot';
 import {
-  INTERRUPTED_TURN, JsonObjectSchema, JsonValueSchema, newestOpener, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
+  JsonObjectSchema, JsonValueSchema, newestOpener, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
   UIMessageSchema, type SentWords, type ChatTransport, type ChatWindow, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, hold as holdExit, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
@@ -687,7 +687,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         if (live === null) return;
 
         // A Stop is not a failure: an `error` frame here makes the SDK client paint an error card. A reply ends on it.
-        if (event.message === INTERRUPTED_TURN) {
+        if (event.interrupted === true) {
           this.wire.replies?.ended(live.turnId, event.message);
 
           return;

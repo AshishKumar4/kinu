@@ -9,6 +9,7 @@ import { JsonObjectSchema, isParsedJsonObject, jsonObjectElements, type JsonObje
 import { freezeTree } from '../utils/freeze';
 import { nextLoopTurn } from '../types/clock';
 import { spilledDigest, type SessionPayloads, type SessionPayloadReader, type SessionPayload } from './payload';
+import { headEnd } from '../utils/text';
 
 export interface MessageReference { readonly messageId: string }
 
@@ -134,10 +135,7 @@ function* segmented(text: string): Generator<string> {
   let at = 0;
 
   while (at < text.length) {
-    let end = Math.min(text.length, at + STREAM_SEGMENT_CHARS);
-    const last = text.charCodeAt(end - 1);
-
-    if (end < text.length && last >= 0xd800 && last <= 0xdbff) end += 1;
+    const end = headEnd(text, Math.min(text.length, at + STREAM_SEGMENT_CHARS));
     yield text.slice(at, end);
     at = end;
   }

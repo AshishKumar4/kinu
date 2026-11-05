@@ -6,7 +6,7 @@ import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json
 import { redactSecrets } from '../safety/secret-patterns';
 import { NATIVE_ACTION_EFFECTS, type ActionEffect } from '../slates/members';
 import * as v from 'valibot';
-import { oneLineClip } from '../utils/text';
+import { oneLineClip, basename } from '../utils/text';
 import { programEffect, programEffectsOf } from '../execution/call-effects';
 import { readShell } from '../safety/shell-reading';
 
@@ -47,13 +47,8 @@ export function toolCallEffect(toolName: string, input: JsonValue | undefined, a
   return ops !== undefined && Object.hasOwn(ops, op) ? ops[op] : 'unknown';
 }
 
-/** Collapse whitespace and clip, marking the clip. */
-function clip(value: string, max: number = MAX): string {
-  return oneLineClip(value, max);
-}
-
 function quoted(value: string, max: number = MAX): string {
-  const clipped = clip(value, max);
+  const clipped = oneLineClip(value, max);
 
   return clipped ? `"${clipped}"` : "";
 }
@@ -64,7 +59,7 @@ function words(...parts: Array<string | undefined>): string {
 
 /** `<action> <target> — "<body>"`, dropping whichever halves are absent. */
 function actionOn(action: string, target?: string, body?: string): string {
-  const head = words(action, target ? clip(target, 40) : undefined);
+  const head = words(action, target ? oneLineClip(target, 40) : undefined);
   const tail = body ? quoted(body, 48) : "";
 
   return tail ? `${head}: ${tail}` : head;
@@ -87,7 +82,7 @@ function firstCodeLine(code: string): string {
 export function programIntent(code: string): string {
   const first = code.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "";
 
-  return first.startsWith("//") ? redactSecrets(clip(first.slice(2), 72)) : "";
+  return first.startsWith("//") ? redactSecrets(oneLineClip(first.slice(2), 72)) : "";
 }
 
 /** The delegation tool, by the operation its call names. */
@@ -138,17 +133,17 @@ function summarizeFile(input: JsonObject): string {
   const edits = input.edits;
 
   if (op === "edit" && Array.isArray(edits) && edits.length > 1) {
-    return `${op} ${clip(path, 56)} (${edits.length} edits)`;
+    return `${op} ${oneLineClip(path, 56)} (${edits.length} edits)`;
   }
 
-  return path ? `${op} ${clip(path, 60)}` : op;
+  return path ? `${op} ${oneLineClip(path, 60)}` : op;
 }
 
 function summarizeWeb(input: JsonObject): string {
   const op = str(input, "op");
   const url = str(input, "url");
 
-  if (url) return `${op} ${clip(url, 56)}`;
+  if (url) return `${op} ${oneLineClip(url, 56)}`;
   const query = str(input, "query");
 
   return query ? `${op} ${quoted(query, 56)}` : op;
@@ -174,8 +169,8 @@ function summarizeTasks(input: JsonObject): string {
 type ToolSummarizer = (input: JsonObject) => string;
 
 const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
-  eval: (input) => clip(firstCodeLine(str(input, "code"))),
-  shell: (input) => clip(str(input, "command")),
+  eval: (input) => oneLineClip(firstCodeLine(str(input, "code")), MAX),
+  shell: (input) => oneLineClip(str(input, "command"), MAX),
   file: summarizeFile,
   agents: summarizeAgents,
   memory: summarizeMemory,
@@ -258,15 +253,6 @@ const MEMORY_VERBS = new Map(Object.entries({
   note: "Saved to memory", remember: "Saved to memory", recall: "Recalled from memory", forget: "Forgot a memory", search: "Searched memory",
 }));
 
-function basename(path: string): string {
-  const trimmed = path.replace(/\/+$/, "");
-  const segments = trimmed.split("/");
-  const last = segments[segments.length - 1];
-
-  // A path that is only separators has no segment to read; show what was given.
-  return last === "" ? trimmed : last;
-}
-
 function describeWeb(input: JsonObject): string {
   if (str(input, "op") === "fetch") return "Fetched a page";
 
@@ -341,7 +327,7 @@ function summarizeUnknownTool(input: JsonObject): string {
   const strings = Object.values(input).filter((value): value is string =>
     v.is(v.string(), value) && value.trim().length > 0);
 
-  return strings.length === 1 ? clip(strings[0] ?? '') : "";
+  return strings.length === 1 ? oneLineClip(strings[0] ?? '', MAX) : "";
 }
 
 /** One line describing a tool call from its arguments; "" when there is nothing worth showing. */

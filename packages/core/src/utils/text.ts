@@ -1,6 +1,6 @@
 /** Cut text to a budget without splitting a surrogate pair; lone surrogates are data. Cuts move at most one unit, never outward. */
 
-const isHigh = (code: number): boolean => code >= 0xD800 && code <= 0xDBFF;
+export const isHighSurrogate = (code: number): boolean => code >= 0xD800 && code <= 0xDBFF;
 
 const isLow = (code: number): boolean => code >= 0xDC00 && code <= 0xDFFF;
 
@@ -19,7 +19,7 @@ export function detached(text: string): string {
 
 export function headEnd(text: string, len: number): number {
   const splitsPair = len > 0 && len < text.length
-    && isHigh(text.charCodeAt(len - 1)) && isLow(text.charCodeAt(len));
+    && isHighSurrogate(text.charCodeAt(len - 1)) && isLow(text.charCodeAt(len));
 
   return splitsPair ? len - 1 : len;
 }
@@ -28,7 +28,7 @@ export function tailStart(text: string, len: number): number {
   const start = text.length - len;
 
   const splitsPair = start > 0 && start < text.length
-    && isLow(text.charCodeAt(start)) && isHigh(text.charCodeAt(start - 1));
+    && isLow(text.charCodeAt(start)) && isHighSurrogate(text.charCodeAt(start - 1));
 
   return splitsPair ? start + 1 : start;
 }
@@ -88,4 +88,24 @@ export function utf8Bytes(text: string): number {
 /** Items as prose lists them: `a`, `a and b`, `a, b and c`. */
 export function andList(items: readonly string[]): string {
   return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1) ?? ''}`;
+}
+
+/** `text` in a Markdown code fence longer than any backtick run inside it, so nothing in it closes the fence. */
+export function fenced(text: string, lang = ''): string {
+  const marker = '`'.repeat(Math.max(2, ...[...text.matchAll(/`+/gu)].map((run) => run[0].length)) + 1);
+
+  return `${marker}${lang}\n${text}\n${marker}`;
+}
+
+/** A path's last segment; a path of separators alone is itself. */
+export function basename(path: string): string {
+  return path.split('/').filter(Boolean).at(-1) ?? path;
+}
+
+export function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+
+  for (let index = 0; index < left.byteLength; index++) if (left[index] !== right[index]) return false;
+
+  return true;
 }
