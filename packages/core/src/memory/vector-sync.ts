@@ -11,7 +11,7 @@ import { type VectorStore } from './vector-store';
 import { readTailWithVfsOps } from '../vfs/mounts';
 import { MEMORY_DIR, noteDateAt } from './note';
 import { scrubSecrets } from '../safety/secret-patterns';
-import type { MemoryStore, NoteStamp } from "@kinu.run/agent-utils/memory";
+import type { MemoryStore, NoteDater, NoteStamp } from "@kinu.run/agent-utils/memory";
 import { diagnostics, KinuError, settle, toKinuError } from "../obs/index";
 import { writeConditionally, type ObservedFile } from '../vfs/conditional-write';
 import { FileRefusalError } from '../types/file-edits';
@@ -76,26 +76,24 @@ export function adaptMemory(
     }
   };
 
-  /** When a note's lines through `endLine` were written: the stamp of its note heading, else its file's last change. */
-  const writtenAt = async (path: string, content: Promise<string | null>, endLine: number): Promise<number | undefined> =>
-    noteDateAt(await content ?? '', endLine) ?? (await files.stat(path, { follow: false }))?.mtimeMs;
+  /** Dates a hydration's hits: the stamp of each note heading, else its file's last change, stat once a path. */
+  const dater = (): NoteDater => {
+    const changed = new Map<string, Promise<number | undefined>>();
 
-  /** Each hit dated, each file read once. */
-  const dated = async <Hit extends { readonly path: string; readonly endLine: number }>(hits: readonly Hit[]): Promise<Hit[]> => {
-    const reads = new Map<string, Promise<string | null>>();
+    return async (path, lines, endLine) => {
+      const stamped = noteDateAt(lines, endLine);
 
-    return await Promise.all(hits.map(async (hit) => {
-      const content = reads.get(hit.path) ?? store.readFile(hit.path);
+      if (stamped !== null) return stamped;
+      const read = changed.get(path) ?? files.stat(path, { follow: false }).then((stat) => stat?.mtimeMs);
 
-      reads.set(hit.path, content);
-      const at = await writtenAt(hit.path, content, hit.endLine);
+      changed.set(path, read);
 
-      return at === undefined ? hit : { ...hit, writtenAt: at };
-    }));
+      return await read;
+    };
   };
 
   const memory: Memory = {
-    chunk: async (id) => (await dated(await store.chunksByIds([id])))[0] ?? null,
+    chunk: async (id) => (await store.chunksByIds([id], dater()))[0] ?? null,
     // Memory text is kept scrubbed (`memory/scrub.ts`).
     write: (path, content) => store.writeFile(path, scrubSecrets(content)),
     append: (path, content) => store.appendToFile(path, scrubSecrets(content)),
@@ -123,7 +121,7 @@ export function adaptMemory(
     async search(query, limit) {
       await refresh();
 
-      return await dated(await store.search(query, limit, async (path) => memory.index(path)));
+      return await store.search(query, limit, async (path) => memory.index(path), dater());
     },
     // A note that moved is taken in before it is read, as a search takes it in.
     async read(path) {

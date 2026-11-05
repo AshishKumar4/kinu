@@ -281,7 +281,7 @@ export class SleepTimeLane {
 
       const kept = stored === undefined ? yield* this.keptNotes() : null;
 
-      const update = stored ?? (yield* attempt({ doing: 'compressing the recent turns into agent facts', otherwise: 'unavailable' }, () => runSleepTimeCompute(this.deps.llm(), {
+      const update = stored?.update ?? (yield* attempt({ doing: 'compressing the recent turns into agent facts', otherwise: 'unavailable' }, () => runSleepTimeCompute(this.deps.llm(), {
         turns: window.turns,
         ...(kept !== null && { notes: kept.fresh }),
         currentFacts: this.deps.facts.all()
@@ -292,8 +292,11 @@ export class SleepTimeLane {
 
       if (stored === undefined) {
         // The paid answer, so a replay applies it instead of buying another.
-        prepareOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key }, JSON.stringify(update));
+        // With the notes it folded, so a replay moves the watermark as the first application would have.
+        prepareOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key }, JSON.stringify({ ...update, notesThrough: kept?.through ?? null }));
       }
+
+      const notesThrough = stored === undefined ? kept?.through ?? null : stored.notesThrough;
 
       const proposals = account === undefined ? [] : accountProposals(update, window.turns);
 
@@ -301,7 +304,7 @@ export class SleepTimeLane {
       const summary = this.deps.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.deps.facts, update);
 
-        if (kept !== null && kept.through !== null) this.mark(NOTES_FOLDED, kept.through);
+        if (notesThrough !== null) this.mark(NOTES_FOLDED, notesThrough);
 
         for (const [index, proposal] of proposals.entries()) {
           void this.deps.sql`INSERT INTO account_proposal_outbox (delivery, proposal_json)
@@ -395,9 +398,16 @@ export class SleepTimeLane {
     this.clear(SETTLED_AT, CLOSED_AT);
   }
 
-  private recordedUpdate(key: string): SleepTimeUpdate | undefined {
+  /** The answer a pass paid for and has not yet applied, with the newest note it folded (null before notes were). */
+  private recordedUpdate(key: string): { readonly update: SleepTimeUpdate; readonly notesThrough: number | null } | undefined {
     const held = preparedOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
 
-    return held === undefined ? undefined : v.parse(SleepTimeUpdateSchema, JSON.parse(held));
+    if (held === undefined) return undefined;
+    const answer: unknown = JSON.parse(held);
+
+    return {
+      update: v.parse(SleepTimeUpdateSchema, answer),
+      notesThrough: v.parse(v.object({ notesThrough: v.optional(v.nullable(v.number()), null) }), answer).notesThrough,
+    };
   }
 }

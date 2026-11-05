@@ -85,10 +85,8 @@ export function parseMemoryNotes(content: string): MemoryNote[] {
  * When the lines of a note file through `endLine` were written, as the file itself says: the date stamped on the last
  * note heading at or above it (`appendMemoryNote`), at day precision. Null where no heading above is stamped.
  */
-export function noteDateAt(content: string, endLine: number): number | null {
-  const lines = content.split('\n').slice(0, endLine);
-
-  for (let at = lines.length - 1; at >= 0; at--) {
+export function noteDateAt(lines: readonly string[], endLine: number): number | null {
+  for (let at = Math.min(endLine, lines.length) - 1; at >= 0; at--) {
     const line = lines[at] ?? '';
 
     if (!/^#{2,3}\s/u.test(line)) continue;
