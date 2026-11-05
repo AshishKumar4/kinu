@@ -8,7 +8,6 @@
  */
 
 import { AGENT_RPC_ACCESS } from '@kinu.run/core';
-import type { ActorAgent } from './actor-agent';
 import type { OrchestratorAgent } from './orchestrator';
 import type { UserDO } from './user/user-do';
 
@@ -281,25 +280,12 @@ const USER_DO_STARTLESS: ReadonlySet<string> = new Set(['deleteAccount', 'opsTab
 
 export const USER_DO_STARTED_RPC: readonly string[] = USER_DO_METHODS.filter((name) => !USER_DO_STARTLESS.has(name));
 
-/** Members every actor exposes; entries a facet reaches on its parent stub must be listed or nested
- * trees fail closed at depth 2. `protected` members stay unreachable. */
-const ACTOR_AGENT_RPC_SURFACE = [
-  'slateCallDispatch',
-  'closeRevokedCliSockets',
-  'closeRevokedSessionSockets',
-  'inspectSubagentStorage',
-  'headJournalCacheMerge',
-  'headJournalInsertSpawn',
-  'headJournalRecordReport',
-  'headJournalRecordSplit',
-  'installWorkspaceCapability',
-  'missionDebit',
-  'missionGuard',
-  'onModelSettingsChanged',
-] as const satisfies readonly (keyof ActorAgent)[];
-
 /** Beyond `AGENT_RPC_ACCESS` (reachable by construction); `destroyAgent` is called DO-to-DO by UserDO. */
 const ORCHESTRATOR_METHODS = [
+  'closeRevokedCliSockets',
+  'closeRevokedSessionSockets',
+  'installWorkspaceCapability',
+  'onModelSettingsChanged',
   'abortExecutorFileDownload',
   'opsBookmark',
   'opsMissing',
@@ -355,7 +341,6 @@ const ORCHESTRATOR_METHODS = [
   'rawCopyFromFork',
   'readExecutorFileChunk',
   'receivePeerMessage',
-  'recordHeadStep',
   'runScaffoldOnce',
   'runTaskFromMcp',
   'saveNoteFromMcp',
@@ -370,10 +355,8 @@ const ORCHESTRATOR_METHODS = [
   'previewAccess',
   // Answers a refusal, never a storage key: no physical key appears in a client-visible URL.
   'resolveHostedActorRoute',
-  'applyActorDirectory',
   // A browser cannot mint a caller.
   'slateAs',
-  'slateBuildAs',
   'slateCallAs',
   // A personal part's run, its process's calls, and what its viewer showed: DO-to-DO only, from the app's routes and PartBinding.
   // A slate shared to edit: its files read, and changed, for the editor another workspace names (its owner).
@@ -383,10 +366,6 @@ const ORCHESTRATOR_METHODS = [
   'slatePartCall',
   'showSlatePart',
   'releaseSlatePart',
-  // An isolate running an actor's turn, or a slate, calls the actor's operations here.
-  'callOperation',
-  'listOperations',
-  'cancelOperation',
   // Reachable by a DO stub in this Worker, never a browser; none is `@callable`.
   'routeSlateShare',
   'openLiveShare',
@@ -399,7 +378,6 @@ const ORCHESTRATOR_METHODS = [
   'slatePreapprovals',
   'withdrawSlatePreapproval',
   'galleryNeeds',
-  'liveShareUrl',
   // Worker-only: the mail router hands a filed arrival to the workspace it woke (mail/handler.ts), and the owner's
   // route a thread they sent it (mail/routes.ts).
   'mailArrived',
@@ -408,7 +386,6 @@ const ORCHESTRATOR_METHODS = [
   'readOwnerMail',
   // Worker-only: the mail router's word that new mail waits for the assistant's triage (mail/handler.ts).
   'triageOwnerMail',
-  'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
   'requestOverviewPush',
   'ownsBrowserSession',
@@ -427,7 +404,6 @@ const ORCHESTRATOR_METHODS = [
 export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...PLATFORM_RPC_SURFACE,
   ...AGENTS_FACET_RPC_SURFACE,
-  ...ACTOR_AGENT_RPC_SURFACE,
   ...Object.keys(AGENT_RPC_ACCESS),
   ...ORCHESTRATOR_METHODS,
 ];
@@ -440,7 +416,6 @@ const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set([
 ]);
 
 export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [
-  ...ACTOR_AGENT_RPC_SURFACE,
   ...Object.keys(AGENT_RPC_ACCESS),
   ...ORCHESTRATOR_METHODS,
 ].filter((name) => !ORCHESTRATOR_STARTLESS.has(name));

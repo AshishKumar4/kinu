@@ -535,7 +535,7 @@ on entry rowid), the inherited context a spawned head receives
 (`orchestrator/heads-support.ts`), the evolution joins, and the export. The
 Agents SDK's `assistant_messages` is the SDK's own table, and Kinu neither
 writes nor reads it. The `/get-messages` seed a reconnecting tab receives is
-projected from the canonical entries (`cf-backend/src/actor-agent.ts`).
+projected from the canonical entries (`cf-backend/src/orchestrator.ts`).
 `gate:vendor-schema` (`scripts/vendor-schema.ts`) prepares every Kinu
 statement over a vendor-created table against the installed vendor's DDL, so
 the gate catches a bad read of a vendor table before runtime does.
