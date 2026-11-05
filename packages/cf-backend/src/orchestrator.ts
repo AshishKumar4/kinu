@@ -1220,8 +1220,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A repair's question, read only: its calls' effects committed here, under the receipts each kept.
       receipts: async (turnId, runId, callIds) => remoteReceipts(this.boundSql, this.agentBound(actorId).handle, { turnId, runId }, callIds),
       observe: async (lines) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines)); },
-      // Main's isolate holds a turn's run; a stream follows only those and this object's own.
-      runEventsWritten: async () => { if (actorId === this.actorHandle().actorId) this._runWrites?.ring(); },
       answerMetadata: (close, narration) => this.takeTurnSlates(actorId, close.turnId, narration),
       reportModelCall: async (report) => { this.reportModelCall(report); },
       getAuth: credentialReads.getAuth,
@@ -1250,7 +1248,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Its hirer hears it as a delivery of its own, whichever agent hired it.
         return await this.agentDeliveries(parentActorId).signals.send(signal);
       },
-    }, this.deleting.signal, (bound, call) => this.agentTurns.holds(actorId, bound, call), (turnId) => this.agentTurns.cutOff(actorId, turnId));
+    }, this.deleting.signal, {
+      fenced: (bound, call) => this.agentTurns.holds(actorId, bound, call),
+      cutOff: (turnId) => this.agentTurns.cutOff(actorId, turnId),
+      // A stream follows main's runs and this object's own (`getRunEventText`).
+      heard: () => { if (actorId === this.actorHandle().actorId) this._runWrites?.ring(); },
+    });
   }
 
   private agentBound(actorId: string): BoundActor {

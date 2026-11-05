@@ -36,8 +36,9 @@ const SSE_HEARTBEAT_MS = 15_000;
 /** The most event text one stream reads; past it the stream ends, and the client resumes from its Last-Event-ID. */
 const SSE_READ_BYTES = 8 * 1024 * 1024;
 
-/** The workspace's run-event writes as a count, which a stream waits to pass the count it read at. Every write rings it,
- *  in this object or in main's isolate (`AgentWorkspace.runEventsWritten`), so a stream reads only after one. */
+/** The workspace's run-event writes as a count, which a stream waits to pass the count it read at. This object's own
+ *  writes ring it, and every call main's isolate makes to the workspace, as what it wrote it wrote before calling: a
+ *  turn's events are each followed by a call (its step's, its tool's, its end's), so a stream reads only after one. */
 export class RunWrites {
   private count = 0;
   private readonly waiting = new Set<() => void>();

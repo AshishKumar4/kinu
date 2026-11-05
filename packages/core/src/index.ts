@@ -296,7 +296,7 @@ export type * from './types/primitives';
 
 export { VfsRevisionSchema } from './types/primitives';
 
-export { REAL_CLOCK, waitOn, type Clock } from './types/clock';
+export { REAL_CLOCK, type Clock } from './types/clock';
 
 export {
   cloudFileLinks, filesFocusOf, linkFileReferences, localFileLinks, type FileLinks, type FilesFocus,

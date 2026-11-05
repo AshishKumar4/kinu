@@ -219,8 +219,6 @@ export class AgentDatabase {
       readonly sayToParent: AgentWorkspace['sayToParent'];
       readonly receipts: AgentWorkspace['receipts'];
       readonly logActivity: AgentWorkspace['logActivity'];
-      /** Its recorder wrote run events; called once per burst of writes. */
-      readonly runEventsWritten: () => void;
     },
   ) {
     // Run heads, held: every run_events write here is a recorder's persist over `sql`, whose publish advances them.
@@ -468,29 +466,7 @@ export class AgentDatabase {
   }
 
   async acquire(): Promise<HostedActor> {
-    const actor = await this.actorHost().acquire(this.reference(), { kind: 'actor' });
-
-    this.ringOnWrites(actor.stores.eventRecorder);
-
-    return actor;
-  }
-
-  /** The recorders whose writes ring the workspace, each observed once. */
-  private readonly ringing = new WeakSet<RunEventRecorder>();
-  /** A ring is on its way: the writes of one burst ring once. */
-  private rung = false;
-
-  private ringOnWrites(recorder: RunEventRecorder): void {
-    if (this.ringing.has(recorder)) return;
-    this.ringing.add(recorder);
-    recorder.observe(() => {
-      if (this.rung) return;
-      this.rung = true;
-      queueMicrotask(() => {
-        this.rung = false;
-        this.workspace.runEventsWritten();
-      });
-    });
+    return await this.actorHost().acquire(this.reference(), { kind: 'actor' });
   }
 
   private transcript() {

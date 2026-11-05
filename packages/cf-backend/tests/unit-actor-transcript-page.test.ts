@@ -35,7 +35,7 @@ function retainedDatabase() {
 
   const database = new AgentDatabase(context.storage, {
     agent: () => files, home: WORKSPACE_ROOT, state: refuse, enqueueTurn: refuse, admitDelivery: refuse, broadcast: refuse,
-    turnInFlight: () => false, memory: refuse, program: refuse, sayToParent: refuse, receipts: refuse, logActivity: refuse, runEventsWritten: () => {},
+    turnInFlight: () => false, memory: refuse, program: refuse, sayToParent: refuse, receipts: refuse, logActivity: refuse,
   });
 
   const identity = created.sql<StoredRow>`SELECT * FROM workspace_identity`[0];

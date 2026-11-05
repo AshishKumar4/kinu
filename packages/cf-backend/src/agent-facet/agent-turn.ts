@@ -109,8 +109,6 @@ export interface AgentWorkspace {
    *  absent. Read only, so a closed or stopped turn's repair still asks. */
   receipts(turnId: string, runId: string, callIds: readonly string[]): Promise<ReadonlyMap<string, RemoteReceipt>>;
   observe(lines: ReadableStream<Uint8Array>): Promise<void>;
-  /** Its recorder wrote run events: a stream that follows its runs reads them now (`RunWrites`). */
-  runEventsWritten(): Promise<void>;
   /**
    * Calls the agent's `step` for the turn's waiting step, and answers once that step has ended (`StepPacer`). The first
    * step carries the profile the agent assembled the turn on (D5): the workspace binds its tools and live block to it,

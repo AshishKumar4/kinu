@@ -155,8 +155,12 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   constructor(
     private readonly answers: AgentWorkspaceAnswers,
     private readonly closed: AbortSignal,
-    private readonly fenced: (bound: TurnBound, call: TurnCall) => boolean = () => true,
-    private readonly cutOff: (turnId: string) => AbortSignal | null = () => null,
+    private readonly turns: {
+      readonly fenced?: (bound: TurnBound, call: TurnCall) => boolean;
+      readonly cutOff?: (turnId: string) => AbortSignal | null;
+      /** Told of every call as it arrives: the agent wrote what it wrote before making it (`RunWrites`). */
+      readonly heard?: () => void;
+    } = {},
   ) {
     super();
   }
@@ -166,7 +170,9 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   private open<T>(answer: () => T | Promise<T>, bound?: TurnBound, call: TurnCall = 'settles'): Promise<T> {
     const refused = Promise.withResolvers<never>();
 
-    if (bound !== undefined && !this.fenced(bound, call)) {
+    this.turns.heard?.();
+
+    if (bound !== undefined && this.turns.fenced?.(bound, call) === false) {
       refused.reject(call === 'settles'
         ? new KinuError('denied', `stale_close: the close of turn ${bound.turnId} names an execution this agent never opened as such.`)
         : new KinuError('cancelled', `stale_epoch: turn ${bound.turnId} is no longer this agent's current turn.`));
@@ -175,7 +181,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
     }
 
     // A call that runs more of its turn ends as the turn is cut off, as every call does as the workspace is deleted.
-    const cut = bound !== undefined && call !== 'settles' ? this.cutOff(bound.turnId) : null;
+    const cut = bound !== undefined && call !== 'settles' ? this.turns.cutOff?.(bound.turnId) ?? null : null;
     const ends = cut === null ? this.closed : AbortSignal.any([this.closed, cut]);
     const refuse = (): void => { refused.reject(ends.reason); };
 
@@ -201,7 +207,6 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   advisorRead(call: AgentAdvisorRead) { return this.open(() => this.answers.advisorRead(call), call, 'executes'); }
   receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.open(() => this.answers.receipts(turnId, runId, callIds)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.observe(lines)); }
-  runEventsWritten() { return this.open(() => this.answers.runEventsWritten()); }
   paceStep(bound: TurnBound, profile: ResolvedTurnProfile | null) { return this.open(() => this.answers.paceStep(bound, profile), bound, 'executes'); }
   answerMetadata(close: TurnBound, narration: readonly string[] | null) { return this.open(() => this.answers.answerMetadata(close, narration), close); }
   reportModelCall(report: ModelCallReport) { return this.open(() => this.answers.reportModelCall(report)); }
