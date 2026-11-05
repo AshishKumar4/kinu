@@ -1078,54 +1078,57 @@ export class ChatSession {
     opts: SendOptions | CardSend,
     landing: SendLandingWaiter | null = null,
   ): Promise<void> {
-    this.refuseUnusableId(opts.id);
-    const card = 'metadata' in opts ? opts : undefined;
-    const { text, files } = normalizePromptInput(input);
+    return settleEffect(Effect.gen({ self: this }, function* () {
+      this.refuseUnusableId(opts.id);
+      const card = 'metadata' in opts ? opts : undefined;
+      const { text, files } = normalizePromptInput(input);
 
-    // Empty and unattached is refused at the door.
-    if (text.trim() === '' && (files === undefined || files.length === 0)) {
-      throw new KinuError('bad_input', 'send requires the message text');
-    }
+      // Empty and unattached is refused at the door.
+      if (text.trim() === '' && (files === undefined || files.length === 0)) {
+        return yield* Effect.fail(new KinuError('bad_input', 'send requires the message text'));
+      }
 
-    if (card === undefined && this.turnInFlight()) {
-      const { id } = opts;
+      if (card === undefined && this.turnInFlight()) {
+        const { id } = opts;
 
-      const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = {
-        text, id, ...(opts.mode !== undefined && { mode: opts.mode }), ...(files !== undefined && files.length > 0 && { files }),
+        const steer: UserSteer & { readonly id: string; readonly mode?: WorkMode } = {
+          text, id, ...(opts.mode !== undefined && { mode: opts.mode }), ...(files !== undefined && files.length > 0 && { files }),
+        };
+
+        if (landing !== null) this.landings.set(id, landing);
+        const outcome = yield* Effect.promise(() => this.actorSession.send(steer));
+
+        if (outcome === 'mid-turn' || outcome === 'queued') return;
+        this.landings.delete(id);
+
+        return yield* Effect.fail(new KinuError('unavailable', 'The message could not be handed to the running turn. Send it again.'));
+      }
+
+      const mode = opts.mode ?? 'build';
+
+      const metadata: JsonObject = {
+        ...card?.metadata,
+        ...(opts.tier !== undefined && { profile_tier: opts.tier }),
+        ...(opts.mode !== undefined && { kinuMode: opts.mode }),
       };
 
-      if (landing !== null) this.landings.set(id, landing);
-      const outcome = await this.actorSession.send(steer);
+      // The pending_steers insert runs before the pump can begin the turn.
+      const pendingSendId = opts.id;
+      const turnId = opts.id;
 
-      if (outcome === 'mid-turn' || outcome === 'queued') return;
-      this.landings.delete(id);
-      throw new KinuError('unavailable', 'The message could not be handed to the running turn. Send it again.');
-    }
-
-    const mode = opts.mode ?? 'build';
-
-    const metadata: JsonObject = {
-      ...card?.metadata,
-      ...(opts.tier !== undefined && { profile_tier: opts.tier }),
-      ...(opts.mode !== undefined && { kinuMode: opts.mode }),
-    };
-
-    // The pending_steers insert runs before the pump can begin the turn.
-    const pendingSendId = opts.id;
-    const turnId = opts.id;
-
-    if (landing !== null) this.landings.set(turnId, landing);
-    this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files, ...(card !== undefined && { metadata: card.metadata }) });
-    this.queue.push(tagged({
-      text, files, metadata, kind: 'user',
-      turnId, pendingSendId,
-      settle: (failure) => {
-        // A failure takes the reservation with it, or the words would be re-delivered after the caller was told no.
-        if (failure) this.pendingSends.retire([pendingSendId]);
-        this.settleLandings([turnId], failure ?? 'turn');
-      },
+      if (landing !== null) this.landings.set(turnId, landing);
+      this.pendingSends.reserve({ id: pendingSendId, turnId: null, mode, text, files, ...(card !== undefined && { metadata: card.metadata }) });
+      this.queue.push(tagged({
+        text, files, metadata, kind: 'user',
+        turnId, pendingSendId,
+        settle: (failure) => {
+          // A failure takes the reservation with it, or the words would be re-delivered after the caller was told no.
+          if (failure) this.pendingSends.retire([pendingSendId]);
+          this.settleLandings([turnId], failure ?? 'turn');
+        },
+      }));
+      this.pump();
     }));
-    this.pump();
   }
 
   private settleLandings(ids: readonly string[], fate: SendLanding | KinuError): void {

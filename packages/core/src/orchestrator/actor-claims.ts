@@ -4,7 +4,7 @@ import type { WorkMode } from '../types/turn';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
-import { diagnostics, settleSync, toKinuError } from '../obs/index';
+import { diagnostics, settle, settleSync, toKinuError } from '../obs/index';
 import { RUN_END_REASONS } from './turn-lifecycle';
 import { initSessionContextTables } from '../session/schema';
 import { initSessionTranscriptTables } from '../session/transcript-schema';
@@ -523,14 +523,16 @@ export type ClaimRecovery =
 
 export async function verifyClaimedProgram(claim: StoredActorClaim, readVersionedSource: (version: number) => Promise<string | null>, digestOf: (source: string) => string,
   context: ContextRevision | null): Promise<ClaimRecovery> {
-  const { program } = claim;
+  return settle(Effect.gen(function* () {
+    const { program } = claim;
 
-  // A claim never bound to its program (still `preparing`) admitted no request either.
-  if (context === null || program === null) throw new KinuError('missing', 'claimed request evidence is missing');
+    // A claim never bound to its program (still `preparing`) admitted no request either.
+    if (context === null || program === null) return yield* Effect.fail(new KinuError('missing', 'claimed request evidence is missing'));
 
-  if (program.kind === 'builtin') return { kind: program.build === null ? 'build_unknown' : 'verified', claim };
-  const source = await readVersionedSource(program.version);
-  const found = source === null ? null : digestOf(source);
+    if (program.kind === 'builtin') return { kind: program.build === null ? 'build_unknown' : 'verified', claim };
+    const source = yield* Effect.promise(() => readVersionedSource(program.version));
+    const found = source === null ? null : digestOf(source);
 
-  return found === null || found !== program.digest ? { kind: 'source_changed', claim, found } : { kind: 'verified', claim };
+    return found === null || found !== program.digest ? { kind: 'source_changed', claim, found } : { kind: 'verified', claim };
+  }));
 }
