@@ -350,9 +350,9 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
     return settle(this.served(() => this.store.archived()));
   }
 
-  /** The account's workspaces are `live`: the boxes of any other are retired, as a teardown asks (docs/MAIL.md §2). */
-  retireAllBut(live: readonly string[]): Promise<readonly string[]> {
-    return settle(this.served(() => this.store.retireAllBut(live)));
+  /** `workspace` is deleted: its boxes retire, their mail kept, as its teardown asks (docs/MAIL.md §2). */
+  retireWorkspace(workspace: string): Promise<readonly string[]> {
+    return settle(this.served(() => this.store.retireWorkspace(workspace)));
   }
 
   /** Whether the person holds an address, which a turn asks without listing every box. */

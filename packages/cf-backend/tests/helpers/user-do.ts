@@ -115,8 +115,8 @@ export interface TestUserDO {
   destroyReads: string[];
   /** What the account's delete reached beyond its own object: its mailbox and labels, its control-plane forget. */
   accountDeleted: string[];
-  /** Each roster a teardown handed the account's mailbox, whose boxes of any other workspace it retires. */
-  mailRetired: (readonly string[])[];
+  /** Each workspace a teardown retired the boxes of in the account's mailbox. */
+  mailRetired: string[];
   /** Reasons passed to `ctx.abort`: an account delete completes only once `destroy()` raises 'destroyed'. */
   aborted: string[];
   abortRaised: () => Promise<void>;
@@ -240,6 +240,9 @@ export interface TestUserDOOptions {
   deviceRosterMoved?: (name: string) => Promise<boolean>;
   /** The slate-picture bucket; absent, a teardown has no pictures to delete. */
   slatePictures?: PictureBucket;
+  /** Whether the deployment keeps mail (its MAIL_BUCKET); absent, a teardown has no boxes to retire. `refuses-once`: its
+   *  Mailbox refuses the first retirement asked of it, as one cut by a restart does. */
+  mailBucket?: true | 'refuses-once';
   /** The deployment's eval identity, whose accounts lease their `eval-` workspaces; absent, no account is an eval's. */
   devUserEmail?: string;
   /** The control plane the account's index feed reaches; absent, the deployment has none and the registry feeds nothing. */
@@ -331,10 +334,12 @@ function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']):
 interface TestUserEnvironment {
   UserDO?: { idFromName(name: string): string; get(id: string): ShareCardRecipient | Pick<UserDOInstance, 'builtinRemoveAccount'> };
   ControlPlaneDO?: { idFromName(name: string): string; get(id: string): IndexFeedSink & Pick<ControlPlaneDO, 'forgetUser'> };
-  MAILBOX: { idFromName(name: string): string; get(id: string): Pick<MailboxDO, 'deleteBox' | 'retireAllBut'> };
+  MAILBOX: { idFromName(name: string): string; get(id: string): Pick<MailboxDO, 'deleteBox' | 'retireWorkspace'> };
   CREDENTIAL_ENCRYPTION_KEY: string;
   DEV_USER_EMAIL?: string;
   SLATE_PICTURES?: PictureBucket;
+  /** Only whether it is bound is read here: the Mailbox keeps the bytes. */
+  MAIL_BUCKET?: object;
   CLI_PUBLIC_ORIGIN?: string;
   ASSETS?: { fetch(input: Request): Promise<Response> };
   AUTH_KV?: KvStore;
@@ -443,7 +448,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const sql = sqlExec(db);
   const installed = new Map<string, string>();
   const destroyedWorkspaces: string[] = [];
-  const mailRetired: (readonly string[])[] = [];
+  const mailRetired: string[] = [];
+  let refusedRetirement = false;
   /** Workspaces whose storage a destroy wiped, whatever its call answered. */
   const wipedWorkspaces = new Set<string>();
   const destroyReads: string[] = [];
@@ -694,6 +700,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
     ...(options.pages !== undefined && { AUTH_KV: options.pages.AUTH_KV }),
     SLATE_PICTURES: options.slatePictures,
+    ...(options.mailBucket !== undefined && { MAIL_BUCKET: {} }),
     ControlPlaneDO: controlPlaneNamespace(options.controlPlane, accountDeleted),
     // No mail here: the box answers no labels, and its delete is recorded.
     MAILBOX: {
@@ -702,8 +709,13 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         deleteBox: async () => {
           accountDeleted.push(`mailbox:${name}`);
         },
-        retireAllBut: async (roster: readonly string[]) => {
-          mailRetired.push([...roster].sort());
+        retireWorkspace: async (workspace: string) => {
+          if (options.mailBucket === 'refuses-once' && mailRetired.length === 0 && !refusedRetirement) {
+            refusedRetirement = true;
+            throw new Error('the Mailbox restarted mid-call');
+          }
+
+          mailRetired.push(workspace);
 
           return [];
         },

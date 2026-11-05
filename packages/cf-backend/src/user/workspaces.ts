@@ -588,12 +588,13 @@ export class UserWorkspaces {
     diagnostics.event('workspace.destroyed', { workspace: name, object: object.toString(), proof });
 
     if (this.host.env.SLATE_PICTURES !== undefined) await deletePictures(this.host.env.SLATE_PICTURES, picturePrefix(name));
-    this.deleteWorkspaceRows(name, 'after-destroy');
-    // Its boxes retired, their mail kept (docs/MAIL.md §2): asked with the whole roster, so a box a deletion before this
-    // retirement existed left live is retired too.
-    const live = this.host.sqlx<{ name: string }>(`SELECT name FROM user_workspaces WHERE name != ?`, name).map((row) => row.name);
 
-    await objectNamed(this.host.env.MAILBOX, ownerUserId).retireAllBut(live);
+    // Its boxes retired, their mail kept (docs/MAIL.md §2), before its registry row goes: a retirement that fails leaves
+    // the row marked, so the deletion's job runs it again; and the row holds the name, so no workspace of it is made
+    // meanwhile. A deployment with no mail store holds no boxes.
+    if (this.host.env.MAIL_BUCKET !== undefined) await objectNamed(this.host.env.MAILBOX, ownerUserId).retireWorkspace(name);
+
+    this.deleteWorkspaceRows(name, 'after-destroy');
     this.host.limits.forgetStore(`workspace:${name}`);
     await this.host.evalLeases.ended(name);
     await this.host.deletions.ended(name);

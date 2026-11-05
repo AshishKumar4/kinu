@@ -425,21 +425,18 @@ export class MailStore {
   }
 
   /**
-   * The account's workspaces are `live` now: every box of a workspace not among them is retired (docs/MAIL.md §2), and
-   * the person's box forgets an assistant that is gone, so its mail wakes nothing until the next one reads it (`open`).
-   * Run at each teardown with the whole roster, so a box an earlier deletion left live is retired too. The ones it
-   * retired, by path.
+   * `workspace` is deleted: its boxes retire (docs/MAIL.md §2), and the person's box forgets it as their assistant, so
+   * its mail wakes nothing until the next one reads it (`open`). Asked by its teardown while its registry row still
+   * holds the name, so no workspace of that name is made meanwhile; one made after gets boxes of its own. The paths it
+   * retired; none when asked again.
    */
-  retireAllBut(live: readonly string[]): string[] {
-    // With no workspace live, every one is gone: `NOT IN ()` is no SQL, and `NOT IN (NULL)` is never true.
-    const gone = live.length === 0 ? 'workspace IS NOT NULL' : `workspace NOT IN (${live.map(() => '?').join(', ')})`;
-
+  retireWorkspace(workspace: string): string[] {
     const retired = rows(v.object({ path: v.string() }), this.deps.sql.exec(
-      `INSERT INTO mail_retired (path, retired_at) SELECT path, ? FROM mail_addresses
-       WHERE kind != 'person' AND ${gone} AND ${LIVE} RETURNING path`, this.deps.now(), ...live,
+      `INSERT INTO mail_retired (path, retired_at) SELECT path, ? FROM mail_addresses WHERE kind != 'person' AND workspace = ? AND ${LIVE} RETURNING path`,
+      this.deps.now(), workspace,
     )).map((row) => row.path);
 
-    this.deps.sql.exec(`UPDATE mail_addresses SET workspace = NULL, actor_id = NULL WHERE path = '' AND ${gone}`, ...live);
+    this.deps.sql.exec("UPDATE mail_addresses SET workspace = NULL, actor_id = NULL WHERE path = '' AND workspace = ?", workspace);
 
     return retired.sort();
   }
@@ -522,14 +519,20 @@ export class MailStore {
     }
 
     const at = this.deps.now();
-    const woke = named === null ? null : this.wakeOf(box, verdict);
     const messageId = this.deps.id();
     // Every byte kept first; then the thread, its message, its attachments and its index with no await between them, so
     // the object commits them together and no reader meets a thread without its message (staging 06498fc55).
     const keys = await this.keep(input.raw, parsed);
     const attachments = await this.keepAttachments(parsed.attachments);
+    // Where it is filed, and whom it wakes, read again with no await before the filing: a box retired while its bytes
+    // were kept files nothing, and an assistant gone meanwhile wakes nothing (docs/MAIL.md §2).
+    const addressed = this.box(input.recipient.path);
+    const filedIn = addressed ?? this.box('');
+
+    if (filedIn === null) return null;
+    const woke = addressed === null ? null : this.wakeOf(filedIn, verdict);
     const tag = input.recipient.tag === null ? '' : `+${input.recipient.tag}`;
-    const threadId = this.threadFor(box.path, parsed);
+    const threadId = this.threadFor(filedIn.path, parsed);
 
     this.deps.sql.exec(
       `INSERT INTO mail_messages (id, thread_id, header_id, from_addr, from_name, to_json, cc_json, delivered_to,
@@ -550,9 +553,9 @@ export class MailStore {
     this.index(messageId, parsed.subject, `${from.name ?? ''} ${from.address}`, parsed.text);
     // A thread that comes back to life leaves the Trash.
     this.deps.sql.exec('UPDATE mail_threads SET trashed_at = NULL WHERE id = ?', threadId);
-    const triage = this.awaitTriage(box, woke, threadId, at);
+    const triage = this.awaitTriage(filedIn, woke, threadId, at);
 
-    return this.arrival(box, parsed, { messageId, threadId, headerId, from, verified: verdict.verified, woke, duplicate: false, triage });
+    return this.arrival(filedIn, parsed, { messageId, threadId, headerId, from, verified: verdict.verified, woke, duplicate: false, triage });
   }
 
   /** What a filed message comes to for the router: whom it wakes, on whose word, and with what words. */

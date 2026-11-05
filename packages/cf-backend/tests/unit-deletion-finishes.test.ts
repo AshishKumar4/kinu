@@ -232,8 +232,8 @@ test("a burst of a person's deletes is torn down one per alarm, each alarm the n
     .toEqual({ torn: [1, 2, 3], destroyed: ['archive', 'drafts', 'ledger'], jobs: [] });
 });
 
-test("a workspace's teardown hands its mailbox the roster it leaves, whose boxes of any other workspace retire", async () => {
-  const user = createTestUserDO({ durableObjectId: OWNER });
+test("a workspace's teardown retires its boxes in the account's mailbox, and no other's", async () => {
+  const user = createTestUserDO({ durableObjectId: OWNER, mailBucket: true });
   const owner = await testOwner();
 
   for (const name of ['ledger', 'drafts']) await user.userDO.registerWorkspace(owner, name);
@@ -241,7 +241,24 @@ test("a workspace's teardown hands its mailbox the roster it leaves, whose boxes
   await user.userDO.requestWorkspaceRemoval(owner, 'ledger', OWNER);
   await user.userDO.alarm();
 
-  expect({ destroyed: user.destroyedWorkspaces, retired: user.mailRetired }).toEqual({ destroyed: ['ledger'], retired: [['drafts']] });
+  expect({ destroyed: user.destroyedWorkspaces, retired: user.mailRetired }).toEqual({ destroyed: ['ledger'], retired: ['ledger'] });
+});
+
+test("a retirement its Mailbox did not answer is asked again by the deletion, which lands only once it is", async () => {
+  const user = createTestUserDO({ durableObjectId: OWNER, mailBucket: 'refuses-once' });
+  const owner = await testOwner();
+
+  await user.userDO.registerWorkspace(owner, 'ledger');
+  await user.userDO.requestWorkspaceRemoval(owner, 'ledger', OWNER);
+
+  for (let alarm = 0; alarm < 3 && user.mailRetired.length === 0; alarm++) {
+    user.db.run("UPDATE cf_agents_jobs SET time = 0 WHERE id LIKE 'workspace-deletion:%'");
+    await user.userDO.alarm();
+  }
+
+  const marked = user.db.query<{ name: string }, []>('SELECT name FROM user_workspaces').all().map((row) => row.name);
+
+  expect({ retired: user.mailRetired, marked }).toEqual({ retired: ['ledger'], marked: [] });
 });
 
 // An account's delete writes its intent and every workspace's mark in one transaction, so a reset at any later point

@@ -250,8 +250,8 @@ export interface MailboxCalls {
   boxes(): Promise<readonly MailBox[]>;
   /** The boxes of workspaces since deleted, newest retired first: their mail kept, under the workspace each names. */
   archived(): Promise<readonly MailArchivedBox[]>;
-  /** Every box of a workspace not in `live` retired, and an assistant not in it forgotten; the paths it retired. */
-  retireAllBut(live: readonly string[]): Promise<readonly string[]>;
+  /** `workspace` is deleted: its boxes retired and the person's box rid of it as their assistant; the paths it retired. */
+  retireWorkspace(workspace: string): Promise<readonly string[]>;
   /** The owner's Personal assistant's main agent reads their own box from now on; null before they have an address. */
   readBy(reader: { readonly workspace: string; readonly actorId: string }): Promise<MailBox | null>;
   /**
