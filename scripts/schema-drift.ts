@@ -625,7 +625,7 @@ export function survey(lock: GenesisLock = readGenesisLock()): Survey {
   // is the ONLY enumeration — this line was
   // `git ls-files 'packages/*/src/**/*.ts'`, whose `**/` requires at least one
   // intervening directory, so it matched 454 of 616 product files and every file
-  // sitting directly in a `src/` was invisible. `actor-agent.ts` among them: the
+  // sitting directly in a `src/` was invisible. `orchestrator.ts` among them: the
   // largest DDL surface in the repo, in a gate reporting drift-free over it.
   const sources = readMatching(isProductSource);
   const declared = [...sources].map(([file, source]) => ddlIn(file, source));

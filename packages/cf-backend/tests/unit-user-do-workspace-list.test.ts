@@ -10,7 +10,9 @@ import {
   createTestUserDO, createdWorkspace, testOwner, type TestUserDO, type TestUserDOOptions,
 } from './helpers/user-do';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
-import { RECOVERY_BACKOFF_CEILING_MS, WORKSPACE_TITLE_MAX } from '@kinu.run/core';
+import { RECOVERY_BACKOFF_CEILING_MS, SCHEMA_STAMPS, WORKSPACE_TITLE_MAX } from '@kinu.run/core';
+import { kvOf } from './helpers/platform-context';
+import { present } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
 import { unreachableNamespace, userAccount, workerContext } from './helpers/bindings';
 import type { AuthIdentity } from '../src/auth/session';
@@ -372,6 +374,28 @@ describe('a deletion that could not finish', () => {
     await lapLater(next);
 
     expect({ destroyed: next.destroyedWorkspaces, marked: pendingRows(next) }).toEqual({ destroyed: ['half-gone'], marked: [] });
+    next.close();
+    storage.close();
+  });
+
+  // Issue #18 (2026-09-22): a table's CHECK stays as the build that made it declared it, so a widened origin refused every
+  // create without a title on accounts made before it.
+  test('an account whose workspace table an older build made creates a workspace with a derived title', async () => {
+    const storage = new Database(':memory:');
+
+    createTestUserDO({ durableObjectId: USER_ID, storage }).close();
+    const made = present(storage.query<{ sql: string }, []>(`SELECT sql FROM sqlite_master WHERE name = 'user_workspaces'`).get(), 'the table');
+
+    // As the build before left it: the table's origin narrower than this build's, under that build's stamp.
+    storage.exec('PRAGMA foreign_keys = OFF');
+    storage.exec('DROP TABLE user_workspaces');
+    storage.exec(made.sql.replace("IN ('auto', 'user')", "IN ('user')"));
+    kvOf(storage).set('kinu.schema_stamp', SCHEMA_STAMPS.account + 1);
+
+    const next = createTestUserDO({ durableObjectId: USER_ID, storage });
+    const entry = createdWorkspace(await next.userDO.registerWorkspace(await testOwner(), 'mission-only'));
+
+    expect((await next.userDO.listWorkspaces(await testOwner())).entries.map((each) => each.name)).toEqual([entry.name]);
     next.close();
     storage.close();
   });

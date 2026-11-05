@@ -132,7 +132,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
    * rename: the `maybeAutoTitle` wrapper it called is gone, so it calls the
    * `applyAutoTitle` that wrapper ran.
    */
-  const SPAWNED = `export class OrchestratorAgent extends ActorAgent {
+  const SPAWNED = `export class OrchestratorAgent extends Agent<Env> {
     onStart(): void {
       this.ensureSchema();
       if (this.getOwnerUserId()) {
@@ -196,7 +196,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
     // this rule is a name list rather than "detached work is banned": the
     // reconcile marks stale heads `interrupted` and offers their roots to the job
     // sweep. Indexed writes, no provider, and it MUST be allowed to stay.
-    const bounded = `export class OrchestratorAgent extends ActorAgent {
+    const bounded = `export class OrchestratorAgent extends Agent<Env> {
       onStart(): void {
         this.ensureSchema();
         const forkJournalReconcileTask: AsyncTaskOwner = { promise: null };
@@ -318,13 +318,13 @@ ${hold.body}
   });
 
 
-  test('cut the wire: restoring a fiber recovery hook on the real ActorAgent goes red', () => {
-    const file = 'packages/cf-backend/src/actor-agent.ts';
+  test('cut the wire: restoring a fiber recovery hook on the real OrchestratorAgent goes red', () => {
+    const file = 'packages/cf-backend/src/orchestrator.ts';
     const real = present(SOURCES.get(file), `the ${file} source`);
 
     const restored = real.replace(
-      'export abstract class ActorAgent extends Agent<Env> {',
-      `export abstract class ActorAgent extends Agent<Env> {
+      'export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {',
+      `export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   override onFiberRecovered(_ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
     return Promise.resolve({ status: 'completed', snapshot: null });
   }`,
@@ -332,7 +332,7 @@ ${hold.body}
 
     expect(restored).not.toBe(real);
     const { violations } = auditFile(file, restored);
-    expect(violations.map((v) => `${v.owner}.${v.member}`)).toEqual(['ActorAgent.onFiberRecovered']);
+    expect(violations.map((v) => `${v.owner}.${v.member}`)).toEqual(['OrchestratorAgent.onFiberRecovered']);
   });
 
   test('cut the wire: re-spawning the auto-title task from the real onStart goes red', () => {

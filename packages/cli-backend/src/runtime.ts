@@ -127,7 +127,7 @@ export interface CLIRuntime extends AgentRuntime {
    * Override seam for harnesses (`tests/live-model/harness.ts`); `null`
    * withholds resolution so an unrouted lane says so rather than inventing a model.
    */
-  setProfileResolver(resolve: (() => Promise<ResolvedTurnProfile>) | null): void;
+  setProfileResolver(resolve: () => Promise<ResolvedTurnProfile>): void;
   /** The issued operation's profile, or current authority for new work. */
   ensureProfile: () => Promise<ResolvedTurnProfile>;
   /** The agent's own gated, checkpointed host shell; a swarm node it seats runs in it too. */
@@ -282,17 +282,9 @@ function buildCLIRuntime(
   const profiles = createLocalProfileAuthority({ config: agentConfig, plane: profilePlane });
 
   // Every local runtime routes, session-less ones included.
-  let profileResolver: (() => Promise<ResolvedTurnProfile>) | null =
-    () => profiles.resolvePreTurn();
+  let profileResolver: () => Promise<ResolvedTurnProfile> = () => profiles.resolvePreTurn();
 
-  const ensureProfile = (): Promise<ResolvedTurnProfile> => resolveRoutingProfile({
-    actor,
-    resolve: () => {
-      if (!profileResolver) throw new Error('this runtime has no profile resolver: model lanes cannot route before a turn');
-
-      return profileResolver();
-    },
-  });
+  const ensureProfile = (): Promise<ResolvedTurnProfile> => resolveRoutingProfile({ actor, resolve: () => profileResolver() });
 
   // Core's one routed invocation over the local registry; a spec is spelled as the registry spells it, so spend is too.
   const localRegistry = {
@@ -474,7 +466,7 @@ function buildCLIRuntime(
     setModelForRoute: (factory: (resolution: ModelRouteResolution) => RoutedLLM) => {
       modelRouteFactory = factory;
     },
-    setProfileResolver: (resolve: (() => Promise<ResolvedTurnProfile>) | null) => {
+    setProfileResolver: (resolve: () => Promise<ResolvedTurnProfile>) => {
       profileResolver = resolve;
     },
     ensureProfile,

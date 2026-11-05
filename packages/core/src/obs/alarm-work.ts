@@ -35,10 +35,9 @@ export const ALARM_WORK = {
   PendingDeliveries: ['watch.checked'],
   // Nimbus's hosted-runtime tasks, each re-armed from the activity it watches.
   NimbusTasks: [],
-  // Dispatch their capabilities' jobs above, and the fibers that hold running work.
-  ActorAgent: [],
   // Dispatches its capabilities' jobs above, one workspace's teardown at most.
   UserDO: [],
+  // Dispatches its capabilities' jobs above, and the fibers that hold running work.
   OrchestratorAgent: [],
 } as const satisfies Readonly<Record<string, readonly LogEventName[]>>;
 

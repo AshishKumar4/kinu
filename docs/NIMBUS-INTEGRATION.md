@@ -206,8 +206,8 @@ The orchestrator, its durable subagents, and exploration heads share the
 workspace's files, processes, and ports. They do not share mutable shell cwd or
 exported environment state. `ActorRuntimeIdentity.shellId`
 (`cf-backend/src/runtime.ts`) is a stable actor-specific key. It reads
-`agent:<name>` for the main actor (`ActorAgent.shellId()`,
-`cf-backend/src/actor-agent.ts`) and `<kind>:<storage-key>` for every hosted
+`agent:<name>` for the main actor (`OrchestratorAgent.shellId()`,
+`cf-backend/src/orchestrator.ts`) and `<kind>:<storage-key>` for every hosted
 logical actor (subagent, head, swarm node and branch alike) from
 `hostedActorShellId` in `cf-backend/src/actor-hosting.ts`, keyed on the
 immutable storage key rather than the registered name.

@@ -209,7 +209,7 @@ describe('a message that narrates the session or argues in the first person is r
       "The daemon runs as the owner on the owner's machine.",
       "Both proxies spend the owner's inference credentials.",
       // Present tense, and this one is the discriminator: a product sentence
-      // about a user's question, verbatim from actor-agent.ts:1208.
+      // about a user's question, verbatim from orchestrator.ts.
       'The owner asks what the WORKSPACE cost, and a recursive total answers it.',
     ]) {
       expect(inspect(`feat(cf): pair the token\n\n${body}`, isCode)).toEqual([]);
