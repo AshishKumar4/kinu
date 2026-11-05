@@ -290,6 +290,8 @@ describe("executor lifecycle state", () => {
     // ...while the creation ran exactly once, and its failure is stated.
     expect(starts).toBe(1);
     expect(out).toMatchObject({ error: expect.stringContaining('network connection lost') });
+    // A box that came up for a start that failed answered no call: the computer is not in use.
+    expect(executor.getStatus?.().active).toBe(false);
   });
 
   test("the Nimbus workspace is idle until a session call reaches the SDK handle", async () => {
