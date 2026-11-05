@@ -163,7 +163,7 @@ interface SealedOrchestratorRpc extends Rpc.DurableObjectBranded, DeniedRpc {
   __unsafe_ensureInitialized(): Promise<void>;
   hostedWorkspace(): Promise<void>;
   loadSoulText(): Promise<void>;
-  currentProfile(): Promise<void>;
+  actorHandle(): Promise<void>;
   startExecutorFileDownload(): Promise<void>;
   abortExecutorFileDownload(): Promise<void>;
   writeExecutorFileChunk(): Promise<void>;

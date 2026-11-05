@@ -175,7 +175,7 @@
     "@types/node": "^25.9.1",
     "@vitest/coverage-istanbul": "^4.1.12",
     "agents": "^0.29.0",
-    "armada": "github:AshishKumar4/armada#138e0d62a993aedaef300ee72eadc9a14b021796",
+    "armada": "github:AshishKumar4/armada#636be1efc249d2dcb3d3518dee7343ed19a19c94",
     "aws4fetch": "^1.0.20",
     "bun": "1.4.3",
     "capnweb": "^0.12.0",

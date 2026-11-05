@@ -18,13 +18,13 @@ describe('tracing — the census is derived from the product corpus', () => {
   test('a call counts, the declaration does not, and a mention in prose does not', () => {
     expect(tracerCallSites(new Map([
       ['packages/cf-backend/src/obs/cf-tracer.ts', 'export function createWorkersTracer(): Tracer { return t; }'],
-      ['packages/cf-backend/src/actor-agent.ts', 'const tracing = { tracer: createWorkersTracer() };'],
+      ['packages/cf-backend/src/orchestrator.ts', 'const tracing = { tracer: createWorkersTracer() };'],
       ['packages/cf-backend/src/notes.ts', '// createWorkersTracer() is what actor-agent uses\nconst text = "createWorkersTracer()";'],
-    ]))).toEqual(['packages/cf-backend/src/actor-agent.ts']);
+    ]))).toEqual(['packages/cf-backend/src/orchestrator.ts']);
   });
 
   test('the live corpus holds a production call site', () => {
-    expect(tracerCallSites(readMatching(isProductSource))).toContain('packages/cf-backend/src/actor-agent.ts');
+    expect(tracerCallSites(readMatching(isProductSource))).toContain('packages/cf-backend/src/orchestrator.ts');
   });
 });
 

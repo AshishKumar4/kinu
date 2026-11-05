@@ -1543,7 +1543,7 @@ export const PLATFORM_CATALOG = {
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-source',
-    provenance: 'packages/cf-backend/src/cli/rpc-gate.ts:3-5, :17-18; actor-agent.ts:677-679',
+    provenance: 'packages/cf-backend/src/cli/rpc-gate.ts:3-5, :17-18; orchestrator.ts',
     date: '2026-08-16',
     trigger: 'a Durable Object hibernating with accepted WebSockets, then waking on a message',
     onBreach:

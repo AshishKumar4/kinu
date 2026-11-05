@@ -70,7 +70,7 @@ type AgentHost = Pick<Agent<Env>, 'name' | 'sql'>;
 export interface CFRuntimeAccess {
   readonly env: Env;
   readonly ctx: DurableObjectState;
-  /** Keeps the root alive while a lane runs whose `fibers` row outlives its activation (`ActorAgent.holdLane`). */
+  /** Keeps the root alive while a lane runs whose `fibers` row outlives its activation (`OrchestratorAgent.holdLane`). */
   holdLane<T>(body: () => Promise<T>): Promise<T>;
   /** One box per workspace: a child composing its own gets a second, empty filesystem
      *  (tests/unit-head-fork.test.ts). Actors are separated by `shellId` and credential. */
@@ -79,7 +79,7 @@ export interface CFRuntimeAccess {
   workspaceServing(): Promise<WorkspaceServing>;
   getCliCwdForDevice?(): string | null;
   getCheckpointMetaForDevice?(): { turnId: string; sessionId: string } | null;
-  /** The surface of the live turn, which its calls' background policy reads (`ActorAgent.turnSurface`). */
+  /** The surface of the live turn, which its calls' background policy reads (`OrchestratorAgent.turnSurface`). */
   readonly turnSurface?: () => InvocationSurface;
   /** The owner's secrets granted to the workspace, as the variables of every command an agent runs in it. */
   readonly commandEnvironment: CommandEnvironment;

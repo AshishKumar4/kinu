@@ -5,7 +5,6 @@
  */
 import { describe, expect, test } from 'vitest';
 import { Agent } from 'agents';
-import { ActorAgent } from '../../src/actor-agent';
 import { OrchestratorAgent } from '../../src/orchestrator';
 import { UserDO } from '../../src/user/user-do';
 
@@ -45,7 +44,6 @@ function callableSurface(cls: { readonly prototype: object }): CallableSurface {
  */
 const DECORATED = [
   { name: 'OrchestratorAgent', cls: OrchestratorAgent, witness: 'branchTurn' },
-  { name: 'ActorAgent', cls: ActorAgent, witness: 'send' },
 ] as const;
 
 describe('KINU-065 — the real decorated classes load and keep their callable metadata', () => {
@@ -57,17 +55,6 @@ describe('KINU-065 — the real decorated classes load and keep their callable m
   });
 
   // No "every registered name resolves" test: the SDK only registers function-valued names, so it could not fail.
-
-  test('the one actor root inherits the shared surface rather than redeclaring it', () => {
-    // ActorAgent's RPCs reach the orchestrator through inheritance; a per-class registry would lose them.
-    const actor = callableSurface(ActorAgent).callable;
-    expect(actor.length).toBeGreaterThan(0);
-    const root = callableSurface(OrchestratorAgent);
-
-    for (const inherited of actor) {
-      expect(root.callable, `OrchestratorAgent lost inherited ${inherited}`).toContain(inherited);
-    }
-  });
 });
 
 /** Asserted against the runtime registry, not source text, which drifts with formatting. */
@@ -82,8 +69,6 @@ describe('KINU-065 — the privileged surface is absent from the runtime registr
       { cls: OrchestratorAgent, names: [
         'rawCopyFromFork', 'claimOwner', 'acceptWebhookDelivery', 'mailArrived',
         'receivePeerMessage', 'listPeersFromMcp', 'runTaskFromMcp', 'saveNoteFromMcp', 'sendPeerFromMcp',
-      ] },
-      { cls: ActorAgent, names: [
         'installWorkspaceCapability',
       ] },
     ] as const;

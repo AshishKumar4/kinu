@@ -16,7 +16,7 @@ Cloudflare's [With Durable Objects](https://developers.cloudflare.com/workers/ve
 
 This is not a pin a caller can select. [Worker version affinity](https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/version-affinity/) uses `Cloudflare-Workers-Version-Key`, and Cloudflare says "you do not choose which version a key maps to". Worker overrides do not prove which version a Durable Object runs.
 
-`ActorAgent.installedBuildIdentity()` already reads `CF_VERSION_METADATA.id` inside the object and records it in turn claims. The tier could use it to verify a selected workspace's version, but does not assert it today. `/api/health` reads Worker assets, not a Durable Object.
+`OrchestratorAgent.installedBuildIdentity()` already reads `CF_VERSION_METADATA.id` inside the object and records it in turn claims. The tier could use it to verify a selected workspace's version, but does not assert it today. `/api/health` reads Worker assets, not a Durable Object.
 
 ## The decision still needed
 
