@@ -5,7 +5,7 @@ import {
   actorAffinity, parseModelSpec, reasoningEffortOptions,
   providerSnapshotOf, providerListingKey, providerListingOf, ProviderListingCache,
   type ModelAffinity, type ProviderListing, type StoredProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
-  type ModelAttemptInfo, type ProviderWaitInfo, type ProviderAccounts, objectNamed,
+  type ModelAttemptInfo, type ProviderWaitInfo, type ProviderAccounts,
   type WebSearchProvider, type WebSearchChain,
   type ProviderEnv, type WorkersAIBinding,
 } from '@kinu.run/core';
@@ -19,6 +19,7 @@ import {
 import type { ActorReference, ModelCallSink, UserCaller } from '@kinu.run/core';
 import type { LabelSignerEnv, ObjectNamespace, PreviewSuffixEnv } from '@kinu.run/core';
 import { selfPreviewPass } from './viewer-pass';
+import { accountNamed } from './user/workspace-placement';
 
 type MarkdownConversion = NonNullable<Parameters<typeof buildCfWebSearchProvider>[0]['AI']>['toMarkdown'];
 
@@ -140,7 +141,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
       const { env, getUserCaller } = this.options;
 
       this.providerRegistryCache = this.registryOver({
-        credentials: userId ? userCredentials(() => objectNamed(env.UserDO, userId), getUserCaller) : null,
+        credentials: userId ? userCredentials(() => accountNamed(env.UserDO, userId), getUserCaller) : null,
         appTitle: this.options.appTitle,
         accounts: this.options.accounts,
       });

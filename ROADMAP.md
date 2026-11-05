@@ -38,7 +38,7 @@ The release of 2026-10-24 (build `8e8bb8c7a`):
 
 ## Known limits
 
-- **A workspace created in Hong Kong before October 24 can't use Claude.** Anthropic refuses that region, and a workspace stays where it was made. A new workspace is placed where every provider answers. From Hong Kong, testing a key in Settings and AI in your pages are still refused.
+- **A workspace made in Hong Kong before October 24, or an account made there before November 5, can't use Claude.** Anthropic refuses that region, and each stays where it was made: the workspace's agents, or the account's key test in Settings and AI in your pages. Anything made since is placed where every provider answers.
 - **Workspace programs can't use TLS with a custom identity check** (for example mysql2 with SSL). Run those on the computer, where raw TCP with TLS works. Waiting on [Nimbus](https://github.com/AshishKumar4/kinu/issues/60).
 - **The workspace shell resolves paths by their text, while the file tools follow links.** Waiting on [Nimbus](https://github.com/AshishKumar4/kinu/issues/56).
 

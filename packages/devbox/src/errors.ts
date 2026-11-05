@@ -71,6 +71,29 @@ function reject<E extends Error>(cause: Cause.Cause<E>, signal?: AbortSignal): n
   throw new DevboxError('cancelled', 'devbox operation cancelled', { cause: signal?.reason });
 }
 
+/** A failure carried as it was thrown, for a holder that reports it, or hands it on, in the thrower's own words. */
+class Caught extends Data.TaggedError('Caught')<{ readonly thrown: unknown }> {}
+
+/** Promise work's value, or what it threw, as thrown: for the holders that log, report or record a failure and go on. */
+export async function caught<A>(run: () => PromiseLike<A>): Promise<{ readonly value: A } | { readonly cause: unknown }> {
+  const exit = await hold(Effect.tryPromise({ try: run, catch: (thrown) => new Caught({ thrown }) }));
+
+  if (Exit.isSuccess(exit)) return { value: exit.value };
+  const failed = Cause.squash(exit.cause);
+
+  return { cause: failed instanceof Caught ? failed.thrown : failed };
+}
+
+/** Promise work nobody awaits: what it threw, as thrown, goes to `lost`. */
+export function whenLost(work: PromiseLike<unknown>, lost: (thrown: { readonly cause: unknown }) => void): void {
+  Effect.runCallback(Effect.tryPromise({ try: async () => work, catch: (thrown) => new Caught({ thrown }) }), { scheduler: withinOneEvent, onExit(exit) {
+    if (Exit.isSuccess(exit)) return;
+    const failed = Cause.squash(exit.cause);
+
+    lost({ cause: failed instanceof Caught ? failed.thrown : failed });
+  } });
+}
+
 /** A run whose exit is stored and read where it is used: it never rejects, and its holder decides what the exit means. */
 export function hold<A, E extends Error>(effect: Effect.Effect<A, E>): Promise<Exit.Exit<A, E>> {
   return settle(Effect.exit(effect));

@@ -8,6 +8,7 @@ import { ROSTER_SOCKET_PATH } from './roster';
 import type { AuthIdentity } from '../auth/session';
 import type { FamilyEnv } from '../api/context';
 import type { UserDO } from './user-do';
+import { UNPLACED } from './workspace-placement';
 
 export const ROSTER_SOCKET_ROUTE = '/api/user/workspaces/live';
 
@@ -20,10 +21,10 @@ export async function accountObject<Id, Stub extends Pick<UserDO, 'ensureProfile
 ): Promise<Stub> {
   const id = namespace.idFromName(identity.userId);
 
-  await idempotent('ensureProfile', () => namespace.get(id),
+  await idempotent('ensureProfile', () => namespace.get(id, { locationHint: UNPLACED }),
     (stub) => stub.ensureProfile(owner, identity.email, identity.displayName ?? undefined), { onRetry: logDoCallRetry });
 
-  return namespace.get(id);
+  return namespace.get(id, { locationHint: UNPLACED });
 }
 
 export interface RosterSocketEnv<Id> {

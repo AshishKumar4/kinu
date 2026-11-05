@@ -15,13 +15,14 @@ import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/ident
 import type { AdmittedBrowserSession, UserDO } from '../user/user-do';
 import type { BrowserSessionIdentity } from '../user/sessions';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { objectNamed, randomToken, sha256Hex } from '@kinu.run/core';
+import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
 import { KinuError, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { sanitizeReturnTo } from '@kinu.run/core';
+import { accountNamed, UNPLACED, type WorkspacePlacement } from '../user/workspace-placement';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -187,10 +188,12 @@ export function parseSessionTokenUserId(token: string): string | null {
   return match?.[1] ?? null;
 }
 
-export function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile): Promise<BrowserSession> {
+/** `placement`: where the account's object runs if this sign-in is the one that makes it (`placementFor` of the
+ *  sign-in's request; a sign-in from nowhere known, as a test's, is placed as an unknown place is). */
+export function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, placement: WorkspacePlacement = UNPLACED): Promise<BrowserSession> {
   return settle(Effect.gen(function* () {
     const now = Date.now();
-    const identity = yield* resolveIdentity(env, profile, now);
+    const identity = yield* resolveIdentity(env, profile, now, placement);
     const token = `ps_${identity.userId}_${randomToken(48)}`;
     const tokenHash = sha256Hex(token);
     const expiresAt = now + SESSION_TTL_MS;
@@ -274,10 +277,10 @@ export async function revokeSession<Id>(env: AuthStoreEnv<Id>, token: string): P
 
 /** The one authority on which of a user's sessions are live. */
 function sessionAuthority<Id>(env: AuthStoreEnv<Id>, userId: string): SessionAuthority {
-  return objectNamed(env.UserDO, userId);
+  return accountNamed(env.UserDO, userId);
 }
 
-function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number): Effect.Effect<AuthIdentity, KinuError> {
+function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number, placement: WorkspacePlacement): Effect.Effect<AuthIdentity, KinuError> {
   return Effect.gen(function* () {
     const email = profile.email.trim().toLowerCase();
 
@@ -294,7 +297,8 @@ function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: 
 
     const userId = accountIdFor(env, email);
 
-    const stored = yield* Effect.promise(async () => sessionAuthority(env, userId)
+    // The account's first reach, which makes its object where every provider answers.
+    const stored = yield* Effect.promise(async () => accountNamed(env.UserDO, userId, placement)
       .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined));
 
     return {

@@ -2,7 +2,7 @@
 import { Hono } from 'hono';
 import { decisionRunOf, userCredentials, type UserCredentialClient } from '../providers/agent-registry';
 import type { OwnerCapabilityEnv, ProviderEnv, WorkersAIRunBinding } from '@kinu.run/core';
-import { objectNamed, CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
+import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
 import { MY_GATEWAY_PROVIDER_ID, SESSION_AFFINITY_HEADER, sessionAffinityOf, workersAiSpec, DECISION_MODELS, USER_AI_RUN_PATH, decodeJsonValue } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
@@ -18,6 +18,7 @@ import { inferenceProxyGate, type CliBearerEnv, type CliBearerVariables } from '
 import type { CliAuthAuthority } from '../cli/auth-store';
 import * as v from 'valibot';
 import { bindingCompletion } from './binding-completions';
+import { accountNamed } from './workspace-placement';
 
 const PROXY_PLACEHOLDER = 'https://kinu-user-ai-proxy.invalid';
 
@@ -61,7 +62,7 @@ aiProxyRoutes.post(`${USER_AI_RUN_PATH}/*`, async (c) => {
 
   if (body === null) return errorResponse(400, 'Body must be a JSON object.');
   const userId = c.get('cli').userId;
-  const run = decisionRunOf({ env: c.env, userDO: userCredentials(() => objectNamed(c.env.UserDO, userId), await ownerCaller(c.env)) });
+  const run = decisionRunOf({ env: c.env, userDO: userCredentials(() => accountNamed(c.env.UserDO, userId), await ownerCaller(c.env)) });
 
   return json({ body: decodeJsonValue({ value: await run(spec.slice('workers-ai/'.length), body) }) });
 });
@@ -83,7 +84,7 @@ aiProxyRoutes.get(`${USER_AI_PROXY_PATH}/models`, async (c) => {
 for (const endpoint of ['chat/completions', 'responses', 'messages'] as const) {
   aiProxyRoutes.post(`${USER_AI_PROXY_PATH}/${endpoint}`, (c) => {
     const { userId } = c.get('cli');
-    const limits = objectNamed(c.env.UserDO, userId);
+    const limits = accountNamed(c.env.UserDO, userId);
 
     // Counted after the answer, outliving the request: a count that fails is logged, never the caller's.
     const spent = (tokens: number) => c.executionCtx.waitUntil(settleLogged('limits.cli_tokens_undebited', { doing: "counting a CLI call on the platform's models to the owner's day", otherwise: 'unavailable' },
@@ -148,7 +149,7 @@ function proxyCompletion<Id>(
     const aiFetch = createCloudflareAIFetch({
       credKey: workersAI ? CLOUDFLARE_OAUTH_CRED_KEY : CLOUDFLARE_AI_GATEWAY_CRED_KEY,
       provider: workersAI ? 'workers-ai' : 'my-gateway',
-      getAuth: userCredentials(() => objectNamed(env.UserDO, userId), yield* Effect.promise(() => ownerCaller(env))).getAuth,
+      getAuth: userCredentials(() => accountNamed(env.UserDO, userId), yield* Effect.promise(() => ownerCaller(env))).getAuth,
       placeholder: PROXY_PLACEHOLDER,
       missingCredentialMessage: workersAI
         ? 'Connect Cloudflare in your Kinu user settings before using Workers AI models.'

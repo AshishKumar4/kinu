@@ -56,6 +56,8 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
 /** The RPC counterpart of the `requireTier` gate: every entry gates itself on a `UserCaller`. */
 const USER_DO_METHODS = [
   'slateAi',
+  'testModel',
+  'cancelModelTest',
   'slatePartConsented',
   'slateAiSpend',
   'slateConsents',
