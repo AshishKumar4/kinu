@@ -38,7 +38,7 @@ import { buildTree, type MctsRow } from "@kinu.run/core";
 import type { ChatHistoryEntry, ChatHistoryPage, DirEntry, ExplorationCanvasRun, ForkRunSummary, HeadRunView, NodeTranscriptView, Page, PageRequest, FilesPage, InspectedWork, PendingAction, PendingDeviceConsent, SearchTreeRow } from "@kinu.run/core";
 import * as v from "valibot";
 import { galleryClearChat, galleryServerPush, seededGalleryChatRows } from "@/gallery-agent-stub";
-import { AGENTS_PANEL, ANNOTATION_SAVES, ASKS_HELD, BACKGROUND_JOBS, BOARD_FULL, BUILD_JOB_ID, BUILD_LINES, CHANGELOG, CREATE_FAILS, ConsentSettleSchema, DRAIN_BATCHES, DecisionsSchema, EMPTY_TREES, EXTRA_WORKSPACE, FILES_REQUEST_ARGS, FIRST_DRIVE, FORK_PARAMS, GALLERY_ASK, GALLERY_DEVICE_SESSIONS, GALLERY_KEPT_PAGES, GALLERY_LOGO, GALLERY_MAIN_TITLE, GALLERY_PLAN_CONTENT, GALLERY_PLAN_STATUS, GALLERY_PLAN_THREAD, GALLERY_PLAN_TITLE_NOTE, GALLERY_PLAN_VARIANT, GALLERY_ROSTER, GALLERY_SESSIONS, GALLERY_SUBS, GALLERY_WORKSPACE_SESSIONS, HISTORY_HELD, HISTORY_LATENCY_MS, HISTORY_PICTURE, HISTORY_ROWS, HISTORY_UNEVEN, IDLE_TURN, JOBS_RUNNING, JobsAnswerSchema, LATE_ASKS, MCTS_ACTIONS, MERGED_RUN, NOW, NO_GALLERY_FIGURES, NO_HEAD_ACTIVITY, OWED_CLAIM, OWED_EFFECT, OWED_TURNS, OWNER_REMINDER, PARKED_ASKS, PC_CONSENTED_ROOT, PC_SEGMENT, PENDING_ACTIONS, PROMPT, PROVE_ROWS, PTY_SCREENS, REFUSED_ROWS, RENAME_FAILS, RESTED_AGENTS, REVERT_CHECKPOINT, REVERT_LISTING, ROSTER_ASKED, RUNNING_ROWS, SHELL_COMPUTER, SHELL_GRANTS, SHELL_MACHINES, SHELL_PC, SNAPSHOT_FAILS, STOCK_OVERVIEWS, SWARM_ROWS, TAKE_COUNT, TWO_CONSENTS, WORKSPACE_PAGE_NAME, frame } from "@/gallery-data";
+import { AGENTS_PANEL, ANNOTATION_SAVES, ASKS_HELD, BACKGROUND_JOBS, BOARD_FULL, BUILD_JOB_ID, BUILD_LINES, CHANGELOG, CREATE_FAILS, ConsentSettleSchema, DRAIN_BATCHES, DecisionsSchema, EMPTY_TREES, EXTRA_WORKSPACE, FILES_REQUEST_ARGS, FIRST_DRIVE, FORK_PARAMS, GALLERY_ASK, GALLERY_DEVICE_SESSIONS, GALLERY_KEPT_PAGES, GALLERY_LOGO, GALLERY_MAIN_TITLE, GALLERY_PLAN_CONTENT, GALLERY_PLAN_STATUS, GALLERY_PLAN_THREAD, GALLERY_PLAN_TITLE_NOTE, GALLERY_PLAN_VARIANT, GALLERY_ROSTER, GALLERY_SESSIONS, GALLERY_SUBS, GALLERY_WORKSPACE_SESSIONS, HISTORY_HELD, HISTORY_LATENCY_MS, HISTORY_PICTURE, HISTORY_ROWS, HISTORY_UNEVEN, SEED_SERIES, IDLE_TURN, JOBS_RUNNING, JobsAnswerSchema, LATE_ASKS, MCTS_ACTIONS, MERGED_RUN, NOW, NO_GALLERY_FIGURES, NO_HEAD_ACTIVITY, OWED_CLAIM, OWED_EFFECT, OWED_TURNS, OWNER_REMINDER, PARKED_ASKS, PC_CONSENTED_ROOT, PC_SEGMENT, PENDING_ACTIONS, PROMPT, PROVE_ROWS, PTY_SCREENS, REFUSED_ROWS, RENAME_FAILS, RESTED_AGENTS, REVERT_CHECKPOINT, REVERT_LISTING, ROSTER_ASKED, RUNNING_ROWS, SHELL_COMPUTER, SHELL_GRANTS, SHELL_MACHINES, SHELL_PC, SNAPSHOT_FAILS, STOCK_OVERVIEWS, SWARM_ROWS, TAKE_COUNT, TWO_CONSENTS, WORKSPACE_PAGE_NAME, frame } from "@/gallery-data";
 
 const STUB_DATA = v.parse(JsonObjectSchema, {
   // Every field the client's `UserProfileSchema` requires; a fixture that type-checks can still fail that parse.
@@ -1119,9 +1119,27 @@ export const textEntry = ({ content, ...entry }: Omit<ChatHistoryEntry, "parts">
   ...entry, parts: [{ type: "text", text: content }], metadata: { ...entry.metadata, [RECORDED_AT_METADATA_KEY]: entry.createdAt },
 });
 
+/** A long answer as the big-workspace eval writes them: a bold lead, about 150 words, and a two-line example. */
+const LONG_ANSWER = "**Loyalty points: a second currency nobody ledgers.** " + "Points are money on the balance sheet, but they are built like a feature: an integer on the user row, incremented by a dozen flows and edited by support. ".repeat(4)
+  + "\n\n```\nUPDATE users SET points = points + 200\nPoints liability off at audit; no reconstruction possible\n```";
+
+/** A row of the chat `&transcript=seed-*` opens on: one-liners, or a long ask and its long answer. */
+function seriesRow(index: number, id: string, createdAt: number): ChatHistoryEntry {
+  const asked = index % 2 === 0;
+  const row = { id, position: index, role: asked ? "user" as const : "assistant" as const, turnId: null, createdAt };
+
+  if (SEED_SERIES === "short") return textEntry({ ...row, content: asked ? `Next ${String(index)}?` : `Done ${String(index)}.` });
+
+  if (!asked) return textEntry({ ...row, content: LONG_ANSWER });
+
+  return textEntry({ ...row, content: `Turn ${String(index)}. In about 150 words, explain one practical pitfall with ledgers in distributed systems, then give a two-line example. No tools.` });
+}
+
 export function historyRow(index: number): ChatHistoryEntry {
   const id = `hist-${String(index).padStart(5, "0")}`;
   const createdAt = NOW - (HISTORY_ROWS - index + 60) * 60e3;
+
+  if (SEED_SERIES !== null) return seriesRow(index, id, createdAt);
 
   if (index % 2 === 0) return textEntry({ id, position: index, role: "user", turnId: null, content: `Question ${index}: what changed in openDb this time?`, createdAt });
 

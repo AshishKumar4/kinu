@@ -198,7 +198,7 @@ export {
   type ConversationTurnPair,
 } from './identity/conversation-store';
 
-export { CHAT_SESSION_ID } from './session/transcript-schema';
+export { CHAT_SEED_ROWS, CHAT_SESSION_ID } from './session/transcript-schema';
 
 export { keptMediaName, type MediaRef, type MediaUrl, type StoredImage } from './session/chat-media';
 
