@@ -2,12 +2,10 @@
   "measuredAt": "2026-11-05",
   "counts": {
     "packages/cf-backend/src/activation-gate.ts#throw": 1,
-    "packages/cf-backend/src/actor-agent.ts#catch": 5,
-    "packages/cf-backend/src/actor-agent.ts#throw": 15,
     "packages/cf-backend/src/index.tsx#throw": 1,
-    "packages/cf-backend/src/orchestrator.ts#catch": 2,
+    "packages/cf-backend/src/orchestrator.ts#catch": 7,
     "packages/cf-backend/src/orchestrator.ts#result-literal": 1,
-    "packages/cf-backend/src/orchestrator.ts#throw": 6,
+    "packages/cf-backend/src/orchestrator.ts#throw": 18,
     "packages/cf-backend/src/user/credentials.ts#catch": 4,
     "packages/cf-backend/src/user/credentials.ts#throw": 7,
     "packages/cf-backend/src/user/sessions.ts#catch": 1,
@@ -34,8 +32,8 @@
     "packages/core/src/delegation/agents-tool.ts#throw": 18,
     "packages/core/src/evolution/engine.ts#catch": 1,
     "packages/core/src/evolution/engine.ts#throw": 1,
-    "packages/core/src/execution/nimbus.ts#catch": 7,
-    "packages/core/src/execution/nimbus.ts#throw": 2,
+    "packages/core/src/execution/nimbus.ts#catch": 2,
+    "packages/core/src/execution/nimbus.ts#throw": 1,
     "packages/core/src/execution/sandbox.ts#error-class": 1,
     "packages/core/src/execution/sandbox.ts#throw": 1,
     "packages/core/src/experience/actions.ts#catch": 1,
@@ -87,6 +85,6 @@
     "packages/core/src/strategy/fanin.ts#catch": 1,
     "packages/core/src/utils/markdown-frontmatter.ts#error-class": 1,
     "packages/core/src/utils/send-admission.ts#promise-rejection": 1,
-    "packages/core/src/vfs/context-plane.ts#throw": 23
+    "packages/core/src/vfs/context-plane.ts#throw": 14
   }
 }

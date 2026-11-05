@@ -22,7 +22,7 @@ is any member the impact table does not name (`packages/core/src/slates/members.
 with the caller stamped in its props (`packages/cf-backend/src/slates/host.ts`,
 `boot`). A call passes through the stub, the workspace object and the actor
 (`packages/cf-backend/src/slates/bindings.ts`,
-`packages/cf-backend/src/actor-agent.ts` `slateCallDispatch`). The host records
+`packages/cf-backend/src/orchestrator.ts` `slateCallDispatch`). The host records
 each member a slate's owner calls (`slate_usage`,
 `packages/core/src/slates/usage.ts`): that record is the slate's graph. The preview process runs as `ROOT_SLATE_CALLER`,
 the session user in Build mode. Only the owner opens it (below), and every tab of

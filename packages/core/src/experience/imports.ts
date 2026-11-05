@@ -1,31 +1,26 @@
-// Imports are misevolution-gated, then staged provisional; the next graded turn promotes or discards them.
+// Staged imports are provisional; the next graded turn promotes or discards them.
 // An imported scaffold only becomes a pending version via modifyScaffold, never the live loop.
 
-import { Result } from 'effect';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { sqlCheckList } from '../utils/sql';
-import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../safety/misevolution';
 import { modifyScaffold } from '../scaffold/modify';
 import { getPendingScaffold } from '../scaffold/versions';
 import { upsertCraftedTool } from '../craft/conflict';
 import { createFactsStore } from '../memory/facts';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
-import { nanoid } from '../utils/nanoid';
 import * as v from 'valibot';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';
 import { recordLesson } from '../evolution/lessons';
 import {
   EXPERIENCE_KINDS,
-  misevolutionSourceOf,
   parseExperiencePayload,
-  type ExperienceEntry,
   type ExperienceKind,
   type ExperiencePayload,
 } from './types';
 
-export type ImportStatus = 'provisional' | 'corroborated';
+type ImportStatus = 'provisional' | 'corroborated';
 
 export interface ImportedExperienceRow {
   id: string;
@@ -120,59 +115,10 @@ export function listImportedExperience(
   return rows.map(toImportRow).filter((r): r is ImportedExperienceRow => r !== null);
 }
 
-/** The staged row, or why it was refused. */
-export type ImportOutcome = Result.Result<ImportedExperienceRow, string>;
-
-/** Stage as provisional; durable stores are written only when a graded turn accepts it. */
-export function stageImport(
-  rt: AgentRuntime,
-  entry: ExperienceEntry,
-  now = Date.now(),
-): ImportOutcome {
-
-  const verdict = checkMisevolutionForSurface(misevolutionSourceOf(entry.payload), 'import');
-
-  if (!verdict.ok) {
-    recordMisevolutionVeto(rt.storage.sql, rt.actor, {
-      surface: 'import',
-      violation: verdict,
-      detail: `${entry.payload.kind} "${entry.key}" from workspace "${entry.sourceWorkspace}" rejected`,
-    });
-
-    return Result.fail(`Misevolution veto (${verdict.criterionId}): ${verdict.reason}`);
-  }
-
-  rt.actor.assertCurrent();
-
-  const existing = rt.storage.sql<{ corroborated_at: number | null }>`
-    SELECT corroborated_at FROM imported_experience
-    WHERE actor_id = ${rt.actor.actorId} AND library_id = ${entry.id} LIMIT 1`[0];
-
-  if (existing) {
-    return Result.fail(existing.corroborated_at !== null
-      ? `already imported and corroborated here: it is part of this workspace already`
-      : `already imported this turn and waiting on the outcome that would corroborate it`);
-  }
-
-  const id = `imp-${nanoid()}`;
-  void rt.storage.sql`INSERT INTO imported_experience
-      (actor_id, id, library_id, kind, key, title, payload_json, evidence, source_workspace,
-       turn_ids, imported_at, corroborated_at)
-    VALUES (${rt.actor.actorId}, ${id}, ${entry.id}, ${entry.payload.kind}, ${entry.key}, ${entry.title},
-            ${JSON.stringify(entry.payload)}, ${entry.evidence}, ${entry.sourceWorkspace},
-            '[]', ${now}, NULL)`;
-
-  return Result.succeed({
-    id, libraryId: entry.id, key: entry.key, title: entry.title,
-    payload: entry.payload, evidence: entry.evidence, sourceWorkspace: entry.sourceWorkspace,
-    status: 'provisional', turnIds: [], importedAt: now, corroboratedAt: null,
-  });
-}
-
 /** Call only for graded turns: binding to an ungraded turn would discard the evidence. */
 export function bindPendingImports(sql: SqlExecutor, actor: ActorHandle, turnId: string): void {
   actor.assertCurrent();
-  // `stageImport` writes `'[]'`, so an unbound row is exactly that literal.
+  // An import is staged with `'[]'`, so an unbound row is exactly that literal.
   void sql`UPDATE imported_experience SET turn_ids = ${JSON.stringify([turnId])}
     WHERE actor_id = ${actor.actorId} AND corroborated_at IS NULL AND turn_ids = '[]'`;
 }

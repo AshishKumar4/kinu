@@ -356,7 +356,7 @@ describe('the settled turn’s recording — every settled turn is recorded', ()
           chat: () => { throw new Error('this ending owes no follow-up turn'); },
           engine: { learnFromTurn: async () => { throw new Error('this ending owes no lesson'); } },
         }),
-        // The host's body (cf-backend actor-agent.ts): the turn's end, announced to its extensions.
+        // The host's body (cf-backend orchestrator.ts): the turn's end, announced to its extensions.
         turn_end_extensions: terminalEffect({
           input: v.object({ messageId: v.string() }),
           run: async () => {

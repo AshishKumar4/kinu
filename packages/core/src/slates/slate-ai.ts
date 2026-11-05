@@ -1,6 +1,6 @@
 /**
  * A slate's `workspace.ai` call, answered once, by whichever account answers it: the workspace's own actor for its
- * owner's code (cf `ActorAgent.slateAiRun`), a collaborator's own account for theirs (cf `UserDO.slateAi`). The profile is
+ * owner's code (cf `OrchestratorAgent.slateAiRun`), a collaborator's own account for theirs (cf `UserDO.slateAi`). The profile is
  * that account's, so is the model it names; the call is filed as a `slate` model call where that account files them.
  */
 import type { LanguageModel } from 'ai';

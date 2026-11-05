@@ -7,7 +7,6 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { Result } from 'effect';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { createMemoryVfs, createScriptedLLM, testActorHandle } from '@kinu.run/test-utils';
@@ -16,7 +15,7 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 
-import { initLessonTables, recordLesson, getLesson } from '../src/evolution/lessons';
+import { initLessonTables, listLessons, recordLesson } from '../src/evolution/lessons';
 import { initTurnRatingTables, listTurnRatings, ratingOf, recordTurnRating } from '../src/evolution/ratings';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
 import { initRefinementTables, createRefinementStore } from '../src/evolution/refinement';
@@ -54,9 +53,6 @@ import {
   initSwarmNodeRecords, recordSwarmNode, markSwarmNodeMerged, readSwarmNodeRecords,
   type SwarmNodeRecord,
 } from '../src/strategy/swarm-resume';
-import {
-  initImportedExperienceTable, stageImport, listImportedExperience, bindPendingImports,
-} from '../src/experience/imports';
 import { MissionBudgetLedger, listMissionSpend } from '../src/mission-budget';
 import { initWorkspaceActorTable } from '../src/identity/workspace-actors';
 import { SubagentRosterStore } from '../src/subagents/roster';
@@ -186,8 +182,8 @@ describe('two actors, one database: lessons', () => {
     expect(idA).toBe(idB);
     expect(w.count('lessons')).toBe(2);
 
-    expect(getLesson(w.sql, w.a, idA)?.text).toBe('from-a');
-    expect(getLesson(w.sql, w.b, idB)?.text).toBe('from-b');
+    expect(listLessons(w.sql, w.a).map((lesson) => lesson.text)).toEqual(['from-a']);
+    expect(listLessons(w.sql, w.b).map((lesson) => lesson.text)).toEqual(['from-b']);
     w.close();
   });
 });
@@ -619,34 +615,6 @@ describe('two actors, one database: swarm_node_records', () => {
 
     expect(merged(w.a)).toBe(9);
     expect(merged(w.b)).toBeNull();
-    w.close();
-  });
-});
-
-describe('two actors, one database: imported_experience', () => {
-  test('both actors adopt the same library entry, and each settles only its own', () => {
-    const w = world();
-    initImportedExperienceTable(w.execRaw);
-
-    const entry = {
-      id: 'lib-1', key: 'deploy_target',
-      title: 'deploy target', evidence: 'used twice', sourceWorkspace: 'other',
-      publishedAt: 1,
-      payload: { kind: 'fact' as const, key: 'deploy_target', value: 'x.workers.dev', confidence: 0.9 },
-    };
-
-    const rtA = runtimeFor(w, w.a);
-    const rtB = runtimeFor(w, w.b);
-    expect(Result.isSuccess(stageImport(rtA, entry, 1))).toBe(true);
-    // Admitted for B too: "already imported" is per actor.
-    expect(Result.isSuccess(stageImport(rtB, entry, 1))).toBe(true);
-    expect(w.count('imported_experience')).toBe(2);
-    // The same actor is still refused.
-    expect(Result.isSuccess(stageImport(rtA, entry, 1))).toBe(false);
-
-    bindPendingImports(w.sql, w.a, 'turn-1');
-    expect(listImportedExperience(w.sql, w.a)[0]?.turnIds).toEqual(['turn-1']);
-    expect(listImportedExperience(w.sql, w.b)[0]?.turnIds).toEqual([]);
     w.close();
   });
 });
