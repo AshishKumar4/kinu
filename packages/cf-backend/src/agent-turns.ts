@@ -565,7 +565,17 @@ export class AgentTurns {
     const { explicitTier, frozen } = turn.request;
 
     // What the turn's words recall is searched beside the reading of its sources.
-    const [recalled, sources] = await Promise.all([surface.sources.recall?.(input.task, turn.accountFacts), materializeTurnSources(
+    const reading = performance.now();
+
+    const stamped = async <T>(stage: string, read: Promise<T>): Promise<T> => {
+      const value = await read;
+
+      turn.timing = { ...turn.timing, [`${stage}Ms`]: performance.now() - reading };
+
+      return value;
+    };
+
+    const [recalled, sources] = await Promise.all([stamped('recall', Promise.resolve(surface.sources.recall?.(input.task, turn.accountFacts))), stamped('materialize', materializeTurnSources(
       { ...surface.sources, toolset: () => ({ tools: surface.offered, stores: surface.stores }), externalTools: async () => ({}) },
       {
         userText: input.task, workMode: mode,
@@ -573,7 +583,7 @@ export class AgentTurns {
         // A recovered execution's model bundle is the one it froze, whatever the tier says now.
         ...(frozen !== undefined && { frozen }),
       },
-    )]);
+    ))]);
 
     lap('sources');
     turn.recalled = recalled;

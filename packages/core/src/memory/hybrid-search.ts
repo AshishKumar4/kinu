@@ -144,8 +144,19 @@ export function hybridSearch(
     ? armOf(() => notesSource(query, perSourceK), "search the account's notes", 'unavailable')
     : Effect.succeed({ kind: 'skipped' });
 
+  // Each arm's wall time, reported once a search (#103: which of them a turn's recall waits on).
+  const timing: Record<string, number> = {};
+  const began = performance.now();
+
+  const timed = <A>(arm: string, effect: Effect.Effect<A>): Effect.Effect<A> =>
+    Effect.tap(effect, () => Effect.sync(() => { timing[`${arm}Ms`] = performance.now() - began; }));
+
   return settle(Effect.gen(function* () {
-    const [lexical, semantic, factArm, noteArm] = yield* Effect.all([lexicalArm, semanticArm, factsArm, notesArm], { concurrency: 'unbounded' });
+    const [lexical, semantic, factArm, noteArm] = yield* Effect.all([
+      timed('lexical', lexicalArm), timed('semantic', semanticArm), timed('facts', factsArm), timed('notes', notesArm),
+    ], { concurrency: 'unbounded' });
+
+    diagnostics.event('memory.search_timing', { ...timing, semantic: semantic.kind, totalMs: performance.now() - began });
     const answered = [lexical, semantic, factArm, noteArm].some((arm) => arm.kind === 'answered');
 
     if (answered) {
