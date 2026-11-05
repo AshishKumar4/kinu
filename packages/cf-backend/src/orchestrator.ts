@@ -42,6 +42,7 @@ import {
 import { PROJECT_OWNER_CRED, blueprintOwnerName, blueprintSeed, kinuBlueprint, stableStringify, bookmarkNow, censusOf, missingBytes, requireOps, restartedForRestore, restoreArmed, type ArmedRestore, type MissingBytes, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import type { WorkspaceActorContext } from './workspace-actor/context';
+import { WorkspaceAccounting } from './workspace-actor/accounting';
 import { ActorProfiles } from './workspace-actor/profiles';
 import { unownedWorkspace, WorkspaceExecutors, type ExecutorFileChunkRead, type ExecutorFileChunkWrite } from "./workspace-executors";
 import { HeldRead } from "./account-reads";
@@ -234,7 +235,7 @@ import { ownedByAnotherAccount } from './user/workspace-ownership';
 import { workspaceOwner, type LiveShareReading, type SlateEditor, type WorkspaceOwnerRpc } from './workspace-owner-rpc';
 
 import {
-  recordJobSettled, recordSandboxRecovery, type AgentKind,
+  recordJobSettled, recordSandboxRecovery,
 } from "@kinu.run/core/analytics";
 import {
   agentSelfHost, actorNamespaces, SURFACE_POLICY, type SurfaceActor, type AgentSelfHost, type GoogleDeps, type SlateEffectVerdict, type MailDeps, type MailThreadSummary, googleConnectionClient, type OwnerWaitsHost,
@@ -279,7 +280,7 @@ import {
   type TerminalTurnParts,
 } from "@kinu.run/core";
 import { accountNamed } from './user/workspace-placement';
-import { ComputerProcessEnds, jobState, inspectSubagentStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair, type RunEventInput, type SubagentInspectionAuthority, type ConversationRecall, PLATFORM_LIMITS, ProgramsInFlight, cardWords, specProvider, WORKERS_AI_PROVIDER_ID, type GitHubDeps, type SendState, type SubagentActivityEvent, codemodeSurface, HeldReads, PAGE_KEEPALIVE, type SqlExec, recoverSubagentLifecycles, type ScaffoldRunOptions, initActorClaimTables, ActorClaimStore, initPendingSendTables, createScaffoldCandidateSurface, createScaffoldHistory, type ScaffoldCandidateBinding, type ScaffoldControl, type RefinementDeps, type TurnContinuity, buildBuiltinTools, buildMcpToolSet, McpToolSurfaceCache, type BrowserSessions, browserSessions, currentDateForPrompt, answerDrawsPages, type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability, ExtensionHost, type PromptFile, PromptFileSchema, type AgentOrchestrator, actorTerminalEffects, DynamicContextLedger, type BackendHost, EvolutionLanes, drainPendingEvents, standingFileLedger, type DynamicDelegate, builtinStores, type ComposedRequest, type AgentsSwarmDeps, type PromptModelContext, isWorkMode, type HeadJournal, LiveHeadJournal, type HeadStreamFrame, type HeadId, type HeadReport, type HeadRuntime, type HeadGrounding, MissionGovernor, type MissionSeam, type MissionBudgetRefusal, priceCall, type Usage, signalCardId, TurnReplies, type ModelCallReport, type ModelOperationSink, recordModelOperations, type ModelAttemptInfo, type ProviderWaitInfo, pricedModelCallEvent, type FactsStore, createAgentStores, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subagentDelegatesOf, type SubagentRosterEntry, type SqlExecutor, type JobResumer, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE, type BackgroundJobStore, type TaskListStore, resumeBackgroundJob, resumableBackgroundJob, computerProcessJob, computerProcessResume, stopComputerProcessJob, harvestBackgroundJob, isWorkspaceProcessJob, stopWorkspaceProcessJob, workspaceProcessJobRuns, cancelCurrentWork, getStoredModelSpec, type ChatHistoryPage, PositionPageRequestSchema, type PositionPageRequest, type MctsSearchStore, isSteerBranchRunId, type ActiveSkillSet, type TurnReads, type PlanDecisionOutcome, type ReviewAnnotation, type PlanReviewDecision, type PlanReviewResult, type OwnerAnswer, type SubagentRuntime, type TemporaryAgentPort, subagentTitle, temporaryPortFor, bootstrapScaffold, applyWorkspaceTitle, suggestWorkspaceTitle, parseModelSpec, specModelInfo, assembleActorTurn, ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo, type AdmittedInstructionDecision, type InstructionSourceRow, type InstructionSourceView, JsonObjectSchema, changeRoleAsOwner, captureOperationProfile, runOperationProfile, withOperationProfile, providerAccounts, type ProviderAccounts, scopedTurnSurface, toolsNamespace, runWorkModeInvocation, hostedSurfaceActor, resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode, GITHUB_MCP_PRESET, recognizeGitHubMcp, type SerializableToolDescriptor, OwnerAnswersSchema, REPORT_TOOL, type ActiveRoster, type ProfileCatalogEnvelope, toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, providersWithoutOwnerSecrets, withholdingOwnerSecrets, currentWorkMode, requireWorkModePermission, type ResolvedTurnProfile, type ModelCallSpend, type ToolSurfaceNarrowing, type AgentInbox, childContextResolver, recoveryBackoffMs, TerminalTransitions, initTerminalEffectTable, turnRecordingEffects, type TerminalEffectFault, type CodemodeProvider, type SlateRoute, type SlateSurfaceValue, type UserCaller, ensureIdentityTable, initMissionBudgetTable, JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from "@kinu.run/core";
+import { ComputerProcessEnds, jobState, inspectSubagentStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, durableStamps, readStamp, repairSchema, SCHEMA_TABLES, StoragePredatesReleaseError, writeStamp, LiveWorkers, type Repair, type RunEventInput, type SubagentInspectionAuthority, type ConversationRecall, PLATFORM_LIMITS, ProgramsInFlight, cardWords, type GitHubDeps, type SendState, type SubagentActivityEvent, codemodeSurface, HeldReads, PAGE_KEEPALIVE, type SqlExec, recoverSubagentLifecycles, type ScaffoldRunOptions, initActorClaimTables, ActorClaimStore, initPendingSendTables, createScaffoldCandidateSurface, createScaffoldHistory, type ScaffoldCandidateBinding, type ScaffoldControl, type RefinementDeps, type TurnContinuity, buildBuiltinTools, buildMcpToolSet, McpToolSurfaceCache, type BrowserSessions, browserSessions, currentDateForPrompt, answerDrawsPages, type DynamicContext, type DynamicApproval, type DynamicContextInput, type MissingCapability, ExtensionHost, type PromptFile, PromptFileSchema, type AgentOrchestrator, actorTerminalEffects, DynamicContextLedger, type BackendHost, EvolutionLanes, drainPendingEvents, standingFileLedger, type DynamicDelegate, builtinStores, type ComposedRequest, type AgentsSwarmDeps, type PromptModelContext, isWorkMode, type HeadJournal, LiveHeadJournal, type HeadStreamFrame, type HeadId, type HeadReport, type HeadRuntime, type HeadGrounding, MissionGovernor, type MissionSeam, type MissionBudgetRefusal, type Usage, signalCardId, TurnReplies, type FactsStore, createAgentStores, type SetModelDeps, collectDynamicContext, dynamicReads, type DynamicReads, subagentDelegatesOf, type SubagentRosterEntry, type SqlExecutor, type JobResumer, type InvocationSurface, InvocationSurfaceSchema, RESUMED_SURFACE, type BackgroundJobStore, type TaskListStore, resumeBackgroundJob, resumableBackgroundJob, computerProcessJob, computerProcessResume, stopComputerProcessJob, harvestBackgroundJob, isWorkspaceProcessJob, stopWorkspaceProcessJob, workspaceProcessJobRuns, cancelCurrentWork, getStoredModelSpec, type ChatHistoryPage, PositionPageRequestSchema, type PositionPageRequest, type MctsSearchStore, isSteerBranchRunId, type ActiveSkillSet, type TurnReads, type PlanDecisionOutcome, type ReviewAnnotation, type PlanReviewDecision, type PlanReviewResult, type OwnerAnswer, type SubagentRuntime, type TemporaryAgentPort, subagentTitle, temporaryPortFor, bootstrapScaffold, applyWorkspaceTitle, suggestWorkspaceTitle, parseModelSpec, specModelInfo, assembleActorTurn, ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo, type AdmittedInstructionDecision, type InstructionSourceRow, type InstructionSourceView, JsonObjectSchema, changeRoleAsOwner, captureOperationProfile, runOperationProfile, withOperationProfile, providerAccounts, type ProviderAccounts, scopedTurnSurface, toolsNamespace, runWorkModeInvocation, hostedSurfaceActor, resolveModelRoute, completeOnRoute, routedLlm, tierRefusals, type TierRefusals, slateToolReach, callCodemodeMember, requireCodemodeMember, inWorkMode, GITHUB_MCP_PRESET, recognizeGitHubMcp, type SerializableToolDescriptor, OwnerAnswersSchema, REPORT_TOOL, type ActiveRoster, type ProfileCatalogEnvelope, toolsInWorkMode, type TaskPlan, withTaskPlan, providersInWorkMode, providersWithoutOwnerSecrets, withholdingOwnerSecrets, currentWorkMode, requireWorkModePermission, type ResolvedTurnProfile, type ModelCallSpend, type ToolSurfaceNarrowing, type AgentInbox, childContextResolver, recoveryBackoffMs, TerminalTransitions, initTerminalEffectTable, turnRecordingEffects, type TerminalEffectFault, type CodemodeProvider, type SlateRoute, type SlateSurfaceValue, type UserCaller, ensureIdentityTable, initMissionBudgetTable, JOB_STAMP_ENV, sha256Hex, webSearchChainOf } from "@kinu.run/core";
 import { type SlateCallerHop, initSlateUsageTable, slateAiAnswer } from "@kinu.run/core/slates";
 import { getCurrentAgent } from "agents";
 import { MessageType } from "agents/chat";
@@ -296,24 +297,15 @@ import { BROWSER_PRELUDE } from "./browser-prelude";
 import { codemodeLauncher, jobContextAnswers, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
-import { OwnedModelServices, type ProvidersLane } from "./owned-model-services";
+import { OwnedModelServices } from "./owned-model-services";
 import { AgentStoreBroker } from "./agent-facets";
 import type { SlateDispatchContext } from "./slates/host";
 import { AccountReads, type UserHubClient } from "./account-reads";
 import { gatedClientHandlers } from "./client-socket-gate";
 import { initWorkspaceGenerationTable } from "@kinu.run/core/workspace";
-import { attributeWorkspace, installAnalyticsDiagnostics, recordModelRow, recordToolRow, recordTtftRow, recordTurnRow } from "@kinu.run/core/analytics";
+import { attributeWorkspace, installAnalyticsDiagnostics, recordToolRow, recordTtftRow, recordTurnRow } from "@kinu.run/core/analytics";
 import { TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from "./wake-jobs";
 import { callUserMcpTool } from "./user-mcp-call";
-
-/** Named contract so the analytics writer and the actor agree which half is the provider. */
-interface ModelDimensions {
-  readonly provider: string;
-  readonly model: string;
-}
-
-/** No model resolved. Empty rather than a plausible default, so unknowns are not misattributed. */
-const UNRESOLVED_MODEL: ModelDimensions = { provider: '', model: '' };
 
 const RUN_EVENT_EMIT_FAILED = {
   tool_call_end: 'event.tool_call_end_emit_failed',
@@ -503,9 +495,6 @@ export interface OwnToolsHeld {
   readonly stores?: ServedStores;
 }
 
-/** The owner's limits an actor asks, by the event an ask that could not reach them is logged as. */
-const LIMITS_UNASKED = { turn: 'limits.turn_unasked', bytes: 'limits.bytes_unasked' } as const;
-
 /** How often a workspace tells its owner's limits its size, as its turns open (`reportSizeOnCadence`). */
 const SIZE_REPORT_MS = 10 * 60_000;
 
@@ -529,11 +518,6 @@ function mcpMissing(offered: McpToolSurface, server: string, tool: string): stri
 }
 
 /** Where an actor's provider words (`provider_wait`, `model_attempt`) are recorded: its log, and the run they belong to. */
-interface ProviderLog {
-  readonly recorder: RunEventRecorder;
-  runId(): string;
-}
-
 const READS_BY_STATEMENT = new WeakMap<TemplateStringsArray, readonly LiveRead[]>();
 
 const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
@@ -1104,8 +1088,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     getUserCaller: () => this.userCaller(),
     // Asked of the same UserDO the registry reads; held as `accountSettingsAtOpen` keeps it current.
     getCredentialsRevision: () => this.account.credentialsRevision(),
-    onProviderWait: (info) => { this.noteProviderWait(info); },
-    onModelAttempt: (info) => { this.noteModelAttempt(info); },
+    onProviderWait: (info) => { this.accounting.told.onProviderWait(info); },
+    onModelAttempt: (info) => { this.accounting.told.onModelAttempt(info); },
     accounts: () => this.providerAccounts(),
     // A cold workspace serves the account's last listing swept under the same keys, and sweeps behind its turn.
     storedListing: {
@@ -1113,7 +1097,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       keep: (revision, accounts, listing) => this.account.keepProviderListing(revision, accounts, listing),
       detach: (work) => { this.detachOwned(work); },
     },
-    reportModelCall: (report) => { this.reportModelCall(report); },
+    reportModelCall: (report) => { this.accounting.reportModelCall(report); },
     webSearchChain: async () => webSearchChainOf((await this.profiles.catalog()).catalog),
     currentTurn: (reference) => this.currentTurnOf(reference),
   });
@@ -1127,6 +1111,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     sql: () => this.boundSql,
     models: this.ownedModelServices,
     workspaceName: () => this.workspaceName(),
+    owner: { userId: () => this.getOwnerUserId(), hub: () => this.userHub() },
+    life: { detach: (work) => { this.detachOwned(work); }, broadcast: (frame, actorId) => { this.broadcastToActor(actorId, frame); } },
   };
 
   private _profiles: ActorProfiles | null = null;
@@ -1134,6 +1120,20 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     this._profiles ??= this.createProfiles();
 
     return this._profiles;
+  }
+
+  private _accounting: WorkspaceAccounting | null = null;
+  protected get accounting(): WorkspaceAccounting {
+    this._accounting ??= new WorkspaceAccounting({
+      context: this.context,
+      events: () => this.eventRecorder,
+      catalog: this.modelCatalog,
+      env: this.env,
+      effectiveSpec: () => this.effectiveModelSpec(),
+      databaseSize: () => this.ctx.storage.sql.databaseSize,
+    });
+
+    return this._accounting;
   }
 
   /** The one seam a test harness replaces the profile module through. */
@@ -1359,38 +1359,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   /** Test-only deterministic cut point in the terminal sequence. Null in production. */
   protected terminalEffectFault: TerminalEffectFault | null = null;
 
-  /** Uses `effectiveModelSpec`: the stored spec can be null or an un-normalized alias. */
-  private analyticsModel(): ModelDimensions {
-    return this.analyticsModelOf(this.effectiveModelSpec());
-  }
-
-  /**
-   * `parseModelSpec` throws on unknown shapes and `report.spec` comes from many producers, so a
-   * malformed spec costs the row its dimensions rather than the caller its turn.
-   */
-  protected analyticsModelOf(spec: string): ModelDimensions {
-    if (!spec) return UNRESOLVED_MODEL;
-
-    try {
-      const { provider, modelId } = parseModelSpec(spec);
-
-      return { provider, model: modelId };
-    } catch (error) {
-      diagnostics.event('actor.model_spec_unparseable', {
-        workspace: this.name, error: renderThrownChain({ cause: error }),
-      });
-
-      return UNRESOLVED_MODEL;
-    }
-  }
-
-  /** Cost at the model's current catalog rate; undefined when the catalog has no rate. */
-  private priceAt(usage: Usage): number | undefined {
-    const pricing = this.modelCatalog.pricing();
-
-    return pricing ? priceCall(usage, pricing) : undefined;
-  }
-
   /** Lazy: resolves this actor's handle, whose directory row the subclass constructor creates after
    *  this field initializes. */
   private _compactionState: CompactionStateStore | null = null;
@@ -1425,7 +1393,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       ledger: new DynamicContextLedger(true),
       logger: this.compactionLogger,
       summarizer: () => this.getModel(),
-      spend: { report: (report) => this.reportModelCall(report), operations: this.modelOperations },
+      spend: { report: (report) => this.accounting.reportModelCall(report), operations: this.accounting.operations },
     });
 
     return this._compaction;
@@ -1884,15 +1852,15 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
     recordTurnRow(this.env, {
       workspace: this.workspaceName(),
-      agentKind: this.actorKind(),
-      ...this.analyticsModel(),
+      agentKind: 'orchestrator',
+      ...this.accounting.dimensions(),
       outcome: completed ? 'ok' : 'failed',
       code: '',
       durationMs: turn.durationMs,
       steps: turn.steps,
       toolCalls: turn.toolCalls.length,
       usage,
-      usd: this.priceAt(usage),
+      usd: this.accounting.price(usage),
     });
   }
 
@@ -1915,141 +1883,11 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   }
 
   /**
-   * `ask` of the owner's limits (core limits/): their own refusal (a limit, a suspension) fails the caller in their
-   * words; an account object that could not be asked is logged under the ask's name and refuses nothing.
-   */
-  private admittedByLimits(asking: keyof typeof LIMITS_UNASKED, ask: (stub: UserHubClient, caller: UserCaller) => Promise<void>): Effect.Effect<void, KinuError> {
-    if (this.getOwnerUserId() === null) return Effect.void;
-
-    const asked = attemptInItsWords('unavailable', async () => {
-      const { stub, caller } = await this.userHub();
-
-      await ask(stub, caller);
-    });
-
-    return Effect.catch(asked, (failure) => (failure.code === 'budget' || failure.code === 'denied'
-      ? Effect.fail(failure)
-      : Effect.sync(() => { diagnostics.failure(LIMITS_UNASKED[asking], failure, { workspace: this.workspaceName() }); })));
-  }
-
-  /**
    * A turn on `spec`, admitted by the owner's limits: none starts in a suspended account, and one the platform pays for
    * (Workers AI through the deployment's binding, `createWorkersAIProvider`) is bounded by the free tier's day of tokens.
    */
   admitModelTurn(spec: string): Promise<void> {
-    return settle(this.admittedByLimits('turn', (stub, caller) => stub.limits_admitTurn(caller, specProvider(spec) === WORKERS_AI_PROVIDER_ID)));
-  }
-
-  /** This workspace's stored bytes, as its own database reads them: the platform's number, sampled, never counted. */
-  private storedSample() {
-    return { source: `workspace:${this.workspaceName()}`, bytes: this.ctx.storage.sql.databaseSize };
-  }
-
-  /** New bytes for this workspace (a person's upload, an agent's file): the owner's limits answer, given its size now. */
-  protected admitNewBytes(): Effect.Effect<void, KinuError> {
-    return this.admittedByLimits('bytes', (stub, caller) => stub.limits_admitStoredBytes(caller, this.storedSample()));
-  }
-
-  /** Tells the owner's limits this workspace's size now; a failure is logged, never the caller's. */
-  protected async reportStoredBytes(): Promise<void> {
-    if (this.getOwnerUserId() === null) return;
-    await settleLogged('limits.size_unreported', { doing: "telling the owner's limits this workspace's size", otherwise: 'unavailable' }, async () => {
-      const { stub, caller } = await this.userHub();
-      const { source, bytes } = this.storedSample();
-
-      await stub.limits_storageSampled(caller, source, bytes);
-    });
-  }
-
-  /** What a call on the platform's own models spent counts to the owner's day (core limits/), told, never waited on. */
-  private debitPlatformTokens(report: ModelCallReport, provider: string): void {
-    const tokens = (report.usage.input ?? 0) + (report.usage.output ?? 0);
-
-    if (provider !== WORKERS_AI_PROVIDER_ID || tokens <= 0 || this.getOwnerUserId() === null) return;
-    this.detachOwned(Effect.promise(() => settleLogged('limits.tokens_undebited', { doing: "counting a platform model call to the owner's day", otherwise: 'unavailable' }, async () => {
-      const { stub, caller } = await this.userHub();
-
-      await stub.limits_platformTokensSpent(caller, tokens);
-    })));
-  }
-
-  /**
-   * Record one non-turn model call (judges, fast tier, evolution, compaction, AI bindings) as a
-   * `model_call` row; filed under the current run or the workspace id. Row shape and pricing guard
-   * live in core's `pricedModelCallEvent`.
-   */
-  protected reportModelCall(report: ModelCallReport): void {
-    const event = pricedModelCallEvent(report, this.modelCatalog);
-
-    settleLoggedSync('event.model_call_emit_failed', { doing: 'recording a model_call run event', otherwise: 'io' }, () => {
-      this.eventRecorder.emit(currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID), event);
-    }, { source: report.source });
-
-    // `spec` is absent on seams that never had one; the actor's effective model stands in so the
-    // row stays countable against the provider it reached.
-    const dimensions = report.spec === undefined
-      ? this.analyticsModel()
-      : this.analyticsModelOf(report.spec);
-
-    this.debitPlatformTokens(report, dimensions.provider);
-    recordModelRow(this.env, {
-      workspace: this.workspaceName(),
-      agentKind: this.actorKind(),
-      provider: dimensions.provider,
-      model: report.modelId ?? dimensions.model,
-      source: report.source,
-      usage: report.usage,
-      // Reuse the durable row's number; re-deriving it can disagree with the ledger if the catalog
-      // resolves a rate between the two reads.
-      usd: event.usd,
-    });
-  }
-
-  /**
-   * Records direct model operations' start and end via core's shared mapper.
-   * A start row with no end means the platform destroyed the frame mid-call.
-   */
-  protected readonly modelOperations: ModelOperationSink = recordModelOperations(
-    // Resolve the recorder per emit: field initializers run in the DO constructor, and the store
-    // bundle needs the actor directory that exists only after `onStart`.
-    { emit: (runId, input) => { this.eventRecorder.emit(runId, input); } },
-    () => currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID),
-  );
-
-  /** Records a provider-mandated wait to the ledger (`provider_wait`), and tells the windows of the turn it holds: a call
-   *  a turn's tool made here. A call no turn made (a title, a logo, upkeep) holds no turn, so no window hears it.
-   *  Recorder faults are contained so a ledger write never kills the sleep. */
-  /** Where this actor's provider words are recorded: its own log, under the operation in flight, else its current run. */
-  private ownProviderLog(): ProviderLog {
-    return { recorder: this.eventRecorder, runId: () => currentOperationProfile(this.actorHandle())?.runId ?? (this._currentRunId || WORKSPACE_RUN_ID) };
-  }
-
-  /** A hosted actor's lanes' provider words, recorded in its own log under the operation it is in. */
-  protected providerToldFor(actor: BoundActor): NonNullable<ProvidersLane['told']> {
-    const log: ProviderLog = { recorder: actor.stores.eventRecorder, runId: () => currentOperationProfile(actor.handle)?.runId ?? WORKSPACE_RUN_ID };
-
-    return { onProviderWait: (info) => { this.noteProviderWait(info, log); }, onModelAttempt: (info) => { this.noteModelAttempt(info, log); } };
-  }
-
-  private noteModelAttempt(info: ModelAttemptInfo, log = this.ownProviderLog()): void {
-    settleLoggedSync('event.model_attempt_emit_failed', { doing: 'recording a model_attempt run event', otherwise: 'io' }, () => {
-      log.recorder.emit(log.runId(), { type: 'model_attempt', ...info });
-    }, { provider: info.provider });
-  }
-
-  private noteProviderWait(info: ProviderWaitInfo, log = this.ownProviderLog()): void {
-    const runId = log.runId();
-
-    settleLoggedSync('event.provider_wait_emit_failed', { doing: 'recording a provider_wait run event', otherwise: 'io' }, () => {
-      log.recorder.emit(runId, { type: 'provider_wait', ...info });
-    }, { provider: info.provider });
-
-    const turn = activeOperationProfile();
-
-    if (turn === undefined || turn.turnId === WORKSPACE_RUN_ID) return;
-    const room = turn.actor.actorId === this.actorHandle().actorId ? null : turn.actor.actorId;
-
-    this.broadcastToActor(room, JSON.stringify({ type: 'provider_wait', ...info }));
+    return settle(this.accounting.admitTurn(spec));
   }
 
   // EventsHub primitives. Spec: docs/ARCHITECTURE.md — "Events and ingress"
@@ -2328,7 +2166,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     return {
       rt, model, originContext, compactShared,
       windowOf: (spec) => this.modelCatalog.windowFor(spec),
-      reportModelCall: (report) => { this.reportModelCall(report); },
+      reportModelCall: (report) => { this.accounting.reportModelCall(report); },
       nodeCodemode: (actor) => nodeCodemodeTool(seams, actor),
       webSearch: seams.webSearch(),
       resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
@@ -2445,8 +2283,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
         slate: (operation, turn) => this.programSlate(operation, turn),
-        reportModelCall: (report) => this.reportModelCall(report),
-        modelOperations: this.modelOperations,
+        reportModelCall: (report) => this.accounting.reportModelCall(report),
+        modelOperations: this.accounting.operations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         servingMoved: () => this.servingMoved(),
         boxUse: this.boxUse,
@@ -2743,7 +2581,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     admit?.();
 
     return slateAiAnswer(route, { spec: profile.tier.model, tier: profile.tier.id }, {
-      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec), report: (report) => { this.reportModelCall(report); }, operations: this.modelOperations,
+      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec), report: (report) => { this.accounting.reportModelCall(report); }, operations: this.accounting.operations,
     });
   }
 
@@ -2965,8 +2803,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   private scaffoldSpend(): ModelCallSpend {
     return {
       source: 'scaffold',
-      report: (report) => this.reportModelCall(report),
-      operations: this.modelOperations,
+      report: (report) => this.accounting.reportModelCall(report),
+      operations: this.accounting.operations,
     };
   }
 
@@ -3265,7 +3103,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
     return (system, prompt) => completeOnRoute(route, {
       llm: (resolution) => routedLlm((serving) => this.profiles.forResolution(serving), resolution, {
-        report: (report) => this.reportModelCall(report), operations: this.modelOperations,
+        report: (report) => this.accounting.reportModelCall(report), operations: this.accounting.operations,
       }, system),
       attemptOf: (spec) => this.ownedModelServices.attemptFor(spec),
       refusals: this.tierRefusals,
@@ -3409,8 +3247,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       // The merge is a judge call: its model and effort come from the route table via this profile,
       // not from the actor's stored chat spec.
       profile: () => this.profiles.routing(),
-      reportModelCall: (report) => this.reportModelCall(report),
-      operations: this.modelOperations,
+      reportModelCall: (report) => this.accounting.reportModelCall(report),
+      operations: this.accounting.operations,
       grounding,
     });
 
@@ -3533,7 +3371,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
     if (now - this.sizeReportedAt < SIZE_REPORT_MS) return;
     this.sizeReportedAt = now;
-    this.detachOwned(Effect.promise(() => this.reportStoredBytes()));
+    this.detachOwned(Effect.promise(() => this.accounting.reportStoredBytes()));
   }
 
   /** A turn of the workspace agent's read here: its executors and folder are its own, its clock starts, and a fresh one's
@@ -3574,7 +3412,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
           return result;
         } finally {
           // Name, verdict and duration only: its input and result carry the workspace's content.
-          recordToolRow(this.env, { workspace: this.workspaceName(), agentKind: this.actorKind(), tool: name, failed, durationMs: Date.now() - started });
+          recordToolRow(this.env, { workspace: this.workspaceName(), agentKind: 'orchestrator', tool: name, failed, durationMs: Date.now() - started });
         }
       } }];
     }));
@@ -3585,7 +3423,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     const model = this.boundProfiles.get(actorId)?.tier.model;
 
     recordTtftRow(this.env, {
-      workspace: this.workspaceName(), agentKind: this.actorKind(), ...(model === undefined ? this.analyticsModel() : this.analyticsModelOf(model)), ttftMs: Date.now() - openedAt,
+      workspace: this.workspaceName(), agentKind: 'orchestrator', ...(model === undefined ? this.accounting.dimensions() : this.accounting.dimensions(model)), ttftMs: Date.now() - openedAt,
     });
   }
 
@@ -3973,10 +3811,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     if (refusal) return settle(Effect.fail(new KinuError(refusal.reason, refusal.error)));
 
     return this.heldAlarm();
-  }
-
-  protected actorKind(): AgentKind {
-    return 'orchestrator';
   }
 
   /** Shared across boot retries. */
@@ -4623,7 +4457,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       receipts: async (turnId, runId, callIds) => remoteReceipts(this.boundSql, this.agentBound(actorId).handle, { turnId, runId }, callIds),
       observe: async (lines) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines)); },
       answerMetadata: (close, narration) => this.takeTurnSlates(actorId, close.turnId, narration),
-      reportModelCall: async (report) => { this.reportModelCall(report); },
+      reportModelCall: async (report) => { this.accounting.reportModelCall(report); },
       getAuth: credentialReads.getAuth,
       listCredentials: credentialReads.listCredentials,
       relayDevice: async (provider) => {
@@ -4866,7 +4700,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       ctx: this.ctx,
       agent: this,
       holdLane: (body) => this.holdLane(body),
-      providers: (lane, actor) => this.ownedModelServices.registryOver({ ...lane, told: this.providerToldFor(actor) }),
+      providers: (lane, actor) => this.ownedModelServices.registryOver({ ...lane, told: this.accounting.toldFor(actor) }),
       exec: this.watchedExec,
       sql: this.boundSql,
       directory: this.workspaceActors(),
@@ -4887,12 +4721,12 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       // Same profile authority an actor chat resolves through, so a role restriction narrows
       // a chat and a head identically; branches under an unresolved profile are unreproducible.
       resolveProfile: (input) => this.profiles.resolve(input),
-      reportModelCall: (report) => { this.reportModelCall(report); },
+      reportModelCall: (report) => { this.accounting.reportModelCall(report); },
       refusals: (actor) => this.refusalNoticesFor(actor),
       liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
       servingMoved: () => this.servingMoved(),
       boxUse: this.boxUse,
-      modelOperations: this.modelOperations,
+      modelOperations: this.accounting.operations,
       tracing: () => this.tracing,
       slate: (actor, operation, turn) => this.slateAs(
         { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation, turn,
@@ -5325,8 +5159,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     const compactShared = reach.kind === 'workspace' ? this.compaction().compactShared : hostedActorCompaction(actor, {
       logger: compactionDiagnostics,
       models: { normalize: (spec) => spec || (operation()?.profile.tier.model ?? ''), resolve: model },
-      report: (_actor, report) => this.reportModelCall(report),
-      operations: this.modelOperations,
+      report: (_actor, report) => this.accounting.reportModelCall(report),
+      operations: this.accounting.operations,
     }).extension.compactShared;
 
     const inputs = operation()?.inputs ?? null;
@@ -5549,8 +5383,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       artifacts: { sql: this.boundSql, held: turn?.artifacts },
       affinity: this.ownedModelServices.affinityKey,
       ...(reach.kind === 'workspace' && { budget: this.budget, observeStream: (chunks) => this.chatTransport.observe(chunks) }),
-      operations: this.modelOperations,
-      report: (report) => this.reportModelCall(report),
+      operations: this.accounting.operations,
+      report: (report) => this.accounting.reportModelCall(report),
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
       accountFacts: () => planes.facts ?? this.account.factsForTurn(),
@@ -6022,7 +5856,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
         return provider.warmCache(modelSpec.modelId, deps, body);
       },
-      spend: (report) => { this.reportModelCall(report); },
+      spend: (report) => { this.accounting.reportModelCall(report); },
       now: () => Date.now(),
     });
 
@@ -6636,7 +6470,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
         if (accepted) recordAgentFigures(this.boundSql, actorId, ended.outcome.ended.figures);
 
-        if (charging.has(runEndKey(ended))) for (const charge of ended.outcome.ended.charges ?? []) this.reportModelCall(charge);
+        if (charging.has(runEndKey(ended))) for (const charge of ended.outcome.ended.charges ?? []) this.accounting.reportModelCall(charge);
       }
 
       await this.agentTurns.runEnded(actorId, ended);
@@ -7524,7 +7358,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   ): Outcome {
     recordJobSettled(this.env, {
       workspace: this.name,
-      agentKind: this.actorKind(),
+      agentKind: 'orchestrator',
       operation,
       outcome: outcome.ok ? 'ok' : 'refused',
     });
@@ -10630,14 +10464,14 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   writeExecutorFileChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
     return settle(Effect.gen({ self: this }, function* () {
       if (write.offset === 0) {
-        const admitted = yield* Effect.result(this.admitNewBytes());
+        const admitted = yield* Effect.result(this.accounting.admitNewBytes());
 
         if (Result.isFailure(admitted)) return { error: admitted.failure.message };
       }
 
       const written = yield* Effect.promise(() => this.executors.writeChunk(write));
 
-      if (write.final) yield* Effect.promise(() => this.reportStoredBytes());
+      if (write.final) yield* Effect.promise(() => this.accounting.reportStoredBytes());
 
       return written;
     }));
