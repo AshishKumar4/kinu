@@ -15,7 +15,7 @@ const PARSE: acorn.Options = { ecmaVersion: 'latest', sourceType: 'module' };
 /** A node of the parsed module, as the walk reads it: anything with a string `type`. */
 const SyntaxNodeSchema = v.looseObject({ type: v.string() });
 
-type SyntaxNode = Readonly<Pick<v.InferOutput<typeof SyntaxNodeSchema>, 'type'>>;
+export type SyntaxNode = Readonly<Pick<v.InferOutput<typeof SyntaxNodeSchema>, 'type'>>;
 
 const Span = { start: v.number(), end: v.number() };
 
@@ -59,7 +59,7 @@ function sourceOf(node: SyntaxNode): ModuleSpecifier | null {
 }
 
 /** Every node of `root`, depth first. */
-function* nodesOf(root: SyntaxNode): Generator<SyntaxNode> {
+export function* nodesOf(root: SyntaxNode): Generator<SyntaxNode> {
   const stack: SyntaxNode[] = [root];
 
   for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
