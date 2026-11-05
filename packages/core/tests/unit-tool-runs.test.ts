@@ -66,7 +66,7 @@ describe('a phase of tool calls', () => {
   });
 
   // A call that started a preview ends one too; only a page that knows its preview host can tell one, so the browser
-  // suite proves that one (chat-and-files-ux, the tool run's preview).
+  // suite proves that one (chat-ux, the tool run's preview).
   test('a question for the owner, and the words between phases, each end one', () => {
     const blocks = groupMessageParts([read('c1', 'a.ts'), read('c2', 'b.ts'), ask, read('c3', 'c.ts'), read('c4', 'd.ts'), read('c5', 'e.ts'), said('Halfway.'), read('c6', 'f.ts')]);
 

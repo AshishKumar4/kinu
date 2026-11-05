@@ -447,7 +447,9 @@ describe('the ladder measures something', () => {
       'Test browsers end with their launcher',
       'UI gate self-tests',
       'UI gate self-tests: account, drive and slates',
-      'UI gate self-tests: chat and files',
+      'UI gate self-tests: chat',
+      'UI gate self-tests: files',
+      'UI gate self-tests: workspace shell',
     ]);
   });
 

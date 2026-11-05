@@ -992,6 +992,16 @@ export async function openRowMenu(page: Page, row: string): Promise<void> {
   await page.waitForSelector(`${OPEN_MENU} [role="menuitem"]`);
 }
 
+/** Presses the open dialog's button by the words it shows. */
+export async function pressInDialog(page: Page, words: string): Promise<void> {
+  await page.$$eval('[role="dialog"] button', (buttons, label) => {
+    const button = buttons.find((each) => each.textContent?.trim() === label);
+
+    if (!(button instanceof HTMLElement)) throw new Error(`no ${label} in the dialog`);
+    button.click();
+  }, words);
+}
+
 /**
  * Press `item` on the menu of the row or tile `row`: its ⋯, then the item in the menu it opens, which is drawn in a
  * portal and not inside the row (62d972325 moved every row menu onto ui/Menu, 2026-10-21).

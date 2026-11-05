@@ -675,17 +675,17 @@
       "loadAtStart": 0.55,
       "exit": 0
     },
-    "bun test --timeout=0 --isolate --path-ignore-patterns=tests/browser/chat-and-files-ux.test.ts --path-ignore-patterns=tests/browser/account-ux.test.ts --path-ignore-patterns=tests/browser/drive-ux.test.ts --path-ignore-patterns=tests/browser/slate-preview-ux.test.ts --path-ignore-patterns=tests/browser/slate-sharing-ux.test.ts tests/browser/*-ux.test.ts tests/browser/computed-style.test.ts": {
-      "machine": "linux x64, AMD EPYC (8 threads)",
-      "wallSeconds": 724.35,
-      "cpuSeconds": 725.12,
-      "peakRssMb": 5516.09,
+    "bun test --timeout=0 --isolate --path-ignore-patterns=tests/browser/chat-ux.test.ts --path-ignore-patterns=tests/browser/files-ux.test.ts --path-ignore-patterns=tests/browser/workspace-shell-ux.test.ts --path-ignore-patterns=tests/browser/account-ux.test.ts --path-ignore-patterns=tests/browser/drive-ux.test.ts --path-ignore-patterns=tests/browser/slate-preview-ux.test.ts --path-ignore-patterns=tests/browser/slate-sharing-ux.test.ts tests/browser/*-ux.test.ts tests/browser/computed-style.test.ts": {
+      "wallSeconds": 1481.88,
+      "cpuSeconds": 1493.91,
+      "peakRssMb": 10195.87,
       "peakRunnable": 36,
-      "peakCpuThreads": 5.09,
-      "meanThreads": 1,
-      "samples": 2052,
-      "loadAtStart": 0.91,
-      "exit": 0
+      "peakCpuThreads": 3.87,
+      "meanThreads": 1.01,
+      "samples": 3742,
+      "loadAtStart": 0.22,
+      "exit": 0,
+      "machine": "linux x64, AMD EPYC (8 threads)"
     },
     "bun test --timeout=0 --isolate ./evals/ scripts/deploy-preflight.test.ts": {
       "machine": "linux x64, AMD EPYC (8 threads)",
@@ -951,17 +951,41 @@
       "loadAtStart": 0.27,
       "exit": 0
     },
-    "bun test --timeout=0 tests/browser/chat-and-files-ux.test.ts": {
-      "machine": "linux x64, AMD EPYC (8 threads)",
-      "wallSeconds": 262.31,
-      "cpuSeconds": 140.98,
-      "peakRssMb": 1511.91,
-      "peakRunnable": 23,
-      "peakCpuThreads": 4.78,
-      "meanThreads": 0.54,
-      "samples": 924,
-      "loadAtStart": 0.63,
-      "exit": 0
+    "bun test --timeout=0 tests/browser/chat-ux.test.ts": {
+      "wallSeconds": 151.73,
+      "cpuSeconds": 89.97,
+      "peakRssMb": 1972.67,
+      "peakRunnable": 26,
+      "peakCpuThreads": 3.78,
+      "meanThreads": 0.59,
+      "samples": 549,
+      "loadAtStart": 0.23,
+      "exit": 0,
+      "machine": "linux x64, AMD EPYC (8 threads)"
+    },
+    "bun test --timeout=0 tests/browser/workspace-shell-ux.test.ts": {
+      "wallSeconds": 141.91,
+      "cpuSeconds": 88.73,
+      "peakRssMb": 1970.15,
+      "peakRunnable": 19,
+      "peakCpuThreads": 3.78,
+      "meanThreads": 0.63,
+      "samples": 506,
+      "loadAtStart": 0.37,
+      "exit": 0,
+      "machine": "linux x64, AMD EPYC (8 threads)"
+    },
+    "bun test --timeout=0 tests/browser/files-ux.test.ts": {
+      "wallSeconds": 124.72,
+      "cpuSeconds": 73.22,
+      "peakRssMb": 2210.68,
+      "peakRunnable": 29,
+      "peakCpuThreads": 3.81,
+      "meanThreads": 0.59,
+      "samples": 448,
+      "loadAtStart": 0.5,
+      "exit": 0,
+      "machine": "linux x64, AMD EPYC (8 threads)"
     },
     "bun test --timeout=0 tests/browser/live-app-layout.test.ts": {
       "machine": "linux x64, AMD EPYC (8 threads)",
