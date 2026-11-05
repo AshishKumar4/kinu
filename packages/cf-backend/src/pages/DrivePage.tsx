@@ -715,7 +715,8 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   const [search, setSearch] = useSearchParams();
   const { entries: roster } = useWorkspaceRoster();
   const copier = useCopy();
-  const loadListing = useCallback(() => listDrive(path), [path]);
+  // Only My stuff draws its listing: Slates and Shared ask for none, so a first visit landing on either reads it once.
+  const loadListing = useCallback(() => (tab === "mine" ? listDrive(path) : Promise.resolve({ path, entries: [] })), [tab, path]);
   const listing = useAsyncResource(loadListing, undefined, path);
   const loadLibrary = useCallback(() => getSharedLibrary(), []);
   const library = useAsyncResource(loadLibrary, undefined, "library");

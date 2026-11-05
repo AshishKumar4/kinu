@@ -109,7 +109,15 @@ async function serveDrive(drive: MossaicVfs, request: Request): Promise<Response
 
   try {
     switch (route) {
-      case "GET ": return Response.json(await listDrive(drive, url.searchParams.get("path") ?? "/"));
+      case "GET ": {
+        const path = url.searchParams.get("path") ?? "/";
+        const asks = document.documentElement.dataset;
+
+        // `data-drive-reads`: every folder the page listed, in order.
+        asks.driveReads = `${asks.driveReads ?? ""} ${path}`.trim();
+
+        return Response.json(await listDrive(drive, path));
+      }
 
       case "DELETE ": {
         await deleteDriveEntry(drive, url.searchParams.get("path") ?? "");
@@ -251,8 +259,10 @@ class FixtureUpload extends EventTarget {
   }
 }
 
+/** `&driveFixture=<name>`: the whole app's Drive over another frame's fixture, each place on its own page as the app's. */
 export function installDriveFixture(frame: string): void {
-  const fixture = Object.entries(FIXTURES).find(([name]) => name === frame)?.[1];
+  const chosen = frame === "whole" ? new URLSearchParams(location.search).get("driveFixture") ?? frame : frame;
+  const fixture = Object.entries(FIXTURES).find(([name]) => name === chosen)?.[1];
 
   if (fixture === undefined) return;
   const next = window.fetch.bind(window);
