@@ -589,6 +589,11 @@ export class UserWorkspaces {
 
     if (this.host.env.SLATE_PICTURES !== undefined) await deletePictures(this.host.env.SLATE_PICTURES, picturePrefix(name));
     this.deleteWorkspaceRows(name, 'after-destroy');
+    // Its boxes retired, their mail kept (docs/MAIL.md §2): asked with the whole roster, so a box a deletion before this
+    // retirement existed left live is retired too.
+    const live = this.host.sqlx<{ name: string }>(`SELECT name FROM user_workspaces WHERE name != ?`, name).map((row) => row.name);
+
+    await objectNamed(this.host.env.MAILBOX, ownerUserId).retireAllBut(live);
     this.host.limits.forgetStore(`workspace:${name}`);
     await this.host.evalLeases.ended(name);
     await this.host.deletions.ended(name);

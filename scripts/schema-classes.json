@@ -391,6 +391,7 @@
     "mail_blob_graves",
     "mail_box",
     "mail_messages",
+    "mail_retired",
     "mail_threads"
   ],
   "monitor": [

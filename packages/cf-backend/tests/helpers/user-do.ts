@@ -115,6 +115,8 @@ export interface TestUserDO {
   destroyReads: string[];
   /** What the account's delete reached beyond its own object: its mailbox and labels, its control-plane forget. */
   accountDeleted: string[];
+  /** Each roster a teardown handed the account's mailbox, whose boxes of any other workspace it retires. */
+  mailRetired: (readonly string[])[];
   /** Reasons passed to `ctx.abort`: an account delete completes only once `destroy()` raises 'destroyed'. */
   aborted: string[];
   abortRaised: () => Promise<void>;
@@ -329,7 +331,7 @@ function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']):
 interface TestUserEnvironment {
   UserDO?: { idFromName(name: string): string; get(id: string): ShareCardRecipient | Pick<UserDOInstance, 'builtinRemoveAccount'> };
   ControlPlaneDO?: { idFromName(name: string): string; get(id: string): IndexFeedSink & Pick<ControlPlaneDO, 'forgetUser'> };
-  MAILBOX: { idFromName(name: string): string; get(id: string): Pick<MailboxDO, 'deleteBox'> };
+  MAILBOX: { idFromName(name: string): string; get(id: string): Pick<MailboxDO, 'deleteBox' | 'retireAllBut'> };
   CREDENTIAL_ENCRYPTION_KEY: string;
   DEV_USER_EMAIL?: string;
   SLATE_PICTURES?: PictureBucket;
@@ -441,6 +443,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const sql = sqlExec(db);
   const installed = new Map<string, string>();
   const destroyedWorkspaces: string[] = [];
+  const mailRetired: (readonly string[])[] = [];
   /** Workspaces whose storage a destroy wiped, whatever its call answered. */
   const wipedWorkspaces = new Set<string>();
   const destroyReads: string[] = [];
@@ -699,6 +702,11 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         deleteBox: async () => {
           accountDeleted.push(`mailbox:${name}`);
         },
+        retireAllBut: async (roster: readonly string[]) => {
+          mailRetired.push([...roster].sort());
+
+          return [];
+        },
       }),
     },
     OrchestratorAgent: {
@@ -836,7 +844,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   };
 
   return {
-    userDO, db, sql, installed, destroyedWorkspaces, destroyReads, accountDeleted, aborted, revokedSocketPushes,
+    userDO, db, sql, installed, destroyedWorkspaces, destroyReads, accountDeleted, mailRetired, aborted, revokedSocketPushes,
     abortRaised: () => aborts.until((reasons) => reasons.length > 0),
     revokedSessionPushes, connectionsChanged, overviewNudges, secretsMoved, githubPush,
     pendingConsents: (workspace) => registryFor(workspace).list(),

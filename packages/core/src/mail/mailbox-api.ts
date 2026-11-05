@@ -41,6 +41,15 @@ export interface MailBox {
   readonly wake: MailWake;
 }
 
+/** A box of a workspace since deleted (docs/MAIL.md §2): retired, its mail kept, under the workspace it names. */
+export interface MailArchivedBox {
+  readonly path: string;
+  readonly address: string;
+  readonly kind: MailBoxKind;
+  readonly workspace: string;
+  readonly retiredAt: number;
+}
+
 export interface MailParty {
   readonly name: string | null;
   readonly address: string;
@@ -239,6 +248,10 @@ export interface MailboxCalls {
    */
   boxFor(owner: { readonly kind: 'workspace' | 'agent'; readonly workspace: string; readonly name: string; readonly actorId: string }): Promise<MailBox>;
   boxes(): Promise<readonly MailBox[]>;
+  /** The boxes of workspaces since deleted, newest retired first: their mail kept, under the workspace each names. */
+  archived(): Promise<readonly MailArchivedBox[]>;
+  /** Every box of a workspace not in `live` retired, and an assistant not in it forgotten; the paths it retired. */
+  retireAllBut(live: readonly string[]): Promise<readonly string[]>;
   /** The owner's Personal assistant's main agent reads their own box from now on; null before they have an address. */
   readBy(reader: { readonly workspace: string; readonly actorId: string }): Promise<MailBox | null>;
   /**

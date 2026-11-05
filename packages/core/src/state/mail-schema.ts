@@ -41,6 +41,14 @@ export function initMailboxTables(sql: SqlExec): void {
     )
   `);
   sql.exec('CREATE UNIQUE INDEX IF NOT EXISTS mail_addresses_actor ON mail_addresses (workspace, actor_id, kind) WHERE actor_id IS NOT NULL');
+  // A deleted workspace's boxes, retired (docs/MAIL.md §2): each keeps its row and its mail, listed as archived under the
+  // workspace it names, and is no box mail is filed in, an agent reads, or a new box is placed under.
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS mail_retired (
+      path        TEXT    PRIMARY KEY REFERENCES mail_addresses (path),
+      retired_at  INTEGER NOT NULL
+    )
+  `);
   sql.exec(`
     CREATE TABLE IF NOT EXISTS mail_allow (
       path        TEXT    NOT NULL REFERENCES mail_addresses (path),

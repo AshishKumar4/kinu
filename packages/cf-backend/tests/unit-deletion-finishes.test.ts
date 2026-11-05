@@ -232,6 +232,18 @@ test("a burst of a person's deletes is torn down one per alarm, each alarm the n
     .toEqual({ torn: [1, 2, 3], destroyed: ['archive', 'drafts', 'ledger'], jobs: [] });
 });
 
+test("a workspace's teardown hands its mailbox the roster it leaves, whose boxes of any other workspace retire", async () => {
+  const user = createTestUserDO({ durableObjectId: OWNER });
+  const owner = await testOwner();
+
+  for (const name of ['ledger', 'drafts']) await user.userDO.registerWorkspace(owner, name);
+
+  await user.userDO.requestWorkspaceRemoval(owner, 'ledger', OWNER);
+  await user.userDO.alarm();
+
+  expect({ destroyed: user.destroyedWorkspaces, retired: user.mailRetired }).toEqual({ destroyed: ['ledger'], retired: [['drafts']] });
+});
+
 // An account's delete writes its intent and every workspace's mark in one transaction, so a reset at any later point
 // leaves an account the next activation finishes: each workspace, then the account (review, 2026-10-25: a reset between
 // per-workspace marks left one unmarked, and the account's job would never run).

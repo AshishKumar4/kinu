@@ -13,7 +13,7 @@ import { replySubject } from './words';
 import { filedRecipients, mailAddress } from './message';
 import { MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_WAKES, MAIL_WOKE } from './mailbox-api';
 import type {
-  MailAgentMessage, MailBox, MailCaller, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView,
+  MailAgentMessage, MailArchivedBox, MailBox, MailCaller, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView,
   MailSendState, MailTriaged, MailTriageItem, MailTriagePick, MailWake, MailWoke,
 } from './mailbox-api';
 import type { SqlExec } from '../types/primitives';
@@ -64,6 +64,13 @@ interface MailStoreDeps {
   /** Where a sent message's send stands, by its id: the outbox's word, the only one; null where it holds none. */
   readonly sendState?: (messageId: string) => 'pending' | 'sent' | 'dlq' | null;
 }
+
+/** A box not retired (`mail_retired`), in a query over `mail_addresses` that names its own columns bare. */
+const LIVE = 'path NOT IN (SELECT path FROM mail_retired)';
+
+const ArchivedRow = v.object({
+  path: v.string(), kind: v.picklist(MAIL_BOX_KINDS), workspace: v.string(), retired_at: v.number(),
+});
 
 const BoxRow = v.object({
   path: v.string(), kind: v.picklist(MAIL_BOX_KINDS), workspace: v.nullable(v.string()),
@@ -118,7 +125,7 @@ export class MailStore {
   }
 
   private box(path: string): MailBox | null {
-    const [row] = rows(BoxRow, this.deps.sql.exec("SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE path = ?", path));
+    const [row] = rows(BoxRow, this.deps.sql.exec(`SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE path = ? AND ${LIVE}`, path));
 
     return row === undefined ? null : this.boxOf(row, this.identity()?.username ?? '');
   }
@@ -182,7 +189,7 @@ export class MailStore {
   private placed(owner: MailBoxOwner, workspacePath?: string): { readonly made: MailBox } | { readonly path: string } {
     // By kind too: the Personal assistant's main agent reads the person's box and its workspace's.
     const [held] = rows(BoxRow, this.deps.sql.exec(
-      'SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ?', owner.workspace, owner.actorId, owner.kind,
+      `SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ? AND ${LIVE}`, owner.workspace, owner.actorId, owner.kind,
     ));
 
     if (held !== undefined) return { made: this.boxOf(held, this.identity()?.username ?? '') };
@@ -190,7 +197,7 @@ export class MailStore {
     const label = mailLabelOf(owner.name) ?? (owner.kind === 'workspace' ? 'workspace' : 'agent');
 
     const under = workspacePath
-      ?? rows(v.object({ path: v.string() }), this.deps.sql.exec("SELECT path FROM mail_addresses WHERE kind = 'workspace' AND workspace = ?", owner.workspace))[0]?.path
+      ?? rows(v.object({ path: v.string() }), this.deps.sql.exec(`SELECT path FROM mail_addresses WHERE kind = 'workspace' AND workspace = ? AND ${LIVE}`, owner.workspace))[0]?.path
       ?? mailLabelOf(owner.workspace) ?? 'workspace';
 
     const at = (own: string) => (owner.kind === 'workspace' ? own : `${own}.${under}`);
@@ -259,7 +266,7 @@ export class MailStore {
     if (home === undefined) return [];
 
     const others = rows(BoxRow, this.deps.sql.exec(
-      "SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND path != ? AND (kind = 'workspace' OR actor_id = ?) ORDER BY path",
+      `SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND path != ? AND (kind = 'workspace' OR actor_id = ?) AND ${LIVE} ORDER BY path`,
       caller.workspace, own.path, caller.actorId,
     )).map((row) => this.boxOf(row, username));
 
@@ -405,7 +412,36 @@ export class MailStore {
   boxes(): MailBox[] {
     const username = this.identity()?.username ?? '';
 
-    return rows(BoxRow, this.deps.sql.exec('SELECT path, kind, workspace, actor_id, wake FROM mail_addresses ORDER BY path')).map((row) => this.boxOf(row, username));
+    return rows(BoxRow, this.deps.sql.exec(`SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE ${LIVE} ORDER BY path`)).map((row) => this.boxOf(row, username));
+  }
+
+  /** The boxes of workspaces since deleted, newest retired first: their mail is kept, under the workspace each names. */
+  archived(): MailArchivedBox[] {
+    const username = this.identity()?.username ?? '';
+
+    return rows(ArchivedRow, this.deps.sql.exec(
+      'SELECT a.path, a.kind, a.workspace, r.retired_at FROM mail_retired r JOIN mail_addresses a ON a.path = r.path ORDER BY r.retired_at DESC, a.path',
+    )).map((row) => ({ path: row.path, kind: row.kind, workspace: row.workspace, address: mailAddressOf(username, row.path, this.deps.domain), retiredAt: row.retired_at }));
+  }
+
+  /**
+   * The account's workspaces are `live` now: every box of a workspace not among them is retired (docs/MAIL.md §2), and
+   * the person's box forgets an assistant that is gone, so its mail wakes nothing until the next one reads it (`open`).
+   * Run at each teardown with the whole roster, so a box an earlier deletion left live is retired too. The ones it
+   * retired, by path.
+   */
+  retireAllBut(live: readonly string[]): string[] {
+    // With no workspace live, every one is gone: `NOT IN ()` is no SQL, and `NOT IN (NULL)` is never true.
+    const gone = live.length === 0 ? 'workspace IS NOT NULL' : `workspace NOT IN (${live.map(() => '?').join(', ')})`;
+
+    const retired = rows(v.object({ path: v.string() }), this.deps.sql.exec(
+      `INSERT INTO mail_retired (path, retired_at) SELECT path, ? FROM mail_addresses
+       WHERE kind != 'person' AND ${gone} AND ${LIVE} RETURNING path`, this.deps.now(), ...live,
+    )).map((row) => row.path);
+
+    this.deps.sql.exec(`UPDATE mail_addresses SET workspace = NULL, actor_id = NULL WHERE path = '' AND ${gone}`, ...live);
+
+    return retired.sort();
   }
 
   setWake(path: string, wake: MailWake, allow?: readonly string[]): MailBox {
