@@ -14,6 +14,7 @@ import { APP_ROUTES, DEFAULT_THEME, modeFor, PREFERS_LIGHT, THEME_NAMES, type Th
 import { setMode, wearTheme, type ThemeMode } from "@/hooks/use-theme";
 import { CHAT_FACES, CHAT_FACE_NAMES, FACE_SCOPES, installChatFaces, type ChatFaceName, type FaceScope } from "@/gallery-chat-fonts";
 import { DEPLOY_FIXTURE_STATES, deployStateHref } from "@/gallery-deploy-fixture";
+import { wearKumoOwn } from "@/gallery-kumo-parts";
 
 /** Where the Activity switches show: the assistant's own. */
 const ACTIVITY_PAGE = "/workspace/personal-assistant/activity";
@@ -36,6 +37,11 @@ const TIME_WORDINGS = ["ships", "one"] as const;
 
 type TimeWording = (typeof TIME_WORDINGS)[number];
 
+/** Kumo's parts as Kinu restyles them with `!important`, as it ships, or as Kumo draws them (audit #27). */
+const KUMO_LOOKS = ["ships", "own"] as const;
+
+type KumoLook = (typeof KUMO_LOOKS)[number];
+
 /** The page's states for the review: as it would be mid-morning, at rest, before anything, reading, and failed. */
 export const ACTIVITY_STATES = [
   { id: "live", label: "Working, and asking" },
@@ -55,6 +61,7 @@ export interface Design {
   readonly device: Device;
   readonly activity: ActivityViewName;
   readonly times: TimeWording;
+  readonly kumo: KumoLook;
 }
 
 const MODES = ["light", "dark"] as const satisfies readonly ThemeMode[];
@@ -80,6 +87,7 @@ function readDesign(): Design {
     device: oneOf(params.get("device"), DEVICES, "desktop"),
     activity: oneOf(params.get("activity"), ACTIVITY_VIEWS, "ships"),
     times: oneOf(params.get("times"), TIME_WORDINGS, "ships"),
+    kumo: oneOf(params.get("kumo"), KUMO_LOOKS, "ships"),
   };
 }
 
@@ -101,6 +109,8 @@ function apply(design: Design): void {
 
   if (design.background === "today") delete root.dataset.background;
   else root.dataset.background = design.background;
+
+  wearKumoOwn(design.kumo === "own");
 }
 
 /** Every switch is a parameter of the address, so a reload and the phone window open on the same design. */
@@ -196,13 +206,18 @@ const ACTIVITY_WHY: Record<ActivityViewName, string> = {
   log: "One log for the workspace: now, what needs you, what is coming, and everything done, by its agent, helpers, jobs and watches.",
 };
 
+const KUMO_WHY: Record<KumoLook, string> = {
+  ships: "Kinu's restyle: index.css's `!important` declarations on Kumo's select, popover, tooltip, meter, copy field, composer model and landing tabs.",
+  own: "Kumo's own: those declarations taken out, and nothing else changed. What differs is all they do; what does not is safe to delete.",
+};
+
 const TIMES_WHY: Record<TimeWording, string> = {
   ships: "Each surface's own: the chat's clock (2:10 AM), the pill's \"3 min\", the jobs' \"in 3m\", the roster's \"3m ago\".",
   one: "One rule: \"just now\", \"12 min ago\" and \"in 20 min\" when near; the clock the same day; \"Yesterday, 4:10 PM\"; the weekday; the date.",
 };
 
 function summary(design: Design): string {
-  return [LOOK_NAMES[design.look], design.mode, `${CHAT_FACES[design.font].label} (${design.scope})`, `background ${design.background}`, design.device, `activity ${design.activity}`, `times ${design.times}`].join(" · ");
+  return [LOOK_NAMES[design.look], design.mode, `${CHAT_FACES[design.font].label} (${design.scope})`, `background ${design.background}`, design.device, `activity ${design.activity}`, `times ${design.times}`, `kumo ${design.kumo}`].join(" · ");
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -260,6 +275,8 @@ export function DesignBar() {
           <Choice label="Times" value={design.times} options={TIME_WORDINGS} name={(times) => (times === "one" ? "One wording" : "As it ships")}
             onPick={(times) => detach(switchTo({ times }, pathname.endsWith("/activity") ? null : ACTIVITY_PAGE))} />
           <p className="p-meta p-text-3" data-design-why="times">{TIMES_WHY[design.times]}</p>
+          <Choice label="Kumo's parts" value={design.kumo} options={KUMO_LOOKS} name={(kumo) => (kumo === "own" ? "Kumo's own" : "As it ships")} onPick={(kumo) => setDesign({ kumo })} />
+          <p className="p-meta p-text-3" data-design-why="kumo">{KUMO_WHY[design.kumo]}</p>
         </Section>
         <Section title="Go to">
           <div className="flex flex-wrap gap-1">

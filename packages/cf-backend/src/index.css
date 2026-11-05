@@ -239,8 +239,11 @@ html, body, #root {
      `border-kumo-hairline`, …) are baked into its dist bundle and cannot
      be restyled per call site. They resolve through Kumo's own custom
      properties, so re-pointing those at the `--c-*` layer reskins its
-     colours with no wrappers; a part's padding, radius or shadow that a
-     token cannot reach is still overridden where its class sits below.
+     colours with no wrappers. A part's padding, radius or shadow that no
+     token reaches is overridden below with `!important` on the class its
+     `ui/` wrapper sets (.p-select, .p-popover, .p-tooltip, .p-meter-*,
+     .p-copy-field, .p-composer-model), and those rules lean on Kumo's
+     markup. The gallery's design bar takes them out live ("Kumo's parts").
 
      Kumo declares them inside `@layer base` and keys its dark set on the
      same `[data-mode]` attribute we use; this block is unlayered, so it
