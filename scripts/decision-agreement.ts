@@ -25,9 +25,8 @@ import {
   isHighRating, isLowRating, rateTurn, renderRatedTurn, type RatedTurnInput, type RatingVerdict,
 } from '../packages/core/src/evolution/ratings';
 import { TRIAGE } from '../packages/core/src/evolution/refinement-lane';
-import {
-  createDecisionPort, DECISION_MODELS, DEFAULT_DECISION_MODEL, type DecisionModel, type DecisionPort, type DecisionRun,
-} from '../packages/core/src/providers/decision-model';
+import { createDecisionPort, type DecisionPort, type DecisionRun } from '../packages/core/src/providers/decision-model';
+import { DECISION_MODELS, DEFAULT_DECISION_MODEL, type DecisionModel } from '../packages/core/src/providers/decision-models';
 import { answerStructured } from '../packages/core/src/evolution/structured-decision';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../packages/core/src/providers/workers-ai';
 import { createLocalModelResolver } from '../packages/cli-backend/src/model-resolver';

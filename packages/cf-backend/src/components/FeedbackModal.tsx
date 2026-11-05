@@ -61,7 +61,7 @@ function sendLabel(phase: SendState["phase"]): string {
   return "Send";
 }
 
-export function FeedbackModal({ onClose }: { onClose: () => void }) {
+export default function FeedbackModal({ onClose }: { onClose: () => void }) {
   const location = useLocation();
   const [note, setNote] = useState("");
   const [wanted, setWanted] = useState(true);

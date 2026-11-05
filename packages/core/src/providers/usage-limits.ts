@@ -5,7 +5,7 @@ import { KinuError, diagnostics, renderThrownChain, settle } from '../obs/index'
 import { baseCredentialKey, accountOf } from '../credentials/accounts';
 import { fmtSpan, fmtUsd } from '../utils/format';
 import { OPENROUTER_BASE_URL } from './openrouter';
-import { providerName } from './model-test';
+import { providerName } from './model-test-result';
 import { plainFetch } from './fetch-shim';
 
 export interface LimitWindow {

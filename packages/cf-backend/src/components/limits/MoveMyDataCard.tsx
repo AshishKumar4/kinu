@@ -11,7 +11,7 @@ import { getLimits } from "@/lib/limits-api";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { zipWholeDrive } from "@/lib/drive-api";
 import { downloadWorkspaceArchive, saveBlob } from "@/lib/workspace-archive";
-import { useWorkspaceRpc } from "@/hooks/use-chat-owner";
+import { useWorkspaceRpc } from "@/hooks/use-workspace-rpc";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Group } from "@/components/ui/Group";

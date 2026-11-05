@@ -1,9 +1,11 @@
 /** Owns only the open state, so the dialog and the rasteriser's chunk are built after a click. */
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { MegaphoneIcon } from "@phosphor-icons/react";
-import { FeedbackModal } from "./FeedbackModal";
+import { lazyRoute } from "@/lazy-route";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
+
+const FeedbackModal = lazyRoute(() => import("./FeedbackModal"));
 
 export function FeedbackButton({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -17,7 +19,7 @@ export function FeedbackButton({ compact = false }: { compact?: boolean }) {
             <MegaphoneIcon size={14} /><span>Feedback</span>
           </Pressable>
         )}
-      {open && <FeedbackModal onClose={() => setOpen(false)} />}
+      {open && <Suspense fallback={null}><FeedbackModal onClose={() => setOpen(false)} /></Suspense>}
     </>
   );
 }

@@ -13,7 +13,7 @@ import { definePromptSection } from '../prompting/template';
 import { NAMED_SWARM_PRESETS } from '../types/swarm';
 import { REASONING_EFFORTS } from '../providers/effort';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
-import { DECISION_MODELS } from '../providers/decision-model';
+import { DECISION_MODELS } from '../providers/decision-models';
 import { DEFAULT_WEB_SEARCH_CHAIN, WebSearchRouteSchema } from '../providers/web-search';
 import type { WebSearchChain } from '../web/search-chain';
 import { isAccountName, isProviderScope } from '../credentials/accounts';

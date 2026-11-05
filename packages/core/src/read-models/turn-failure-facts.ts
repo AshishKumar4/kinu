@@ -4,7 +4,7 @@
  */
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
-import { providerName } from '../providers/model-test';
+import { providerName } from '../providers/model-test-result';
 
 export interface TurnFailureFacts {
   /** The provider's name as the chat writes it, when the failure names one. */

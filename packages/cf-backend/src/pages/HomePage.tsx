@@ -15,7 +15,7 @@ import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 import { useSetupFinish } from "@/lib/setup-finish";
 import { Loader } from "@/components/ui/Loader";
-import WorkspacePage from "./WorkspacePage";
+import { WorkspacePage } from "./workspace-route";
 import { Surface } from "@/components/ui/Surface";
 
 /** Home: the owner's Personal assistant's chat once they have one; until then, a new workspace's mission, which is also

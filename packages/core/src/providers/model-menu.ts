@@ -2,7 +2,7 @@
 
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from './workers-ai';
 import { knownReasoningEfforts, type ReasoningEffort } from './reasoning-effort';
-import { ProviderFailureSchema, type ProviderFailure } from './registry';
+import { ProviderFailureSchema, type ProviderFailure } from './provider-failure';
 import { MODEL_CAPABILITIES, ModelPricingSchema, specProvider, specWithoutAccount, type ModelCapability, type ModelPricing } from './types';
 import * as v from 'valibot';
 import { nonEmptyString } from '../utils/json';
