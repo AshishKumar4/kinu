@@ -2,7 +2,7 @@ import {
   createExperienceLibrary, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, validateProfileCatalog, type ExperienceEntry, type ExperienceKind, type ProfileCatalog, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, decodeJsonValue, PROFILE_CATALOG_CONFIG_KEY, CapabilityDeniedError, type UserCaller, type WorkspaceOverview, displayNameProblem, type UserProfile,
 } from '@kinu.run/core';
 import { authoredRefusal, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { AI_GATEWAY_CONFIG_KEY } from './credentials';
 import { libraryTiles } from './roster';
@@ -165,82 +165,64 @@ export class UserProfileStore {
   }
 
   /** A key of the account's plain config: the owner's, and never the profile catalog, which has its typed CAS route. */
-  private async configKey(caller: UserCaller, key: string): Promise<void> {
-    await this.host.requireTier(caller, 'config');
+  private configKey(caller: UserCaller, key: string): Effect.Effect<void, KinuError> {
+    return Effect.flatMap(Effect.promise(() => this.host.requireTier(caller, 'config')), () => {
+      if (key === PROFILE_CATALOG_CONFIG_KEY) return Effect.fail(new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.'));
 
-    if (key === PROFILE_CATALOG_CONFIG_KEY) {
-      throw new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
-    }
-
-    // An authentication setting: its write moves the credentials' revision (`selectAIGateway`).
-    if (key === AI_GATEWAY_CONFIG_KEY) throw new KinuError('bad_input', `${AI_GATEWAY_CONFIG_KEY} has a dedicated route, PUT /api/user/cloudflare/gateway.`);
+      // An authentication setting: its write moves the credentials' revision (`selectAIGateway`).
+      return key === AI_GATEWAY_CONFIG_KEY
+        ? Effect.fail(new KinuError('bad_input', `${AI_GATEWAY_CONFIG_KEY} has a dedicated route, PUT /api/user/cloudflare/gateway.`))
+        : Effect.void;
+    });
   }
 
-  async getConfig(caller: UserCaller, key: string): Promise<string | null> {
-    await this.configKey(caller, key);
-
-    const row = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
-
-    return row?.value ?? null;
+  getConfig(caller: UserCaller, key: string): Promise<string | null> {
+    return settle(Effect.map(this.configKey(caller, key), () => this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0]?.value ?? null));
   }
 
-  async setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
-    await this.configKey(caller, key);
-
-    this.host.sqlx(
-      `INSERT INTO user_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      key, value,
-    );
+  setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
+    return settle(Effect.map(this.configKey(caller, key), () => {
+      this.host.sqlx(
+        `INSERT INTO user_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        key, value,
+      );
+    }));
   }
 
   /** The value `key` holds, or `proposed` written as its value when it holds none: read and written in one turn, so of
    *  two claims at once one writes and both answer what it wrote. */
-  async claimConfig(caller: UserCaller, key: string, proposed: string): Promise<string> {
-    await this.configKey(caller, key);
+  claimConfig(caller: UserCaller, key: string, proposed: string): Promise<string> {
+    return settle(Effect.map(this.configKey(caller, key), () => {
+      const held = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0]?.value;
 
-    const held = this.host.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0]?.value;
+      if (held !== undefined) return held;
+      this.host.sqlx(`INSERT INTO user_config (key, value) VALUES (?, ?)`, key, proposed);
 
-    if (held !== undefined) return held;
-    this.host.sqlx(`INSERT INTO user_config (key, value) VALUES (?, ?)`, key, proposed);
-
-    return proposed;
+      return proposed;
+    }));
   }
 
   /**
    * Owner-session only: the role/tier catalog is authority, so even a `full`-tier workspace is
    * refused until the agent runtime adds its narrow read surface.
    */
-  private async requireOwnerSession(caller: UserCaller): Promise<void> {
-    const resolved = await this.host.requireTier(caller, 'config');
-
-    if (resolved.kind !== 'owner_session') {
-      throw new CapabilityDeniedError(
-        'The profile catalog is owner-only. Workspaces cannot read or write the account\'s roles and tiers.',
-      );
-    }
+  private requireOwnerSession(caller: UserCaller): Effect.Effect<void> {
+    return Effect.flatMap(Effect.promise(() => this.host.requireTier(caller, 'config')), (resolved) => (resolved.kind === 'owner_session'
+      ? Effect.void
+      : Effect.die(new CapabilityDeniedError('The profile catalog is owner-only. Workspaces cannot read or write the account\'s roles and tiers.'))));
   }
 
   /** Corruption is an account configuration error, not permission to substitute other authority. */
-  private parseStoredProfileCatalog(value: string): ProfileCatalog {
-    let json: JsonValue;
+  private parseStoredProfileCatalog(value: string): Result.Result<ProfileCatalog, KinuError> {
+    const json = Result.try({
+      try: (): JsonValue => decodeJsonValue({ value: JSON.parse(value) }),
+      catch: (cause) => new KinuError('io', 'The stored account profile catalog cannot be decoded as JSON.', { cause }),
+    });
 
-    try {
-      json = decodeJsonValue({ value: JSON.parse(value) });
-    } catch (error) {
-      throw new KinuError('io', 
-        'The stored account profile catalog cannot be decoded as JSON.',
-        { cause: error },
-      );
-    }
-
-    try {
-      return validateProfileCatalog({ value: json });
-    } catch (error) {
-      throw new KinuError('io', 
-        'The stored account profile catalog violates the profile catalog contract.',
-        { cause: error },
-      );
-    }
+    return Result.flatMap(json, (decoded) => Result.try({
+      try: () => validateProfileCatalog({ value: decoded }),
+      catch: (cause) => new KinuError('io', 'The stored account profile catalog violates the profile catalog contract.', { cause }),
+    }));
   }
 
   private profileCatalogEnvelope(version: number, catalog: ProfileCatalog): ProfileCatalogEnvelope {
@@ -253,86 +235,84 @@ export class UserProfileStore {
   }
 
   /** A missing row starts at version 0; malformed stored config fails rather than changing roles. */
-  private readProfileCatalogState(): ProfileCatalogState {
+  private readProfileCatalogState(): Effect.Effect<ProfileCatalogState, KinuError> {
     const rawRow = this.host.sqlx(
       `SELECT value, version FROM user_config WHERE key = ?`, PROFILE_CATALOG_CONFIG_KEY,
     )[0];
 
-    if (!rawRow) return { version: 0, catalog: BUILTIN_PROFILE_CATALOG };
+    if (!rawRow) return Effect.succeed({ version: 0, catalog: BUILTIN_PROFILE_CATALOG });
+    const row = v.safeParse(StoredProfileCatalogRowSchema, rawRow);
 
-    let row: StoredProfileCatalogRow;
-
-    try {
-      row = v.parse(StoredProfileCatalogRowSchema, rawRow);
-    } catch (error) {
-      throw new KinuError('io', 'The stored account profile catalog state is malformed.', { cause: error });
+    if (!row.success) {
+      return Effect.fail(new KinuError('io', 'The stored account profile catalog state is malformed.', { cause: new v.ValiError(row.issues) }));
     }
 
-    return { version: row.version, catalog: this.parseStoredProfileCatalog(row.value) };
+    return Effect.map(Effect.fromResult(this.parseStoredProfileCatalog(row.output.value)), (catalog) => ({ version: row.output.version, catalog }));
   }
 
-  async getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
-    await this.requireOwnerSession(caller);
-    const current = this.readProfileCatalogState();
+  /** The stored catalog as its envelope, once `admitted` lets the caller read it. */
+  private currentEnvelope(admitted: Effect.Effect<unknown>): Effect.Effect<ProfileCatalogEnvelope, KinuError> {
+    return Effect.andThen(admitted, Effect.map(Effect.suspend(() => this.readProfileCatalogState()), (current) => this.profileCatalogEnvelope(current.version, current.catalog)));
+  }
 
-    return this.profileCatalogEnvelope(current.version, current.catalog);
+  getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
+    return settle(this.currentEnvelope(this.requireOwnerSession(caller)));
   }
 
   /** The catalog's version alone: a workspace compares it at each turn's open, and reads the catalog only once it moved. */
-  async getWorkspaceProfileCatalogVersion(caller: UserCaller): Promise<number> {
-    await this.host.requireTier(caller, 'profile.resolve');
-
-    return this.readProfileCatalogState().version;
+  getWorkspaceProfileCatalogVersion(caller: UserCaller): Promise<number> {
+    return settle(Effect.map(this.currentEnvelope(Effect.promise(() => this.host.requireTier(caller, 'profile.resolve'))), (envelope) => envelope.version));
   }
 
   /** Shared workspaces may read the catalog; only an owner session may mutate it. */
-  async getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
-    await this.host.requireTier(caller, 'profile.resolve');
-    const current = this.readProfileCatalogState();
-
-    return this.profileCatalogEnvelope(current.version, current.catalog);
+  getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
+    return settle(this.currentEnvelope(Effect.promise(() => this.host.requireTier(caller, 'profile.resolve'))));
   }
 
   /**
    * CAS write: a version mismatch refuses with current state. Validation precedes the write, and
    * the read-check-write has no await, so each accepted write increments the version by one.
    */
-  async putProfileCatalog(caller: UserCaller, catalog: JsonValue, expectedVersion: number): Promise<ProfileCatalogWriteResult> {
-    await this.requireOwnerSession(caller);
+  putProfileCatalog(caller: UserCaller, catalog: JsonValue, expectedVersion: number): Promise<ProfileCatalogWriteResult> {
+    const writing = Effect.suspend((): Effect.Effect<ProfileCatalogWriteResult, KinuError> => {
+      if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
+        return Effect.succeed({ ok: false, kind: 'malformed', reason: 'expectedVersion must be a non-negative integer.' });
+      }
 
-    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
-      return { ok: false, kind: 'malformed', reason: 'expectedVersion must be a non-negative integer.' };
-    }
+      const validated = Result.try(() => validateProfileCatalog({ value: catalog }));
 
-    let parsed: ProfileCatalog;
+      if (Result.isFailure(validated)) {
+        // The refusal names the offending path; it is all the owner is shown.
+        const reason = renderThrownChain({ cause: authoredRefusal({ doing: 'reading the profile catalog', cause: validated.failure }) });
 
-    try {
-      parsed = validateProfileCatalog({ value: catalog });
-    } catch (cause) {
-      // The refusal names the offending path; it is all the owner is shown.
-      return { ok: false, kind: 'malformed', reason: renderThrownChain({ cause: authoredRefusal({ doing: 'reading the profile catalog', cause }) }) };
-    }
+        return Effect.succeed({ ok: false, kind: 'malformed', reason });
+      }
 
-    // No await from here to the write: DO input gates make the CAS atomic.
-    const current = this.readProfileCatalogState();
+      const parsed = validated.success;
 
-    if (current.version !== expectedVersion) {
-      return {
-        ok: false,
-        kind: 'conflict',
-        currentVersion: current.version,
-        currentDigest: profileCatalogDigest(current.catalog),
-      };
-    }
+      // No await from here to the write: DO input gates make the CAS atomic.
+      return Effect.map(this.readProfileCatalogState(), (current): ProfileCatalogWriteResult => {
+        if (current.version !== expectedVersion) {
+          return {
+            ok: false,
+            kind: 'conflict',
+            currentVersion: current.version,
+            currentDigest: profileCatalogDigest(current.catalog),
+          };
+        }
 
-    const nextVersion = current.version + 1;
-    this.host.sqlx(
-      `INSERT INTO user_config (key, value, version) VALUES (?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET value = excluded.value, version = excluded.version`,
-      PROFILE_CATALOG_CONFIG_KEY, JSON.stringify(parsed), nextVersion,
-    );
+        const nextVersion = current.version + 1;
+        this.host.sqlx(
+          `INSERT INTO user_config (key, value, version) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, version = excluded.version`,
+          PROFILE_CATALOG_CONFIG_KEY, JSON.stringify(parsed), nextVersion,
+        );
 
-    return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
+        return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
+      });
+    });
+
+    return settle(Effect.andThen(this.requireOwnerSession(caller), writing));
   }
 
   /**

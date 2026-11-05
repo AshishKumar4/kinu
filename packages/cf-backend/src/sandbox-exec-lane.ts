@@ -5,7 +5,7 @@
  */
 
 import { jsonResultOrVoid, REAL_CLOCK, SandboxPending, type Clock, type OutputSink, type SandboxHandle } from '@kinu.run/core';
-import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
+import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, settleLogged, type ErrorCode } from "@kinu.run/core/obs";
 import { devboxFailure, holdReadiness, readExec, type DevboxErrorCode } from '@kinu.run/devbox';
 import { DEVBOX_WORKDIR } from '@kinu.run/devbox/wire';
 import { Effect } from 'effect';
@@ -91,7 +91,7 @@ function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
  * output whole. An abort ends its process tree and reports once it is gone; a refused kill is reported as itself,
  * since the process is still running, and a command that finished first is returned as finished.
  */
-async function execWithoutDeadline(
+function execWithoutDeadline(
   handle: Pick<KinuDevbox, "exec" | "execStream" | "killExec">,
   command: string,
   { cwd, signal, env, execId }: {
@@ -101,7 +101,7 @@ async function execWithoutDeadline(
 ) {
   const options = { cwd: cwd ?? DEVBOX_WORKDIR, execId, ...(env !== undefined && { env }) };
 
-  return await stoppable(handle, { execId, signal, doing: 'computer.exec' }, () => (output === undefined
+  return stoppable(handle, { execId, signal, doing: 'computer.exec' }, () => (output === undefined
     ? handle.exec(command, options)
     : handle.execStream(command, options).then((stream) => readExec(stream, (name, data) => { output.write(name, data); }))));
 }
@@ -112,35 +112,40 @@ async function execWithoutDeadline(
  * is reported as itself, since the process is still running; a call that finished first is returned as finished; one
  * the box answers as stopped is that answer.
  */
-async function stoppable<T>(
+function stoppable<T>(
   handle: Pick<KinuDevbox, "killExec">,
   { execId, signal, doing }: { readonly execId: string; readonly signal: AbortSignal | undefined; readonly doing: string },
   run: () => Promise<T>,
-): Promise<T> {
-  const ran = run();
-  // Set only on abort: true means this call ended the process tree, false that the command had already exited.
-  let verdict: Promise<boolean> | undefined;
-  const { promise: killRefused, reject } = Promise.withResolvers<never>();
+): Effect.Effect<T, KinuError> {
+  return Effect.suspend(() => {
+    const ran = run();
+    // Set only on abort: true means this call ended the process tree, false that the command had already exited.
+    let verdict: Promise<boolean> | undefined;
+    // Settles only as a refused kill, whose refusal ends the wait: the process is still running.
+    const { promise: killRefused, resolve } = Promise.withResolvers<never>();
 
-  const kill = (): void => {
-    verdict = handle.killExec(execId);
-    verdict.catch(reject);
-  };
+    const kill = (): void => {
+      const asked = handle.killExec(execId);
+      verdict = asked;
+      resolve(asked.then(() => new Promise<never>(() => {})));
+    };
 
-  if (signal?.aborted === true) kill();
-  else signal?.addEventListener("abort", kill, { once: true });
+    if (signal?.aborted === true) kill();
+    else signal?.addEventListener("abort", kill, { once: true });
 
-  try {
-    const result = await Promise.race([ran, killRefused]);
+    const stopped = Effect.gen(function* () {
+      const result = yield* callDevbox(() => Promise.race([ran, killRefused]));
+      const asked = verdict;
 
-    if (verdict !== undefined && await verdict) {
-      throw new DOMException(`${doing} cancelled: its container process tree was ended (exec ${execId})`, "AbortError");
-    }
+      if (asked !== undefined && (yield* callDevbox(() => asked))) {
+        return yield* fromDevbox({ cause: new DOMException(`${doing} cancelled: its container process tree was ended (exec ${execId})`, "AbortError") });
+      }
 
-    return result;
-  } finally {
-    signal?.removeEventListener("abort", kill);
-  }
+      return result;
+    });
+
+    return Effect.ensuring(stopped, Effect.sync(() => { signal?.removeEventListener("abort", kill); }));
+  });
 }
 
 /** What a moved exposure owes is recorded before the call returns; its failure is reported, never the exposure's. */
@@ -174,43 +179,37 @@ export function adaptCloudflareSandbox(
   // Memoized on the promise so concurrent first calls share it; failures are not cached.
   let inFlight: Promise<void> | null = null;
 
-  const configured = async (): Promise<void> => {
-    if (inFlight !== null) return await inFlight;
+  const configured = Effect.suspend(() => {
+    const joined = inFlight;
+
+    if (joined !== null) return callDevbox(() => joined);
     const configuring = configure();
     inFlight = configuring;
 
-    try {
-      await configuring;
-    } catch (error) {
-      inFlight = null;
-      throw error;
-    }
-  };
+    return Effect.onError(callDevbox(() => configuring), () => Effect.sync(() => { inFlight = null; }));
+  });
 
   // `signal`: the call's own, which ends a hold for the box's base as it ends the call.
-  const onContainer = <T>(run: () => Promise<T>, signal?: AbortSignal): Effect.Effect<T, KinuError> => Effect.tryPromise({
-    try: async () => {
-      await configured();
-      const readiness = await readinessPastBase(handle, clock, signal);
+  const onContainer = <T>(run: () => Promise<T>, signal?: AbortSignal): Effect.Effect<T, KinuError> => Effect.gen(function* () {
+    yield* configured;
+    const readiness = yield* callDevbox(() => readinessPastBase(handle, clock, signal));
 
-      if (readiness.kind === 'pending') throw new SandboxPending(readiness.reason);
+    if (readiness.kind === 'pending') return yield* fromDevbox({ cause: new SandboxPending(readiness.reason) });
 
-      return await run();
-    },
-    catch: (cause) => fromDevbox({ cause }),
+    return yield* callDevbox(run);
   });
 
 
   return {
     ensureReady: () => settle(onContainer(() => Promise.resolve())),
-    configure: () => settle(Effect.tryPromise({ try: configured, catch: (cause) => fromDevbox({ cause }) })),
+    configure: () => settle(configured),
     // One launch id per call: after a lost reply the same id reads the box's answer, never a second launch.
     exec: (command, opts) => {
       const signals = [opts?.signal, opts?.timeout === undefined ? undefined : AbortSignal.timeout(opts.timeout)].filter((held) => held !== undefined);
       const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
       const execId = crypto.randomUUID();
       const ready = onContainer(() => Promise.resolve(), signal);
-      const run = callDevbox(() => execWithoutDeadline(handle, command, { cwd: opts?.cwd, signal, env: opts?.env, execId }, opts?.output));
+      const run = execWithoutDeadline(handle, command, { cwd: opts?.cwd, signal, env: opts?.env, execId }, opts?.output);
       // The exec call itself gave no verdict, and nothing cancelled it: it may or may not have reached the box.
       const lost = (failure: KinuError): boolean => signal?.aborted !== true && failure.code === 'io' && devboxFailure({ cause: failure.cause }) === undefined;
 
@@ -243,9 +242,9 @@ export function adaptCloudflareSandbox(
 
       drivers.add(request.driver);
 
-      return settle(Effect.andThen(onContainer(() => Promise.resolve(), signal), callDevbox(() => stoppable(
+      return settle(Effect.andThen(onContainer(() => Promise.resolve(), signal), stoppable(
         handle, { execId, signal, doing: `computer.${request.action.kind}` }, () => handle.desktop({ ...request, execId }),
-      ))));
+      )));
     },
     releaseDesktop: (driver) => {
       if (!drivers.has(driver)) return Promise.resolve();
@@ -295,15 +294,7 @@ export function adaptCloudflareSandbox(
 
           if (label === null || label.port !== row.port) return;
 
-          try {
-            await index.refresh(row.port, label.token);
-          } catch (cause) {
-            diagnostics.failure('preview.refresh_failed', toKinuError({
-              doing: 'refreshing a published sandbox preview',
-              cause,
-              otherwise: 'unavailable',
-            }), { port: row.port });
-          }
+          await settleLogged('preview.refresh_failed', { doing: 'refreshing a published sandbox preview', otherwise: 'unavailable' }, () => index.refresh(row.port, label.token), { port: row.port });
         }));
       }
 
@@ -319,11 +310,7 @@ export function adaptCloudflareSandbox(
         command: row.command, restartable: row.restartable,
         waiting: row.waiting, session: row.session,
       })))),
-    resize: (size) => settle(callDevbox(async () => {
-      await configured();
-
-      return await handle.resize(size);
-    })),
+    resize: (size) => settle(Effect.andThen(configured, callDevbox(() => handle.resize(size)))),
     // Not `onContainer`: an answer never starts a resting container.
     answerRest: (answer) => settle(callDevbox(() => handle.answerRest(answer))),
     // DO rows only: no egress, no attach wait, since the token must be mintable before its exposure.

@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { tolerate, settle } from '@kinu.run/core/obs';
+import { KinuError, tolerate, settle } from '@kinu.run/core/obs';
 import { lstatSync, mkdirSync, readlinkSync, symlinkSync, unlinkSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
@@ -52,17 +52,17 @@ interface ConfigLock {
 }
 
 /** Asynchronous: a wait polls on a timer, so the process keeps running while another holds the lock. */
-export function createConfigLock(boundary = hostProcessIdentity()): ConfigLock {
-  return {
-    async with<T>(configPath: string, fn: () => T | Promise<T>): Promise<T> {
-      const lockPath = lockPathFor(configPath);
-      const held = await acquire(lockPath, boundary);
+export function createConfigLock(boundary?: ProcessIdentityBoundary): ConfigLock {
+  const identity = boundary === undefined ? hostProcessIdentity() : Effect.succeed(boundary);
 
-      try {
-        return await holding(lockPath, held.token, fn);
-      } finally {
-        release(held);
-      }
+  return {
+    with<T>(configPath: string, fn: () => T | Promise<T>): Promise<T> {
+      return settle(Effect.gen(function* () {
+        const lockPath = lockPathFor(configPath);
+        const held = yield* acquire(lockPath, yield* identity);
+
+        return yield* Effect.ensuring(Effect.promise(async () => holding(lockPath, held.token, fn)), Effect.sync(() => { release(held); }));
+      }));
     },
   };
 }
@@ -76,18 +76,21 @@ export async function withConfigLock<T>(configPath: string, fn: () => T | Promis
  * One try at the lock at `path`, for a caller that skips work another live process is doing rather than wait for it:
  * its release, or null while a live process holds it. A lock whose holder the kernel proves gone is taken over.
  */
-export async function tryLock(path: string, boundary = hostProcessIdentity()): Promise<(() => void) | null> {
-  mkdirSync(dirname(path), { recursive: true });
-  const self = await boundary.self(process.pid);
+export function tryLock(path: string, boundary?: ProcessIdentityBoundary): Promise<(() => void) | null> {
+  return settle(Effect.gen(function* () {
+    const identity = boundary ?? (yield* hostProcessIdentity());
+    mkdirSync(dirname(path), { recursive: true });
+    const self = yield* Effect.promise(() => identity.self(process.pid));
 
-  // The second try follows a broken abandoned lock.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const held = await tryAcquire(path, self, boundary);
+    // The second try follows a broken abandoned lock.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const held = yield* Effect.promise(() => tryAcquire(path, self, identity));
 
-    if (held !== null) return () => { release(held); };
-  }
+      if (held !== null) return () => { release(held); };
+    }
 
-  return null;
+    return null;
+  }));
 }
 
 function lockPathFor(configPath: string): string {
@@ -103,18 +106,29 @@ function holding<T>(lockPath: string, token: string, fn: () => T): T {
   return heldByCall.run(held, fn);
 }
 
-async function acquire(lockPath: string, boundary: ProcessIdentityBoundary): Promise<Held> {
-  const self = await boundary.self(process.pid);
+function acquire(lockPath: string, boundary: ProcessIdentityBoundary): Effect.Effect<Held, KinuError> {
+  return Effect.gen(function* () {
+    const self = yield* Effect.promise(() => boundary.self(process.pid));
 
-  for (;;) {
-    const held = await tryAcquire(lockPath, self, boundary);
+    for (;;) {
+      const held = yield* Effect.promise(() => tryAcquire(lockPath, self, boundary));
 
-    if (held !== null) return held;
-    assertNotSelfHeld(lockPath);
-    const poll = Promise.withResolvers<void>();
-    setTimeout(poll.resolve, LOCK_POLL_MS);
-    await poll.promise;
-  }
+      if (held !== null) return held;
+
+      if (selfHeld(lockPath)) {
+        return yield* new KinuError('bad_input', `Deadlocked on the config lock: ${lockPath}: this call already holds it, and the `
+          + 'hold is released only when it returns. Take the lock once around the whole '
+          + 'read-modify-write instead of nesting it.');
+      }
+
+      yield* Effect.promise(() => {
+        const poll = Promise.withResolvers<void>();
+        setTimeout(poll.resolve, LOCK_POLL_MS);
+
+        return poll.promise;
+      });
+    }
+  });
 }
 
 /** Owner info lands in the same syscall as the name, so a crash cannot leave an unidentifiable lock. */
@@ -212,26 +226,23 @@ export function createProcessIdentityBoundary(
   };
 }
 
-function hostProcessIdentity(): ProcessIdentityBoundary {
+function hostProcessIdentity(): Effect.Effect<ProcessIdentityBoundary, KinuError> {
   const host = hostGenerationReader();
 
   if (host === null) {
-    throw new Error(`Refusing to take the config lock: ${process.platform} cannot prove a process `
-      + 'generation after a crash. Kinu supports this lock on Linux and macOS.');
+    return Effect.fail(new KinuError('unsupported', `Refusing to take the config lock: ${process.platform} cannot prove a process `
+      + 'generation after a crash. Kinu supports this lock on Linux and macOS.'));
   }
 
-  return createProcessIdentityBoundary(host.platform, (pid) => host.read(pid));
+  return Effect.succeed(createProcessIdentityBoundary(host.platform, (pid) => host.read(pid)));
 }
 
 /**
  * Waits end when the holder does, never on a clock: a timeout would drop a config
  * write. The one refused wait is a take of a path this call already holds.
  */
-function assertNotSelfHeld(lockPath: string): void {
+function selfHeld(lockPath: string): boolean {
   const token = heldByCall.getStore()?.get(lockPath);
 
-  if (token === undefined || readOwner(lockPath)?.token !== token) return;
-  throw new Error(`Deadlocked on the config lock: ${lockPath}: this call already holds it, and the `
-    + 'hold is released only when it returns. Take the lock once around the whole '
-    + 'read-modify-write instead of nesting it.');
+  return token !== undefined && readOwner(lockPath)?.token === token;
 }
