@@ -710,10 +710,13 @@ class BenchBox extends Devbox<BenchEnv> {
     return await this.ctx.storage.get<BenchOperationRow>(operationKey(token));
   }
 
-  protected override async dispatchAlarm(callback: string): Promise<void> {
-    if (!callback.startsWith("bench.operation:")) return super.dispatchAlarm(callback);
+  protected override alarmHandler(callback: string): (() => Promise<void>) | undefined {
+    if (!callback.startsWith("bench.operation:")) return super.alarmHandler(callback);
     const token = callback.slice("bench.operation:".length);
-    await this.#runBenchOperation({ token }, row => row.operation === "checkpoint" ? this.checkpointNow(row.kind) : this.quiesce());
+
+    return async () => {
+      await this.#runBenchOperation({ token }, row => row.operation === "checkpoint" ? this.checkpointNow(row.kind) : this.quiesce());
+    };
   }
 
   /**

@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import {
   DEVICE_PTY_MAX_AXIS, nanoid, type UserCaller, DeviceTerminalHub, DEVICE_FRAMES, DEVICE_METHOD, NO_DEVICE_CONNECTED, type DeviceSocket,
 } from '@kinu.run/core';
@@ -69,14 +69,14 @@ export class UserTerminals {
     const token = url.searchParams.get('session') ?? '';
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
-    let attached: { device: string; workspace: string };
+    const attaching = Result.try(() => this._terminals.attach(token, server));
 
-    try {
-      attached = this._terminals.attach(token, server);
-    } catch (cause) {
-      // Unknown or taken session is expected (shell ended or object evicted); the pane opens a new one.
-      return new Response(renderThrownChain({ cause: authoredRefusal({ doing: 'attaching a terminal pane', cause }) }), { status: 409 });
+    // Unknown or taken session is expected (shell ended or object evicted); the pane opens a new one.
+    if (Result.isFailure(attaching)) {
+      return new Response(renderThrownChain({ cause: authoredRefusal({ doing: 'attaching a terminal pane', cause: attaching.failure }) }), { status: 409 });
     }
+
+    const attached = attaching.success;
 
     diagnostics.event('device.terminal_attached', { device: attached.device, workspace: attached.workspace });
     const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };

@@ -2,8 +2,8 @@
 
 import { existsSync } from 'node:fs';
 import {
-  MissingLocalWorkspaceError,
   agentDbPath,
+  missingLocalWorkspace,
   resolveAgentRef,
   resolveLocalAgent,
   type LocalAgentRef,
@@ -13,13 +13,14 @@ import { printError } from './display';
 
 /** A missing workspace is a usage error with its hint; every other refusal propagates. */
 export function requireLocalAgent(name: string): LocalAgentRef {
-  try {
-    return resolveLocalAgent(name);
-  } catch (error) {
-    if (!(error instanceof MissingLocalWorkspaceError)) throw error;
-    printError(error.message, error.hint);
+  const missing = missingLocalWorkspace(name);
+
+  if (missing !== null) {
+    printError(`Workspace "${missing}" not found.`, `Create it with: kinu create ${missing}`);
     process.exit(1);
   }
+
+  return resolveLocalAgent(name);
 }
 
 /** Cloud targets need a configured ref: the account list is server-side. */

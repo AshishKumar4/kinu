@@ -9,7 +9,8 @@ import type {
   CodemodeSurface,
   JsonValue,
 } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { chainOf, settle } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
 import {
   CRAFTED_TOOL_NAMESPACE,
   explainSandboxError, programSurface,
@@ -82,7 +83,7 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
 
         const sandboxConsole = { log: capture, info: capture, warn: capture, error: capture, debug: capture, trace: capture, dir: capture };
 
-        try {
+        const ran = Effect.promise(async (): Promise<ExecuteSuccess> => {
           const signal = options.abortSignal;
           const context = signal ? { signal } : undefined;
           const toolBindings: Record<string, CodemodeExecute> = {};
@@ -136,11 +137,14 @@ export function createNodeCodemodeToolFactory(deps: NodeExecuteToolFactoryDeps):
           if (logs.length > 0) payload.logs = logs;
 
           return payload;
-        } catch (error) {
-          // A bare native-tool call throws a plain ReferenceError; rewrite it into a correction.
-          const message = explainSandboxError(renderThrownChain({ cause: error }));
-          throw new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: error });
-        }
+        });
+
+        // A bare native-tool call throws a plain ReferenceError; rewrite it into a correction.
+        return settle(Effect.catchCause(ran, (failed) => {
+          const message = explainSandboxError(chainOf(failed));
+
+          return Effect.die(new Error(logs.length > 0 ? message + '\nConsole output:\n' + logs.join('\n') : message, { cause: Cause.squash(failed) }));
+        }));
       }, { call: options.toolCallId, signal: options.abortSignal }, execContext({ signal: options.abortSignal, channel: readDeviceRequestChannel({ toolOptions: options }) })),
     }), () => surface.craftedTools().map(({ name, description }) => ({ name, description })));
   };

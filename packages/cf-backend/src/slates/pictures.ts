@@ -3,7 +3,7 @@ import type { Browser, BrowserWorker } from '@cloudflare/puppeteer';
 import * as v from 'valibot';
 import { DARK_PICTURE, isWorkspaceName, markStoreChanged, sha256Hex, VIEWER_EXCHANGE_PATH, type RawSqlExec, type SqlExec } from '@kinu.run/core';
 import { SlateDirectoryName } from '@kinu.run/core/slates';
-import { diagnostics, recording, toKinuError, settle } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, recording, toKinuError, settle } from '@kinu.run/core/obs';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from '../workspace-host';
 
 const AFTER_LAST_RENDER_MS = 30_000;
@@ -420,7 +420,7 @@ export async function browserCamera(binding: Pick<BrowserRun, 'fetch'>): Promise
   const worker: BrowserWorker = { fetch: Object.assign((input: RequestInfo | URL, init?: RequestInit) => binding.fetch(input, init), { preconnect: () => undefined }) };
   const browser = await puppeteer.launch(worker);
 
-  return { shoot: (url) => photograph(browser, url), close: () => browser.close() };
+  return { shoot: (url) => settle(photograph(browser, url)), close: () => browser.close() };
 }
 
 function captureToken(): string {
@@ -429,20 +429,20 @@ function captureToken(): string {
 
 /** Waits on load, not the network: a streaming slate never idles. Taken light, then dark with the page as it stands:
  *  `prefers-color-scheme` is what a slate's own CSS reads, so a slate that draws a dark of its own does so. */
-async function photograph(browser: Browser, url: string): Promise<Shots> {
-  const page = await browser.newPage();
-
-  try {
+function photograph(browser: Browser, url: string): Effect.Effect<Shots, KinuError> {
+  return Effect.flatMap(Effect.promise(() => browser.newPage()), (page) => Effect.ensuring(Effect.gen(function* () {
     if (new URL(url).hostname.endsWith(LOCAL_DEV_ZONE)) {
-      await (await page.createCDPSession()).send('Security.setIgnoreCertificateErrors', { ignore: true });
+      yield* Effect.promise(async () => (await page.createCDPSession()).send('Security.setIgnoreCertificateErrors', { ignore: true }));
     }
 
-    await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 0.5 });
-    await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+    yield* Effect.promise(async () => {
+      await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 0.5 });
+      await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
+    });
 
-    const response = await page.goto(url, { waitUntil: 'load', timeout: CAPTURE_HANDLE_LIFE_MS });
+    const response = yield* Effect.promise(() => page.goto(url, { waitUntil: 'load', timeout: CAPTURE_HANDLE_LIFE_MS }));
 
-    if (response === null || !response.ok()) throw new Error(`the preview answered ${String(response?.status() ?? 'nothing')}`);
+    if (response === null || !response.ok()) return yield* new KinuError('unavailable', `the preview answered ${String(response?.status() ?? 'nothing')}`);
 
     const inScheme = async (scheme: 'light' | 'dark'): Promise<Uint8Array> => {
       await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: scheme }]);
@@ -454,10 +454,8 @@ async function photograph(browser: Browser, url: string): Promise<Shots> {
       return await page.screenshot({ type: 'webp', quality: 80 });
     };
 
-    return { light: await inScheme('light'), dark: await inScheme('dark') };
-  } finally {
-    await page.close();
-  }
+    return { light: yield* Effect.promise(() => inScheme('light')), dark: yield* Effect.promise(() => inScheme('dark')) };
+  }), Effect.promise(() => page.close())));
 }
 
 /** A picture as a route names it: its slate, and the digest of one version, its dark capture's with `DARK_PICTURE`. */

@@ -10,6 +10,7 @@ import {
 } from './config';
 import { workspaceDisplayTitle } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { Result } from 'effect';
 import { listCloudAgents, type CloudAgent } from './cloud-api';
 
 interface ListedAgentFields {
@@ -74,18 +75,16 @@ export function groupAgentWorkspaces<T extends ListedAgent>(
 
 /** The slug is the address `kinu chat <name>` takes, never the title shown. */
 function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'> {
-  try {
-    return { label: workspaceDisplayTitle({ name: dirName, displayName: readWorkspaceDisplayName(agentDbPath(dirName)) }) };
-  } catch (error) {
-    const reason = renderThrownChain({ cause: error });
-    diagnostics.failure(
-      'workspace.read_failed',
-      toKinuError({ doing: 'reading a local workspace title', cause: error, otherwise: 'io' }),
-      { workspace: dirName },
-    );
+  const read = Result.try({
+    try: () => ({ label: workspaceDisplayTitle({ name: dirName, displayName: readWorkspaceDisplayName(agentDbPath(dirName)) }) }),
+    catch: (cause) => toKinuError({ doing: 'reading a local workspace title', cause, otherwise: 'io' }),
+  });
 
-    return { label: `(unreadable: ${reason})`, readError: reason };
-  }
+  if (Result.isSuccess(read)) return read.success;
+  const reason = renderThrownChain({ cause: read.failure.cause });
+  diagnostics.failure('workspace.read_failed', read.failure, { workspace: dirName });
+
+  return { label: `(unreadable: ${reason})`, readError: reason };
 }
 
 /** Opens under the ref's config name when one exists, so cloud links stay attached. */

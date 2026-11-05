@@ -577,33 +577,43 @@ export class WorkspaceActorDirectory {
         if (!row) return yield* Effect.fail(new KinuError('missing', 'The actor creation is not registered.'));
         child = row;
       } else {
-        const row = this.retained(input.reference.actorId);
-
-        if (!row) return yield* Effect.fail(new KinuError('missing', 'The child actor is not registered.'));
-
-        if (row.parentActorId !== parent.actorId || row.name !== input.name || row.workspaceId !== input.reference.workspaceId || row.parentActorId !== input.reference.parentActorId) {
-          return yield* Effect.fail(new KinuError('denied', 'The child reference does not match its parent and name.'));
-        }
-
-        if (input.action === 'validate' && actorStanding(row) !== 'live') return yield* Effect.fail(new KinuError('missing', 'The child actor is retired.'));
-
-        if (input.action === 'retire' && actorStanding(row) === 'live') {
-          this.transitionRetirement(row.actorId, 'retire');
-        }
-
-        if (input.action === 'release' && row.deletedAt === null) {
-          if (row.retiringAt === null) return yield* Effect.fail(new KinuError('denied', 'Retirement must start before its name is released.'));
-          this.transitionRetirement(row.actorId, 'release');
-        }
-
-        const updated = this.retained(row.actorId);
-
-        if (!updated) return yield* Effect.fail(new KinuError('missing', 'The child actor record disappeared.'));
-        child = updated;
+        child = yield* this.transitioned(parent, input);
       }
 
       return this.result(child);
     }));
+  }
+
+  /** A named child checked against its parent and reference, and taken through the transition `input` asks for. */
+  private transitioned(
+    parent: ActorHandle, input: Extract<ChildActorOperation, { readonly action: 'validate' | 'retire' | 'release' }>,
+  ): Effect.Effect<WorkspaceActor, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const row = this.retained(input.reference.actorId);
+
+      if (!row) return yield* Effect.fail(new KinuError('missing', 'The child actor is not registered.'));
+
+      if (row.parentActorId !== parent.actorId || row.name !== input.name || row.workspaceId !== input.reference.workspaceId || row.parentActorId !== input.reference.parentActorId) {
+        return yield* Effect.fail(new KinuError('denied', 'The child reference does not match its parent and name.'));
+      }
+
+      if (input.action === 'validate' && actorStanding(row) !== 'live') return yield* Effect.fail(new KinuError('missing', 'The child actor is retired.'));
+
+      if (input.action === 'retire' && actorStanding(row) === 'live') {
+        this.transitionRetirement(row.actorId, 'retire');
+      }
+
+      if (input.action === 'release' && row.deletedAt === null) {
+        if (row.retiringAt === null) return yield* Effect.fail(new KinuError('denied', 'Retirement must start before its name is released.'));
+        this.transitionRetirement(row.actorId, 'release');
+      }
+
+      const updated = this.retained(row.actorId);
+
+      if (!updated) return yield* Effect.fail(new KinuError('missing', 'The child actor record disappeared.'));
+
+      return updated;
+    });
   }
 
   private result(child: WorkspaceActor): ActorDirectoryResult {
