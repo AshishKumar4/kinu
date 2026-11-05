@@ -19,6 +19,7 @@ import type { GitHubAnswer, GitHubRead, GoogleAnswer, GoogleCall, ObjectNamespac
 import type { GalleryListingSync } from '@kinu.run/core/slates';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
 import { OwnedModelServices } from '../../src/owned-model-services';
+import { ActorProfiles, type ActorProfilesDeps } from '../../src/workspace-actor/profiles';
 import { bindAgentSql } from '../../src/runtime';
 import { hostedSubagentRuntime, type ActorSurface, type SurfaceTurn, type ToolScope } from '../../src/hosted-actors';
 import type { CFSeat } from '../../src/actor-hosting';
@@ -312,14 +313,66 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Side models (titler, advisor, judge) are silent scripted ones: harness actors hold no
    *  provider credentials. A suite-scripted route is honoured; never the turn model. */
   sideModelFactory?: () => LanguageModel;
-  protected override modelForResolution(resolution: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>) {
-    const routed = super.modelForResolution(resolution);
-    // A scripted resolver is a plain object, not an `OwnedModelServices` instance.
-    const scriptedRoute = !(this.ownedModelServices instanceof OwnedModelServices);
+  /** The harness's profiles: its catalog overlay and provider revision, a held resolution, and silent side models. */
+  protected override createProfiles(): ActorProfiles {
+    return new (class HarnessProfiles extends ActorProfiles {
+      constructor(deps: ActorProfilesDeps, private readonly harness: HarnessOrchestratorAgent) {
+        super(deps);
+      }
 
-    if (scriptedRoute) return routed;
+      override async inputs() {
+        const hold = this.harness.profileHold;
+        this.harness.profileHold = null;
 
-    return { ...routed, model: this.sideModelFactory?.() ?? SILENT_SIDE_MODEL };
+        if (hold !== null) {
+          hold.reached();
+          await hold.release;
+        }
+
+        const overlay = this.harness._catalogOverlay;
+        const revision = this.harness._providerRevision;
+        const envelope = await this.catalog();
+
+        if (overlay === null) return { envelope, provider: { ...HARNESS_PROVIDER_SNAPSHOT, revision } };
+
+        // Overlay tier models join the provider snapshot: a tier naming an unlisted model is refused before routing.
+        return {
+          envelope,
+          provider: overlay.availableModels === undefined ? { ...HARNESS_PROVIDER_SNAPSHOT, revision } : {
+            ...HARNESS_PROVIDER_SNAPSHOT,
+            revision,
+            availableModels: [...new Set([...HARNESS_PROVIDER_SNAPSHOT.availableModels, ...overlay.availableModels])],
+          },
+        };
+      }
+
+      /** The installed overlay merged over the builtins, digest recomputed. With a real account in its world and no
+       *  catalog installed over it, the account's own catalog, read as a deployed workspace reads it. */
+      override async catalog(): Promise<ProfileCatalogEnvelope> {
+        const overlay = this.harness._catalogOverlay;
+
+        if (overlay === null || (overlay.roles === undefined && overlay.tiers === undefined && overlay.betaSwarms === undefined)) {
+          return activationWorlds.get(this.harness.ctx)?.userDO === undefined ? HARNESS_PROFILE_ENVELOPE : super.catalog();
+        }
+
+        const catalog: ProfileCatalog = {
+          roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
+          tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
+          betaSwarms: overlay.betaSwarms ?? true,
+        };
+
+        return { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) };
+      }
+
+      override forResolution(resolution: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>) {
+        const routed = super.forResolution(resolution);
+
+        // A scripted resolver is a plain object, not an `OwnedModelServices` instance.
+        if (!(this.harness.ownedModelServices instanceof OwnedModelServices)) return routed;
+
+        return { ...routed, model: this.harness.sideModelFactory?.() ?? SILENT_SIDE_MODEL };
+      }
+    })(super.createProfiles().deps, this);
   }
   /** `true` admits a turn and parks it at its first model call; `false` settles it. */
   async declareTurnInFlight(inFlight: boolean): Promise<void> {
@@ -490,49 +543,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     this._providerRevision = revision;
   }
   private _providerRevision = HARNESS_PROVIDER_SNAPSHOT.revision;
-
-  protected override async profileInputs() {
-    const hold = this.profileHold;
-    this.profileHold = null;
-
-    if (hold !== null) {
-      hold.reached();
-      await hold.release;
-    }
-
-    const overlay = this._catalogOverlay;
-    const revision = this._providerRevision;
-    const envelope = await this.profileCatalog();
-
-    if (overlay === null) return { envelope, provider: { ...HARNESS_PROVIDER_SNAPSHOT, revision } };
-
-    // Overlay tier models join the provider snapshot: a tier naming an unlisted model is refused before routing.
-    return {
-      envelope,
-      provider: overlay.availableModels === undefined ? { ...HARNESS_PROVIDER_SNAPSHOT, revision } : {
-        ...HARNESS_PROVIDER_SNAPSHOT,
-        revision,
-        availableModels: [...new Set([...HARNESS_PROVIDER_SNAPSHOT.availableModels, ...overlay.availableModels])],
-      },
-    };
-  }
-  /** The installed overlay merged over the builtins, digest recomputed. With a real account in its world and no
-   *  catalog installed over it, the account's own catalog, read as a deployed workspace reads it. */
-  protected override async profileCatalog(): Promise<ProfileCatalogEnvelope> {
-    const overlay = this._catalogOverlay;
-
-    if (overlay === null || (overlay.roles === undefined && overlay.tiers === undefined && overlay.betaSwarms === undefined)) {
-      return activationWorlds.get(this.ctx)?.userDO === undefined ? HARNESS_PROFILE_ENVELOPE : super.profileCatalog();
-    }
-
-    const catalog: ProfileCatalog = {
-      roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
-      tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
-      betaSwarms: overlay.betaSwarms ?? true,
-    };
-
-    return { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) };
-  }
 
   /** Whether the object's timer wake is due now, as the alarm would fire it. */
   harnessTimerDue(now = Date.now()): boolean {
@@ -1885,7 +1895,7 @@ export function makeEnv(
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
 
-  // SAFETY: the ActorAgent dependency contract only reads the constructed
+  // SAFETY: the OrchestratorAgent dependency contract only reads the constructed
   // LOADER, UserDO, and gateway bindings in this harness; each
   // unsupported operation throws if schema composition begins invoking it.
   return env as Env;

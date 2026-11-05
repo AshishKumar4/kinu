@@ -206,7 +206,7 @@ cannot tell actors apart: it renders the Durable Object path, which is the same
 for every actor of a workspace, and so is `ctx.id`. An invocation span carries
 the workspace root; a turn span carries the actor whose turn it is.
 
-`ActorAgent`'s `tracing` getter (`cf-backend/src/actor-agent.ts`) builds the
+`OrchestratorAgent`'s `tracing` getter (`cf-backend/src/orchestrator.ts`) builds the
 seam once per construction, with `isolateGen` from
 `AgentConfigStore.countIsolateGeneration` (`core/src/config/store.ts`).
 
@@ -380,7 +380,7 @@ call's usage through the `ModelCallSink` the call was handed.
   `LocalAgentSession.modelCallSink`.
 - Cloud uses `createProfileLaneLLM` (`cf-backend/src/runtime.ts`; the
   `judgeModel` and `fastLlm` lanes), which files the row through
-  `ActorAgent.reportModelCall`.
+  `OrchestratorAgent.reportModelCall`.
 - Every entry point in `model-invocation.ts` takes the spend it reports, so a
   call site cannot drop the sink. `.oxlintrc.json` refuses the AI SDK's
   invoking exports and the `env.AI` binding read outside that module. Its rule
@@ -471,7 +471,7 @@ A turn that stops with tool calls pending is `incomplete`, and
 turn did not answer; the failure line reports the defect that stopped the
 loop: a step ceiling, a stop condition, or a relay the loop waited on. Neither
 loop sets a step ceiling: `runChat` (`core/src/chat.ts`) defaults `stopWhen` to
-the SDK's `isLoopFinished()`, and `ActorAgent` passes none.
+the SDK's `isLoopFinished()`, and `OrchestratorAgent` passes none.
 
 Host death writes no `run_end`. `RunEventRecorder.unterminatedModelOperations`
 (`events/recorder.ts`) detects it.

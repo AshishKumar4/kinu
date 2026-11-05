@@ -1,7 +1,7 @@
 // Worker-side helpers for creating a user's workspace and notifying live workspaces of credential
 // changes. Shared by user/routes.ts and cli/routes.ts so status mapping cannot drift.
 import { Effect, Cause } from 'effect';
-import type { ActorAgent } from '../actor-agent';
+import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { OwnerCapabilityEnv } from '@kinu.run/core';
@@ -55,7 +55,7 @@ export function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequest<Id
   }));
 }
 
-export type ModelSettingsFanoutTarget = Pick<ActorAgent, 'onModelSettingsChanged'>;
+export type ModelSettingsFanoutTarget = Pick<OrchestratorAgent, 'onModelSettingsChanged'>;
 
 export interface ModelSettingsFanoutEnv<Id> extends OwnerCapabilityEnv {
   OrchestratorAgent: ObjectNamespace<Id, ModelSettingsFanoutTarget>;
