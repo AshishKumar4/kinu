@@ -102,6 +102,11 @@ function stagedEntries(history: SessionHistory, selection: ContextSelection | nu
   return { entries: selection === null ? entries : history.context.conversationOf(entries), blocked, staged };
 }
 
+const isByteRange = (offset: number, length: number): boolean =>
+  Number.isSafeInteger(offset) && Number.isSafeInteger(length) && offset >= 0 && length >= 0 && offset <= Number.MAX_SAFE_INTEGER - length;
+
+const badRange = (): KinuError => new KinuError('bad_input', 'range must use nonnegative safe byte offsets');
+
 /** Bytes [offset, offset + length) of a document, read as a selection of its context. */
 async function documentRange(source: Document, offset: number, length: number): Promise<Uint8Array> {
   if (length === 0) {
@@ -527,14 +532,6 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
     return { ok: true as const, revision: working(located(path)).header.version };
   });
 
-  const readDocumentRange = (source: Document, offset: number, length: number): Effect.Effect<Uint8Array, KinuError> => {
-    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0 || offset > Number.MAX_SAFE_INTEGER - length) {
-      return Effect.fail(new KinuError('bad_input', 'range must use nonnegative safe byte offsets'));
-    }
-
-    return Effect.promise(async () => documentRange(source, offset, length));
-  };
-
   const files: ContextTree = {
     async readFile(path) {
       const source = file(path);
@@ -552,7 +549,9 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
         if (resolved.segments.length !== 1 || resolved.segments[0] !== 'working.jsonl') return yield* Effect.fail(new VfsError('EACCES', READ_ONLY, path));
         const source = workingDocument(yield* atRevision(resolved, revision));
 
-        if (range !== undefined) return yield* readDocumentRange(source, range.offset, range.length);
+        if (range !== undefined && !isByteRange(range.offset, range.length)) return yield* Effect.fail(badRange());
+
+        if (range !== undefined) return yield* Effect.promise(async () => documentRange(source, range.offset, range.length));
 
         return yield* Effect.promise(async () => {
           let text = '';
@@ -565,7 +564,11 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
       }));
     },
     readRange(path, offset, length) {
-      return settle(Effect.suspend(() => readDocumentRange(file(path), offset, length)));
+      const source = file(path);
+
+      if (!isByteRange(offset, length)) return settle(Effect.fail(badRange()));
+
+      return documentRange(source, offset, length);
     },
     async readdir(path) {
       const found = resolve(path);

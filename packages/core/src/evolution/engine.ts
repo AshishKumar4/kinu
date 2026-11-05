@@ -427,9 +427,10 @@ export class EvolutionEngine {
      * turn being opened. A row is retired only once its review ran. Undecodable rows
      * and missions over cap come back in `refused` with their disposition.
      */
-  runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
+  async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
+    if (!this.enabled) return { reviewed: 0, refused: [] };
+
     return settle(Effect.gen({ self: this }, function* () {
-      if (!this.enabled) return { reviewed: 0, refused: [] };
       this.recoverInterruptedWork();
       const taken = this.sessionWindow.takeQueuedReviews(MAX_TURN_REVIEWS_PER_OPEN);
       const refused: RefusedTurnReview[] = [...taken.refused];
