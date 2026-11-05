@@ -5,14 +5,13 @@
  * (`&roster=` names another); a workspace opens on the long turn; `&env=computer&pc=granted&pcdesktop=ready` gives it its
  * computer and the owner's PC. `&at=<path>` opens a page, and follows the page on screen.
  */
-import { lazy, Suspense, type ReactNode } from "react";
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Suspense, type ReactNode } from "react";
+import { lazyRoute } from "@/lazy-route";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { APP_ROUTES } from "@kinu.run/core";
 import Layout from "@/components/layout";
-import WorkspacePage from "@/pages/WorkspacePage";
-import UserSettingsPage from "@/pages/UserSettingsPage";
-import MailPage from "@/pages/MailPage";
+import { LISTED_SLATE_ROUTE, shellRoutes } from "@/App";
 import type { SocketCall } from "@/lib/workspace-rpc";
 import { seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
 import { ASSISTANT_THREAD, AssistantHome, assistantRpc } from "@/gallery-assistant";
@@ -23,20 +22,7 @@ import { installMailPageFixture } from "@/gallery-mailpage";
 import DeployPage from "@/pages/DeployPage";
 import { DesignBar, KeepPlace, PhoneWindow, startDesign, useDesign } from "@/gallery-design-bar";
 
-const WorkspacesPage = lazy(() => import("@/pages/WorkspacesPage"));
-
-const PluginsPage = lazy(() => import("@/pages/PluginsPage"));
-
-
-const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
-
-const ExploreWorkspacePage = lazy(() => import("@/pages/ExploreWorkspacePage"));
-
-const WelcomePage = lazy(() => import("@/pages/WelcomePage"));
-
-const GallerySlatePage = lazy(() => import("@/pages/GallerySlatePage"));
-
-const NewWorkspacePage = lazy(async () => ({ default: (await import("@/pages/HomePage")).NewWorkspacePage }));
+const WelcomePage = lazyRoute(() => import("@/pages/WelcomePage"));
 
 const loading = (page: ReactNode): ReactNode => (
   <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{page}</Suspense>
@@ -71,25 +57,10 @@ function Pages() {
 
   return (
     <Routes key={background}>
+      {/* The app's own pages, with the assistant on Home and Drive over its fixture. */}
       <Route element={<Layout />}>
-        <Route index element={<AssistantHome />} />
-        <Route path={APP_ROUTES.workspaces} element={loading(<WorkspacesPage />)} />
-        <Route path={APP_ROUTES.newWorkspace} element={loading(<NewWorkspacePage />)} />
-        <Route path={APP_ROUTES.drive} element={<DriveRoute tab="mine" />} />
-        <Route path={APP_ROUTES.driveFolder} element={<DriveRoute tab="mine" />} />
-        <Route path={APP_ROUTES.slates} element={<DriveRoute tab="slates" />} />
-        <Route path={APP_ROUTES.shared} element={<DriveRoute tab="shared" />} />
-        <Route path={APP_ROUTES.explore} element={loading(<ExplorePage />)} />
-        <Route path={APP_ROUTES.exploreWorkspace} element={loading(<ExploreWorkspacePage />)} />
-        <Route path={APP_ROUTES.plugins} element={loading(<PluginsPage />)} />
-        <Route path={APP_ROUTES.gallerySlate} element={loading(<GallerySlatePage />)} />
-        <Route path="/mail/*" element={<MailPage />} />
-        <Route path="/workspace/:agentId" element={<WorkspacePage />} />
-        <Route path="/workspace/:agentId/agents/:subName" element={<WorkspacePage />} />
-        <Route path={APP_ROUTES.workspaceAgentPath} element={<WorkspacePage />} />
-        <Route path="/workspace/:agentId/:view" element={<WorkspacePage />} />
-        <Route path={APP_ROUTES.userSettings} element={<UserSettingsPage />} />
-        <Route path="*" element={<Navigate to={APP_ROUTES.home} replace />} />
+        {shellRoutes({ home: <AssistantHome />, drive: (tab) => <DriveRoute tab={tab} /> })}
+        {LISTED_SLATE_ROUTE}
       </Route>
       <Route path={APP_ROUTES.welcome} element={loading(<WelcomePage initialStep={0} />)} />
       <Route path="/deploy" element={<DeployPage />} />

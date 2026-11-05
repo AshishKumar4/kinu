@@ -1,11 +1,11 @@
 import {
   draw, effect, frame, geometry, init, sampler, surface, target, VGPUError,
-  type Draw, type Effect, type Geometry, type Gpu, type Surface, type Target,
+  type Draw, type Effect as GpuEffect, type Geometry, type Gpu, type Surface, type Target,
 } from 'vgpu';
 
-import { VGPUError as CoreVGPUError } from '@vgpu/core';
 
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { Effect, Result } from 'effect';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 import { type ArtFrame, type ArtPalette, type ArtRenderer, DEFAULT_LIFT, type Lift, NODE_STRIDE, PULSE_STRIDE, RECESS, STROKE_STRIDE } from '@kinu.run/core/web/art';
 import blurSource from './blur.wgsl';
 import brightSource from './bright.wgsl';
@@ -65,13 +65,11 @@ interface WebGpuRendererRequest {
 export async function createWebGpuRenderer({
   canvas, initialPalette, width, height, ratio,
 }: WebGpuRendererRequest): Promise<WebGpuRendererOutcome> {
-  // `attempted` lets the catch release a gpu `init` already produced.
+  // `attempted` lets a failed start release a gpu `init` already produced.
   let attempted: Gpu | null = null;
   let scale = ratio;
 
-  try {
-    const gpu = await init();
-    attempted = gpu;
+  const started = async (gpu: Gpu): Promise<WebGpuRendererOutcome> => {
 
     const physical = (w: number, h: number): readonly [number, number] => [Math.max(1, Math.round(w * scale)), Math.max(1, Math.round(h * scale))];
     let size = physical(width, height);
@@ -141,21 +139,21 @@ export async function createWebGpuRenderer({
       set: { view: view(), palette: paletteUniform(initialPalette, DEFAULT_LIFT) },
     });
 
-    const bright: Effect = effect(gpu, brightSource, { label: 'hero-bright', set: { scene, samp: linear } });
+    const bright: GpuEffect = effect(gpu, brightSource, { label: 'hero-bright', set: { scene, samp: linear } });
 
-    const restCopy: Effect = effect(gpu, copySource, { label: 'hero-rest-copy', blend: 'premultiplied', set: { source: rest, samp: linear } });
+    const restCopy: GpuEffect = effect(gpu, copySource, { label: 'hero-rest-copy', blend: 'premultiplied', set: { source: rest, samp: linear } });
 
-    const blurH: Effect = effect(gpu, blurSource, {
+    const blurH: GpuEffect = effect(gpu, blurSource, {
       label: 'hero-blur-h',
       set: { source: bloomA, samp: linear, blur: { direction: [1, 0], texel: bloomA.texelSize } },
     });
 
-    const blurV: Effect = effect(gpu, blurSource, {
+    const blurV: GpuEffect = effect(gpu, blurSource, {
       label: 'hero-blur-v',
       set: { source: bloomB, samp: linear, blur: { direction: [0, 1], texel: bloomB.texelSize } },
     });
 
-    const composite: Effect = effect(gpu, compositeSource, {
+    const composite: GpuEffect = effect(gpu, compositeSource, {
       label: 'hero-composite',
       set: { scene, bloom: bloomA, samp: linear, composite: { strength: BLOOM_STRENGTH[initialPalette.mode], pad0: 0, pad1: 0, pad2: 0 } },
     });
@@ -213,8 +211,8 @@ export async function createWebGpuRenderer({
         const nodeCount = Math.min(current.nodeCount, NODE_CAPACITY);
         const pulseCount = Math.min(current.pulseCount, PULSE_CAPACITY);
 
-        try {
-          // Inside the try: `geometry.write` throws DISPOSED/LOST on a device that died between ticks.
+        // `geometry.write` throws DISPOSED/LOST on a device that died between ticks, as `frame()` does.
+        const drawn = Result.try(() => {
           if ((current.lift ?? DEFAULT_LIFT) !== lift) {
             lift = current.lift ?? DEFAULT_LIFT;
             tint();
@@ -244,20 +242,17 @@ export async function createWebGpuRenderer({
           });
 
           if (redraw) drawnRest = current.rest?.epoch ?? null;
-        } catch (thrown) {
-          // A dead device throws from `frame()`, not `gpu.onError`. Check @vgpu/core's shared base class:
-          // its ValidationError is not a vgpu VGPUError. DISPOSED here can only be a self-killed device;
-          // anything else propagates.
-          if (thrown instanceof CoreVGPUError
-            && (thrown.code === 'VGPU-DEVICE-LOST' || thrown.code === 'VGPU-DEVICE-DISPOSED')) {
-            fault = thrown;
-            renderer.dispose();
-            faultHandler?.(thrown);
+        });
 
-            return;
-          }
+        // A dead device throws from `frame()`, not `gpu.onError` (@vgpu/core's shared base class: its ValidationError
+        // is not a vgpu VGPUError; DISPOSED here can only be a self-killed device). A frame that fails any other way is
+        // a fault as well: the device is let go, and the picture goes on in the canvas fallback, which logs why.
+        if (Result.isFailure(drawn)) {
+          const failed = drawn.failure instanceof Error ? drawn.failure : new Error(renderThrownChain({ cause: drawn.failure }));
 
-          throw thrown;
+          fault = failed;
+          renderer.dispose();
+          faultHandler?.(failed);
         }
       },
       onFault(handler) {
@@ -287,19 +282,21 @@ export async function createWebGpuRenderer({
     });
 
     return { kind: 'renderer', renderer };
-  } catch (cause) {
-    if (cause instanceof VGPUError && cause.code === 'VGPU-RING1-UNSUPPORTED') {
-      return { kind: 'unsupported', reason: cause.message };
-    }
+  };
 
-    let reason = `the hero could not start WebGPU: ${renderThrownChain({ cause })}`;
+  // The library throws: a start that fails is answered, its device released.
+  return await settle(Effect.catchDefect(Effect.promise(async () => {
+    const gpu = await init();
 
-    try {
-      attempted?.dispose();
-    } catch (disposal) {
-      reason = `${reason}; releasing it failed too: ${renderThrownChain({ cause: disposal })}`;
-    }
+    attempted = gpu;
 
-    return { kind: 'failed', reason };
-  }
+    return await started(gpu);
+  }), (cause) => Effect.sync((): WebGpuRendererOutcome => {
+    if (cause instanceof VGPUError && cause.code === 'VGPU-RING1-UNSUPPORTED') return { kind: 'unsupported', reason: cause.message };
+
+    const reason = `the hero could not start WebGPU: ${renderThrownChain({ cause })}`;
+    const released = Result.try(() => attempted?.dispose());
+
+    return { kind: 'failed', reason: Result.isFailure(released) ? `${reason}; releasing it failed too: ${renderThrownChain({ cause: released.failure })}` : reason };
+  })));
 }

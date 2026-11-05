@@ -1,12 +1,12 @@
 /** Text rides the viewer RPC; images, PDFs and saves (PUT) ride the raw-bytes route. Keyed by its path by its caller, so
  *  a draft, a failure and the source toggle are one file's. */
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import {
   CheckIcon, DownloadSimpleIcon, FileIcon, PencilSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
-import { attemptInItsWords } from "@kinu.run/core/obs";
+import { attemptInItsWords, settleSync } from "@kinu.run/core/obs";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { MarkdownContent, CodeBlock } from "./shared";
 import {
@@ -156,20 +156,24 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   );
 }
 
-function frontmatterAsCode(markdown: string): string {
-  let body: string;
+/** A markdown file's frontmatter shown as the YAML it is, above its body. Frontmatter that does not parse is shown as it
+ *  is written; any other failure is a defect, which stays one. */
+function frontmatterAsCode(markdown: string): Effect.Effect<string> {
+  return Effect.map(Effect.catchDefect(
+    Effect.sync(() => parseMarkdownFrontmatter(markdown).body),
+    (caught) => (caught instanceof MarkdownFrontmatterError ? Effect.succeed(markdown) : Effect.die(caught)),
+  ), (body) => {
+    if (body.length === markdown.length) return markdown;
+    const head = markdown.slice(0, markdown.length - body.length);
 
-  try {
-    body = parseMarkdownFrontmatter(markdown).body;
-  } catch (caught) {
-    if (caught instanceof MarkdownFrontmatterError) return markdown;
-    throw caught;
-  }
+    return `\`\`\`yaml\n${head.slice(head.indexOf("\n") + 1, head.lastIndexOf("\n---"))}\n\`\`\`\n\n${body}`;
+  });
+}
 
-  if (body.length === markdown.length) return markdown;
-  const head = markdown.slice(0, markdown.length - body.length);
+function MarkdownFile({ content }: { content: string }) {
+  const shown = useMemo(() => settleSync(frontmatterAsCode(content)), [content]);
 
-  return `\`\`\`yaml\n${head.slice(head.indexOf("\n") + 1, head.lastIndexOf("\n---"))}\n\`\`\`\n\n${body}`;
+  return <div className="p-3 prose-chat"><MarkdownContent content={shown} /></div>;
 }
 
 function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
@@ -207,7 +211,7 @@ function TextBody({ file, body, draft, onDraft, content, name, downloadHref }: {
     );
   }
 
-  if (body === "markdown") return <div className="p-3 prose-chat"><MarkdownContent content={frontmatterAsCode(content)} /></div>;
+  if (body === "markdown") return <MarkdownFile content={content} />;
 
   if (body === "html") {
     return (

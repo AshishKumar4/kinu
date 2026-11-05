@@ -1,7 +1,7 @@
 /** The conversation of the subagent the TUI has open: read whole when it opens, and only the open subagent's answer shown. */
 import { useEffect, useState } from 'react';
 import { Effect } from 'effect';
-import { detach, renderThrownChain } from '@kinu.run/core/obs';
+import { KinuError, detach, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { readConversation } from '@kinu.run/core';
 import type { AgentClient } from '../agent-client';
 import type { TuiSubagentChat } from './hubs';
@@ -24,24 +24,20 @@ export function useSubagentChat(client: AgentClient, target: SubagentTarget | nu
     let live = true;
     setChat({ name, label, messages: null, error: null });
 
-    detach(Effect.promise(async () => {
-      try {
-        const subagent = actorId === null ? { path: [...path] } : { path: [], actor: actorId };
+    const subagent = actorId === null ? { path: [...path] } : { path: [], actor: actorId };
 
-        const conversation = await readConversation(async (page) => {
-          const result = await client.inspectSubagent({ ...subagent, view: 'history', page });
+    // A page that is not the conversation's fails the read, said where the conversation would show.
+    detach(Effect.match(Effect.tryPromise({ try: () => readConversation((at) => settle(Effect.gen(function* () {
+      const result = yield* Effect.promise(() => client.inspectSubagent({ ...subagent, view: 'history', page: at }));
 
-          if (result.view === 'missing') throw new Error(result.error);
+      if (result.view === 'missing') return yield* Effect.fail(new KinuError('missing', result.error));
 
-          if (result.view !== 'history') throw new Error(`the conversation read answered "${result.view}"`);
+      if (result.view !== 'history') return yield* Effect.fail(new KinuError('unavailable', `the conversation read answered "${result.view}"`));
 
-          return result.page;
-        });
-
-        if (live) setChat({ name, label, messages: conversation, error: null });
-      } catch (cause) {
-        if (live) setChat({ name, label, messages: null, error: `Its conversation could not be read: ${renderThrownChain({ cause })}` });
-      }
+      return result.page;
+    }))), catch: (cause) => ({ cause }) }), {
+      onSuccess: (conversation) => { if (live) setChat({ name, label, messages: conversation, error: null }); },
+      onFailure: (failed) => { if (live) setChat({ name, label, messages: null, error: `Its conversation could not be read: ${renderThrownChain(failed)}` }); },
     }));
 
     return () => { live = false; };

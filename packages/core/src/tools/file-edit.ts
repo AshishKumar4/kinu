@@ -2,8 +2,9 @@
  * Exact-match file editor behind the `file` tool's `edit`, and the numbered window its `read` shows: an edit that cannot
  * be placed exactly once fails without touching the file. No fuzzy fallback; line endings and BOM round-trip.
  */
+import { Effect } from 'effect';
 import { BOM, headEnd, lineCount, withoutBom } from '../utils/text';
-import { FILE_READ_LINE_CHARS, FILE_READ_LINES, type EditedSpan, type FileEditFailure } from '../types/file-edits';
+import { FileRefusalError, FILE_READ_LINE_CHARS, FILE_READ_LINES, type EditedSpan, type FileEditFailure } from '../types/file-edits';
 
 export {
   FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, FILE_REFUSAL_REASONS, type FileEditFailure,
@@ -22,9 +23,14 @@ interface AppliedEdit {
   addedLines: number;
 }
 
-export type FileEditOutcome =
-  | { ok: true; content: string; applied: AppliedEdit[]; spans: EditedSpan[] }
-  | { ok: false; reason: FileEditFailure; message: string };
+/** The edited file, what each edit did, and the spans it replaced; a refusal fails as a `FileRefusalError` naming why. */
+export interface FileEdited {
+  readonly content: string;
+  readonly applied: readonly AppliedEdit[];
+  readonly spans: readonly EditedSpan[];
+}
+
+const refuse = (reason: FileEditFailure, message: string): Effect.Effect<never, FileRefusalError> => Effect.fail(new FileRefusalError(reason, message));
 
 function detectLineEnding(content: string): '\r\n' | '\n' {
   const crlf = content.indexOf('\r\n');
@@ -88,7 +94,7 @@ function at(index: number, total: number): string {
 }
 
 /** Apply every edit to `original`, or none: a missing, ambiguous, or overlapping anchor fails before any write. */
-export function applyFileEdits(original: string, edits: readonly FileEdit[], path: string): FileEditOutcome {
+export function applyFileEdits(original: string, edits: readonly FileEdit[], path: string): Effect.Effect<FileEdited, FileRefusalError> {
   const hasBom = original.startsWith(BOM);
   const ending = detectLineEnding(original);
   const body = withoutBom(original);
@@ -102,11 +108,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
     const { oldText, newText } = anchors[i];
 
     if (oldText.length === 0) {
-      return {
-        ok: false,
-        reason: 'empty_anchor',
-        message: `${at(i, anchors.length)} is empty in ${path}. Give the exact text to replace; use op=write to create or replace the whole file.`,
-      };
+      return refuse('empty_anchor', `${at(i, anchors.length)} is empty in ${path}. Give the exact text to replace; use op=write to create or replace the whole file.`);
     }
 
     const occurrences = countOccurrences(base, oldText);
@@ -115,25 +117,15 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
       // Copied with the numbers a read puts before each line, which are not in the file.
       const numbered = oldText.split('\n').every((line) => /^\d+\t/.test(line));
 
-      return {
-        ok: false,
-        reason: 'not_found',
-        message:
-          `${at(i, anchors.length)} does not appear in ${path}. It must match the file byte for byte, ` +
+      return refuse('not_found', `${at(i, anchors.length)} does not appear in ${path}. It must match the file byte for byte, ` +
           'including indentation and blank lines. ' + (numbered
-            ? 'It starts each line with a number and a tab, as a read shows lines; copy only the text after the tab.'
-            : 'Read the file again and copy the text from what it returned.'),
-      };
+          ? 'It starts each line with a number and a tab, as a read shows lines; copy only the text after the tab.'
+          : 'Read the file again and copy the text from what it returned.'));
     }
 
     if (occurrences > 1) {
-      return {
-        ok: false,
-        reason: 'ambiguous',
-        message:
-          `${at(i, anchors.length)} appears ${occurrences} times in ${path}, so the target is ambiguous and nothing was changed. ` +
-          'Extend it with the surrounding lines until it is unique, or make one edit per occurrence with distinct context.',
-      };
+      return refuse('ambiguous', `${at(i, anchors.length)} appears ${occurrences} times in ${path}, so the target is ambiguous and nothing was changed. ` +
+        'Extend it with the surrounding lines until it is unique, or make one edit per occurrence with distinct context.');
     }
 
     const start = base.indexOf(oldText);
@@ -147,13 +139,8 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
     const cur = ordered[i];
 
     if (prev.start + prev.length > cur.start) {
-      return {
-        ok: false,
-        reason: 'overlap',
-        message:
-          `edits[${prev.index}] and edits[${cur.index}] cover overlapping text in ${path}. ` +
-          'Merge them into one edit, or target disjoint regions.',
-      };
+      return refuse('overlap', `edits[${prev.index}] and edits[${cur.index}] cover overlapping text in ${path}. ` +
+        'Merge them into one edit, or target disjoint regions.');
     }
   }
 
@@ -167,11 +154,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   }
 
   if (content === body) {
-    return {
-      ok: false,
-      reason: 'no_change',
-      message: `Every edit to ${path} replaced text with itself, so the file is unchanged. Check that new_text differs from old_text.`,
-    };
+    return refuse('no_change', `Every edit to ${path} replaced text with itself, so the file is unchanged. Check that new_text differs from old_text.`);
   }
 
   const applied = matches.map((m) => ({
@@ -184,7 +167,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   // The ledger needs raw offsets, not the display's line counts: a replacement can join a seen line to an unseen one.
   const spans = ordered.map((m) => ({ start: origin[m.start] + lead, end: origin[m.start + m.length] + lead, inserted: m.insert.length }));
 
-  return { ok: true, content: (hasBom ? BOM : '') + content, applied, spans };
+  return Effect.succeed({ content: (hasBom ? BOM : '') + content, applied, spans });
 }
 
 export interface FileSlice {

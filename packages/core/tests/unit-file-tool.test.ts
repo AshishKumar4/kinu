@@ -5,7 +5,8 @@ import { describe, expect, test } from 'bun:test';
 import { renderThrownChain } from '../src/obs/index';
 import { toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-import { applyFileEdits, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
+import { Effect, Result } from 'effect';
+import { applyFileEdits as edit, FILE_READ_LINE_CHARS, FILE_READ_LINES, FILE_READ_MAX_CHARS, formatFileSlice, type FileEditFailure } from '../src/tools/file-edit';
 import { scanFileWindow } from '../src/tools/file-scan';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { createTestRuntime, fileNamespaceOver, fileToolOver } from './helpers';
@@ -33,6 +34,15 @@ import { codemodeFunction } from '../src/tools/sandbox-contract';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { cloudPlanes, resolvePath } from '../src/vfs/resolve';
 import { isBuiltinSkillFile } from '../src/skills/view';
+
+/** The edit's outcome as a value: what it wrote, or why it refused. */
+function applyFileEdits(...args: Parameters<typeof edit>) {
+  const result = Effect.runSync(Effect.result(edit(...args)));
+
+  return Result.isSuccess(result)
+    ? { ok: true as const, ...result.success }
+    : { ok: false as const, reason: result.failure.verdict, message: result.failure.message };
+}
 
 describe('applyFileEdits', () => {
   test('replaces the one occurrence and leaves the rest byte-identical', () => {
