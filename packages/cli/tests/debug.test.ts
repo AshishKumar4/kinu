@@ -12,12 +12,11 @@ import {
 } from '@kinu.run/core';
 
 import { stampSchemaGenesis } from '@kinu.run/core';
-import { scratchDir, createTestActorsOver, runToExit, workspaceDatabase } from '@kinu.run/test-utils';
+import { scratchDir, createTestActorsOver, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
+import { runCli } from './helpers/run-cli';
 
 const repoRoot = resolve(__dirname, '../../..');
-
-const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
 const DebugSummarySchema = v.looseObject({
   identity: JsonObjectSchema,
@@ -40,9 +39,6 @@ function scratch(prefix: string): string {
 }
 
 /** Run to its exit with both pipes drained as it runs: a child that fills one never waits on this test. */
-function runCli(home: string, args: string[], cwd: string, env: Record<string, string> = {}) {
-  return runToExit([process.execPath, cliBin, ...args], { cwd, env: { ...process.env, KINU_HOME: home, NO_COLOR: '1', ...env } });
-}
 
 const SECRET_TOKEN = ['sk-ant-', 'api03-thisisaplantedsecretfortest1234567890abcdefgh'].join('');
 
@@ -191,7 +187,7 @@ describe('kinu debug — redaction', () => {
     seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
 
     const bundle = join(out, 'invest.debug.jsonl');
-    const r = await runCli(home, ['debug', 'invest', '--out', bundle], repoRoot);
+    const r = await runCli(['debug', 'invest', '--out', bundle], { home, cwd: repoRoot });
     expect(r.exitCode).toBe(0);
 
     const raw = readFileSync(bundle, 'utf8');
@@ -218,7 +214,7 @@ describe('kinu debug — local backend', () => {
     seedInvestigationWorkspace(join(home, 'invest', 'agent.db'));
 
     const bundle = join(out, 'invest.debug.jsonl');
-    const r = await runCli(home, ['debug', 'invest', '--out', bundle, '--json'], repoRoot);
+    const r = await runCli(['debug', 'invest', '--out', bundle, '--json'], { home, cwd: repoRoot });
     expect(r.stderr).toBe('');
     expect(r.exitCode).toBe(0);
     expect(r.stdout).not.toContain(SECRET_TOKEN);
@@ -302,7 +298,6 @@ describe('kinu debug — local backend', () => {
     ]);
   });
 
-
 });
 
 describe('kinu debug — cloud backend', () => {
@@ -372,9 +367,9 @@ describe('kinu debug — cloud backend', () => {
     try {
       const bundle = join(out, 'skywriter.debug.jsonl');
 
-      const r = await runCli(home, ['debug', 'skywriter', '--out', bundle, '--json'], repoRoot, {
+      const r = await runCli(['debug', 'skywriter', '--out', bundle, '--json'], { home, cwd: repoRoot, env: {
         KINU_ORIGIN: `http://127.0.0.1:${server.port}`,
-      });
+      } });
 
       expect(r.stderr).toBe('');
       expect(r.exitCode).toBe(0);
@@ -435,9 +430,9 @@ describe('kinu debug --turn — one turn as the model received it', () => {
     try {
       const bundle = join(out, 'turn.jsonl');
 
-      const r = await runCli(home, ['debug', 'skywriter', '--turn', 'turn-1', '--out', bundle], repoRoot, {
+      const r = await runCli(['debug', 'skywriter', '--turn', 'turn-1', '--out', bundle], { home, cwd: repoRoot, env: {
         KINU_ORIGIN: `http://127.0.0.1:${server.port}`,
-      });
+      } });
 
       expect(r.stderr).toBe('');
       expect(r.exitCode).toBe(0);

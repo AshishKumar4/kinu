@@ -11,16 +11,14 @@ import {
   type ChatEvent, type ChatOptions, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { createMockFetch, type MockFetchHandle } from '@kinu.run/test-utils';
+import { namedSseBody } from '@kinu.run/test-utils';
 
 const SUMMARY = 'Summary of the conversation: the owner is renaming the parser module.';
 
 /** Every event terminated: the SSE parser drops an unterminated tail. */
-function sse(events: ReadonlyArray<readonly [string, JsonObject]>): string {
-  return `${events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n`).join('\n')}\n`;
-}
 
 /** A response that compacted first: the summary block, then the reply. */
-const COMPACTED = sse([
+const COMPACTED = namedSseBody([
   ['message_start', { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } }],
   ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'compaction', content: '' } }],
   ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'compaction_delta', content: SUMMARY } }],
@@ -144,7 +142,7 @@ describe('Anthropic server-side compaction', () => {
 
   // Anthropic numbers a response's blocks from 0, so the answer after a tool call reuses the summary's id.
   test('the answer after a compaction and a tool call streams, though it reuses the summary\'s block id', async () => {
-    const compactedThenTool = sse([
+    const compactedThenTool = namedSseBody([
       ['message_start', { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } }],
       ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'compaction', content: '' } }],
       ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'compaction_delta', content: SUMMARY } }],
@@ -156,7 +154,7 @@ describe('Anthropic server-side compaction', () => {
       ['message_stop', { type: 'message_stop' }],
     ]);
 
-    const answered = sse([
+    const answered = namedSseBody([
       ['message_start', { type: 'message_start', message: { id: 'msg_2', type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: { input_tokens: 10, output_tokens: 1 } } }],
       ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
       ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'after tool' } }],

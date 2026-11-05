@@ -3,34 +3,31 @@ import { expect, test } from 'bun:test';
 import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { createChatModel, runChat } from '../src/index';
+import { sseBody } from '@kinu.run/test-utils';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
 const WORDS = Array.from({ length: 60 }, (_, at) => `word${String(at)} `);
 
-function sse(events: readonly string[]): Response {
-  return new Response(events.map((event) => `data: ${event}\n\n`).join(''), { headers: SSE_HEADERS });
-}
-
 /** Many words, then a call: a relay that reads the stream eagerly pulls the SDK's processor ahead of a caller that reads
  *  slowly. */
 function wordyToolStep(): Response {
-  return sse([
+  return new Response(sseBody([
     ...WORDS.map((word) => JSON.stringify({ choices: [{ delta: { content: word } }] })),
     JSON.stringify({ choices: [{ delta: { tool_calls: [
       { index: 0, id: 'tc1', type: 'function', function: { name: 'run', arguments: '{"command":"ls"}' } },
     ] } }] }),
     JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }),
     '[DONE]',
-  ]);
+  ]), { headers: SSE_HEADERS });
 }
 
 function answer(): Response {
-  return sse([
+  return new Response(sseBody([
     JSON.stringify({ choices: [{ delta: { content: 'done' } }] }),
     JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 1, total_tokens: 21 } }),
     '[DONE]',
-  ]);
+  ]), { headers: SSE_HEADERS });
 }
 
 // next-rc 0a4fb372f, 2026-10-19: with nothing else pulling the SDK's stream ahead, a head's step record reached its

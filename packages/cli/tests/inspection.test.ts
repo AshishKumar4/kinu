@@ -15,6 +15,7 @@ import {
 import { createWorkspace } from "@kinu.run/core/workspace-birth";
 import { makeWorkspaceSchemaSql } from "@kinu.run/cli-backend";
 import { wrapDatabase } from "@kinu.run/core/identity";
+import { runCli } from './helpers/run-cli';
 
 /** The CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 
@@ -27,17 +28,6 @@ function newProjectDir(): string {
 const repoRoot = resolve(__dirname, "../../..");
 
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
-
-function runCli(home: string, args: string[], extraEnv: Record<string, string> = {}) {
-  return runToExit([process.execPath, cliBin, ...args], {
-    cwd: newProjectDir(),
-    env: {
-      ...process.env,
-      KINU_HOME: home,
-      ...extraEnv,
-    },
-  });
-}
 
 describe('CLI explicit endpoint options', () => {
   const flags = ['--model', 'fixture-model', '--base-url', 'http://127.0.0.1:1/v1', '--auth', 'Bearer fixture-only'];
@@ -177,23 +167,23 @@ describe("CLI inspection commands", () => {
     const home = scratchDir("cli-inspect");
     await createLocalAgent(home, "localtest");
 
-    const memory = await runCli(home, ["memory", "localtest"]);
+    const memory = await runCli(["memory", "localtest"], { home });
     expect(memory.exitCode).toBe(0);
     expect(memory.stdout).toContain("hello local memory");
 
-    const mcts = await runCli(home, ["swarm", "localtest", "--json"]);
+    const mcts = await runCli(["swarm", "localtest", "--json"], { home });
     expect(mcts.exitCode).toBe(0);
     expect(JSON.parse(mcts.stdout)).toEqual([
       expect.objectContaining({ id: "root", value: 0.7, status: "terminal" }),
     ]);
 
-    const events = await runCli(home, ["events", "localtest", "--json"]);
+    const events = await runCli(["events", "localtest", "--json"], { home });
     expect(events.exitCode).toBe(0);
     expect(JSON.parse(events.stdout)).toEqual([
       expect.objectContaining({ id: "event-1", variant: "chat" }),
     ]);
 
-    const executors = await runCli(home, ["executors", "localtest"]);
+    const executors = await runCli(["executors", "localtest"], { home });
     expect(executors.exitCode).toBe(0);
     expect(executors.stdout).not.toContain("device");
     expect(executors.stdout).toContain("native_binary");
@@ -227,15 +217,15 @@ describe("CLI inspection commands", () => {
     await createLocalAgent(home, "localtest");
     const llmEnv = { KINU_BASE_URL: "http://localhost:1/v1", KINU_AUTH: "Bearer x" };
 
-    const bare = await runCli(home, ["model", "localtest", "gpt-4o-mini"], llmEnv);
+    const bare = await runCli(["model", "localtest", "gpt-4o-mini"], { home, env: llmEnv });
     expect(bare.exitCode).toBe(0);
     expect(bare.stdout).toContain("workers-ai/gpt-4o-mini");
 
-    const cf = await runCli(home, ["model", "localtest", "@cf/meta/llama-3.1-8b-instruct"], llmEnv);
+    const cf = await runCli(["model", "localtest", "@cf/meta/llama-3.1-8b-instruct"], { home, env: llmEnv });
     expect(cf.exitCode).toBe(0);
     expect(cf.stdout).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
 
-    const stored = await runCli(home, ["model", "localtest"], llmEnv);
+    const stored = await runCli(["model", "localtest"], { home, env: llmEnv });
     expect(stored.stdout).toContain("workers-ai/@cf/meta/llama-3.1-8b-instruct");
     // Workspace-scoped: the global config must not gain a model here.
     const configPath = join(home, "config.json");
@@ -251,22 +241,22 @@ describe("CLI inspection commands", () => {
     const home = scratchDir("cli-effort");
     await createLocalAgent(home, "localtest");
 
-    const initial = await runCli(home, ["effort", "localtest"]);
+    const initial = await runCli(["effort", "localtest"], { home });
     expect(initial.exitCode, initial.stderr).toBe(0);
     expect(initial.stdout).toContain("medium");
 
-    const set = await runCli(home, ["effort", "localtest", "high"]);
+    const set = await runCli(["effort", "localtest", "high"], { home });
     expect(set.exitCode).toBe(0);
     expect(set.stdout).toContain("set high");
 
-    const stored = await runCli(home, ["effort", "localtest"]);
+    const stored = await runCli(["effort", "localtest"], { home });
     expect(stored.stdout).toContain("high");
-    const status = await runCli(home, ["status", "localtest"]);
+    const status = await runCli(["status", "localtest"], { home });
     expect(status.exitCode, status.stderr).toBe(0);
     expect(status.stdout).toContain("Effort:");
     expect(status.stdout).toContain("high");
 
-    const invalid = await runCli(home, ["effort", "localtest", "extreme"]);
+    const invalid = await runCli(["effort", "localtest", "extreme"], { home });
     expect(invalid.exitCode).toBe(1);
     expect(invalid.stderr).toContain("none, minimal, low, medium, high, xhigh, max");
   });
@@ -282,7 +272,7 @@ describe("CLI inspection commands", () => {
       KINU_MODEL: "@cf/moonshotai/kimi-k2.6",
     };
 
-    const known = await runCli(home, ["model", "localtest", knownSpec], llmEnv);
+    const known = await runCli(["model", "localtest", knownSpec], { home, env: llmEnv });
     expect(known.exitCode).toBe(0);
 
     const readPinnedModel = () => {
@@ -297,11 +287,11 @@ describe("CLI inspection commands", () => {
 
     expect(readPinnedModel()).toBe(knownSpec);
 
-    const uncatalogued = await runCli(home, ["model", "localtest", "workers-ai/@cf/meta/not-real"], llmEnv);
+    const uncatalogued = await runCli(["model", "localtest", "workers-ai/@cf/meta/not-real"], { home, env: llmEnv });
     expect(uncatalogued.exitCode).toBe(0);
     expect(readPinnedModel()).toBe('workers-ai/@cf/meta/not-real');
 
-    const unknownProvider = await runCli(home, ["model", "localtest", "unknown/model"], llmEnv);
+    const unknownProvider = await runCli(["model", "localtest", "unknown/model"], { home, env: llmEnv });
     expect(unknownProvider.exitCode).toBe(1);
     expect(readPinnedModel()).toBe('workers-ai/@cf/meta/not-real');
   });
@@ -334,7 +324,7 @@ describe("CLI inspection commands", () => {
     await createLocalAgent(home, "localtest");
 
     for (const args of [["jobs", "localtest"], ["triggers", "localtest", "list"]]) {
-      const run = await runCli(home, [...args, "--json"]);
+      const run = await runCli([...args, "--json"], { home });
       expect([args, run.exitCode, run.stderr]).toEqual([args, 0, ""]);
       expect(JSON.parse(run.stdout)).toEqual([]);
     }
@@ -346,7 +336,7 @@ describe("CLI inspection commands", () => {
     await createLocalAgent(home, "localtest");
 
     const at = "2030-01-02T03:04:05Z";
-    const run = await runCli(home, ["triggers", "localtest", "at", at]);
+    const run = await runCli(["triggers", "localtest", "at", at], { home });
     expect([run.exitCode, run.stderr]).toEqual([0, ""]);
     expect(run.stdout).toContain("scheduled");
 
@@ -394,7 +384,7 @@ describe("CLI inspection commands", () => {
       db.close();
     }
 
-    const json = await runCli(home, ["spend", "localtest", "--json"]);
+    const json = await runCli(["spend", "localtest", "--json"], { home });
     expect([json.exitCode, json.stderr]).toEqual([0, ""]);
 
     const parsed = v.parse(
@@ -404,7 +394,7 @@ describe("CLI inspection commands", () => {
 
     expect(parsed.total).toEqual({ unpricedCalls: 1 });
 
-    const printed = await runCli(home, ["spend", "localtest"]);
+    const printed = await runCli(["spend", "localtest"], { home });
     expect([printed.exitCode, printed.stderr]).toEqual([0, ""]);
     const out = printed.stdout;
     expect(out).toContain("$0.0340");
@@ -429,10 +419,10 @@ describe("kinu events rendering", () => {
     const server = Bun.serve({ port: 0, fetch: () => Response.json({ result }) });
 
     try {
-      return await runCli(home, ["events", "cloudtest"], {
+      return await runCli(["events", "cloudtest"], { home, env: {
         KINU_TOKEN: "ptc_test",
         KINU_ORIGIN: `http://localhost:${server.port}`,
-      });
+      } });
     } finally {
       await server.stop(true);
     }
@@ -442,7 +432,7 @@ describe("kinu events rendering", () => {
     const home = scratchDir("cli-events");
     await createLocalAgent(home, "localtest");
 
-    const local = await runCli(home, ["events", "localtest"]);
+    const local = await runCli(["events", "localtest"], { home });
     const cloud = await eventsAgainstCloud(home, [CLOUD_ROW]);
 
     expect([local.exitCode, local.stderr]).toEqual([0, ""]);
