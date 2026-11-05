@@ -36,6 +36,11 @@ const TIME_WORDINGS = ["ships", "one"] as const;
 
 type TimeWording = (typeof TIME_WORDINGS)[number];
 
+/** Kumo's parts as Kinu restyles them with `!important`, as it ships, or as Kumo draws them (audit #27). */
+const KUMO_LOOKS = ["ships", "own"] as const;
+
+type KumoLook = (typeof KUMO_LOOKS)[number];
+
 /** The page's states for the review: as it would be mid-morning, at rest, before anything, reading, and failed. */
 export const ACTIVITY_STATES = [
   { id: "live", label: "Working, and asking" },
@@ -55,6 +60,7 @@ export interface Design {
   readonly device: Device;
   readonly activity: ActivityViewName;
   readonly times: TimeWording;
+  readonly kumo: KumoLook;
 }
 
 const MODES = ["light", "dark"] as const satisfies readonly ThemeMode[];
@@ -80,7 +86,69 @@ function readDesign(): Design {
     device: oneOf(params.get("device"), DEVICES, "desktop"),
     activity: oneOf(params.get("activity"), ACTIVITY_VIEWS, "ships"),
     times: oneOf(params.get("times"), TIME_WORDINGS, "ships"),
+    kumo: oneOf(params.get("kumo"), KUMO_LOOKS, "ships"),
   };
+}
+
+/*
+ * The Kumo switch (audit #27): Kinu's restyle is index.css's `!important` declarations on the classes its `ui/` wrappers
+ * put on Kumo's parts. "Kumo's own" takes those declarations out of the page's stylesheets, and "as it ships" puts each
+ * back where it was, so the product's CSS is never edited and what differs is exactly what the overrides do.
+ */
+/** The classes the `ui/` wrappers put on Kumo's parts, and the Kumo markup the stylesheet reaches into. */
+const KUMO_PARTS = /\.p-select|\.p-popover|\.p-tooltip|data-tooltip-body|\.p-meter-|\.p-copy-field|\.p-composer-model|\.landing-tabs|\.p-background-sheet/u;
+
+interface Taken {
+  readonly style: CSSStyleDeclaration;
+  readonly property: string;
+  readonly value: string;
+}
+
+let taken: readonly Taken[] = [];
+
+function* styleRules(rules: CSSRuleList): Generator<CSSStyleRule> {
+  for (const rule of rules) {
+    if (rule instanceof CSSStyleRule) {
+      yield rule;
+      yield* styleRules(rule.cssRules);
+    } else if (rule instanceof CSSGroupingRule) yield* styleRules(rule.cssRules);
+  }
+}
+
+function sheetRules(sheet: CSSStyleSheet): CSSRuleList | null {
+  // A stylesheet from another origin cannot be read; none of Kinu's is one.
+  return sheet.href === null || new URL(sheet.href).origin === location.origin ? sheet.cssRules : null;
+}
+
+/** Kumo's parts as Kumo draws them (`true`), or as Kinu restyles them. */
+function wearKumoOwn(own: boolean): void {
+  if (!own) {
+    for (const { style, property, value } of taken) style.setProperty(property, value, "important");
+    taken = [];
+
+    return;
+  }
+
+  if (taken.length > 0) return;
+  const found: Taken[] = [];
+
+  for (const sheet of document.styleSheets) {
+    const rules = sheetRules(sheet);
+
+    if (rules === null) continue;
+
+    for (const rule of styleRules(rules)) {
+      if (!KUMO_PARTS.test(rule.selectorText)) continue;
+
+      for (const property of rule.style) {
+        if (rule.style.getPropertyPriority(property) !== "important") continue;
+        found.push({ style: rule.style, property, value: rule.style.getPropertyValue(property) });
+      }
+    }
+  }
+
+  for (const { style, property } of found) style.removeProperty(property);
+  taken = found;
 }
 
 const listeners = new Set<() => void>();
@@ -101,6 +169,8 @@ function apply(design: Design): void {
 
   if (design.background === "today") delete root.dataset.background;
   else root.dataset.background = design.background;
+
+  wearKumoOwn(design.kumo === "own");
 }
 
 /** Every switch is a parameter of the address, so a reload and the phone window open on the same design. */
@@ -196,13 +266,18 @@ const ACTIVITY_WHY: Record<ActivityViewName, string> = {
   log: "One log for the workspace: now, what needs you, what is coming, and everything done, by its agent, helpers, jobs and watches.",
 };
 
+const KUMO_WHY: Record<KumoLook, string> = {
+  ships: "Kinu's restyle: index.css's `!important` declarations on Kumo's select, popover, tooltip, meter, copy field, composer model and landing tabs.",
+  own: "Kumo's own: those declarations taken out, and nothing else changed. What differs is all they do; what does not is safe to delete.",
+};
+
 const TIMES_WHY: Record<TimeWording, string> = {
   ships: "Each surface's own: the chat's clock (2:10 AM), the pill's \"3 min\", the jobs' \"in 3m\", the roster's \"3m ago\".",
   one: "One rule: \"just now\", \"12 min ago\" and \"in 20 min\" when near; the clock the same day; \"Yesterday, 4:10 PM\"; the weekday; the date.",
 };
 
 function summary(design: Design): string {
-  return [LOOK_NAMES[design.look], design.mode, `${CHAT_FACES[design.font].label} (${design.scope})`, `background ${design.background}`, design.device, `activity ${design.activity}`, `times ${design.times}`].join(" · ");
+  return [LOOK_NAMES[design.look], design.mode, `${CHAT_FACES[design.font].label} (${design.scope})`, `background ${design.background}`, design.device, `activity ${design.activity}`, `times ${design.times}`, `kumo ${design.kumo}`].join(" · ");
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -260,6 +335,8 @@ export function DesignBar() {
           <Choice label="Times" value={design.times} options={TIME_WORDINGS} name={(times) => (times === "one" ? "One wording" : "As it ships")}
             onPick={(times) => detach(switchTo({ times }, pathname.endsWith("/activity") ? null : ACTIVITY_PAGE))} />
           <p className="p-meta p-text-3" data-design-why="times">{TIMES_WHY[design.times]}</p>
+          <Choice label="Kumo's parts" value={design.kumo} options={KUMO_LOOKS} name={(kumo) => (kumo === "own" ? "Kumo's own" : "As it ships")} onPick={(kumo) => setDesign({ kumo })} />
+          <p className="p-meta p-text-3" data-design-why="kumo">{KUMO_WHY[design.kumo]}</p>
         </Section>
         <Section title="Go to">
           <div className="flex flex-wrap gap-1">

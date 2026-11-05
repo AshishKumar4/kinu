@@ -7,7 +7,7 @@
 import { Data, Effect } from 'effect';
 import { settle } from '../obs/effect';
 import type { KinuError } from '../obs/error';
-import { hmacSha256Hex } from '../utils/crypto';
+import { hmacSha256Hex, timingSafeEqual } from '../utils/crypto';
 import * as v from 'valibot';
 
 /** `ingest`: any signed-in user's request path. `admin`: only after the HTTP
@@ -146,9 +146,10 @@ function resolveGrade(
     controlToken(env, INGEST_LABEL),
     controlToken(env, ADMIN_LABEL),
   ], { concurrency: 'unbounded' }).pipe(Effect.map(([ingest, admin]): ControlGrade | null => {
-    if (token === admin) return 'admin';
+    // Compared in constant time: how far a guess matched must not show in how long the refusal took.
+    if (timingSafeEqual(token, admin)) return 'admin';
 
-    if (token === ingest) return 'ingest';
+    if (timingSafeEqual(token, ingest)) return 'ingest';
 
     return null;
   }));

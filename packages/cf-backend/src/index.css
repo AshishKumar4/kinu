@@ -239,8 +239,11 @@ html, body, #root {
      `border-kumo-hairline`, …) are baked into its dist bundle and cannot
      be restyled per call site. They resolve through Kumo's own custom
      properties, so re-pointing those at the `--c-*` layer reskins its
-     colours with no wrappers; a part's padding, radius or shadow that a
-     token cannot reach is still overridden where its class sits below.
+     colours with no wrappers. A part's padding, radius or shadow that no
+     token reaches is overridden below with `!important` on the class its
+     `ui/` wrapper sets (.p-select, .p-popover, .p-tooltip, .p-meter-*,
+     .p-copy-field, .p-composer-model), and those rules lean on Kumo's
+     markup. The gallery's design bar takes them out live ("Kumo's parts").
 
      Kumo declares them inside `@layer base` and keys its dark set on the
      same `[data-mode]` attribute we use; this block is unlayered, so it
@@ -973,6 +976,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-row-control { grid-template-columns: 32px minmax(0, 1fr) 120px auto 28px; }
 .p-row-state { display: contents; }
 @media (max-width: 639px) {
+  /* The status column is as wide as its status: a row with none gives its words the width (Plugins' Add list). */
+  .p-row { grid-template-columns: 32px minmax(0, 1fr) auto 28px; }
   .p-row-control { grid-template-columns: 32px minmax(0, 1fr) 28px; }
   .p-row-control .p-row-state { display: flex; align-items: center; gap: 12px; grid-row: 2; grid-column: 2 / -1; padding-bottom: 8px; }
 }

@@ -23,6 +23,8 @@ export interface EvalLeaseDeps {
   readonly markOf: (workspace: string) => number | null;
   /** The account's own deletion of `workspace`. */
   readonly tearDown: (workspace: string) => Promise<void>;
+  /** Withdraws the account-memory proposals `workspace` filed, so a later trial never reads another's. */
+  readonly withdrawProposals: (workspace: string) => void;
 }
 
 export class EvalLeaseJobs extends LifecycleCapability {
@@ -39,8 +41,9 @@ export class EvalLeaseJobs extends LifecycleCapability {
     await this.lifecycle.jobs.push({ id: jobId(workspace), fn: EVAL_LEASE_JOB, time: at + EVAL_WORKSPACE_LEASE_MS, payload: { workspace } });
   }
 
-  /** `workspace` is gone: it holds no lease. */
+  /** `workspace` is gone: it holds no lease, and an eval workspace's proposals to the account go with it. */
   async ended(workspace: string): Promise<void> {
+    if (workspace.startsWith(EVAL_WORKSPACE_PREFIX) && this.#deps.evalAccount()) this.#deps.withdrawProposals(workspace);
     await this.lifecycle.jobs.cancel(jobId(workspace));
   }
 

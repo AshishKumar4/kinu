@@ -3,6 +3,7 @@
  * path, or a package from node_modules), or writes a static `import` at all, runs as a Node program in the workspace
  * (Nimbus's node), where those resolve; every other program runs in the codemode isolate, as it always has.
  */
+import { nodesOf, type SyntaxNode } from '../utils/module-specifiers';
 import * as acorn from 'acorn';
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -45,11 +46,6 @@ const PARSE: acorn.Options = {
   ecmaVersion: 'latest', sourceType: 'module', allowReturnOutsideFunction: true, allowAwaitOutsideFunction: true, allowHashBang: true,
 };
 
-/** A node of the parsed program, as the walk reads it: anything with a string `type`. */
-const SyntaxNodeSchema = v.looseObject({ type: v.string() });
-
-type SyntaxNode = Readonly<Pick<v.InferOutput<typeof SyntaxNodeSchema>, 'type'>>;
-
 const NamedSchema = v.looseObject({ type: v.literal('Literal'), value: v.string() });
 
 /** `require('…')`, its one argument a string literal. */
@@ -59,22 +55,6 @@ const RequireSchema = v.looseObject({
 
 /** `import('…')`, its source a string literal. */
 const DynamicImportSchema = v.looseObject({ type: v.literal('ImportExpression'), source: NamedSchema });
-
-/** Every node of `root`, depth first. */
-function* nodesOf(root: SyntaxNode): Generator<SyntaxNode> {
-  const stack: SyntaxNode[] = [root];
-
-  for (let node = stack.pop(); node !== undefined; node = stack.pop()) {
-    yield node;
-    const values: readonly unknown[] = Object.values(node);
-
-    for (const value of values) {
-      const children: readonly unknown[] = Array.isArray(value) ? value : [value];
-
-      for (const child of children) if (v.is(SyntaxNodeSchema, child)) stack.push(child);
-    }
-  }
-}
 
 /** The module a `require('…')` or `import('…')` names, or null for any other node. */
 function namedModule(node: SyntaxNode): string | null {

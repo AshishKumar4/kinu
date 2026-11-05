@@ -6,6 +6,7 @@
 import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import { cloudPlanes, findPlaneReferences, referencedPath, type PathPlanes } from '../vfs/resolve';
 import { walkedPath } from '../vfs/workspace-path';
+import { inlineLinks, splitCodeSpans } from './markdown-scan';
 
 export type ImageMachine = 'workspace' | 'computer' | 'device';
 
@@ -26,9 +27,6 @@ const EXTENSION = String.raw`\.(?:png|jpe?g|gif|webp|avif|svg)`;
 
 const IMAGE = new RegExp(`${EXTENSION}$`, 'iu');
 
-/** `![alt](target)`, the target up to its closing bracket or a title. */
-const MARKDOWN_IMAGE = /!\[[^\]]*\]\(\s*<?([^)\s>]+)>?(?:\s+"[^"]*")?\s*\)/gu;
-
 const WEB = new RegExp(String.raw`https?:\/\/[^\s<>()"'\x60]+?${EXTENSION}(?:\?[^\s<>()"'\x60]*)?(?=$|[\s<>()"'\x60.,;:!?])`, 'giu');
 
 /** A path in prose or code: absolute, or relative with at least one folder, ending in an image's extension. */
@@ -37,7 +35,24 @@ const PATH = new RegExp(String.raw`(?<![\w@.:/-])(?:\/|~\/)?(?:[\w.@+-]+\/)+[\w.
 /** A file name alone, which only an inline code span names as a file. */
 const CODE_NAME = new RegExp(String.raw`^[\w.@+-]+${EXTENSION}$`, 'iu');
 
-const INLINE_CODE = /`([^`\n]+)`/gu;
+/** Each inline code span's content, trimmed, and where it starts. */
+function codeSpans(text: string): { readonly index: number; readonly code: string }[] {
+  const spans: { readonly index: number; readonly code: string }[] = [];
+  let offset = 0;
+
+  for (const line of text.split('\n')) {
+    let at = offset;
+
+    for (const [i, part] of splitCodeSpans(line).entries()) {
+      if (i % 2 === 1) spans.push({ index: at, code: part.replace(/^`+|`+$/gu, '').trim() });
+      at += part.length;
+    }
+
+    offset += line.length + 1;
+  }
+
+  return spans;
+}
 
 function located(path: string): Pick<Extract<NamedImage, { kind: 'file' }>, 'machine' | 'device'> {
   if (path === '/computer' || path.startsWith('/computer/')) return { machine: 'computer' };
@@ -51,7 +66,7 @@ function located(path: string): Pick<Extract<NamedImage, { kind: 'file' }>, 'mac
 export function namedImages(text: string, at: { readonly home: string; readonly roots: readonly string[] }): NamedImage[] {
   const found: { readonly index: number; readonly written: string }[] = [];
 
-  for (const match of text.matchAll(MARKDOWN_IMAGE)) found.push({ index: match.index, written: match[1] ?? '' });
+  for (const image of inlineLinks(text, true)) found.push({ index: image.start, written: image.destination });
 
   for (const match of text.matchAll(WEB)) found.push({ index: match.index, written: match[0] });
 
@@ -59,11 +74,7 @@ export function namedImages(text: string, at: { readonly home: string; readonly 
 
   for (const match of text.matchAll(PATH)) found.push({ index: match.index, written: match[0] });
 
-  for (const match of text.matchAll(INLINE_CODE)) {
-    const code = (match[1] ?? '').trim();
-
-    if (CODE_NAME.test(code)) found.push({ index: match.index, written: code });
-  }
+  for (const span of codeSpans(text)) if (CODE_NAME.test(span.code)) found.push({ index: span.index, written: span.code });
 
   const planes = cloudPlanes(at.home);
   const named = new Map<string, NamedImage>();
