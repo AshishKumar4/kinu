@@ -13,7 +13,6 @@ import {
   readAgentArchivePage,
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
-  writeWorkspaceArchive,
   CHAT_SESSION_ID,
   SessionHistory,
   type ActorHandle,
@@ -22,7 +21,7 @@ import {
   type SessionTranscriptReader,
   type SqlValue,
 } from '../src/index';
-import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql } from './helpers';
+import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql, writeWorkspaceArchive } from './helpers';
 import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';

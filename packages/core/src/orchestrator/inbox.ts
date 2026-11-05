@@ -26,7 +26,7 @@ import { parseJsonObject, type JsonObject } from '../utils/json';
 import { payloadReference, type SessionPayload } from '../session/payload';
 import { stampTurnAuthor, TURN_AUTHOR_METADATA_KEY } from '../types/turn-metadata';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import { diagnostics, KinuError, toKinuError } from '../obs/index';
+import { diagnostics, KinuError } from '../obs/index';
 
 export interface UserSteer {
   readonly text: string;
@@ -422,6 +422,9 @@ function cardIdOf(signal: Pick<AgentSignal, 'idempotencyKey'>): string {
 
 export class Inbox {
   private pending: DeliveredSignal[] = [];
+
+  /** Re-deliveries still running, held until each settles. */
+  private readonly redeliveries = new Set<Promise<void>>();
   private absorbed: DeliveredSignal[] = [];
   /** The host enqueue in flight until the turn opens; while set, a message rides that turn's first step. */
   private starting: Promise<EnqueueTurnResult> | null = null;
@@ -472,7 +475,7 @@ export class Inbox {
   send(words: UserWords): Promise<SendOutcome> {
     const delivered: DeliveredUserSignal = { ...words, cardId: cardIdOf(words) };
 
-    if (!this.busy) return this.queueUsers([delivered], { idempotent: false });
+    if (!this.busy) return settle(this.queueUsers([delivered], { idempotent: false }));
     this.steers.onAccept?.({ ...toUserSteer(delivered), id: delivered.user.id, mode: delivered.user.mode });
     this.pending.push(delivered);
     const release = this.steers.release;
@@ -493,6 +496,14 @@ export class Inbox {
 
       return 'mid-turn' as const;
     })();
+  }
+
+  /** A re-delivery the inbox holds until it settles: its failure is reported inside the run, which never rejects, so
+   *  nothing waits on it. */
+  private holdRedelivery(run: Effect.Effect<SendOutcome>): void {
+    const held: Promise<void> = hold(run).then(() => { this.redeliveries.delete(held); });
+
+    this.redeliveries.add(held);
   }
 
   /** A person's words waiting for the step to end. */
@@ -745,7 +756,7 @@ export class Inbox {
 
     for (const signal of events) {
       if (!ride) {
-        void this.queue(signal).catch(reportRedeliveryFailure(signal.kind));
+        this.holdRedelivery(this.queue(signal));
       } else if (signal.yieldsToUserMessage === true) {
         this.moveCard(signal.cardId, 'undelivered');
       } else {
@@ -755,7 +766,7 @@ export class Inbox {
     }
 
     if (first !== undefined) {
-      void this.queueUsers([first, ...rest], { idempotent: true }).catch(reportRedeliveryFailure(USER_MESSAGE_SIGNAL_KIND));
+      this.holdRedelivery(this.queueUsers([first, ...rest], { idempotent: true }));
     }
   }
 
@@ -763,59 +774,65 @@ export class Inbox {
    * What a turn left unread, re-delivered as a turn of its own. `idempotencyKey` rides to the backend, which derives the
    * queued message id from it. One the host does not open is dropped here, its card withdrawn and the failure reported.
    */
-  private async queue(signal: DeliveredSignal): Promise<SendOutcome> {
+  private queue(signal: DeliveredSignal): Effect.Effect<SendOutcome> {
     this.openCard(signal, signal.text);
+    const metadata = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId };
+    const { text, yieldsToUserMessage } = signal;
+    // Requeues keep their card identity across durable admission; a yielding offer must still take the
+    // host's slot-time offer check.
+    const idempotencyKey = signal.idempotencyKey ?? (yieldsToUserMessage === true ? undefined : signal.cardId);
 
-    try {
-      const metadata = { ...turnMetadata(signal), [SIGNAL_ID_METADATA_KEY]: signal.cardId };
-      const { text, yieldsToUserMessage } = signal;
-      // Requeues keep their card identity across durable admission; a yielding offer must still take the
-      // host's slot-time offer check.
-      const idempotencyKey = signal.idempotencyKey ?? (yieldsToUserMessage === true ? undefined : signal.cardId);
+    const turn: ProgrammaticTurn = {
+      text, metadata,
+      ...(idempotencyKey !== undefined && { idempotencyKey }),
+      ...(yieldsToUserMessage === true && { yieldsToUserMessage }),
+    };
 
-      const turn: ProgrammaticTurn = {
-        text, metadata,
-        ...(idempotencyKey !== undefined && { idempotencyKey }),
-        ...(yieldsToUserMessage === true && { yieldsToUserMessage }),
-      };
-
-      const result = await this.startTurn(() => this.host.enqueueTurn(turn));
-
+    return this.enqueued(turn, signal.kind).pipe(Effect.map((result): SendOutcome => {
       // The operator spoke first: a consumed offer, not a failure.
-      if (result.status === 'yielded') {
+      if (result?.status === 'yielded') {
         this.moveCard(signal.cardId, 'undelivered');
 
         return 'yielded';
       }
 
-      if (result.status === 'queued') return 'queued';
+      if (result?.status === 'queued') return 'queued';
 
-      if (result.status === 'failed') {
+      if (result?.status === 'failed') {
         diagnostics.failure(
           'signal.turn_failed',
           new KinuError('unavailable', `the signal's turn ended on its error: ${result.reason ?? 'unstated'}`),
           { signal: signal.kind },
         );
-      } else {
+      } else if (result !== null) {
         preempted(signal.kind);
       }
-    } catch (err) {
-      enqueueFailed(toKinuError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }), signal.kind);
-    }
 
-    this.moveCard(signal.cardId, 'undelivered');
+      this.moveCard(signal.cardId, 'undelivered');
 
-    return 'undelivered';
+      return 'undelivered';
+    }));
+  }
+
+  /** The host's answer to `turn`, or null where it could not enqueue it, the failure reported under `kind`. */
+  private enqueued(turn: ProgrammaticTurn, kind: string): Effect.Effect<EnqueueTurnResult | null> {
+    return attempted({ doing: 'enqueue a signal turn', otherwise: 'io' }, () => this.startTurn(() => this.host.enqueueTurn(turn))).pipe(
+      Effect.catch((failure) => Effect.sync(() => {
+        enqueueFailed(failure, kind);
+
+        return null;
+      })),
+    );
   }
 
   /**
    * Operator words become one user turn under the narrowest mode; no card moves. `idempotent` marks a rerun
    * of leftovers (`steer-rerun:` key), versus an idle-agent send that matches ordinary user-turn admission.
    */
-  private async queueUsers(
+  private queueUsers(
     group: readonly [DeliveredUserSignal, ...DeliveredUserSignal[]],
     opts: { readonly idempotent: boolean },
-  ): Promise<SendOutcome> {
+  ): Effect.Effect<SendOutcome> {
     const [first] = group;
 
     // Merged by the session into one rerun ({@link ChatSession.enqueueTurn}).
@@ -832,10 +849,8 @@ export class Inbox {
       }),
     };
 
-    try {
-      const result = await this.startTurn(() => this.host.enqueueTurn(turn));
-
-      if (result.status === 'queued') {
+    return this.enqueued(turn, USER_MESSAGE_SIGNAL_KIND).pipe(Effect.map((result): SendOutcome => {
+      if (result?.status === 'queued') {
         for (const signal of group) {
           this.host.broadcast({ type: 'steer_status', status: 'turn', steerId: signal.user.id, text: signal.text });
         }
@@ -843,12 +858,10 @@ export class Inbox {
         return 'queued';
       }
 
-      preempted(USER_MESSAGE_SIGNAL_KIND);
-    } catch (err) {
-      enqueueFailed(toKinuError({ doing: 'enqueue a signal turn', cause: err, otherwise: 'io' }), USER_MESSAGE_SIGNAL_KIND);
-    }
+      if (result !== null) preempted(USER_MESSAGE_SIGNAL_KIND);
 
-    return 'undelivered';
+      return 'undelivered';
+    }));
   }
 
   /** Same `kinuEvent` metadata as a queued signal's message; `text` is this delivery's rendering. */
@@ -897,12 +910,3 @@ export const turnMetadata = (signal: AgentSignal): JsonObject => {
   return stampTurnAuthor(metadata);
 };
 
-function reportRedeliveryFailure(kind: string) {
-  return (...rejection: [unknown]): void => {
-    diagnostics.failure(
-      'signal.redelivery_failed',
-      toKinuError({ doing: 're-deliver a signal', cause: rejection[0], otherwise: 'io' }),
-      { signal: kind },
-    );
-  };
-}

@@ -1,6 +1,6 @@
 /** CI access tokens (`pta_…`), hashed at rest in UserDO SQLite; free of `cloudflare:workers` for bun:sqlite tests.
  *  Caller-correctable failures return `{ ok: false }` so they survive Worker→DO RPC; throws are infra failures. */
-import { nanoid } from '../utils/nanoid';
+import { randomToken } from '../utils/crypto';
 import { type SqlExec } from '../types/primitives';
 import { sha256Hex } from '../safety/argument-digest';
 import * as v from 'valibot';
@@ -94,7 +94,8 @@ export async function mintAccessToken(
     return { ok: false, error: `An active access token named "${cleanName}" already exists. Revoke it first or choose another name.` };
   }
 
-  const token = `pta_${userId}_${nanoid(44)}`;
+  // 256 unbiased bits from the CSPRNG: a bearer secret, not an id.
+  const token = `pta_${userId}_${randomToken(32)}`;
   const tokenHash = sha256Hex(token);
   const createdAt = Date.now();
   sql.exec(

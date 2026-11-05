@@ -571,7 +571,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Workspaces an agent made | `agent_workspaces` (the Changelog's record of each workspace the agent created in its owner's account) | `core/src/identity/agent-workspaces.ts` |
 | Plan review | `plan_reviews` | `core/src/plans/review.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
-| Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
+| Imported experience | `imported_experience` (declared, written by nothing; its retirement is the owner's) | `core/src/experience/imports.ts` |
 | Compaction | `compaction_state`, `compaction_archive` | `core/src/state/workspace-schema.ts` (the DDL lives in core because `@kinu.run/compaction` sits above it in the dependency graph) |
 | Typed config | `actor_config` | `core/src/config/store.ts` |
 | Evolved text (prompt sections, tool descriptions and field text) | `artifact_versions` | `core/src/evolution/artifacts.ts` |

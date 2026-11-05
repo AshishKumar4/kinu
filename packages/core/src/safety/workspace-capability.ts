@@ -65,7 +65,6 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'workspaces.overview_self': 'workspace',
   /** Reading the owner's experience library published by other workspaces. */
   'experience.read': 'workspace',
-  'experience.write': 'workspace',
   /** The owner's profile; notification and inbound email trust key on its verified email. */
   'profile': 'workspace',
   /** The account itself. Owner-only: resetting it could erase every sibling workspace. */

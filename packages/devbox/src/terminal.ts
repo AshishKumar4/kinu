@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { Effect } from 'effect';
-import { DevboxError, attempt, attemptSync, observe, settle } from './errors';
+import { DevboxError, attempt, attempted, attemptSync, observe, settle } from './errors';
 import { boxEnv, containerExec, endProcess, resizePty, type TerminalSize } from './processes';
 import { INSTALL_SESSION_FILES, SAVED_SESSIONS, SESSIONS_FORGET, SESSION_FILES, SESSION_RC_FILE, SESSION_RESUME_FILE, TMUX_CONF_FILE, type SessionRecord } from './sessions';
 import { DEVBOX_WORKDIR } from './wire';
@@ -177,7 +177,7 @@ export function attachTerminal(container: Pick<Container, 'exec'>, params: URLSe
 }
 
 /** What `attachWhenReady` needs of the box: its readiness, held as the workspace holds it, and the attach itself. */
-export interface TerminalAttach extends Pick<ReadinessHold, 'ask' | 'wait' | 'now'> {
+export interface TerminalAttach extends Pick<ReadinessHold<DevboxError>, 'ask' | 'wait' | 'now'> {
   /** The box's end of the pane's socket, which the runtime holds. */
   readonly socket: Pick<WebSocket, 'send' | 'close'>;
   /** True while the box still holds the socket: false once the pane left. */
@@ -202,7 +202,7 @@ export async function attachWhenReady(box: TerminalAttach): Promise<TerminalSock
     tell({ type: 'status', text: reason });
   };
 
-  const attached = Effect.flatMap(attempt('io', () => holdReadiness({ ...box, gone: () => !box.held(), pending: sayWhy })), (readiness) => {
+  const attached = Effect.flatMap(attempted('io', holdReadiness({ ...box, gone: () => !box.held(), pending: sayWhy })), (readiness) => {
     if (!box.held()) return Effect.succeed(null);
 
     if (readiness.kind === 'pending') return Effect.fail(new DevboxError('io', readiness.reason));

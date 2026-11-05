@@ -4,13 +4,15 @@ import { Effect, Semaphore } from 'effect';
 import * as v from 'valibot';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
-import { effectsAlreadyDone, preparedOutput, prepareOutput, recordEffectDone, retirePreparedOutput } from '../identity/effect-tombstones';
+import { effectsAlreadyDone, preparedOutput, prepareOutput, recordEffectDone, retainEffectsDone, retirePreparedOutput } from '../identity/effect-tombstones';
+import { sha256Hex } from '../safety/argument-digest';
 import type { FactsStore } from '../memory/facts';
 import {
   accountProposals, applySleepTimeUpdate, runSleepTimeCompute, SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
   type SleepTimeUpdate, type SleepTimeWindow,
 } from '../memory/sleep-time-compute';
 import { AccountProposalSchema, type AccountMemory } from '../memory/account';
+import type { MemoryNote } from '../memory/note';
 import { attempt, diagnostics, settle, type KinuError } from '../obs/index';
 import type { SessionTranscript } from '../session/transcript';
 import type { RawSqlExec, RoutedLLM, SqlExecutor } from '../types/primitives';
@@ -22,6 +24,13 @@ const PROCESSED = 'sleep_time';
 const SETTLED_AT = 'settled';
 
 const CLOSED_AT = 'closed';
+
+/** Each note a pass folded into facts, by its stamp and text: a note is folded once, whenever it lands, and a note
+ *  forgotten or rewritten takes its tombstone with it at the next pass that folds one. */
+const NOTE_FOLDED = 'sleep_time_note';
+
+/** The notes one pass folds, oldest first: a workspace with years of them drains over its passes. */
+const FOLD_CAP = 20;
 
 /**
  * One pass at a time over an actor's facts, whichever trigger starts it, each reading its window under the lock: an idle
@@ -77,6 +86,8 @@ export interface SleepTimeLaneDeps {
    * only: the CLI has no account's user object, so it leaves this unset (`scripts/capability-parity.lock.json`).
    */
   readonly account?: () => AccountMemory | undefined;
+  /** The notes the agent kept (`memory/note.ts`), oldest first, folded into facts as they come; absent, none are read. */
+  readonly notes?: () => Promise<readonly MemoryNote[]>;
 }
 
 function idleReason(window: SleepTimeWindow | null): string {
@@ -270,8 +281,11 @@ export class SleepTimeLane {
           })),
         );
 
-      const update = stored ?? (yield* attempt({ doing: 'compressing the recent turns into agent facts', otherwise: 'unavailable' }, () => runSleepTimeCompute(this.deps.llm(), {
+      const kept = stored === undefined ? yield* this.keptNotes() : null;
+
+      const update = stored?.update ?? (yield* attempt({ doing: 'compressing the recent turns into agent facts', otherwise: 'unavailable' }, () => runSleepTimeCompute(this.deps.llm(), {
         turns: window.turns,
+        ...(kept !== null && { notes: kept.fresh }),
         currentFacts: this.deps.facts.all()
           .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
           .map((fact) => ({ key: fact.key, value: fact.value, confidence: fact.confidence })),
@@ -280,14 +294,22 @@ export class SleepTimeLane {
 
       if (stored === undefined) {
         // The paid answer, so a replay applies it instead of buying another.
-        prepareOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key }, JSON.stringify(update));
+        // With the notes it folded, so a replay records them as the first application would have.
+        prepareOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key }, JSON.stringify({ ...update, notesFolded: kept?.keys ?? [] }));
       }
+
+      const folded = stored === undefined ? kept?.keys ?? [] : stored.notesFolded;
 
       const proposals = account === undefined ? [] : accountProposals(update, window.turns);
 
       // One commit, so a replay never repeats a prefix: the workspace's facts, and the account proposals it owes.
       const summary = this.deps.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.deps.facts, update);
+
+        for (const note of folded) recordEffectDone(this.deps.sql, this.deps.actor, { scope: NOTE_FOLDED, key: note });
+
+        // Pruned as tombstones are added, so a pass that folds nothing writes nothing (a turn's statement budget).
+        if (kept !== null && kept.keys.length > 0) retainEffectsDone(this.deps.sql, this.deps.actor, NOTE_FOLDED, kept.live);
 
         for (const [index, proposal] of proposals.entries()) {
           void this.deps.sql`INSERT INTO account_proposal_outbox (delivery, proposal_json)
@@ -352,15 +374,45 @@ export class SleepTimeLane {
     })));
   }
 
+  /** The oldest notes not yet folded, their keys, and every note's key. A read that fails costs the pass its notes,
+   *  never its turns. */
+  private keptNotes(): Effect.Effect<{ readonly fresh: readonly MemoryNote[]; readonly keys: readonly string[]; readonly live: readonly string[] } | null> {
+    const read = this.deps.notes;
+
+    if (read === undefined) return Effect.succeed(null);
+
+    return attempt({ doing: "reading the agent's notes the pass folds into facts", otherwise: 'io' }, read).pipe(
+      Effect.map((notes) => {
+        const keyed = notes.map((note) => ({ note, key: sha256Hex(`${note.updatedAt}\n${note.content}`, 32) }));
+        const done = effectsAlreadyDone(this.deps.sql, this.deps.actor, NOTE_FOLDED, keyed.map(({ key }) => key));
+        const fresh = keyed.filter(({ key }) => !done.has(key)).slice(0, FOLD_CAP);
+
+        return { fresh: fresh.map(({ note }) => note), keys: fresh.map(({ key }) => key), live: keyed.map(({ key }) => key) };
+      }),
+      Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('memory.notes_read_failed', failure, { workspace: this.deps.workspace });
+
+        return null;
+      })),
+    );
+  }
+
   private finish(key: string): void {
     recordEffectDone(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
     retirePreparedOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
     this.clear(SETTLED_AT, CLOSED_AT);
   }
 
-  private recordedUpdate(key: string): SleepTimeUpdate | undefined {
+  /** The answer a pass paid for and has not yet applied, with the notes it folded. */
+  private recordedUpdate(key: string): { readonly update: SleepTimeUpdate; readonly notesFolded: readonly string[] } | undefined {
     const held = preparedOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
 
-    return held === undefined ? undefined : v.parse(SleepTimeUpdateSchema, JSON.parse(held));
+    if (held === undefined) return undefined;
+    const answer: unknown = JSON.parse(held);
+
+    return {
+      update: v.parse(SleepTimeUpdateSchema, answer),
+      notesFolded: v.parse(v.object({ notesFolded: v.optional(v.array(v.string()), []) }), answer).notesFolded,
+    };
   }
 }

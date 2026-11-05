@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createTestActors, present, testActorHandle, type TestActors } from '@kinu.run/test-utils';
-import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
+import { makeExecRaw, makeSql, makeSqlExec, writeWorkspaceArchive } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import {
   createAppDataStore, createDbCodemodeProvider, initAgentDataTables,
@@ -15,7 +15,7 @@ import {
 import { RunEventRecorder } from '../src/events/recorder';
 import { codemodeCapabilitiesFor, narrowToolSurface } from '../src/tools/registry';
 import { inWorkMode, providersInWorkMode } from '../src/execution/work-mode';
-import { restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/index';
+import { restoreWorkspaceArchive } from '../src/index';
 import { sqlStorageOver } from '../src/identity/inline-primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { RunEvent } from '../src/events/types';

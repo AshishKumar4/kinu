@@ -136,7 +136,7 @@ import {
   readWorkspaceArchivePage, type ArchiveAgentSource, type ArchiveCursor, type ArchivePage,
   nanoid, type HeadRunView, BACKGROUND_FIBER_PREFIX, parseJsonValue,
   ForkNotices, forkNoticeDeliveries, initForkNoticeTable,
-  appendMemoryNote,
+  appendMemoryNote, memoryNotes,
   parseMemoryNotes,
   type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateOperation, type SlateFileChange, SharedSlateFilesSchema, type SharedSlateFiles, type SlateReadModel, SLATES_CHANGED_EVENT, SLATE_PUSH_EVENT, ephemeralSlateAddress, SLATES_CHANGED_METADATA_KEY, slatesToPreview,
   type LiveShareRecord, type OwnedLiveShare, type LiveShareModeBody, type LiveShareListingBody, type RoomService, type SlatePreapprovals, type SlatePreapprovalWithdraw,
@@ -7081,6 +7081,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       idle: () => idleDream(this.refinementDeps, this.engine.recordsTurns),
       // Reads the account and proposes to it; the owner accepts what is kept.
       account: () => this.account.ownedMemory({ by: 'background' }),
+      notes: () => memoryNotes(this.rt.memory),
     });
   }
 

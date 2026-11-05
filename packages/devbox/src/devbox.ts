@@ -70,7 +70,8 @@ import {
 } from './lifecycle';
 import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, type ResourceScope } from './operation-lanes';
 import { SupervisedProcesses, type EndTold } from './supervised-processes';
-import { DevboxError, attempt, attemptSync, caught, hold, refuse, rethrow, whenLost, refuseStart, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
+import { AbsentContainer } from './absent-container';
+import { DevboxError, attempt, attempted, attemptSync, caught, hold, whenLost, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
@@ -382,7 +383,8 @@ interface RestoreClock {
  *  box has been waiting on it rather than only that it is. */
 interface Flight {
   readonly generation: number;
-  readonly run: Promise<void>;
+  /** Its exit once it ends, which every caller that joined it is answered with. */
+  readonly run: Promise<Exit.Exit<void, DevboxError>>;
   readonly since: number;
 }
 
@@ -455,7 +457,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    */
   readonly #flights: Flights = {};
   /** `destroy` cancels and awaits these. */
-  readonly #admissions = new Set<{ readonly abort: () => void; readonly settled: Promise<void> }>();
+  readonly #admissions = new Set<{ readonly abort: () => void; readonly settled: Promise<unknown> }>();
   /** Each terminal's socket, held by the runtime (`acceptWebSocket`): attached, its events' PTY; or still waiting for the
    *  box, what its pane sent meanwhile, given to the PTY in order as it attaches (D109). */
   readonly #terminals = new Map<WebSocket, { readonly attached: TerminalSocketEvents } | { readonly waiting: (string | ArrayBuffer)[] }>();
@@ -488,20 +490,22 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #activeCallers = 0;
   #openSockets = 0;
   #callersDrained: { promise: Promise<void>; resolve: () => void } | undefined;
-  #quiescing: Promise<CheckpointOutcome> | undefined;
+  #quiescing: Promise<Exit.Exit<CheckpointOutcome, DevboxError>> | undefined;
   /** Repair recreates storage mounts while a checkpoint may start a runner; one FIFO owns that
    *  graph from admission to finalization so neither mutates beneath work the other admitted. */
   #storageMutationTail: Promise<void> = Promise.resolve();
 
-  async #withStorageMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const run = this.#storageMutationTail.then(operation);
-    this.#storageMutationTail = (async () => {
-      const settled = await caught(async () => run);
+  /** `operation` in the storage-mutation FIFO, its place taken as it runs; a failure releases the FIFO for the next. */
+  #mutating<T>(operation: Effect.Effect<T, DevboxError>): Effect.Effect<T, DevboxError> {
+    return Effect.flatten(Effect.promise(() => {
+      const run = this.#storageMutationTail.then(async () => hold(operation));
 
-      if ('cause' in settled) console.error(`[devbox] storage mutation released its FIFO after failure: ${describe(settled)}`);
-    })();
+      this.#storageMutationTail = run.then((exit) => {
+        if (Exit.isFailure(exit)) console.error(`[devbox] storage mutation released its FIFO after failure: ${describe({ cause: Cause.squash(exit.cause) })}`);
+      });
 
-    return await run;
+      return run;
+    }));
   }
 
   /** One caller at a time per container resource, shared by every facet of this workspace
@@ -736,13 +740,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         return held.success ? held.output : { waiting: [], retiring: [] };
       },
       write: (state) => { this.ctx.storage.kv.put(GOLDEN_KEY, state); },
-      start: async (from) => {
-        if (container().running) await this.#destroyGoldenContainer();
+      start: (from) => Effect.gen({ self: this }, function* () {
+        if (container().running) yield* this.#destroyGoldenContainer();
         const options = { instance: instanceOf(this.defaultSize), enableInternet: false, entrypoint: ['sleep', 'infinity'] };
         container().start('image' in from ? { ...options, image: from.image } : { ...options, containerSnapshot: { id: from.snapshot } });
         keepStartRefusal(container());
-        await firstExec(container(), AbortSignal.timeout(GOLDEN_ADMISSION_MS));
-      },
+        yield* firstExec(container(), AbortSignal.timeout(GOLDEN_ADMISSION_MS));
+      }),
       exec: async (command) => decoded(await (await containerExec(container(), ['/bin/bash', '-c', command])).output()),
       pipe: (key, path) => this.#pipeParts(key, path),
       snapshot: async (name) => (await container().snapshotContainer({ name })).id,
@@ -758,10 +762,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     };
   }
 
-  async #destroyGoldenContainer(): Promise<void> {
-    if (this.#container().running) await this.#container().destroy();
-    await this.#awaitContainerStopped();
+  #destroyGoldenContainer(): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      if (this.#container().running) yield* Effect.promise(() => this.#container().destroy());
+      yield* this.#awaitContainerStopped();
+    });
   }
+
 
   /** The golden object's last answer while this box has nothing to start from. */
   get #awaitingGolden(): BaseWait | undefined {
@@ -943,20 +950,21 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   start(): Promise<void> {
-    return settle(this.#reopening(async () => {
+    return settle(this.#reopening(Effect.suspend(() => {
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
-      await this.#startContainer();
-    }));
+
+      return this.#startContainer();
+    })));
   }
 
   /** A caller asking reopens a destroyed box once a quiesce in flight has settled. */
-  #reopening(work: () => Promise<void>): Effect.Effect<void, DevboxError> {
+  #reopening(work: Effect.Effect<void, DevboxError>): Effect.Effect<void, DevboxError> {
     const arrived = this.#teardowns;
 
     return Effect.gen({ self: this }, function* () {
       yield* this.#afterQuiesce(arrived, 'io');
       this.#closed = false;
-      yield* attempt('io', work);
+      yield* attempted('io', work);
     });
   }
 
@@ -966,15 +974,22 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return Effect.gen({ self: this }, function* () {
       const quiescing = this.#quiescing;
 
-      if (quiescing !== undefined) yield* attempt(code, () => quiescing);
+      if (quiescing !== undefined) yield* attempted(code, Effect.flatten(Effect.promise(() => quiescing)));
 
       if (arrived !== this.#teardowns) return yield* Effect.fail(new DevboxError('io', DESTROYED_AFTER_ARRIVAL));
     });
   }
 
-  async #startNative(inputs: StartInputs, source: StartSource | undefined): Promise<void> {
-    if (this.#closed) refuse(new DevboxError("io", DESTROYED_START));
-    const container = this.#container();
+  #startNative(inputs: StartInputs, source: StartSource | undefined): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      if (this.#closed) return yield* Effect.fail(new DevboxError("io", DESTROYED_START));
+
+      yield* Effect.flatten(Effect.promise(() => this.#startNativeOn(this.#container(), inputs, source)));
+    });
+  }
+
+  /** The start on `container`: what an admission a teardown has not closed runs. */
+  async #startNativeOn(container: Container, inputs: StartInputs, source: StartSource | undefined): Promise<Exit.Exit<void, DevboxError>> {
     const generation = this.#generation;
     // No await separates teardown admission from the platform start. Native exec never starts one.
     const wasRunning = container.running;
@@ -987,8 +1002,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     const cancel = new AbortController();
 
-    const run = (async () => {
-      if (!await this.#admit(container, cancel.signal, inputs)) return;
+    const admitting = Effect.gen({ self: this }, function* () {
+      if (!(yield* this.#admit(container, cancel.signal, inputs))) return;
 
       if (!this.#owns(generation) || this.#closed) return;
       // The platform's part of the admission ends here; the configuration's runs to the hook's open.
@@ -997,23 +1012,24 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       // D104). A configuration refused is answered outside it, where its throw fails the start and resets nothing.
       let configuring = Promise.resolve();
 
-      await this.ctx.blockConcurrencyWhile(async () => {
+      // A hook that fails rejects the block, which resets the object: no start leaves it half-restored.
+      yield* Effect.promise(async () => this.ctx.blockConcurrencyWhile(() => settle(Effect.gen({ self: this }, function* () {
         configuring = this.configureContainer(wasRunning && this.#reused());
-        const [configured] = await Promise.allSettled([configuring]);
+        const [configured] = yield* Effect.promise(async () => Promise.allSettled([configuring]));
 
-        if (configured.status === 'fulfilled' && this.#owns(generation) && !this.#closed) await this.#restoreInStartGate(!wasRunning);
-      });
-      await configuring;
-    })();
+        if (configured?.status === 'fulfilled' && this.#owns(generation) && !this.#closed) yield* this.#restoreInStartGate(!wasRunning);
+      }))));
+      yield* Effect.promise(async () => configuring);
+    });
 
+    const run = hold(admitting);
     const admission = { abort: () => cancel.abort(), settled: run };
     this.#admissions.add(admission);
+    const exit = await run;
 
-    try {
-      await run;
-    } finally {
-      this.#admissions.delete(admission);
-    }
+    this.#admissions.delete(admission);
+
+    return exit;
   }
 
   get #snapshots(): Snapshots {
@@ -1057,98 +1073,106 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    * faster behind it, so its start has the golden object's own bound to be admitted before it is reported lost: at the
    * cutover, a slow golden was retired and every waiting box held for a rebuild (staging 99a13686c, 2026-10-23).
    */
-  async #admit(container: Container, signal: AbortSignal, inputs: StartInputs): Promise<boolean> {
-    const started = this.#started;
+  #admit(container: Container, signal: AbortSignal, inputs: StartInputs): Effect.Effect<boolean, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const started = this.#started;
 
-    if (started !== undefined) {
-      // Cleared once settled: a later abort killed the image's container (D64).
-      const cutover = new AbortController();
-      const missed = `the golden start was not admitted in ${String(GOLDEN_ADMISSION_MS / 1000)} s`;
-      const timer = started.kind === 'golden' ? setTimeout(() => { cutover.abort(new DevboxError('io', missed)); }, GOLDEN_ADMISSION_MS) : undefined;
-      const failed = await admissionFailureOf(container, AbortSignal.any([signal, cutover.signal]));
-      clearTimeout(timer);
+      if (started !== undefined) {
+        // Cleared once settled: a later abort killed the image's container (D64).
+        const cutover = new AbortController();
+        const missed = `the golden start was not admitted in ${String(GOLDEN_ADMISSION_MS / 1000)} s`;
+        const timer = started.kind === 'golden' ? setTimeout(() => { cutover.abort(new DevboxError('io', missed)); }, GOLDEN_ADMISSION_MS) : undefined;
+        const failed = yield* Effect.promise(() => admissionFailureOf(container, AbortSignal.any([signal, cutover.signal])));
+        clearTimeout(timer);
 
-      if (failed === undefined) return true;
+        if (failed === undefined) return true;
 
-      // A start its caller stopped waiting for is no verdict on its source.
-      if (signal.aborted) return false;
+        // A start its caller stopped waiting for is no verdict on its source.
+        if (signal.aborted) return false;
 
-      // Nor is an exec the platform did not answer (D118), or no room (staging, 2026-10-08): the source stays, and the exec
-      // below asks again, failing the start in its own words if it fails again, so the admission retries.
-      const verdict = (failed.answered || cutover.signal.aborted) && !isCapacityRefusal({ cause: failed.failure });
+        // Nor is an exec the platform did not answer (D118), or no room (staging, 2026-10-08): the source stays, and the exec
+        // below asks again, failing the start in its own words if it fails again, so the admission retries.
+        const verdict = (failed.answered || cutover.signal.aborted) && !isCapacityRefusal({ cause: failed.failure });
 
-      if (verdict && !await this.#cutOver(container, inputs, failed.failure, started)) return false;
-    }
+        if (verdict && !(yield* this.#cutOver(container, inputs, failed.failure, started))) return false;
+      }
 
-    await firstExec(container, signal);
+      yield* firstExec(container, signal);
 
-    return true;
+      return true;
+    });
   }
+
 
   /** Leaves a snapshot that failed to wake for the next source; false while the golden that replaces it is pending. */
-  async #cutOver(container: Container, inputs: StartInputs, failed: LateStartFailure['cause'], started: StartSource): Promise<boolean> {
-    this.#trace('startup.snapshot.cutover', { from: started.kind, reason: describe({ cause: failed }) });
-    const golden = started.kind === 'golden' ? started.id : undefined;
-    await container.destroy();
-    await this.#awaitContainerStopped();
+  #cutOver(container: Container, inputs: StartInputs, failed: LateStartFailure['cause'], started: StartSource): Effect.Effect<boolean, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      this.#trace('startup.snapshot.cutover', { from: started.kind, reason: describe({ cause: failed }) });
+      const golden = started.kind === 'golden' ? started.id : undefined;
+      yield* Effect.promise(() => container.destroy());
+      yield* this.#awaitContainerStopped();
 
-    if (golden === undefined) {
-      this.#snapshots.supersede();
-      unawaited(this.#snapshots.sweep(), 'sweeping dead snapshots');
-    }
+      if (golden === undefined) {
+        this.#snapshots.supersede();
+        unawaited(this.#snapshots.sweep(), 'sweeping dead snapshots');
+      }
 
-    const next = await this.#startSource(started.boxes, golden);
+      const next = yield* Effect.promise(() => this.#startSource(started.boxes, golden));
 
-    if (next.kind === 'pending') {
-      this.#awaitingGolden = next;
+      if (next.kind === 'pending') {
+        this.#awaitingGolden = next;
 
-      return false;
-    }
+        return false;
+      }
 
-    this.#startFrom(container, inputs, next);
+      this.#startFrom(container, inputs, next);
 
-    return true;
+      return true;
+    });
   }
+
 
 
   /** Joins a re-entered hook; adopts a settled boot without re-attaching. `started`: this admission started the container. */
-  async #restoreInStartGate(started: boolean): Promise<void> {
-    if (this.#closed) {
-      this.#trace('startup.hook.closed', { generation: this.#generation });
+  #restoreInStartGate(started: boolean): Effect.Effect<void, DevboxError> {
+    return Effect.suspend(() => {
+      if (this.#closed) {
+        this.#trace('startup.hook.closed', { generation: this.#generation });
 
-      return;
-    }
+        return Effect.void;
+      }
 
-    await this.#fly('hook', this.#generation, () => this.#runStartHook(started));
+      return this.#fly('hook', this.#generation, () => Effect.promise(() => this.#runStartHook(started)));
+    });
   }
 
   /**
    * The run under way in `slot` for `generation`, joined; or `open`'s, held there until it ends, unless another has taken
    * its place by then.
    */
-  async #fly(slot: keyof Flights, generation: number, open: () => Promise<void>): Promise<void> {
-    const pending = this.#flights[slot];
+  #fly(slot: keyof Flights, generation: number, open: () => Effect.Effect<void, DevboxError>): Effect.Effect<void, DevboxError> {
+    return Effect.flatten(Effect.promise(async () => {
+      const pending = this.#flights[slot];
 
-    if (pending?.generation === generation) {
-      this.#trace(`startup.${slot}.join`, { generation, sinceMs: Date.now() - pending.since });
+      if (pending?.generation === generation) {
+        this.#trace(`startup.${slot}.join`, { generation, sinceMs: Date.now() - pending.since });
 
-      return await pending.run;
-    }
+        return await pending.run;
+      }
 
-    const since = Date.now();
-    this.#trace(`startup.${slot}.open`, { generation, running: this.ctx.container?.running === true, phase: this.#restoration.phase });
-    const run = open();
-    this.#flights[slot] = { generation, run, since };
-    let settled = false;
+      const since = Date.now();
+      this.#trace(`startup.${slot}.open`, { generation, running: this.ctx.container?.running === true, phase: this.#restoration.phase });
+      const run = hold(open());
+      this.#flights[slot] = { generation, run, since };
+      const exit = await run;
 
-    try {
-      await run;
-      settled = true;
-    } finally {
       if (this.#flights[slot]?.run === run) this.#flights[slot] = undefined;
-      this.#trace(`startup.${slot}.exit`, { generation, ms: Date.now() - since, settled, phase: this.#restoration.phase });
-    }
+      this.#trace(`startup.${slot}.exit`, { generation, ms: Date.now() - since, settled: Exit.isSuccess(exit), phase: this.#restoration.phase });
+
+      return exit;
+    }));
   }
+
 
   /** One structured line per lifecycle edge, on the console the platform
    *  tails. Primitives only: a reader who wants the object asks `/state`. */
@@ -1312,23 +1336,27 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** A checkpoint must refuse a workspace replaced under a live object until the startup hook restores it. */
-  async #healReplacedContainer(): Promise<void> {
-    // A box in `repair` also serves callers over a work directory, so a replaced container
-    // must refuse the commit there just as on an `attached` one.
-    const held = this.#restoration;
+  #healReplacedContainer(): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      // A box in `repair` also serves callers over a work directory, so a replaced container
+      // must refuse the commit there just as on an `attached` one.
+      const held = this.#restoration;
 
-    if (held.phase !== 'attached' && held.phase !== 'repair') return;
+      if (held.phase !== 'attached' && held.phase !== 'repair') return;
 
-    if (this.ctx.container?.running !== true) return;
+      if (this.ctx.container?.running !== true) return;
 
-    if (!await this.#containerWasReplaced()) return;
-    console.error(
-      '[devbox] the restored container was replaced; refusing this commit until the start hook restores it',
-    );
-    this.#invalidateGeneration();
-    await this.#armStartup();
-    refuse(new DevboxError("io", 'this devbox is not ready: the restored container was replaced; a startup is armed'));
+      if (!(yield* Effect.promise(() => this.#containerWasReplaced()))) return;
+      console.error(
+        '[devbox] the restored container was replaced; refusing this commit until the start hook restores it',
+      );
+      this.#invalidateGeneration();
+      yield* Effect.promise(() => this.#armStartup());
+
+      return yield* Effect.fail(new DevboxError("io", 'this devbox is not ready: the restored container was replaced; a startup is armed'));
+    });
   }
+
 
   /** The kernel's boot id, through the reader the process fences use: one identity per container. */
   async #readBootId(): Promise<string> {
@@ -1375,66 +1403,70 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return { cause: new DevboxError("io", reason) };
     }
 
-    const ran = await caught(async () => {
-      await this.#stampBootId(generation);
+    const ran = await hold(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.#stampBootId(generation));
 
-      if (this.#owns(generation)) await this.#attachAndRestore(generation, claim, steps);
-    });
+      if (this.#owns(generation)) yield* this.#attachAndRestore(generation, claim, steps);
+    }));
 
-    if ('value' in ran) return undefined;
+    if (Exit.isSuccess(ran)) return undefined;
+    const failed = { cause: Cause.squash(ran.cause) };
 
     // Fenced as `#recover` is: a superseded attempt clears nothing its successor holds.
-    if (!this.#stoppedUnder(started)) await this.#recover(generation, claim, ran);
+    if (!this.#stoppedUnder(started)) await this.#recover(generation, claim, failed);
     else if (this.#owns(generation)) this.#invalidateGeneration();
 
-    return ran;
+    return failed;
   }
 
   /** One budget for all phases (D19): an attach overrun replaces the identity; a later step's
    *  exhaustion is reported in `unready` and never re-arms. */
-  async #attachAndRestore(
+  #attachAndRestore(
     generation: number,
     claim: RecoveryClaim,
     steps: RestoreSteps,
-  ): Promise<void> {
-    const outcome = await steps.attach(
-      async () => await this.#requireStorage().attach(),
-      (failure) => {
-        console.error(
-          '[devbox] the attach overran its budget and was abandoned; it later settled '
-          + `with: ${describe({ cause: failure.cause })}`,
-        );
-      },
-    );
+  ): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const outcome = yield* steps.attach(
+        async () => await this.#requireStorage().attach(),
+        (failure) => {
+          console.error(
+            '[devbox] the attach overran its budget and was abandoned; it later settled '
+            + `with: ${describe({ cause: failure.cause })}`,
+          );
+        },
+      );
 
-    // The attach is the long await and everything after is a write: the generation may have
-    // turned over, leaving an outcome for a container that no longer exists.
-    if (!this.#owns(generation)) return;
-    this.#stampPhase('attached');
-    // Written only by a drive that reaches `attached` through an attach; a service-only rerun
-    // keeps its generation's record.
-    await this.ctx.storage.put(LAST_ATTACH_KEY, outcome);
-    console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
-    // Boot proof and durable settlement still need their shares after services.
-    steps.declare(2);
-    const restored = await this.#restartWorkloads(generation, steps);
+      // The attach is the long await and everything after is a write: the generation may have
+      // turned over, leaving an outcome for a container that no longer exists.
+      if (!this.#owns(generation)) return;
+      this.#stampPhase('attached');
+      // Written only by a drive that reaches `attached` through an attach; a service-only rerun
+      // keeps its generation's record.
+      yield* Effect.promise(() => this.ctx.storage.put(LAST_ATTACH_KEY, outcome));
+      console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
+      // Boot proof and durable settlement still need their shares after services.
+      steps.declare(2);
+      const restored = yield* Effect.promise(() => this.#restartWorkloads(generation, steps));
 
-    if (!this.#owns(generation)) return;
+      if (!this.#owns(generation)) return;
 
-    // Re-prove the early instance stamp before publishing its settled phase.
-    const stamped = await steps.run(
-      async () => await this.#stampBootId(generation),
-      logLate('the boot-id stamp'),
-    );
+      // Re-prove the early instance stamp before publishing its settled phase.
+      const stamped = yield* Effect.promise(() => steps.run(
+        async () => await this.#stampBootId(generation),
+        logLate('the boot-id stamp'),
+      ));
 
-    if (!this.#owns(generation)) return;
-    // PUBLISHED, not just held: the durable row is what a post-reset activation
-    // adopts, and the stamp above is what it checks the container against.
-    await this.#settle(settledRestoration(restored, stamped.kind));
-    // Only a successful attempt clears the ladder, and only while the row still names it: a
-    // partial restore (work dir but not every service) still clears it; `repair` reports the rest.
-    await this.#releaseRecovery(claim, generation);
+      if (!this.#owns(generation)) return;
+      // PUBLISHED, not just held: the durable row is what a post-reset activation
+      // adopts, and the stamp above is what it checks the container against.
+      yield* Effect.promise(() => this.#settle(settledRestoration(restored, stamped.kind)));
+      // Only a successful attempt clears the ladder, and only while the row still names it: a
+      // partial restore (work dir but not every service) still clears it; `repair` reports the rest.
+      yield* Effect.promise(() => this.#releaseRecovery(claim, generation));
+    });
   }
+
 
   /** Only the start coordinator opens restoration; recovery first retires unsafe work. */
   devboxStartup(): Promise<void> {
@@ -1445,17 +1477,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       });
 
       // Why the start left the box unattached, if it did: the startup's failure, told after its exit is traced.
-      const unattached = yield* attempt('io', async () => this.#dispatch(STARTUP_CALLBACK, async (): Promise<string | undefined> => {
+      const unattached = yield* attempted('io', this.#dispatched(STARTUP_CALLBACK, Effect.gen({ self: this }, function* () {
         if (this.#closed || this.#quiescing !== undefined) return undefined;
-        await this.#adopted();
+        yield* Effect.promise(() => this.#adopted());
 
         // A stale buffered startup row cannot reopen a settled running generation (D12).
         if (this.ctx.container?.running === true && this.#admission() !== undefined) return undefined;
-        await this.#startContainer();
+        yield* this.#startContainer();
         const restoration = this.#restoration;
 
         return restoration.phase === 'unattached' ? restoration.reason : undefined;
-      })).pipe(Effect.ensuring(Effect.sync(() => {
+      }))).pipe(Effect.ensuring(Effect.sync(() => {
         this.#trace('startup.callback.exit', { generation: this.#generation, ms: Date.now() - since, phase: this.#restoration.phase });
       })));
 
@@ -1464,64 +1496,71 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** All delivered startup doors share adoption, admission and destructive recovery. */
-  async #startContainer(): Promise<void> {
-    await this.#adopted();
-    const refused = this.#refusedStart();
+  #startContainer(): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.#adopted());
+      const refused = this.#refusedStart();
 
-    if (refused !== undefined) {
-      await this.#settle({ phase: 'unattached', reason: refused, retry: false });
+      if (refused !== undefined) {
+        yield* Effect.promise(() => this.#settle({ phase: 'unattached', reason: refused, retry: false }));
 
-      return;
-    }
-
-    // A stopped box starts only if its host admits it; a running one is never asked. Nothing is kept of a refusal, so
-    // the next door asks again, once what refused it has changed.
-    if (this.ctx.container?.running !== true) {
-      const admitted = await this.admitStart(this.#size());
-
-      if ('refused' in admitted) refuseStart(admitted.refused);
-      this.#admittedSize = admitted.size;
-    }
-
-    if (this.ctx.container?.running !== true
-      && (this.#restoration.phase !== 'unstarted' || this.#flights.hook !== undefined)) {
-      this.#invalidateGeneration();
-    }
-
-    await this.#fly('startup', this.#generation, () => this.#recoverAndStart());
-  }
-
-  async #recoverAndStart(): Promise<void> {
-    const recovery = await this.ctx.storage.get<{
-      readonly owner: string;
-      readonly action: 'retry' | 'replace';
-      readonly reason: string;
-    }>(RECOVERY_ACTION_KEY);
-
-    if (recovery !== undefined) {
-      const claim = parseRecoveryRow(await this.ctx.storage.get(ATTACH_RECOVERY_KEY));
-
-      if (claim.kind === 'row' && claim.row.owner === recovery.owner) {
-        if (recovery.action === 'replace') {
-          this.#deleteSchedule(STARTUP_CALLBACK);
-          await this.#replaceContainer(recovery.reason);
-        } else {
-          this.#invalidateGeneration(this.#flights.startup);
-          await this.stop('SIGTERM');
-          await this.#awaitContainerStopped();
-        }
-
-        await this.ctx.storage.delete(RECOVERY_ACTION_KEY);
-
-        if (recovery.action === 'replace') return;
-      } else {
-        // A successful successor retired the old recovery claim.
-        await this.ctx.storage.delete(RECOVERY_ACTION_KEY);
+        return;
       }
-    }
 
-    await this.#admitExecution();
+      // A stopped box starts only if its host admits it; a running one is never asked. Nothing is kept of a refusal, so
+      // the next door asks again, once what refused it has changed.
+      if (this.ctx.container?.running !== true) {
+        const admitted = yield* Effect.promise(() => this.admitStart(this.#size()));
+
+        if ('refused' in admitted) return yield* Effect.fail(new DevboxError('refused', admitted.refused));
+        this.#admittedSize = admitted.size;
+      }
+
+      if (this.ctx.container?.running !== true
+        && (this.#restoration.phase !== 'unstarted' || this.#flights.hook !== undefined)) {
+        this.#invalidateGeneration();
+      }
+
+      yield* this.#fly('startup', this.#generation, () => this.#recoverAndStart());
+    });
   }
+
+
+  #recoverAndStart(): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const recovery = yield* Effect.promise(() => this.ctx.storage.get<{
+        readonly owner: string;
+        readonly action: 'retry' | 'replace';
+        readonly reason: string;
+      }>(RECOVERY_ACTION_KEY));
+
+      if (recovery !== undefined) {
+        const claim = parseRecoveryRow(yield* Effect.promise(() => this.ctx.storage.get<StoredValue>(ATTACH_RECOVERY_KEY)));
+
+        if (claim.kind === 'row' && claim.row.owner === recovery.owner) {
+          if (recovery.action === 'replace') {
+            this.#deleteSchedule(STARTUP_CALLBACK);
+            yield* this.#replaceContainer(recovery.reason);
+          } else {
+            this.#invalidateGeneration(this.#flights.startup);
+            // As the box's own stop answers it, in its own code.
+            yield* attempted('io', this.#stopContainer());
+            yield* this.#awaitContainerStopped();
+          }
+
+          yield* Effect.promise(() => this.ctx.storage.delete(RECOVERY_ACTION_KEY));
+
+          if (recovery.action === 'replace') return;
+        } else {
+          // A successful successor retired the old recovery claim.
+          yield* Effect.promise(() => this.ctx.storage.delete(RECOVERY_ACTION_KEY));
+        }
+      }
+
+      yield* Effect.promise(() => this.#admitExecution());
+    });
+  }
+
 
   #startInputs(): StartInputs {
     return { size: this.#size(), store: this.#bucket() !== undefined, version: this.#version(), internet: this.enableInternet };
@@ -1542,16 +1581,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const startsContainer = this.ctx.container?.running !== true;
     this.#trace('startup.admit.enter', { generation, running: !startsContainer });
 
-    const admitted = await caught(async () => {
+    const admitted = await hold(Effect.gen({ self: this }, function* () {
       const startable = startsContainer ? this.#startable() : undefined;
 
       if (startable instanceof DevboxError) {
-        await this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: startable });
+        yield* Effect.promise(() => this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: startable }));
 
         return;
       }
 
-      const source = startable === undefined ? undefined : await this.#startSource(startable);
+      const source = startable === undefined ? undefined : yield* Effect.promise(() => this.#startSource(startable));
 
       if (source?.kind === 'pending') {
         this.#awaitingGolden = source;
@@ -1560,7 +1599,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         return;
       }
 
-      await this.#startNative(inputs, source);
+      yield* this.#startNative(inputs, source);
 
       if (this.#awaitingGolden !== undefined) return;
 
@@ -1568,9 +1607,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
       // `golden` means the box's own snapshot was missing: its restore rebuilds from the backup, the slow start.
       this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation), source: source?.kind ?? 'running' });
-    });
+    }));
 
-    if ('cause' in admitted) await this.#refuseAdmission({ generation, since, startsContainer, inputs }, admitted);
+    if (Exit.isFailure(admitted)) await this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: Cause.squash(admitted.cause) });
   }
 
   /** An admission that did not start: retried only where waiting can change the answer, else parked once (D94, amending
@@ -1616,69 +1655,75 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Re-runs only the service half of a restoration that settled in `repair`, on the startup
    *  flight so two repairs cannot race process reservations, port exposures or the boot marker. */
-  async #repairAttached(generation: number): Promise<void> {
-    const pending = this.#flights.startup;
+  #repairAttached(generation: number): Effect.Effect<void, DevboxError> {
+    return Effect.suspend(() => {
+      const pending = this.#flights.startup;
 
-    if (pending !== undefined && pending.generation === generation) return await pending.run;
+      if (pending !== undefined && pending.generation === generation) return Effect.flatten(Effect.promise(() => pending.run));
 
-    return await this.#withStorageMutation(async () => {
-      if (!this.#owns(generation)) return;
+      return this.#mutating(Effect.suspend(() => {
+        if (!this.#owns(generation)) return Effect.void;
 
-      const retryBootStamp = this.#restoration.phase === 'repair'
-        && this.#restoration.bootStamp !== 'done';
+        const retryBootStamp = this.#restoration.phase === 'repair'
+          && this.#restoration.bootStamp !== 'done';
 
-      await this.#fly('startup', generation, async () => {
-        const claim = await this.#claimRecovery();
+        return this.#fly('startup', generation, () => Effect.gen({ self: this }, function* () {
+          const claim = yield* Effect.promise(() => this.#claimRecovery());
 
-        if (!claim.admit || !this.#owns(generation)) {
-          refuse(new DevboxError("io", 'attached-container repair could not claim recovery'));
-        }
+          if (!claim.admit || !this.#owns(generation)) {
+            return yield* Effect.fail(new DevboxError("io", 'attached-container repair could not claim recovery'));
+          }
 
-        const repaired = await caught(async () => {
-          await this.#repairAttachedAttempt(generation, retryBootStamp);
+          const repaired = yield* Effect.exit(Effect.gen({ self: this }, function* () {
+            yield* this.#repairAttachedAttempt(generation, retryBootStamp);
 
-          if (this.#owns(generation)) await this.#releaseRecovery(claim, generation);
-        });
+            if (this.#owns(generation)) yield* Effect.promise(() => this.#releaseRecovery(claim, generation));
+          }));
 
-        if ('cause' in repaired) {
-          await this.#recover(generation, claim, repaired);
-          rethrow(repaired);
-        }
-      });
+          // A repair that failed is recovered from first, then fails as it failed.
+          if (Exit.isFailure(repaired)) {
+            yield* Effect.promise(() => this.#recover(generation, claim, { cause: Cause.squash(repaired.cause) }));
+
+            return yield* Effect.failCause(repaired.cause);
+          }
+        }));
+      }));
     });
   }
 
   /** Same-container repair: verify the boot stamp, then re-run only the service half.
    *  Writes no attach record: the full attach's record for this generation still applies. */
-  async #repairAttachedAttempt(generation: number, retryBootStamp: boolean): Promise<void> {
-    const expected = await this.ctx.storage.get<string>(BOOT_ID_KEY);
+  #repairAttachedAttempt(generation: number, retryBootStamp: boolean): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const expected = yield* Effect.promise(() => this.ctx.storage.get<string>(BOOT_ID_KEY));
 
-    if (!this.#owns(generation)) return;
-    const actual = await this.#readBootId();
+      if (!this.#owns(generation)) return;
+      const actual = yield* Effect.promise(() => this.#readBootId());
 
-    if (!this.#owns(generation)) return;
+      if (!this.#owns(generation)) return;
 
-    if (expected !== undefined && actual !== expected) {
-      this.#invalidateGeneration();
-      await this.#startContainer();
+      if (expected !== undefined && actual !== expected) {
+        this.#invalidateGeneration();
+        yield* this.#startContainer();
 
-      return;
-    }
+        return;
+      }
 
-    const steps = racedRestoreSteps(openStartBudget(this.policy.attachBudgetMs, this.startClock));
-    steps.declare(2);
-    const restored = await this.#restartWorkloads(generation, steps);
+      const steps = racedRestoreSteps(openStartBudget(this.policy.attachBudgetMs, this.startClock));
+      steps.declare(2);
+      const restored = yield* Effect.promise(() => this.#restartWorkloads(generation, steps));
 
-    if (!this.#owns(generation)) return;
+      if (!this.#owns(generation)) return;
 
-    let stamped: StampOutcome = expected === undefined ? 'pending' : 'done';
+      let stamped: StampOutcome = expected === undefined ? 'pending' : 'done';
 
-    if (expected === undefined && retryBootStamp) {
-      stamped = (await steps.run(async () => await this.#stampBootId(generation), () => undefined)).kind;
-    }
+      if (expected === undefined && retryBootStamp) {
+        stamped = (yield* Effect.promise(() => steps.run(async () => await this.#stampBootId(generation), () => undefined))).kind;
+      }
 
-    if (!this.#owns(generation)) return;
-    await this.#settle(settledRestoration(restored, stamped));
+      if (!this.#owns(generation)) return;
+      yield* Effect.promise(() => this.#settle(settledRestoration(restored, stamped)));
+    });
   }
 
   /** Checked after every await that precedes a state write, an exposure, a cleanup,
@@ -1827,47 +1872,55 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Cancels exec work abandoned at the attach deadline; `destroy` acks before `running` flips.
    *  `super`: a replaced identity is restarted, not closed. */
-  async #replaceContainer(reason: string): Promise<void> {
-    this.#invalidateGeneration(this.#flights.startup);
-    const replacing = this.#generation;
+  #replaceContainer(reason: string): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      this.#invalidateGeneration(this.#flights.startup);
+      const replacing = this.#generation;
 
-    const destroyed = await caught(async () => {
-      await this.#destroyContainer();
-      await this.#awaitContainerStopped();
+      const destroyed = yield* Effect.exit(Effect.gen({ self: this }, function* () {
+        yield* Effect.promise(() => this.#destroyContainer());
+        yield* this.#awaitContainerStopped();
+      }));
+
+      if (Exit.isFailure(destroyed)) {
+        if (!this.#owns(replacing)) return yield* Effect.failCause(destroyed.cause);
+        // A failed destroy leaves the abandoned work running, so keep refusing even though
+        // `#invalidateGeneration` made the box look ready; attaching over it is the overlap.
+        yield* Effect.promise(() => this.#settle({
+          phase: 'unattached',
+          reason: `${reason}; and the container identity could not be destroyed: ${describe({ cause: Cause.squash(destroyed.cause) })}`,
+          // Terminal: the abandoned work still runs there. Only a caller asking by name may attach.
+          retry: false,
+        }));
+
+        return yield* Effect.failCause(destroyed.cause);
+      }
+
+      console.error(
+        '[devbox] the container identity was destroyed after a failed attach; a fresh one '
+        + 'attaches on the next operation',
+      );
     });
-
-    if ('cause' in destroyed) {
-      if (!this.#owns(replacing)) rethrow(destroyed);
-      // A failed destroy leaves the abandoned work running, so keep refusing even though
-      // `#invalidateGeneration` made the box look ready; attaching over it is the overlap.
-      await this.#settle({
-        phase: 'unattached',
-        reason: `${reason}; and the container identity could not be destroyed: ${describe(destroyed)}`,
-        // Terminal: the abandoned work still runs there. Only a caller asking by name may attach.
-        retry: false,
-      });
-      rethrow(destroyed);
-    }
-
-    console.error(
-      '[devbox] the container identity was destroyed after a failed attach; a fresh one '
-      + 'attaches on the next operation',
-    );
   }
+
 
   /** `stop`/`destroy` ack before `container.running` flips; returning early lets a wake reuse
    *  the old mount. Count-bounded: a stop that never flips must refuse, not pin the startup flight. */
-  async #awaitContainerStopped(): Promise<void> {
-    for (let poll = 0; poll < CONTAINER_STOP_ATTEMPTS; poll += 1) {
-      if (this.ctx.container?.running !== true) return;
-      await scheduler.wait(CONTAINER_STOP_INTERVAL_MS);
-    }
+  #awaitContainerStopped(): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      for (let poll = 0; poll < CONTAINER_STOP_ATTEMPTS; poll += 1) {
+        if (this.ctx.container?.running !== true) return;
+        yield* Effect.promise(() => scheduler.wait(CONTAINER_STOP_INTERVAL_MS));
+      }
 
-    if (this.ctx.container?.running !== true) return;
-    refuse(new DevboxError("io", `the container still reported itself running ${String(CONTAINER_STOP_ATTEMPTS)} probes `
-    + `after it acknowledged the stop (${String(CONTAINER_STOP_ATTEMPTS * CONTAINER_STOP_INTERVAL_MS)}ms); `
-    + 'refusing to treat the identity as gone'));
+      if (this.ctx.container?.running !== true) return;
+
+      return yield* Effect.fail(new DevboxError("io", `the container still reported itself running ${String(CONTAINER_STOP_ATTEMPTS)} probes `
+        + `after it acknowledged the stop (${String(CONTAINER_STOP_ATTEMPTS * CONTAINER_STOP_INTERVAL_MS)}ms); `
+        + 'refusing to treat the identity as gone'));
+    });
   }
+
 
   /** A port is exposed only once its listener answers; each failure is recorded and the phase continues. */
   async #restartWorkloads(generation: number, steps: RestoreSteps): Promise<readonly string[]> {
@@ -1999,7 +2052,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** A host asking: reopens a destroyed box and arms the only start coordinator. */
   kickStartup(): Promise<void> {
-    return settle(this.#reopening(() => this.#armStartup()));
+    return settle(this.#reopening(Effect.promise(() => this.#armStartup())));
   }
 
   async #armStartup(): Promise<void> {
@@ -2084,7 +2137,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       if (previous === target) return { kind: 'unchanged', size: target, previous } as const;
       const endedCommands = this.#running.size;
-      const committed = yield* attempt('io', () => this.#quiesce(true));
+      const committed = yield* attempted('io', this.#quiesce(true));
 
       if (committed.kind === 'failed') {
         return { kind: 'failed', size: target, previous, reason: committed.reason ?? 'the final checkpoint failed' } as const;
@@ -2098,50 +2151,50 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Requests may start a stopped box, then adopt the hook's settled generation (D26). */
   resolveReadiness(): Promise<RestoreReadiness> {
-    return settle(attempt('io', async () => {
-      return await this.#resolveReadiness(this.#teardowns);
-    }));
+    return settle(attempted('io', this.#resolveReadiness(this.#teardowns)));
   }
 
-  async #resolveReadiness(arrived: number): Promise<RestoreReadiness> {
-    if (this.#quiescing !== undefined) return { kind: 'pending', reason: SAVING_AND_STOPPING, quiescing: true };
+  #resolveReadiness(arrived: number): Effect.Effect<RestoreReadiness, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      if (this.#quiescing !== undefined) return { kind: 'pending', reason: SAVING_AND_STOPPING, quiescing: true };
 
-    if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
-    this.#closed = false;
-    const wasRunning = this.ctx.container?.running === true;
-    this.#trace('readiness.enter', { generation: this.#generation, running: wasRunning, phase: this.#restoration.phase });
+      if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
+      this.#closed = false;
+      const wasRunning = this.ctx.container?.running === true;
+      this.#trace('readiness.enter', { generation: this.#generation, running: wasRunning, phase: this.#restoration.phase });
 
-    if (!wasRunning) await this.#startContainer();
+      if (!wasRunning) yield* this.#startContainer();
 
-    const base = this.#awaitingGolden;
+      const base = this.#awaitingGolden;
 
-    // The step its base is at rides along: the caller holds while the build moves on (D79).
-    if (base !== undefined && this.ctx.container?.running !== true) return base;
-    await this.#adopted();
-    this.#trace('readiness.adopted', { phase: this.#restoration.phase });
+      // The step its base is at rides along: the caller holds while the build moves on (D79).
+      if (base !== undefined && this.ctx.container?.running !== true) return base;
+      yield* Effect.promise(() => this.#adopted());
+      this.#trace('readiness.adopted', { phase: this.#restoration.phase });
 
-    // Native allocation can report running before restoration starts.
-    if (wasRunning && this.#restoration.phase === 'unstarted') await this.#startContainer();
+      // Native allocation can report running before restoration starts.
+      if (wasRunning && this.#restoration.phase === 'unstarted') yield* this.#startContainer();
 
-    if (this.#quiescing !== undefined) return { kind: 'pending', reason: SAVING_AND_STOPPING, quiescing: true };
+      if (this.#quiescing !== undefined) return { kind: 'pending', reason: SAVING_AND_STOPPING, quiescing: true };
 
-    if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
-    const admission = this.#admission();
+      if (arrived !== this.#teardowns) return { kind: 'pending', reason: DESTROYED_AFTER_ARRIVAL };
+      const admission = this.#admission();
 
-    if (admission !== undefined) return admission;
+      if (admission !== undefined) return admission;
 
-    await this.#armStartup();
-    this.#trace('readiness.armed', { phase: this.#restoration.phase });
+      yield* Effect.promise(() => this.#armStartup());
+      this.#trace('readiness.armed', { phase: this.#restoration.phase });
 
-    if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
-      refuse(new DevboxError('refused', terminalRefusal(this.#restoration.reason)));
-    }
+      if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
+        return yield* Effect.fail(new DevboxError('refused', terminalRefusal(this.#restoration.reason)));
+      }
 
-    return {
-      kind: 'pending',
-      reason: `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
-        + 'A startup is armed, so ask again.',
-    };
+      return {
+        kind: 'pending',
+        reason: `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}. `
+          + 'A startup is armed, so ask again.',
+      };
+    });
   }
 
   restoreStatus(): Promise<RestoreStatus> {
@@ -2157,24 +2210,24 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Strict {@link resolveReadiness}: `pending` is a refusal, never permission. */
   ensureReady(): Promise<RestoreAdmission> {
-    return settle(attempt('io', async () => {
-      return (await this.#ensureReady(this.#teardowns)).admission;
-    }));
+    return settle(Effect.map(attempted('io', this.#ensureReady(this.#teardowns)), ({ admission }) => admission));
   }
 
-  async #ensureReady(arrived: number): Promise<{ readonly admission: RestoreAdmission; readonly container: Container }> {
-    const readiness = await this.#resolveReadiness(arrived);
-    const container = this.ctx.container;
+  #ensureReady(arrived: number): Effect.Effect<{ readonly admission: RestoreAdmission; readonly container: Container }, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const readiness = yield* this.#resolveReadiness(arrived);
+      const container = this.ctx.container;
 
-    if (readiness.kind === 'pending' || container?.running !== true) {
-      refuse(new DevboxError("io", readiness.kind === 'pending' ? readiness.reason : 'this devbox is not ready: its container stopped after it was admitted'));
-    }
+      if (readiness.kind === 'pending' || container?.running !== true) {
+        return yield* Effect.fail(new DevboxError("io", readiness.kind === 'pending' ? readiness.reason : 'this devbox is not ready: its container stopped after it was admitted'));
+      }
 
-    // Every operation route and only callers pass here (maintenance uses `#rawExec` and
-    // scheduled callbacks), so file, port and process routes stamp the lease too (D18).
-    this.stampInteraction();
+      // Every operation route and only callers pass here (maintenance uses `#rawExec` and
+      // scheduled callbacks), so file, port and process routes stamp the lease too (D18).
+      this.stampInteraction();
 
-    return { admission: readiness, container };
+      return { admission: readiness, container };
+    });
   }
 
   /** Starts a box that has run before, as a person opens its workspace, so its computer is ready by the time they ask;
@@ -2290,7 +2343,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    */
   #spawn(command: string | readonly string[], { cwd, env }: ExecOptions, running: RunningExec): Effect.Effect<ExecProcess, DevboxError> {
     return Effect.gen({ self: this }, function* () {
-      const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
+      const { container } = yield* attempted('not-ready', this.#ensureReady(this.#teardowns));
 
       if (running.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'computer exec cancelled before admission'));
       const argv = typeof command === 'string' ? launched(command) : command;
@@ -2438,7 +2491,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       this.#stallRestart = new AbortController();
       this.#trace('disk.stall.restart', { waiting: stall.waiting.join(', '), device: stall.device, reads: stall.reads });
       restart.abort();
-      yield* attempt('io', () => this.#replaceContainer(DISK_STALL_RESTARTED));
+      yield* attempted('io', this.#replaceContainer(DISK_STALL_RESTARTED));
 
       return 'restarted' as const;
     }));
@@ -2461,19 +2514,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       });
 
       if (repairing) {
-        yield* attempt('not-ready', async () => this.#repairAttached(this.#generation));
+        yield* attempted('not-ready', this.#repairAttached(this.#generation));
       } else {
-        const restarted = yield* attempt('not-ready', async () => {
+        const restarted = yield* attempted('not-ready', Effect.gen({ self: this }, function* () {
           if (this.#unready() === undefined) return true;
           this.ctx.storage.kv.delete(START_REFUSED_KEY);
-          await this.#settle({ phase: 'unstarted' });
-          await this.#startContainer();
+          yield* Effect.promise(() => this.#settle({ phase: 'unstarted' }));
+          yield* this.#startContainer();
 
           return this.#admission() !== undefined;
-        });
+        }));
 
         if (!restarted) return yield* new DevboxError('io', `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`);
-        yield* attempt('not-ready', async () => this.#ensureReady(arrived));
+        yield* attempted('not-ready', this.#ensureReady(arrived));
       }
 
       return yield* attempt('not-ready', async (): Promise<AttachOutcome> => await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY)
@@ -2482,35 +2535,35 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   checkpointNow(kind: CheckpointKind): Promise<CheckpointOutcome> {
-    return settle(attempt('io', async (): Promise<CheckpointOutcome> => {
-      if (this.#quiescing !== undefined) return { kind: 'failed', reason: QUIESCING, bytes: undefined, movedBytes: undefined };
+    return settle(attempted('io', Effect.suspend((): Effect.Effect<CheckpointOutcome, DevboxError> => {
+      if (this.#quiescing !== undefined) return Effect.succeed({ kind: 'failed', reason: QUIESCING, bytes: undefined, movedBytes: undefined });
       this.stampInteraction();
 
-      return await this.#checkpoint(kind);
-    }));
+      return this.#checkpoint(kind);
+    })));
   }
 
   /** Every checkpoint runs through here, so none interleave in storage (`createCheckpointLane`), and each awaits the
    *  adoption (D102) and checks the container it is about to commit as it runs, not as it was asked. */
-  #checkpoint(kind: CheckpointKind): Promise<CheckpointOutcome> {
-    return this.#lane.run(kind, async () => await this.#withStorageMutation(async () => {
-      await this.#adopted();
-      await this.#healReplacedContainer();
+  #checkpoint(kind: CheckpointKind): Effect.Effect<CheckpointOutcome, DevboxError> {
+    return this.#lane.run(kind, () => this.#mutating(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.#adopted());
+      yield* this.#healReplacedContainer();
       const pending = this.#flights.startup;
 
       // Waits for the startup to settle rather than racing it against a timer: a timer set here
       // would outlive into the start block and hold every timer its hook sets (D26).
-      if (pending !== undefined && pending.generation === this.#generation) await pending.run;
+      if (pending !== undefined && pending.generation === this.#generation) yield* Effect.flatten(Effect.promise(() => pending.run));
 
       if (this.ctx.container?.running === true && this.#admission() === undefined) {
         return {
           kind: 'failed', reason: `this devbox is not ready: ${this.#unready()}`,
           bytes: undefined, movedBytes: undefined,
-        };
+        } satisfies CheckpointOutcome;
       }
 
       const { sent, received } = this.#containerCommandBytes;
-      const outcome = await this.#runCheckpoint(kind);
+      const outcome = yield* Effect.promise(() => this.#runCheckpoint(kind));
 
       this.#trace('checkpoint.bytes', {
         kind, outcome: outcome.kind, movedBytes: outcome.movedBytes,
@@ -2518,123 +2571,130 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       });
 
       return outcome;
-    }));
+    })));
   }
+
 
   /** Fence admissions, drain owned work, then commit, snapshot and stop. */
   quiesce(): Promise<CheckpointOutcome> {
-    return settle(attempt('io', () => this.#quiesce(false)));
+    return settle(attempted('io', this.#quiesce(false)));
   }
 
-  #quiesce(ending: boolean): Promise<CheckpointOutcome> {
-    return this.#quiescing ??= Promise.resolve().then(async () => {
-      try {
-        return await this.#quiesceAdmitted(ending);
-      } finally {
+  #quiesce(ending: boolean): Effect.Effect<CheckpointOutcome, DevboxError> {
+    // One quiesce at a time, joined by every caller; it starts once its place is held, and lets it go as it ends.
+    return Effect.flatten(Effect.promise(() => this.#quiescing ??= Promise.resolve().then(async () => hold(this.#quiesceAdmitted(ending).pipe(
+      Effect.ensuring(Effect.promise(async () => {
         this.#quiescing = undefined;
 
         if (this.ctx.container?.running === true) await this.#armContainerSchedules();
-      }
-    });
+      })),
+    )))));
   }
 
-  async #quiesceAdmitted(ending: boolean): Promise<CheckpointOutcome> {
-    const starting = this.#flights.startup;
+  #quiesceAdmitted(ending: boolean): Effect.Effect<CheckpointOutcome, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const starting = this.#flights.startup;
 
-    this.#trace('quiesce.enter', { starting: starting !== undefined, callers: this.#activeCallers, ending });
+      this.#trace('quiesce.enter', { starting: starting !== undefined, callers: this.#activeCallers, ending });
 
-    if (starting !== undefined) await Promise.allSettled([starting.run]);
-    this.#trace('quiesce.startup', {});
+      if (starting !== undefined) yield* Effect.promise(() => Promise.allSettled([starting.run]));
+      this.#trace('quiesce.startup', {});
 
-    if (ending) await Promise.allSettled([...this.#running.keys()].map((execId) => this.killExec(execId)));
+      if (ending) yield* Effect.promise(() => Promise.allSettled([...this.#running.keys()].map((execId) => this.killExec(execId))));
 
-    if (this.#activeCallers !== 0) {
-      this.#callersDrained = Promise.withResolvers<void>();
-      await this.#callersDrained.promise;
-    }
+      if (this.#activeCallers !== 0) {
+        const drained = Promise.withResolvers<void>();
 
-    this.#trace('quiesce.callers', {});
-
-    await this.#resources.drain();
-    this.#trace('quiesce.resources', {});
-    await this.#lane.drain();
-    this.#trace('quiesce.lane', {});
-    await this.#storageMutationTail;
-    this.#trace('quiesce.storage', {});
-
-    if (this.ctx.container?.running !== true) {
-      this.#invalidateGeneration();
-      await this.onStop();
-
-      return { kind: 'skipped', reason: 'the container is not running: nothing is attached to commit', bytes: undefined, movedBytes: undefined };
-    }
-
-    await this.#adopted();
-    await this.#healReplacedContainer();
-    const held = this.#restoration;
-
-    if (held.phase === 'unattached') {
-      this.#invalidateGeneration();
-      await this.#stopContainer();
-      await this.#awaitContainerStopped();
-
-      return { kind: 'skipped', reason: `nothing is attached to commit: ${held.reason}`, bytes: undefined, movedBytes: undefined };
-    }
-
-    let warning: string | undefined;
-
-    const listing = await caught(async () => {
-      this.#trace('quiesce.list.enter', {});
-      const listed = await this.#processes().list();
-      this.#trace('quiesce.list.exit', { count: listed.length });
-      const residents = new Set((await this.#procSpecs()).map(spec => spec.processId));
-
-      // A supervised command seen to finish is done: its spec goes, so the next start does not run it again (staging
-      // rc27, 2026-10-20: a three-hour job ran again from its first line on the next wake). One that failed keeps its
-      // spec and restarts cold (D35), unless it runs as a job, whose end is told. Here, with admissions fenced, no start
-      // of the same command can race the forget.
-      await this.#reapJobs();
-
-      for (const process of listed) if (process.status === 'completed' && residents.has(process.id)) await this.#supervised().forget(process.id, 'it finished');
-
-      return listed.some(process => isProcessLive(process.status) && !residents.has(process.id));
-    });
-
-    if ('value' in listing && listing.value && !ending) {
-      return { kind: 'failed', reason: 'the stop is refused: unmanaged commands are still running', bytes: undefined, movedBytes: undefined };
-    }
-
-    if ('cause' in listing) {
-      const reason = describe(listing);
-
-      // Never on a guess (D59).
-      if (!ending) {
-        return { kind: 'failed', reason: 'the stop is held while the process list is unreadable: ' + reason, bytes: undefined, movedBytes: undefined };
+        this.#callersDrained = drained;
+        yield* Effect.promise(() => drained.promise);
       }
 
-      warning = 'the process list was unreadable, so an unobservable command may be stopped: ' + reason;
-      this.#trace('quiesce.processes.unreadable', { reason });
-      await this.#record('quiesce', warning);
-    }
+      this.#trace('quiesce.callers', {});
 
-    // The stop ends every terminal session; what each showed and ran goes into the checkpoint first (D97).
-    await this.#saveSessions();
+      yield* Effect.promise(() => this.#resources.drain());
+      this.#trace('quiesce.resources', {});
+      yield* Effect.promise(() => this.#lane.drain());
+      this.#trace('quiesce.lane', {});
+      yield* Effect.promise(async () => this.#storageMutationTail);
+      this.#trace('quiesce.storage', {});
 
-    // The commit and the snapshot run beside the box's processes; the container's stop ends them.
-    const committed = await this.#checkpoint('quiesce');
-    const outcome = warning === undefined ? committed : { ...committed, reason: warning + (committed.reason === undefined ? '' : '; ' + committed.reason) };
+      if (this.ctx.container?.running !== true) {
+        this.#invalidateGeneration();
+        yield* Effect.promise(() => this.onStop());
 
-    if (outcome.kind === 'failed') {
-      await this.#record('checkpoint', `final checkpoint failed: ${outcome.reason ?? 'unknown'}`);
+        return { kind: 'skipped', reason: 'the container is not running: nothing is attached to commit', bytes: undefined, movedBytes: undefined };
+      }
+
+      yield* Effect.promise(() => this.#adopted());
+      yield* this.#healReplacedContainer();
+      const held = this.#restoration;
+
+      if (held.phase === 'unattached') {
+        this.#invalidateGeneration();
+        yield* this.#stopContainer();
+        yield* this.#awaitContainerStopped();
+
+        return { kind: 'skipped', reason: `nothing is attached to commit: ${held.reason}`, bytes: undefined, movedBytes: undefined };
+      }
+
+      let warning: string | undefined;
+
+      const listing = yield* Effect.promise(() => caught(async () => {
+        this.#trace('quiesce.list.enter', {});
+        const listed = await this.#processes().list();
+        this.#trace('quiesce.list.exit', { count: listed.length });
+        const residents = new Set((await this.#procSpecs()).map(spec => spec.processId));
+
+        // A supervised command seen to finish is done: its spec goes, so the next start does not run it again (staging
+        // rc27, 2026-10-20: a three-hour job ran again from its first line on the next wake). One that failed keeps its
+        // spec and restarts cold (D35), unless it runs as a job, whose end is told. Here, with admissions fenced, no start
+        // of the same command can race the forget.
+        await this.#reapJobs();
+
+        for (const process of listed) if (process.status === 'completed' && residents.has(process.id)) await this.#supervised().forget(process.id, 'it finished');
+
+        return listed.some(process => isProcessLive(process.status) && !residents.has(process.id));
+      }));
+
+      if ('value' in listing && listing.value && !ending) {
+        return { kind: 'failed', reason: 'the stop is refused: unmanaged commands are still running', bytes: undefined, movedBytes: undefined };
+      }
+
+      if ('cause' in listing) {
+        const reason = describe(listing);
+
+        // Never on a guess (D59).
+        if (!ending) {
+          return { kind: 'failed', reason: 'the stop is held while the process list is unreadable: ' + reason, bytes: undefined, movedBytes: undefined };
+        }
+
+        const unread = 'the process list was unreadable, so an unobservable command may be stopped: ' + reason;
+
+        warning = unread;
+        this.#trace('quiesce.processes.unreadable', { reason });
+        yield* Effect.promise(() => this.#record('quiesce', unread));
+      }
+
+      // The stop ends every terminal session; what each showed and ran goes into the checkpoint first (D97).
+      yield* Effect.promise(() => this.#saveSessions());
+
+      // The commit and the snapshot run beside the box's processes; the container's stop ends them.
+      const committed = yield* this.#checkpoint('quiesce');
+      const outcome = warning === undefined ? committed : { ...committed, reason: warning + (committed.reason === undefined ? '' : '; ' + committed.reason) };
+
+      if (outcome.kind === 'failed') {
+        yield* Effect.promise(() => this.#record('checkpoint', `final checkpoint failed: ${outcome.reason ?? 'unknown'}`));
+
+        return outcome;
+      }
+
+      yield* this.#snapshotAndStop();
+      yield* Effect.promise(() => this.#snapshots.sweep());
 
       return outcome;
-    }
-
-    await this.#snapshotAndStop();
-    await this.#snapshots.sweep();
-
-    return outcome;
+    });
   }
+
 
   /**
    * The rest's snapshot, then the stop. A take's time grows with the files on the root, and one still under way when
@@ -2643,34 +2703,42 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    * unanswered by then waits nothing more, as a disk that stopped answering (D89) never extends it. Only a take still
    * unanswered when the wait ends is given up, owed for deletion (D108's take that never answered).
    */
-  async #snapshotAndStop(): Promise<void> {
-    const began = Date.now();
-    const taking = Promise.allSettled([this.#snapshots.save()]).then(([taken]) => ({ taken, takeMs: Date.now() - began }));
-    const late = Symbol('late');
-    const counted = Promise.race([this.#rootFiles(), scheduler.wait(this.restSnapshotWaitMs).then(() => undefined)]);
-    const waitMs = counted.then((files) => this.#restSnapshotWaitFor(files));
+  #snapshotAndStop(): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const began = Date.now();
+      const taking = Promise.allSettled([this.#snapshots.save()]).then(([taken]) => ({ taken, takeMs: Date.now() - began }));
+      const late = Symbol('late');
+      const counted = Promise.race([this.#rootFiles(), scheduler.wait(this.restSnapshotWaitMs).then(() => undefined)]);
+      const waitMs = counted.then((files) => this.#restSnapshotWaitFor(files));
 
-    const waitedOut = waitMs.then(async (ms) => {
-      await scheduler.wait(Math.max(0, ms - (Date.now() - began)));
+      const waitedOut = waitMs.then(async (ms) => {
+        await scheduler.wait(Math.max(0, ms - (Date.now() - began)));
 
-      return late;
+        return late;
+      });
+
+      const waited = yield* Effect.promise(async () => Promise.race([taking, waitedOut]));
+      const files = yield* Effect.promise(async () => Promise.race([counted, Promise.resolve(undefined)]));
+
+      const stopping = yield* Effect.exit(Effect.gen({ self: this }, function* () {
+        this.#invalidateGeneration();
+        yield* this.#stopContainer();
+        yield* this.#awaitContainerStopped();
+      }));
+
+      // Told whatever the stop did; a failure telling it is the rest's failure, as a throw in a `finally` is.
+      yield* Effect.promise(async () => {
+        // Already settled, the take wins the race: a settled promise's reaction runs before a later one's.
+        const settled = await Promise.race([taking, Promise.resolve(late)]);
+        const at = { restMs: Date.now() - began, waitedOut: waited === late, files, waitMs: this.#restSnapshotWaitFor(files) };
+
+        await (settled === late ? this.#restSnapshotAbandoned(at) : this.#restSnapshotSettled(settled, at));
+      });
+
+      return yield* stopping;
     });
-
-    const waited = await Promise.race([taking, waitedOut]);
-    const files = await Promise.race([counted, Promise.resolve(undefined)]);
-
-    try {
-      this.#invalidateGeneration();
-      await this.#stopContainer();
-      await this.#awaitContainerStopped();
-    } finally {
-      // Already settled, the take wins the race: a settled promise's reaction runs before a later one's.
-      const settled = await Promise.race([taking, Promise.resolve(late)]);
-      const at = { restMs: Date.now() - began, waitedOut: waited === late, files, waitMs: this.#restSnapshotWaitFor(files) };
-
-      await (settled === late ? this.#restSnapshotAbandoned(at) : this.#restSnapshotSettled(settled, at));
-    }
   }
+
 
   async #restSnapshotSettled(
     { taken, takeMs }: { readonly taken: PromiseSettledResult<void>; readonly takeMs: number }, at: RestTiming,
@@ -2782,19 +2850,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Native kill acknowledges both termination and absence; a failure keeps the launch record. */
   stopSupervised(processId: string): Promise<{ stopped: boolean }> {
-    return settle(attempt('io', async () => {
-      const arrived = this.#teardowns;
-      await this.#ensureReady(arrived);
-      const result = await this.#supervised().run({ kind: 'stop', processId });
+    return settle(attempted('io', Effect.gen({ self: this }, function* () {
+      yield* this.#ensureReady(this.#teardowns);
+      const result = yield* Effect.promise(() => this.#supervised().run({ kind: 'stop', processId }));
       const ended = result.kind === 'stopped' && result.stopped;
 
       this.stampInteraction();
 
       // A stopped job's session goes with it: the shell under its output, and its tab (D95).
-      if (ended) await this.#endSession(jobSessionId(processId));
+      if (ended) yield* Effect.promise(() => this.#endSession(jobSessionId(processId)));
 
       return { stopped: ended };
-    }));
+    })));
   }
 
   /** What a supervised job wrote most recently. */
@@ -2948,7 +3015,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const release = yield* attempt('io', () => this.#resources.hold(pathScopes({ path })));
 
       const opened = yield* Effect.result(Effect.gen({ self: this }, function* () {
-        yield* attempt('not-ready', () => this.#ensureReady(arrived));
+        yield* attempted('not-ready', this.#ensureReady(arrived));
         const stream = yield* this.#readFileStream(path);
 
         return heldUntilDrained(stream, release);
@@ -2991,7 +3058,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const release = yield* attempt('io', () => this.#resources.hold(scopes));
 
       return yield* Effect.gen({ self: this }, function* () {
-        yield* attempt('not-ready', () => this.#ensureReady(arrived));
+        yield* attempted('not-ready', this.#ensureReady(arrived));
 
         return yield* operation;
       }).pipe(Effect.ensuring(Effect.sync(release)));
@@ -3130,7 +3197,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const period = Math.ceil(this.policy.checkpointIntervalMs / 1000);
       await this.#scheduled(CHECKPOINT_CALLBACK, period, async () => {
         if (this.ctx.container?.running !== true) return null;
-        const outcome = await this.#checkpoint('tick');
+        const ticked = await hold(this.#checkpoint('tick'));
+
+        // A tick that failed is tried again a period on, as a scheduled body that threw is (#scheduled).
+        if (Exit.isFailure(ticked)) {
+          console.error(`[devbox] scheduled ${CHECKPOINT_CALLBACK} failed: ${describe({ cause: Cause.squash(ticked.cause) })}`);
+
+          return period;
+        }
+
+        const outcome = ticked.value;
 
         // A box that is not ready has nothing restored to commit: its start restores it, and no checkpoint failed
         // (#117 filed one every tick for an object that had restarted beside its container).
@@ -3299,26 +3375,27 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** D59: refused with no ask pending. */
   answerRest(answer: RestAnswer): Promise<RestAnswered> {
-    return settle(attempt('io', async (): Promise<RestAnswered> => {
-      if (await this.ctx.storage.get<number>(REST_ASK_KEY) === undefined) {
-        return { kind: 'refused', reason: 'no rest ask is pending: the computer is in use or already resting' };
+    return settle(attempted('io', Effect.gen({ self: this }, function* () {
+      if ((yield* Effect.promise(() => this.ctx.storage.get<number>(REST_ASK_KEY))) === undefined) {
+        return { kind: 'refused', reason: 'no rest ask is pending: the computer is in use or already resting' } satisfies RestAnswered;
       }
 
-      await this.ctx.storage.delete(REST_ASK_KEY);
+      yield* Effect.promise(() => this.ctx.storage.delete(REST_ASK_KEY));
 
       if (answer === 'keep') {
         const now = Date.now();
         this.stampInteraction();
-        await this.ctx.storage.put(LAST_INTERACTION_KEY, now);
+        yield* Effect.promise(() => this.ctx.storage.put(LAST_INTERACTION_KEY, now));
 
-        return { kind: 'kept', askAgainAfterMs: this.policy.idleMs + this.policy.quietConfirmMs };
+        return { kind: 'kept', askAgainAfterMs: this.policy.idleMs + this.policy.quietConfirmMs } satisfies RestAnswered;
       }
 
-      const outcome = await this.#quiesce(true);
+      const outcome = yield* this.#quiesce(true);
 
-      return outcome.kind === 'failed' ? { kind: 'failed', reason: outcome.reason ?? 'the final checkpoint failed' } : { kind: 'resting' };
-    }));
+      return (outcome.kind === 'failed' ? { kind: 'failed', reason: outcome.reason ?? 'the final checkpoint failed' } : { kind: 'resting' }) satisfies RestAnswered;
+    })));
   }
+
 
   /** One durable row per heartbeat, so a stopped box shows when and why: it tells apart an
    *  alarm that never fired, a tick that returned early, and a ping that did not renew. */
@@ -3681,7 +3758,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return Effect.succeed(new Response('WebSocket required', { status: 426 }));
 
     return this.#withActiveCaller(Effect.gen({ self: this }, function* () {
-      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
+      const { container } = yield* attempted('io', this.#ensureReady(this.#teardowns));
 
       yield* this.#desktopUp(request.signal);
       const server = `http://127.0.0.1:${String(DESKTOP_PORT)}`;
@@ -3835,7 +3912,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  action's own outcome is what the agent hears. */
   #letUp(kind: DesktopAction['kind']): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
-      const { container } = yield* attempt('io', () => this.#ensureReady(this.#teardowns));
+      const { container } = yield* attempted('io', this.#ensureReady(this.#teardowns));
       const letUp = decoded(yield* attempt('io', async () => await (await launch(container, ['python3', '-c', LET_UP_PY, 'devbox-let-up'], {})).output()));
 
       if (letUp.exitCode !== 0) return yield* Effect.fail(new DevboxError('io', `letting up what was down failed: ${letUp.stderr.trim()}`));
@@ -3863,13 +3940,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #supervisedClient: SupervisedProcesses | undefined;
   enableInternet = true;
 
+  /** A server that runs no container answers as one that refuses everything asked of it (`AbsentContainer`). */
+  #absent: AbsentContainer | undefined;
+
   #container(): Container {
-    const container = this.ctx.container;
-
-    // A dev server runs no container (vite.config.ts), so a box there is refused once rather than retried.
-    if (container === undefined) refuse(new DevboxError('configuration', NO_CONTAINER));
-
-    return container;
+    return this.ctx.container ?? (this.#absent ??= new AbsentContainer(NO_CONTAINER));
   }
 
   #files(): Files { return this.#fileClient ??= new Files(seamedContainer(this.#container())); }
@@ -3902,26 +3977,29 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.onStop();
   }
 
-  async #stopContainer(): Promise<void> {
-    const container = this.#container();
+  #stopContainer(): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const container = this.#container();
 
-    if (!container.running) return;
-    const ending = container.monitor();
+      if (!container.running) return;
+      const ending = container.monitor();
 
-    // PID 1 is tini, which catches no signal, so the kernel drops a TERM sent it from inside: every other process gets
-    // one, and tini exits with its child, the container with it (staging, 2026-10-21: a new boot id after). Through
-    // the seam, as the platform's `signal()` is a task nobody can await (`containerExec`). Its exec may end with the
-    // container it ends, which is no failure; a kill that refuses fails the stop (`endEveryProcess`).
-    const sending = endEveryProcess(container);
+      // PID 1 is tini, which catches no signal, so the kernel drops a TERM sent it from inside: every other process gets
+      // one, and tini exits with its child, the container with it (staging, 2026-10-21: a new boot id after). Through
+      // the seam, as the platform's `signal()` is a task nobody can await (`containerExec`). Its exec may end with the
+      // container it ends, which is no failure; a kill that refuses fails the stop (`endEveryProcess`).
+      const sending = endEveryProcess(container);
 
-    const ended = await caught(async () => Promise.all([sending, ending]));
+      const ended = yield* Effect.exit(Effect.promise(async () => Promise.all([sending, ending])));
 
-    if ('cause' in ended && container.running) rethrow(ended);
+      if (Exit.isFailure(ended) && container.running) return yield* Effect.failCause(ended.cause);
 
-    // The box ended this container itself: the next one is a start, not a replacement.
-    await this.ctx.storage.delete(BOOT_ID_KEY);
-    await this.onStop();
+      // The box ended this container itself: the next one is a start, not a replacement.
+      yield* Effect.promise(() => this.ctx.storage.delete(BOOT_ID_KEY));
+      yield* Effect.promise(() => this.onStop());
+    });
   }
+
   override fetch(request: Request): Promise<Response> {
     return settle(Effect.gen({ self: this }, function* () {
       const url = yield* attemptSync('invalid-input', () => new URL(request.url));
@@ -3956,7 +4034,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const events = await attachWhenReady({
       socket: server, held: () => this.#terminals.has(server),
       ask: () => this.#resolveReadiness(arrived), wait: (ms) => scheduler.wait(ms), now: () => Date.now(),
-      attach: () => this.#withActiveCaller(attempt('io', async () => attachTerminal((await this.#ensureReady(arrived)).container, params, session, server))),
+      attach: () => this.#withActiveCaller(attempted('io', Effect.flatMap(this.#ensureReady(arrived), ({ container }) => Effect.promise(() => attachTerminal(container, params, session, server))))),
     });
 
     if (events === null) this.#terminals.delete(server);
@@ -4017,11 +4095,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(Effect.gen({ self: this }, function* () {
       const session = yield* this.#session(id);
 
-      yield* this.#withActiveCaller(attempt("io", async () => {
-        const { container } = await this.#ensureReady(this.#teardowns);
-
-        return resetTerminal(container, session.id);
-      }));
+      yield* this.#withActiveCaller(attempted("io", Effect.flatMap(this.#ensureReady(this.#teardowns), ({ container }) => Effect.promise(() => resetTerminal(container, session.id)))));
     }));
   }
 
@@ -4167,9 +4241,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
 
   stop(_signal?: 'SIGTERM'): Promise<void> {
-    return settle(attempt('io', async () => {
-      await this.#stopContainer();
-    }));
+    return settle(attempted('io', this.#stopContainer()));
   }
 
   onStop(): Promise<void> {
@@ -4288,6 +4360,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Run one scheduled callback's body with its name marked as dispatching,
    *  so the row still in the table under it is read as its own. */
+  /** {@link #dispatch} for an Effect body. */
+  #dispatched<T>(callback: string, body: Effect.Effect<T, DevboxError>): Effect.Effect<T, DevboxError> {
+    return Effect.suspend(() => {
+      this.#dispatching.add(callback);
+
+      return Effect.ensuring(body, Effect.sync(() => { this.#dispatching.delete(callback); }));
+    });
+  }
+
   async #dispatch<T>(callback: string, body: () => Promise<T>): Promise<T> {
     this.#dispatching.add(callback);
 
@@ -4335,10 +4416,9 @@ async function admissionFailureOf(container: Container, signal: AbortSignal): Pr
   return admitted.value.exitCode === 0 ? undefined : { failure: new DevboxError('io', `native container admission exited ${String(admitted.value.exitCode)}`), answered: true };
 }
 
-async function firstExec(container: Container, signal: AbortSignal): Promise<void> {
-  const failed = await admissionFailureOf(container, signal);
-
-  if (failed !== undefined) rethrow({ cause: failed.failure });
+/** The first exec after a start, failing as the platform refused the start or as the exec failed. */
+function firstExec(container: Container, signal: AbortSignal): Effect.Effect<void> {
+  return Effect.flatMap(Effect.promise(() => admissionFailureOf(container, signal)), (failed) => (failed === undefined ? Effect.void : Effect.die(failed.failure)));
 }
 
 /** A locale that reads text as UTF-8; the C one the box starts in reads a byte past ASCII as an invalid sequence. */

@@ -1,3 +1,5 @@
+import * as v from 'valibot';
+
 /** Cut text to a budget without splitting a surrogate pair; lone surrogates are data. Cuts move at most one unit, never outward. */
 
 export const isHighSurrogate = (code: number): boolean => code >= 0xD800 && code <= 0xDBFF;
@@ -108,4 +110,9 @@ export function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
   for (let index = 0; index < left.byteLength; index++) if (left[index] !== right[index]) return false;
 
   return true;
+}
+
+/** A message part's text, null for a part of any other kind; a text part with no string text is malformed. */
+export function textOfPart(part: { readonly type?: unknown; readonly text?: unknown }): string | null {
+  return part.type === 'text' ? v.parse(v.string(), part.text) : null;
 }

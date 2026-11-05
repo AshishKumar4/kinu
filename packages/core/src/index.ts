@@ -218,8 +218,7 @@ export { forkArtifactPath, type ForkConversationPlan } from './identity/fork-pla
 // Workspace archive: one backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION,
-  readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
-  ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
+  readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
   type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentPage,
   type ArchivePage, type ArchiveStoreSource,
 } from './identity/archive';
@@ -411,13 +410,10 @@ export {
   createExperienceLibrary,
   EXPERIENCE_KINDS,
   initExperienceLibraryTables,
-  initImportedExperienceTable,
-  listImportedExperience,
   type ExperienceEntry,
   type ExperienceKind,
   type ExperienceLibraryStore,
   type ExperienceSearchOptions,
-  type PublishableCandidate,
 } from './experience/index';
 
 // Chat engine
@@ -1234,7 +1230,7 @@ export { recallForTurn, type RecallSources } from './memory/turn-recall';
 // Memory writes
 export { memoryBytes } from './memory/note';
 
-export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail } from './memory/note';
+export { appendMemoryNote, MEMORY_PATH, memoryNotes, parseMemoryNotes, readMemoryTail } from './memory/note';
 
 export {
   ConversationSearchStore, ensureIndexTables, invalidateConversationSearchIndex,

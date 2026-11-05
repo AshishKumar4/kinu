@@ -147,7 +147,7 @@ import { discoverAgentsMd } from './agents-md';
 import { osLeaseProcess } from './agent-host/lease-process';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
-import { detectOrphanedFibers, readMemoryTail, recallForTurn } from '@kinu.run/core';
+import { detectOrphanedFibers, memoryNotes, readMemoryTail, recallForTurn } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
 import {
@@ -2028,6 +2028,7 @@ export class LocalAgentSession {
       transactionSync: (write) => this.rt.storage.transactionSync(write),
       armWake: () => { this.scheduleSleepTimeWake(); }, workspace: this.rt.actor.actorId,
       idle: () => idleDream(this.refinementDeps, this.engine.recordsTurns),
+      notes: () => memoryNotes(this.rt.memory),
     });
   }
 

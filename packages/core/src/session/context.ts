@@ -86,7 +86,7 @@ export class SessionContext {
   /** Each context's head as last read or written here: a committed revision's membership never changes. */
   private readonly heads = new Map<string, KeptHead>();
 
-  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly atomic: <T>(operation: () => T) => T,
+  constructor(private readonly sql: SqlExecutor, private readonly actor: ActorHandle, private readonly transactionSync: <T>(operation: () => T) => T,
     private readonly messages: Pick<SessionMessageReader, 'originOf'>) {}
 
   /** The newest revision `turnId`'s input made, in whichever context it was made; null for a turn that made none. */
@@ -123,7 +123,7 @@ export class SessionContext {
   initialize(contextId = crypto.randomUUID()): ContextSelection {
     this.actor.assertCurrent();
 
-    return this.atomic(() => {
+    return this.transactionSync(() => {
       const selected = this.selected();
 
       if (selected !== null) return selected;
@@ -215,7 +215,7 @@ export class SessionContext {
   commit(expected: ContextSelection | null, request: ContextCommitRequest): ContextSelection {
     const { cause, turnId, mutate, assertEpoch, proposal } = request;
 
-    return this.atomic(() => settleSync(Effect.gen({ self: this }, function* () {
+    return this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
       yield* assertEpoch();
       const probe = this.headOf(null) ?? (expected === null ? emptyProbe(this.initialize()) : null);
@@ -256,7 +256,7 @@ export class SessionContext {
     reference: MessageReference, at: { readonly before: string | null; readonly replaces: boolean },
     request: { readonly turnId: string | null; readonly assertEpoch: () => Effect.Effect<void, KinuError> },
   ): ContextSelection {
-    return this.atomic(() => settleSync(Effect.gen({ self: this }, function* () {
+    return this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
       yield* request.assertEpoch();
       const probe = this.headOf(null) ?? emptyProbe(this.initialize());
@@ -274,7 +274,7 @@ export class SessionContext {
 
   /** The next revision of an unselected context, opened on first use: an entry is its position, so a kept message writes nothing. */
   record(contextId: string, messages: readonly MessageReference[]): ContextSelection {
-    return this.atomic(() => {
+    return this.transactionSync(() => {
       this.actor.assertCurrent();
       const probe = this.headOf(contextId) ?? emptyProbe(this.fork(null, contextId));
       const kept = this.keptHead(probe);
@@ -344,14 +344,14 @@ export class SessionContext {
   fork(source: ContextSelection | null, contextId: string = crypto.randomUUID()): ContextSelection {
     this.actor.assertCurrent();
 
-    return this.atomic(() => {
+    return this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       const actorId = this.actor.actorId;
 
       if (source !== null) {
         const exists = this.sql<{ revision: number }>`SELECT revision FROM context_revisions
           WHERE actor_id=${actorId} AND context_id=${source.contextId} AND revision=${source.revision}`[0];
 
-        if (exists === undefined) throw new KinuError('missing', 'fork source revision does not exist');
+        if (exists === undefined) return yield* Effect.fail(new KinuError('missing', 'fork source revision does not exist'));
       }
 
       void this.sql`INSERT INTO actor_contexts(actor_id,context_id) VALUES(${actorId},${contextId})`;
@@ -361,11 +361,11 @@ export class SessionContext {
         VALUES(${actorId},${contextId},${entry.entryId},0,${entry.position},${entry.messageId})`;
 
       return { contextId, revision: 0 };
-    });
+    })));
   }
 
   select(expected: ContextSelection, target: ContextSelection, assertIdle: () => Effect.Effect<void, KinuError>): void {
-    return this.atomic(() => settleSync(Effect.gen({ self: this }, function* () {
+    return this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.actor.assertCurrent();
       yield* assertIdle();
       const selected = this.selected();

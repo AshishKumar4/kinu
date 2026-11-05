@@ -132,16 +132,6 @@ const GATED_CALLS: GatedCall[] = [
 
 
   { capability: 'experience.read', name: 'searchExperience', run: (u, c) => u.searchExperience(c, { query: 'deploy' }) },
-  { capability: 'experience.read', name: 'getExperienceEntry', run: (u, c) => u.getExperienceEntry(c, 'exp-nope') },
-  {
-    capability: 'experience.write',
-    name: 'publishExperience',
-    run: (u, c) => u.publishExperience(c, {
-      key: 'deploy.target', title: 'deploy.target',
-      payload: { kind: 'fact', key: 'deploy.target', value: 'x.workers.dev', confidence: 1 },
-      evidence: 'held at confidence 1.00',
-    }),
-  },
 
   { capability: 'profile', name: 'getProfile', run: (u, c) => u.getProfile(c) },
   { capability: 'profile', name: 'ensureProfile', run: (u, c) => u.ensureProfile(c, 'owner@example.com') },
@@ -382,7 +372,6 @@ describe('a registered workspace reaches the whole surface', () => {
     expect(kept).toContain('workspaces.read:listWorkspaces');
     expect(kept).toContain('workspaces.write:registerWorkspace');
     expect(kept).toContain('experience.read:searchExperience');
-    expect(kept).toContain('experience.write:publishExperience');
     expect(kept).toContain('profile:getProfile');
     expect(kept).toContain('auth_tokens:verifyCliToken');
     expect(kept).toContain('credentials.model:getAuthHeaders(codex.oauth)');

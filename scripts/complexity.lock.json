@@ -207,7 +207,7 @@
     },
     {
       "key": "scripts/error-model.ts#bridgeSites>walk#2",
-      "complexity": 27
+      "complexity": 25
     },
     {
       "key": "scripts/module-edges.ts#moduleEdges>walk",

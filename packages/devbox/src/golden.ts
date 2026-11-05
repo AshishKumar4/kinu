@@ -1,7 +1,7 @@
 // The golden snapshot (D65): the base image with the pinned tools, built by one object of the box's class.
 import { Effect, Result } from 'effect';
 import * as v from 'valibot';
-import { DevboxError, attempt } from './errors';
+import { DevboxError, attempt, attempted } from './errors';
 import { OwedSchema, SNAPSHOT_LIFE_MS, payDebt, type SnapshotDeletion } from './snapshot-registry';
 import { shellPath } from './stream-archive';
 import {
@@ -55,11 +55,11 @@ export interface GoldenPorts {
   readonly tools: string;
   readonly read: () => GoldenState;
   readonly write: (state: GoldenState) => void;
-  readonly start: (from: { readonly image: string } | { readonly snapshot: string }) => Promise<void>;
+  readonly start: (from: { readonly image: string } | { readonly snapshot: string }) => Effect.Effect<void, DevboxError>;
   readonly exec: (command: string) => Promise<{ readonly stdout: string; readonly stderr: string; readonly exitCode: number }>;
   readonly pipe: (key: string, path: string) => Effect.Effect<void, DevboxError>;
   readonly snapshot: (name: string) => Promise<string>;
-  readonly destroy: () => Promise<void>;
+  readonly destroy: () => Effect.Effect<void, DevboxError>;
   readonly build: () => Promise<void>;
   readonly tell: (box: string, answer: GoldenAnswer) => Effect.Effect<void, DevboxError>;
   /** Deletes a snapshot from the registry, telling `owe` its manifest's digest before any tag goes; undefined without the
@@ -128,7 +128,7 @@ export function buildGolden(ports: GoldenPorts, keepAlive: boolean): Effect.Effe
 
     if (keepAlive && state.previous !== undefined && Result.isSuccess(built)) {
       const previous = state.previous;
-      const renewed = yield* Effect.result(attempt('io', async () => { await ports.start({ snapshot: previous.id }); await ports.destroy(); }));
+      const renewed = yield* Effect.result(attempted('io', Effect.andThen(ports.start({ snapshot: previous.id }), ports.destroy())));
 
       if (Result.isSuccess(renewed)) ports.write({ ...state, previous: { ...previous, renewedAt: ports.now() } });
     }
@@ -176,7 +176,7 @@ function build(ports: GoldenPorts, before: GoldenState): Effect.Effect<Pick<Gold
     }
 
     yield* at('starting the base image');
-    yield* attempt('io', () => ports.start({ image: GOLDEN_BASE }), 'starting the base image');
+    yield* attempted('io', ports.start({ image: GOLDEN_BASE }), 'starting the base image');
     const base = yield* run('reading the base', BASE_COMMAND);
 
     yield* at('fetching the tools');
@@ -186,7 +186,7 @@ function build(ports: GoldenPorts, before: GoldenState): Effect.Effect<Pick<Gold
     yield* at('snapshotting the base');
     const id = yield* attempt('io', () => ports.snapshot(`${toolsKey(ports.tools).slice(13, 21)}-${String(ports.now())}`), 'snapshotting the base');
     // The snapshot is made: a container that will not stop is no failed build, or its id would be lost unrecorded.
-    const stopped = yield* Effect.result(attempt('io', () => ports.destroy()));
+    const stopped = yield* Effect.result(attempted('io', ports.destroy()));
 
     if (Result.isFailure(stopped)) console.error(`[devbox] the golden ${id} is built, but its container did not stop: ${stopped.failure.message}`);
 

@@ -15,6 +15,7 @@ import { spillEventContent } from '../hub/content-spill';
 import { Effect, Result } from 'effect';
 import { settle, settleSync } from '../../obs/index';
 import { decodeJsonValue, JsonValueSchema, safeJsonParse, type JsonObject, type JsonValue } from '../../utils/json';
+import { nanoid } from '../../utils/nanoid';
 import {
   checkWatcher, watchCheckOf, WatchCheckSchema, type RunCheck, type WatchCheck, type WatchDeps, type WatchOutcome,
 } from './watch';
@@ -171,7 +172,7 @@ export function registerPushWatcher(
   registry: TriggerRegistry, secrets: Pick<WebhookSecretStore, 'put' | 'deleteByTrigger'>, opts: PushWatcherOpts, now: number,
 ): Promise<{ readonly trigger_id: string; readonly secret: string }> {
   return settle(Effect.gen(function* () {
-    const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
+    const secret_id = `webhook_secret_${nanoid(10)}`;
     const secret = freshWebhookSecret();
 
     const spec: JsonObject = {
@@ -207,7 +208,7 @@ export async function registerDurableWebhook(
   now: number,
 ): Promise<RegisteredWebhook> {
   const rate_limit_per_min = normalizeWebhookRateLimitPerMin(opts.rate_limit_per_min);
-  const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
+  const secret_id = `webhook_secret_${nanoid(10)}`;
   const secret = opts.auth_mode === 'mtls' ? null : webhookSecretOrMinted(opts.secret);
 
   const trigger_id = await registry.register({
@@ -488,7 +489,7 @@ export function acceptWebhookDelivery(
 
     if (answered !== null) return answered;
 
-    const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
+    const delivery_id = opts.delivery_id ?? `${opts.now}-${nanoid(8)}`;
 
     // Spill after the auth and rate gates so a rejected delivery never writes a file.
     const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);

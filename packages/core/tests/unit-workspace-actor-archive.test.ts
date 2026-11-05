@@ -3,10 +3,10 @@ import { seedTranscriptEntry } from '@kinu.run/test-utils';
 // count and restore refuses a rebuilt roster that disagrees.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeSqlExec } from './helpers';
+import { makeSql, makeSqlExec, writeWorkspaceArchive } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
-import { restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/identity/archive';
+import { restoreWorkspaceArchive } from '../src/identity/archive';
 import { SessionHistory } from '../src/session/history';
 import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';

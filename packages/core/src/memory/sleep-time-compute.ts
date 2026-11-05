@@ -120,6 +120,8 @@ export interface SleepTimeInput {
   currentFacts: ReadonlyArray<{ key: string; value: JsonValue; confidence: number }>;
   /** The account's facts, so a proposal reuses their keys and never repeats one; absent where no account is wired. */
   accountFacts?: ReadonlyArray<{ key: string; value: JsonValue }>;
+  /** The notes the agent kept since the last pass, oldest first: folded into facts, its durable beliefs. */
+  notes?: ReadonlyArray<{ readonly content: string; readonly updatedAt: string }>;
 }
 
 export interface SleepTimeUpdate {
@@ -176,6 +178,10 @@ evidence.
 Recent turns (oldest first):
 ${i.turns.map(renderTurn).join('\n\n') || '(none)'}
 
+Notes the agent kept since the last pass (oldest first; what each records is
+its own account, not the owner's words):
+${(i.notes ?? []).map((note) => `- (${note.updatedAt}) ${evidenceWindow(note.content, EVIDENCE_BUDGETS.outcomeUserMessage)}`).join('\n') || '  (none)'}
+
 Current facts in agent's world model:
 ${i.currentFacts.slice(0, 30).map((fact) => `${renderFactLine(fact)} (conf ${fact.confidence.toFixed(2)})`).join('\n') || '  (none)'}
 
@@ -183,8 +189,9 @@ Existing fact keys (reuse these exact keys when updating the same subject; do no
 ${i.currentFacts.map(f => `  ${f.key}`).join('\n') || '  (none)'}
 
 Decide:
-1. What durable facts did these turns establish? (user preferences, project
-   state, dates, URLs, current configuration). Upsert with high confidence
+1. What durable facts did these turns and notes establish? (user preferences,
+   project state, dates, URLs, current configuration). A note restating a fact
+   updates it under the same key; when notes disagree, the newest holds. Upsert with high confidence
    (0.8-1.0). DON'T duplicate existing facts. "importance" (0 to 1) is how much
    it matters when recalled; "veracity" is "stated" when the turns say it
    outright. No raw tool output is provided here: tool names and an assistant's

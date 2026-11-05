@@ -547,8 +547,9 @@ function isFailureModule(file: string, specifier: string): boolean {
  * `return settle(…)` or `return settleSync(…)` with the runner imported from `obs`, inside an exported
  * function or a public class member. Each is removed when its callers' wave arrives; the migration
  * ends at zero. A runner returned anywhere else is a finding: a private helper must return the Effect.
- * One more edge is platform-owned: a `transactionSync(() => …)` callback, where only a synchronous throw
- * rolls the transaction back, so `settleSync(…)` as that callback's whole return is a bridge too.
+ * Two more edges are platform-owned: a `transactionSync(() => …)` callback, where only a synchronous throw
+ * rolls the transaction back, so `settleSync(…)` as that callback's whole return is a bridge too; and a
+ * `blockConcurrencyWhile(() => …)` callback, whose rejection resets the object, so `settle(…)` as its whole return is.
  */
 export interface BridgeCensus {
   readonly bridges: string[];
@@ -576,7 +577,8 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     if (Object.values(FAILURE_SURFACES).some(surface => file === surface.adapter) || HOST_BOUNDARIES.has(file)) continue;
     const parsed = parse(file, text);
     const runners = new Set<string>();
-    const syncRunners = new Set<string>();
+    /** Each runner's local name, by the platform callback whose whole return it may be. */
+    const platformOf = new Map<string, 'transactionSync' | 'blockConcurrencyWhile'>();
     const flightNames = new Set<string>();
     const detachNames = new Set<string>();
 
@@ -593,7 +595,9 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && RUNNERS.includes(specifier.imported.name)) {
           runners.add(specifier.local.name);
 
-          if (specifier.imported.name === 'settleSync') syncRunners.add(specifier.local.name);
+          if (specifier.imported.name === 'settleSync') platformOf.set(specifier.local.name, 'transactionSync');
+
+          if (specifier.imported.name === 'settle') platformOf.set(specifier.local.name, 'blockConcurrencyWhile');
 
           if (specifier.imported.name === 'detach') detachNames.add(specifier.local.name);
         }
@@ -673,13 +677,15 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         return;
       }
 
-      if (syncRunners.has(raw.callee.name) && isTransactionCallback(holder.raw.type === 'ReturnStatement' ? holder : { parent: holder })) {
+      const callback = holder.raw.type === 'ReturnStatement' ? holder : { parent: holder };
+
+      if (platformCallback(callback, platformOf.get(raw.callee.name))) {
         bridges.push(site);
 
         return;
       }
 
-      const owner = bridgeOwner(holder.raw.type === 'ReturnStatement' ? holder : { parent: holder });
+      const owner = bridgeOwner(callback);
 
       if (owner === null) findings.push(`${site}: a runner returned outside an exported function or public member`);
       else bridges.push(site);
@@ -957,8 +963,10 @@ function bridgeOwner(statement: Pick<SyntaxNode, 'parent'>): SyntaxNode | null {
   return owner.parent === undefined ? null : bridgeOwner(owner);
 }
 
-/** Whether the return belongs directly to a function passed as `transactionSync`'s argument. */
-function isTransactionCallback(statement: Pick<SyntaxNode, 'parent'>): boolean {
+/** Whether the return belongs directly to a function passed as the platform method `method`'s argument. */
+function platformCallback(statement: Pick<SyntaxNode, 'parent'>, method: 'transactionSync' | 'blockConcurrencyWhile' | undefined): boolean {
+  if (method === undefined) return false;
+
   let node: SyntaxNode | undefined = statement.parent;
 
   while (node !== undefined && !isFunctionLike(node)) node = node.parent;
@@ -967,9 +975,9 @@ function isTransactionCallback(statement: Pick<SyntaxNode, 'parent'>): boolean {
   if (node === undefined || call?.raw.type !== 'CallExpression' || !call.raw.arguments.some((argument) => argument === node.raw)) return false;
   const { callee } = call.raw;
 
-  if (callee.type === 'Identifier') return callee.name === 'transactionSync';
+  if (callee.type === 'Identifier') return callee.name === method;
 
-  return callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier' && callee.property.name === 'transactionSync';
+  return callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier' && callee.property.name === method;
 }
 
 const arrowBody = (raw: SyntaxNode['raw']): SyntaxNode['raw'] | null =>

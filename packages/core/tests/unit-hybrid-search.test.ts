@@ -127,7 +127,7 @@ describe('hybridSearch', () => {
     });
 
   test('a lexical snippet is never replaced by a rehydrated one', async () => {
-      const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus), { rehydrate: async () => 'rehydrated text' });
+      const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus), { rehydrate: async () => ({ text: 'rehydrated text' }) });
       expect(present(out.find((hit) => hit.id === 'shared'), "the 'shared' hit").snippet).toBe('shared snippet');
     });
 
@@ -187,7 +187,7 @@ describe('hybridSearch', () => {
       const rehydrate = memorySnippetRehydrator(memory);
       const hit: VectorSearchHit = { ...chunk, score: 1 };
       await expect(rehydrate(hit)).rejects.toThrow('transient read');
-      await expect(rehydrate(hit)).resolves.toBe('line1');
+      await expect(rehydrate(hit)).resolves.toEqual({ text: 'line1' });
     });
 
   test('failed canonical reads are unavailable, while verified deletions are an empty answer', async () => {
@@ -224,7 +224,7 @@ describe('hybridSearch', () => {
     const rehydrate = async () => {
       reads++;
 
-      return 'should not run';
+      return { text: 'should not run' };
     };
 
     const out = await hybridSearch('user tz', async () => [], createNoopVectorStore(), { facts: () => facts.all(), rehydrate });

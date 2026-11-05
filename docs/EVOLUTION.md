@@ -318,6 +318,6 @@ Evolution activity is persisted to the `evolution_events` SQL table:
 | `data` | TEXT | JSON payload (optional) |
 | `created_at` | INTEGER | Epoch milliseconds |
 
-The engine emits eight types (`EvolutionEvent`, `core/src/evolution/types.ts`): `reflection`, `craft_discovered`, `scaffold_proposed`, `consolidation`, `turn_complete`, `changelog_digest`, `experience_import` and `advisor_note`. `recordMisevolutionVeto` writes a ninth, `misevolution_veto`, directly (`core/src/safety/misevolution.ts`).
+The engine emits seven types (`EvolutionEvent`, `core/src/evolution/types.ts`): `reflection`, `craft_discovered`, `scaffold_proposed`, `consolidation`, `turn_complete`, `changelog_digest` and `advisor_note`; older rows may hold `experience_import`. `recordMisevolutionVeto` writes an eighth, `misevolution_veto`, directly (`core/src/safety/misevolution.ts`).
 
 This table is one of four sources the Run Timeline read model merges (`getRunTimeline`, `core/src/read-models/timeline.ts`); the others are the per-run `run_events` log, the MCTS `search_nodes` table, and detached background jobs. The merge runs server-side and does not depend on the platform, so every backend has the timeline. `kinu status` reads the same table locally.

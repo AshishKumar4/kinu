@@ -35,6 +35,7 @@ import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';
 import { TASK_REMINDER_EVENT, taskReminderIdempotencyKey } from '../tasks/reminder';
 import { TASK_REMINDER_OPEN_KEY } from '../read-models/event-summary';
 import { TASK_TURN_ENDINGS } from '../subagents/temporary';
+import { doublingBackoffMs } from '../utils/recovery-backoff';
 
 /** The picklist is {@link RUN_END_REASONS}, so a stored row cannot carry an unknown word. */
 export const RunEndReasonSchema = v.picklist(RUN_END_REASONS);
@@ -73,9 +74,7 @@ const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {
 
 /** Doubling from the base delay to the ceiling. */
 function terminalEffectBackoffMs(attempts: number): number {
-  const grown = TERMINAL_EFFECT_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1);
-
-  return Math.min(grown, TERMINAL_EFFECT_RETRY_CEILING_MS);
+  return doublingBackoffMs({ base: TERMINAL_EFFECT_RETRY_BASE_MS, ceiling: TERMINAL_EFFECT_RETRY_CEILING_MS }, attempts);
 }
 
 /** A row naming anything else is blocked; each actor's {@link TerminalEffectTable} picks its subset. */
