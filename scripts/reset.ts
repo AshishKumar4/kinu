@@ -620,13 +620,19 @@ async function stampsMoved(environment: InfraEnvironment): Promise<number> {
   }
 
   const sha = (await servedHealth(origin(plan(environment).config))).build?.sha;
-  const served = sha === undefined ? undefined : stampsAt(sha);
-  const candidate = stampsAt('HEAD') ?? {};
-  const moved = Object.keys(candidate).filter((schema) => served?.[schema] !== candidate[schema]);
+  const moved = stampsMovedFrom(sha);
 
   console.log(moved.length === 0 ? 'none' : moved.join(','));
 
   return moved.length === 0 ? 0 : 3;
+}
+
+/** The classes whose stamp this candidate moves from the build `served` (every class when it is unknown). */
+function stampsMovedFrom(served: string | undefined): string[] {
+  const from = served === undefined ? undefined : stampsAt(served);
+  const candidate = stampsAt('HEAD') ?? {};
+
+  return Object.keys(candidate).filter((schema) => from?.[schema] !== candidate[schema]);
 }
 
 /** Exit 1 when the candidate retires a class the deployment's served build exports and, in production, the owner's words
@@ -664,7 +670,9 @@ async function retirementsOf(environment: InfraEnvironment): Promise<number> {
 }
 
 /** What this release does to the tables of the build the deployment serves (`schemaChange`): exit 0 for none, 4 for
- *  additive, 5 for a change; a deployment whose build it cannot read is an error, never taken as unchanged. */
+ *  additive or for a restamp (no table changes, but a class's stamp moves, as a file move re-keys the genesis lock: the
+ *  deploy then needs --reset-tables, whose plan drops nothing), 5 for a change; a deployment whose build it cannot read
+ *  is an error, never taken as unchanged. */
 async function schemaChangeOf(environment: InfraEnvironment): Promise<number> {
   if (bindsNoClass(environment)) {
     console.log('none');
@@ -676,6 +684,13 @@ async function schemaChangeOf(environment: InfraEnvironment): Promise<number> {
 
   if (sha === undefined) throw new Error(`${environment} serves no build stamp, so what this release changes is unknown`);
   const change = schemaChange(releaseVerdicts(sha));
+  const restamped = change.kind === 'none' ? stampsMovedFrom(sha) : [];
+
+  if (restamped.length > 0) {
+    console.log(`restamp: ${restamped.join(', ')}`);
+
+    return 4;
+  }
 
   console.log(`${change.kind}${change.tables.length === 0 ? '' : `: ${change.tables.join(', ')}`}`);
 
