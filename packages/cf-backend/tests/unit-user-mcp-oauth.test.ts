@@ -133,6 +133,47 @@ describe("an OAuth login's renewal", () => {
     }
   });
 
+  // 1105-oauth-refresh-race: requests share one login, so a refusal can arrive after another request renewed the token it
+  // refused. Renewing again spends a refresh for nothing; the refused request is sent with the token that replaced its own.
+  test('a refusal answered after another request renewed its token is sent again with the renewed one, refreshing nothing more', async () => {
+    const net = network();
+    const h = createTestUserDO();
+
+    try {
+      const id = await signedIn(h, 3600);
+
+      await call(h, id, { expire: true });
+      const scripted = globalThis.fetch;
+      const held = Promise.withResolvers<void>();
+      const refused = Promise.withResolvers<void>();
+      let holding = true;
+
+      // The first refusal waits at the wire until a second request was refused, renewed the login and answered.
+      globalThis.fetch = Object.assign(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const answer = await scripted(input, init);
+
+        if (holding && answer.status === 401) {
+          holding = false;
+          refused.resolve();
+          await held.promise;
+        }
+
+        return answer;
+      }, { preconnect: scripted.preconnect });
+
+      const first = call(h, id);
+
+      await refused.promise;
+      const second = await call(h, id);
+
+      held.resolve();
+      expect({ first: (await first).includes('session'), second: second.includes('session'), refreshes: net.refreshes.length })
+        .toEqual({ first: true, second: true, refreshes: 1 });
+    } finally {
+      h.close();
+    }
+  });
+
   test('a renewal that fails for now leaves the server connected: a token still valid is used, an expired one fails the call, and the next call renews', async () => {
     const net = network();
     const h = createTestUserDO();
