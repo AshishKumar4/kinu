@@ -296,7 +296,7 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
 
   // `state.messages` is the SDK's newest window with streamed messages; older history pages from storage.
   const chat = useChatThread({
-    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, seedEdge: state.seedEdge, steerRuns: state.steerRuns,
+    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, seedEdge: state.seedEdge, amended: state.amended, steerRuns: state.steerRuns,
     total: state.actorSnapshot?.messageCount,
   });
 

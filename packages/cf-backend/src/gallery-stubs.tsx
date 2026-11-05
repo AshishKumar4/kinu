@@ -15,7 +15,7 @@ import { installDriveFixture } from "@/gallery-drive";
 import { installGalleryFixture } from "@/gallery-listings";
 import { installPartsFixture, installShareModeFixture } from "@/gallery-parts";
 import type { SharePreapproval } from "@kinu.run/core";
-import { TURN_CLAIM_FRAME, BUILTIN_PROFILE_CATALOG, validateProfileCatalog, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema, DEFAULT_FILES_VIEW, FILES_VIEW_CONFIG_KEY, parseDeviceTier, type JsonObject, type JsonValue, type ProfileCatalogEnvelope, type AccountUsage } from "@kinu.run/core";
+import { MESSAGE_AMENDED_FRAME, TURN_CLAIM_FRAME, UIMessageSchema, BUILTIN_PROFILE_CATALOG, validateProfileCatalog, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema, DEFAULT_FILES_VIEW, FILES_VIEW_CONFIG_KEY, parseDeviceTier, type JsonObject, type JsonValue, type ProfileCatalogEnvelope, type AccountUsage } from "@kinu.run/core";
 import { wireOf } from "@/lib/workspace-rpc";
 import type { SubagentView } from "@kinu.run/core/protocol";
 import type { UserDevice } from "@/lib/user-api";
@@ -1324,6 +1324,13 @@ const GalleryPushFrameSchema = v.object({
   waitMs: v.optional(v.number()),
   attempt: v.optional(v.number()),
   source: v.optional(v.string()),
+});
+
+// A row the room stamped after it ended, sent alone as the room sends it (`MESSAGE_AMENDED_FRAME`).
+window.addEventListener("gallery:amend-row", (event: Event) => {
+  const detail = event instanceof CustomEvent ? v.safeParse(v.object({ message: UIMessageSchema }), event.detail) : null;
+
+  if (detail?.success === true) galleryServerPush(JSON.stringify({ type: MESSAGE_AMENDED_FRAME, message: detail.output.message }));
 });
 
 // What an answer's page's server pushes, told to the tab as the workspace tells it (`SLATE_PUSH_EVENT`).

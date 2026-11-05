@@ -64,9 +64,18 @@ interface ChatThreadInput {
   readonly actor?: string | null;
   /** Sizes the reserve before any page. */
   readonly total?: number | undefined;
+  /** Rows the room stamped after they ended, by id: each is drawn over the copy held, from any source. */
+  readonly amended?: ReadonlyMap<string, UIMessage>;
 }
 
 const NO_MESSAGES: readonly UIMessage[] = [];
+
+const NO_AMENDED: ReadonlyMap<string, UIMessage> = new Map();
+
+/** `rows` with each stamped one drawn as stamped; the same array when none is. */
+function amendRows(rows: readonly UIMessage[], amended: ReadonlyMap<string, UIMessage> = NO_AMENDED): readonly UIMessage[] {
+  return amended.size === 0 || !rows.some((row) => amended.has(row.id)) ? rows : rows.map((row) => amended.get(row.id) ?? row);
+}
 
 /** Rows shown before `next`'s front: a frame holds only the newest window. */
 interface Slide { readonly live: readonly UIMessage[]; readonly slid: readonly UIMessage[]; readonly gaps: number }
@@ -97,7 +106,7 @@ function liveGap(segments: readonly HistorySegment[], total: number | undefined,
 }
 
 export function useChatThread({
-  rpc, live: frame, seeded, seedEdge = null, steerRuns = NO_STEER_RUNS, actor, total,
+  rpc, live: frame, seeded, seedEdge = null, steerRuns = NO_STEER_RUNS, actor, total, amended,
 }: ChatThreadInput): ChatThread {
   const [slide, setSlide] = useState<Slide>(() => ({ live: frame, slid: NO_MESSAGES, gaps: 0 }));
   const current = slideWindow(slide, frame);
@@ -106,8 +115,8 @@ export function useChatThread({
   if (current.slid !== slide.slid || current.gaps !== slide.gaps || frame.length !== slide.live.length) setSlide(current);
 
   const live = useMemo(
-    () => current.slid.length === 0 ? frame : [...current.slid, ...frame],
-    [current.slid, frame]);
+    () => amendRows(current.slid.length === 0 ? frame : [...current.slid, ...frame], amended),
+    [current.slid, frame, amended]);
 
   const readPage = useCallback(
     (request: PositionPageRequest) => rpc("getChatHistoryPage", [
@@ -216,8 +225,8 @@ export function useChatThread({
 
   // The sources overlap by construction; the live copy wins because it carries parts the stored copy lost.
   const olderSegments = useMemo(
-    () => restored.map((rows) => rows.filter((row) => !liveIds.has(row.id))),
-    [restored, liveIds]);
+    () => restored.map((rows) => amendRows(rows.filter((row) => !liveIds.has(row.id)), amended)),
+    [restored, liveIds, amended]);
 
   const olderRows = useMemo(() => olderSegments.flat(), [olderSegments]);
 
