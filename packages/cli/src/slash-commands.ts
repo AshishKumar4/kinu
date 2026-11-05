@@ -1,7 +1,7 @@
 /** Slash commands shared by the TUI and classic REPL; outcomes are presentation-neutral. */
 
-import { COMPACTED, conversationMarkdown, fmtUsd, lastAnswer, limitLines, MAIN_ACCOUNT, slashCommand, specWithoutAccount, usageTotal, type SlashCommandInfo } from '@kinu.run/core';
-import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, offeredReasoningEfforts, formatPlanWithLineNumbers, planHandoffShortfall, planTitle, type PlanReview, type RefinementListing, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
+import { COMPACTED, conversationMarkdown, describeTakePick, fmtUsd, lastAnswer, limitLines, MAIN_ACCOUNT, slashCommand, specWithoutAccount, usageTotal, type SlashCommandInfo } from '@kinu.run/core';
+import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, offeredReasoningEfforts, formatPlanWithLineNumbers, planHandoffShortfall, planTitle, type PlanReview, type RefinementListing, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus } from './agent-client';
 import type { AgentModelMenu, InstructionSourceRow } from '@kinu.run/core';
 import { attemptInItsWords, chainOf, hold } from '@kinu.run/core/obs';
@@ -959,14 +959,6 @@ export function describeBranchStatus(event: BranchStatusEvent): string {
   }
 }
 
-export function describeTakePick(result: TakePickOutcome, n: number): string {
-  if (!result.changedAnswer) {
-    return `Take ${n} confirmed. The answered approach stays as an explicit preference.`;
-  }
-
-  return `Take ${n} picked. Preference recorded, convergence re-pointed` +
-    (result.continuationQueued ? ', and the agent will continue with this approach.' : '.');
-}
 
 /** Absent shows no row. */
 function autoEvolveText(autoEvolve: boolean | undefined): string | undefined {

@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { useCallback, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import {
@@ -21,12 +21,16 @@ import { Surface } from "@/components/ui/Surface";
 import { Pressable } from "@/components/ui/Pressable";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
 
-export function TakesChip({ set, onPick }: {
+export function TakesChip({ set, onPick, opened }: {
   set: AlternateTakeSet;
   /** Throws on RPC failure so the comparison can show it. */
   onPick: (takeId: string, nodeId: string) => Promise<TakePickOutcome>;
+  /** Moves each time the chat's `/takes` asks to open this comparison. */
+  opened?: number;
 }) {
   const [open, setOpen] = useState(false);
+
+  useEffect(() => { if (opened !== undefined) setOpen(true); }, [opened]);
 
   return (
     <>
