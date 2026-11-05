@@ -1,10 +1,10 @@
 # Roadmap
 
-What's live on [kinu.run](https://kinu.run), what's coming next, and what I'm building after that. Last updated 2026-11-04. The [changelog](CHANGELOG.md) has the detail for everything that ships.
+What's live on [kinu.run](https://kinu.run), what's coming next, and what I'm building after that. Last updated 2026-11-05. The [changelog](CHANGELOG.md) has the detail for everything that ships.
 
 ## Live now
 
-Since 2026-10-24, up to build `3198b7c25` (2026-11-04):
+Since 2026-10-24, up to build `80d8a9cbe` (2026-11-05):
 
 - **Claude sign-in opens claude.ai on the first click.**
 - **A quiet indicator for background work.** A pill over the composer counts the helpers and jobs running, and its list puts what's waiting on you first.
@@ -16,6 +16,9 @@ Since 2026-10-24, up to build `3198b7c25` (2026-11-04):
 - **Plans lead with their outcome** and show their pictures and drawn pages.
 - **Every chat preview copies, opens beside the chat, or opens in a tab,** and folds in the chat while it's open beside it.
 - **A download that breaks off fails,** never saves a short or empty file.
+- **Workspaces and accounts are placed where every model provider answers.** Anthropic refuses some regions, Hong Kong among them; a new workspace or account lands where it doesn't.
+- **Connectors as an optional step before Deploy** when you run your own Kinu: GitHub and Google, bound to the address your Kinu will have.
+- **Turns start faster.** A warm turn's answer starts streaming in about 345 ms, down from 605 ms.
 
 The release of 2026-10-24 (build `8e8bb8c7a`):
 
@@ -31,9 +34,7 @@ The release of 2026-10-24 (build `8e8bb8c7a`):
 
 ## In progress
 
-- **Workspaces placed where every model provider answers.** Anthropic refuses some regions, Hong Kong among them.
 - **Computers start fast after a tools update.** An update moves only the files that changed.
-- **Connectors as an optional step before Deploy** when you run your own Kinu.
 - **Google Workspace** (Gmail, Drive, Calendar and more) through one sign-in, waiting on Google's app setup.
 
 ## Known limits
