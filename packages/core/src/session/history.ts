@@ -286,19 +286,29 @@ export class SessionHistory {
     });
   }
 
-  stagePrepared(proposal: Omit<ContextProposal, 'base'> & { readonly base: ContextSelection | null }, messages: readonly PreparedMessage[], assertOwner: () => void, events: ContextEventRecorder | null = null): void {
-    const publication = this.dependencies.transactionSync(() => {
+  /** `owned` checks, inside the staging transaction, that the edit's author still owns its base; its refusal rolls the
+   *  transaction back. */
+  stagePrepared(
+    proposal: Omit<ContextProposal, 'base'> & { readonly base: ContextSelection | null }, messages: readonly PreparedMessage[],
+    owned: () => Effect.Effect<void, KinuError>, events: ContextEventRecorder | null = null,
+  ): void {
+    const publication = this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       this.dependencies.actor.assertCurrent();
-      assertOwner();
+      yield* owned();
       const base = proposal.base ?? this.context.initialize();
 
       for (const message of messages) this.messages.insert(message, proposal.cause === 'context_transform' ? 'context_transform' : 'edit');
       this.proposals.stage({ ...proposal, base });
 
       return this.editEvent({ proposalId: proposal.id, selection: base, status: 'staged', turnId: proposal.turnId, events });
-    });
+    })));
 
     publication?.publish();
+  }
+
+  /** Runs `check` against the history as one transaction sees it: its refusal is thrown as the file plane reads it. */
+  checked(check: () => Effect.Effect<void, KinuError>): void {
+    this.dependencies.transactionSync(() => settleSync(check()));
   }
 
   async replaceHistory(messages: readonly ModelMessage[], options: { readonly author: string; readonly via: string; readonly turnId: string | null; readonly stage: boolean; readonly assertOwner: () => void; readonly events?: ContextEventRecorder | null }): Promise<{ readonly selection: ContextSelection; readonly proposalId: string | null }> {

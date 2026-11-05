@@ -434,48 +434,48 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
     const observed = expected === undefined ? current : atRevision(resolved, expected);
     const observedRevision = contextRevision(observed.header.version);
 
-    const assertBase = () => {
+    // Inside a transaction (`checked`, or the staging one): a refusal is an Effect failure its runner rolls back.
+    const baseHeld = (): Effect.Effect<void, KinuError> => Effect.gen(function* () {
       const latest = working(located(path));
       const latestRevision = contextRevision(latest.header.version);
 
       if (latest.header.contextId !== observed.header.contextId || latest.header.proposalId !== observed.header.proposalId || latest.header.turn !== observed.header.turn) {
-        throw new FileRefusalError('stale', 'context selection or pending edit changed');
+        return yield* Effect.fail(new FileRefusalError('stale', 'context selection or pending edit changed'));
       }
 
       if (latestRevision[5] !== observedRevision[5] || latestRevision[6] !== observedRevision[6] || latestRevision[7] !== observedRevision[7]) {
-        throw new FileRefusalError('stale', 'context execution ownership changed');
+        return yield* Effect.fail(new FileRefusalError('stale', 'context execution ownership changed'));
       }
 
       for (const [position, entry] of observed.entries.entries()) {
         const now = latest.entries[position];
 
         if (now?.entryId !== entry.entryId || now.messageId !== entry.messageId) {
-          throw new FileRefusalError('stale', 'observed context content changed');
+          return yield* Effect.fail(new FileRefusalError('stale', 'observed context content changed'));
         }
       }
-    };
+    });
 
-    assertBase();
-    const messages = resolved.stores.claims.history.messages;
+    const history = resolved.stores.claims.history;
+
+    history.checked(baseHeld);
+    const messages = history.messages;
     const lines = workingLines(data, observed, resolved.stores.claims.actorId);
     const { desired, originals } = await desiredEntries(lines, observed.entries, messages);
     const prepared = await prepareDesired(desired, messages);
     await assertPairsIntact(observed.entries, originals, desired, messages);
-    const history = resolved.stores.claims.history;
 
-    const assertOwner = () => {
-      const latest = working(located(path));
-
-      if (latest.target.author !== resolved.author) throw new KinuError('denied', 'context edit authority changed');
-      assertBase();
-    };
+    const owned = (): Effect.Effect<void, KinuError> => Effect.gen(function* () {
+      if (working(located(path)).target.author !== resolved.author) return yield* Effect.fail(new KinuError('denied', 'context edit authority changed'));
+      yield* baseHeld();
+    });
 
     const selection = observed.selection;
     const base = selection === null ? [] : history.context.entries(selection);
     const changes = changesAgainst(base, desired);
     const proposalId = crypto.randomUUID();
     history.stagePrepared({ id: proposalId, base: selection, expectedPending: observed.header.proposalId, author: resolved.author,
-      via: resolved.child ? 'owner' : 'file', cause: 'edit', turnId: observed.header.turn, changes }, prepared, assertOwner, resolved.stores.events);
+      via: resolved.child ? 'owner' : 'file', cause: 'edit', turnId: observed.header.turn, changes }, prepared, owned, resolved.stores.events);
 
     return { ok: true, revision: working(located(path)).header.version };
   };
