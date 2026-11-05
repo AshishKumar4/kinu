@@ -742,6 +742,42 @@ describe('the Drive', () => {
     });
   });
 
+  // A first visit reads My stuff to know where it lands. Shared draws nothing of My stuff, so landing there reads it no
+  // more; a read it did ask for came in after the page had moved on, and a step timed by "the next listing" read the
+  // one before it (product flow drive, 2026-11-05).
+  test('a first visit that lands on Shared reads My stuff only to know where it lands, and pressing My stuff reads it', async () => {
+    await withGallery(async (gallery) => {
+      // The whole app, where each place is a page of its own as the product draws them, with the library held so the
+      // first visit stays on its landing until released.
+      const recipient = await gallery.newPage();
+      const reads = () => recipient.evaluate(() => (document.documentElement.dataset.driveReads ?? '').split(' ').filter((read) => read !== '').length);
+      const twoFrames = () => recipient.evaluate(() => new Promise((painted) => { requestAnimationFrame(() => requestAnimationFrame(painted)); }));
+
+      try {
+        await recipient.setViewport(VIEWPORTS.desktop);
+        await recipient.goto(`${gallery.origin}/gallery.html?frame=whole&at=/drive&driveFixture=drive-recipient&libraryHold=1&bar=off`, { waitUntil: 'networkidle0' });
+        await recipient.waitForSelector('[data-drive-landing]');
+        await twoFrames();
+        const landing = await reads();
+
+        expect(landing).toBeGreaterThan(0);
+
+        await recipient.evaluate(() => { window.__releaseLibrary?.(); });
+        await recipient.waitForSelector('[data-drive-place="shared"][aria-current="page"]');
+        // The landing's reads were asked in the effects after its first paint; a mount's would be too.
+        await twoFrames();
+        expect(await reads()).toBe(landing);
+
+        await recipient.click('[data-drive-place="mine"]');
+        await recipient.waitForSelector('[data-drive-place="mine"][aria-current="page"]');
+        await recipient.waitForSelector('[data-drive-section]');
+        expect(await reads()).toBeGreaterThan(landing);
+      } finally {
+        await recipient.close();
+      }
+    });
+  });
+
   test('a new account holds only Skills, with the built-in skills in it, and one someone shared with lands on Shared', async () => {
     await withGallery(async (gallery) => {
       const empty = await freshPage(gallery, 'drive-empty', 'dark', 'mobile');

@@ -1959,7 +1959,13 @@ const MY_STUFF_PLACE = `[...document.querySelectorAll('${drivePlace('mine')}, [d
  */
 async function openMyStuff(page: Page): Promise<void> {
   await until(page, 'My stuff or its place', `document.querySelector('${DRIVE_NEW}') !== null || ${MY_STUFF_PLACE} !== undefined`);
-  await page.evaluate(`document.querySelector('${DRIVE_NEW}') === null && ${MY_STUFF_PLACE}?.click()`);
+
+  // Pressed, My stuff opens as its own page and lists its root. Every later step is timed by the listing it causes, so
+  // the press waits for its own: left in flight, it was the next step's, and each step after read the one before.
+  if (await page.evaluate(`document.querySelector('${DRIVE_NEW}') === null`) === true) {
+    await relisted(page, async () => { await page.evaluate(`${MY_STUFF_PLACE}?.click()`); });
+  }
+
   await until(page, "My stuff's New", `document.querySelector('${DRIVE_NEW}') !== null`);
 }
 
