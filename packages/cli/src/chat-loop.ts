@@ -25,8 +25,8 @@ import {
   printStepCut, printToolCall, printToolResult, printEvolutionEvent, createTurnStatus, formatFailure,
   ACCENT, DIM, MUTED, ERR, OK, WARN, type TurnStatus,
 } from './display';
-import { errnoCode, renderThrownChain, detach } from '@kinu.run/core/obs';
-import { Effect } from 'effect';
+import { chainOf, errnoCode, renderThrownChain, detach, hold } from '@kinu.run/core/obs';
+import { Cause, Effect, Exit, Result } from 'effect';
 import { initialInputState, READS_CHANGED_EVENT, reduceInput, type InputMachineEvent, type WorkMode } from '@kinu.run/core';
 import { clipText } from '@kinu.run/core/tui';
 
@@ -132,19 +132,17 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     const cap = Promise.withResolvers<void>();
     setTimeout(cap.resolve, EXIT_CLOSE_WAIT_MS);
 
-    try {
-      await Promise.race([client.close(), cap.promise]);
-    } catch (err) {
+    const closed = await hold(Effect.promise(() => Promise.race([client.close(), cap.promise])));
+
+    if (Exit.isFailure(closed)) {
       console.log(WARN('\n  This session did not close cleanly. Its last evolution window may not have flushed.'));
-      console.log(formatFailure({ cause: err }));
+      console.log(formatFailure({ cause: Cause.squash(closed.cause) }));
     }
 
     // A session daemon lives as long as the chat it was started for.
-    try {
-      killSessionDaemon();
-    } catch (err) {
-      console.log(formatFailure({ cause: err }));
-    }
+    const killed = Result.try(killSessionDaemon);
+
+    if (Result.isFailure(killed)) console.log(formatFailure({ cause: killed.failure }));
 
     console.log(DIM('\n  Goodbye.\n'));
     rl.close();
@@ -165,10 +163,10 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       return;
     }
 
-    try {
-      await onExit();
-    } catch (cause) {
-      console.log(`\n${formatFailure({ cause })}\n`);
+    const left = await hold(Effect.promise(onExit));
+
+    if (Exit.isFailure(left)) {
+      console.log(`\n${formatFailure({ cause: Cause.squash(left.cause) })}\n`);
       rl.close();
       process.exit(1);
     }
@@ -224,16 +222,14 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     else console.log(DIM('  ⧗ the turn had just finished, so this ran as the next message.'));
   };
 
-  rl.on('line', (line) => detach(Effect.promise(async () => { if (!busy() || consentAskPending || exiting) return;
-  const input = line.trim();
-  
-  if (!input) return;
-  
-  try {
-    await onMidTurnLine(input);
-  } catch (cause) {
-    console.log(`\n${formatFailure({ cause })}\n`);
-  } })));
+  rl.on('line', (line) => {
+    const input = line.trim();
+
+    if (!busy() || consentAskPending || exiting || !input) return;
+    detach(Effect.catchCause(Effect.promise(() => onMidTurnLine(input)), (failed) => Effect.sync(() => {
+      console.log(`\n${formatFailure({ cause: Cause.squash(failed) })}\n`);
+    })));
+  });
 
   await client.connect();
 
@@ -272,7 +268,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     interruptRequested = false;
     let consentWatch: ReturnType<typeof watchTerminalConsents> | null = null;
 
-    try {
+    const sending = Effect.promise(async () => {
       const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
 
       // Stopped while its attachments were read: it never leaves, and comes back to edit like what was queued.
@@ -297,16 +293,20 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
         resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text,
         { cwd: process.cwd(), ...(mode !== undefined && { mode }) },
       );
-    } catch (err) {
+    });
+    // The watch is read when the send ends: the send is what starts it.
+
+    const sent = await hold(Effect.ensuring(sending, Effect.sync(() => consentWatch?.stop())));
+
+    if (Exit.isFailure(sent)) {
       turnStatus.clear();
-      console.log(`\n${formatFailure({ cause: err })}\n`);
-    } finally {
-      consentWatch?.stop();
-      turnStatus.clear();
-      console.log('\n');
-      // Answered, admitted or refused: what waits behind it goes once nothing else runs.
-      dispatch({ type: 'send-ended' });
+      console.log(`\n${formatFailure({ cause: Cause.squash(sent.cause) })}\n`);
     }
+
+    turnStatus.clear();
+    console.log('\n');
+    // Answered, admitted or refused: what waits behind it goes once nothing else runs.
+    dispatch({ type: 'send-ended' });
   };
 
   const handleFork = async (ref: string | undefined) => {
@@ -385,45 +385,45 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     if (!input) continue;
 
     if (input.startsWith('/')) {
-      try {
+      const slash = await hold(Effect.promise(async (): Promise<'ok' | 'exit'> => {
         const outcome = await executeSlashCommand(client, input);
 
         if (outcome.kind === 'queue') {
           queueOrExplain(outcome.text, dispatch);
-          continue;
+
+          return 'ok';
         }
 
         if (outcome.kind === 'branch') {
           // Idle — there is no live turn to branch from; run it normally.
           await branchOrExplain(outcome.text, runTurn);
-          continue;
+
+          return 'ok';
         }
 
         if (outcome.kind === 'plan') {
           await planOrExplain(outcome.text, runTurn);
-          continue;
+
+          return 'ok';
         }
 
         if (outcome.kind === 'fork') {
           await handleFork(outcome.ref);
-          continue;
+
+          return 'ok';
         }
 
         if (outcome.kind === 'undo') {
           await runUndo(client, outcome.ref, handleFork);
-          continue;
+
+          return 'ok';
         }
 
-        const done = await applySlashOutcome(client, rl, outcome);
+        return applySlashOutcome(client, rl, outcome);
+      }));
 
-        if (done === 'exit') {
-          await onExit();
-
-          return;
-        }
-      } catch (err) {
-        console.log(`\n${formatFailure({ cause: err })}\n`);
-      }
+      if (Exit.isFailure(slash)) console.log(`\n${formatFailure({ cause: Cause.squash(slash.cause) })}\n`);
+      else if (slash.value === 'exit') break;
 
       continue;
     }
@@ -486,12 +486,16 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefi
     rl.once('close', onClose);
     signal?.addEventListener('abort', onAbort, { once: true });
 
-    try {
-      // Cancelled with the signal, so a question taken back leaves readline free for the next one.
+    // Cancelled with the signal, so a question taken back leaves readline free for the next one.
+    const asked = Result.try(() => {
       rl.question(prompt, { signal }, settle);
 
       if (prefill) rl.write(prefill);
-    } catch (error) {
+    });
+
+    if (Result.isFailure(asked)) {
+      const error = asked.failure;
+
       // Readline refuses a question once stdin has ended (ERR_USE_AFTER_CLOSE): piped input that ran out ends the chat,
       // which says goodbye. Anything else is said on stderr, as stdout carries only the conversation.
       if (!(error instanceof Error && errnoCode(error) === 'ERR_USE_AFTER_CLOSE')) {
@@ -550,16 +554,17 @@ async function promptDeviceConnect(rl: readline.Interface, opts: { allowDismiss:
 }
 
 async function runDeviceConnect(session: boolean): Promise<void> {
-  try {
+  const connected = await hold(Effect.promise(async () => {
     const auth = requireAuthConfig();
     const dots = waitingDots('  ');
     const result = await connectDevice(auth, { session, label: defaultDeviceName(), onWaiting: dots.onWaiting });
     dots.end();
-    const outcome = describeConnectOutcome(result, session);
-    console.log(`  ${outcome.ok ? OK('✓') : ERR('✗')} ${outcome.message}`);
-  } catch (err) {
-    console.log(`  ${ERR('✗')} ${renderThrownChain({ cause: err })}`);
-  }
+
+    return describeConnectOutcome(result, session);
+  }));
+
+  if (Exit.isFailure(connected)) console.log(`  ${ERR('✗')} ${chainOf(connected.cause)}`);
+  else console.log(`  ${connected.value.ok ? OK('✓') : ERR('✗')} ${connected.value.message}`);
 }
 
 function showText(outcome: Extract<SlashOutcome, { kind: 'text' }>): void {

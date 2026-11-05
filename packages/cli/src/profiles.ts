@@ -18,7 +18,7 @@ import * as v from 'valibot';
 import { ensureSecretDir, withConfigLock, writeSecretFile, type ProfileEnvelopeSource } from '@kinu.run/cli-backend';
 import { AGENT_HOME, loadConfigFile, requireStoredAuthConfig, updateConfigFile, sessionExpired } from './config';
 import { getCloudProfile, updateCloudProfile } from './cloud-api';
-import { diagnostics, toKinuError, settleSync, settle } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError, settleSync, settle } from '@kinu.run/core/obs';
 
 type ProfileAuthoritySource = { kind: 'local' } | { kind: 'account'; accountId: string };
 
@@ -34,21 +34,22 @@ export function resolveProfileAuthority(): ProfileAuthoritySource {
 
 /** Null if never imported; account-kind content here throws. */
 export function loadLocalProfileAuthority(): ProfileCatalogEnvelope | null {
-  return settleSync(Effect.gen(function* () {
-    const local = loadConfigFile().localProfile;
+  return settleSync(localProfileAuthority());
+}
 
-    if (!local) return null;
+function localProfileAuthority(): Effect.Effect<ProfileCatalogEnvelope | null, KinuError> {
+  const local = loadConfigFile().localProfile;
 
-    if (local.authority.kind !== 'local') {
-      return yield* Effect.die(new Error(
-        `config.json localProfile carries authority kind "${local.authority.kind}"; the local slot holds only locally authored catalogs`,
-      ));
-    }
+  if (!local) return Effect.succeed(null);
 
-    assertDigestMatches(local);
+  if (local.authority.kind !== 'local') {
+    return Effect.fail(new KinuError(
+      'bad_input',
+      `config.json localProfile carries authority kind "${local.authority.kind}"; the local slot holds only locally authored catalogs`,
+    ));
+  }
 
-    return local;
-  }));
+  return Effect.as(Effect.fromResult(digestMatches(local)), local);
 }
 
 /** Replaces whole; the version counts replacements. */
@@ -86,66 +87,79 @@ interface AccountProfileCache {
   accounts: Record<string, ProfileCatalogEnvelope>;
 }
 
-function readAccountCache(): AccountProfileCache {
-  const path = profileCachePath();
+/** The cache file, empty when absent; one that does not read as the cache is refused with how to fix it. */
+function readCacheFile(path: string): Result.Result<AccountProfileCache, KinuError> {
+  if (!existsSync(path)) return Result.succeed({ accounts: {} });
 
-  if (!existsSync(path)) return { accounts: {} };
-  let raw: unknown;
+  const text = readFileSync(path, 'utf-8');
 
-  try {
-    raw = JSON.parse(readFileSync(path, 'utf-8'));
-  } catch (error) {
-    throw new Error(`${path} is not valid JSON; fix or remove the profile cache.`, { cause: error });
-  }
+  const parsed = Result.try({
+    try: () => v.parse(AccountProfileCacheSchema, JSON.parse(text)),
+    catch: (cause) => cause,
+  });
 
-  try {
-    return v.parse(AccountProfileCacheSchema, raw);
-  } catch (error) {
-    throw new Error(`${path} is not a valid Kinu profile cache; fix or remove it.`, { cause: error });
-  }
+  if (Result.isSuccess(parsed)) return Result.succeed(parsed.success);
+
+  // Which way it failed is what says how to fix it.
+  const json = Result.isSuccess(Result.try(() => { JSON.parse(text); }));
+
+  return Result.fail(new KinuError('bad_input', json
+    ? `${path} is not a valid Kinu profile cache; fix or remove it.`
+    : `${path} is not valid JSON; fix or remove the profile cache.`, { cause: parsed.failure }));
 }
 
-/** Null if never fetched here; corrupt entries throw. */
-function loadCachedAccountProfile(accountId: string): ProfileCatalogEnvelope | null {
-  const entry = readAccountCache().accounts[accountId];
+/** Null if never fetched here; a corrupt entry fails. */
+function loadCachedAccountProfile(accountId: string): Effect.Effect<ProfileCatalogEnvelope | null, KinuError> {
+  return Effect.fromResult(Result.flatMap(readCacheFile(profileCachePath()), (cache) => {
+    const entry = cache.accounts[accountId];
 
-  if (!entry) return null;
-  assertCachedEntry(accountId, entry);
-
-  return entry;
+    return entry ? Result.map(cachedEntry(accountId, entry), () => entry) : Result.succeed(null);
+  }));
 }
 
-async function cacheAccountProfile(accountId: string, envelope: ProfileCatalogEnvelope): Promise<void> {
-  assertCachedEntry(accountId, envelope);
-  const path = profileCachePath();
-  await withConfigLock(path, () => {
-    const cache = readAccountCache();
-    const existing = cache.accounts[accountId];
+/** The cache with `envelope` in it; null when a newer version is already cached. Two catalogs at one version are refused. */
+function withEnvelope(cache: AccountProfileCache, accountId: string, envelope: ProfileCatalogEnvelope): Result.Result<AccountProfileCache | null, KinuError> {
+  const existing = cache.accounts[accountId];
 
-    if (existing) {
-      assertCachedEntry(accountId, existing);
+  if (!existing) return Result.succeed({ accounts: { ...cache.accounts, [accountId]: envelope } });
 
-      if (existing.version > envelope.version) return;
+  return Result.flatMap(cachedEntry(accountId, existing), () => {
+    if (existing.version > envelope.version) return Result.succeed(null);
 
-      if (existing.version === envelope.version && existing.digest !== envelope.digest) {
-        throw new Error(`profile cache received two catalogs for account ${accountId} at version ${envelope.version}`);
-      }
+    if (existing.version === envelope.version && existing.digest !== envelope.digest) {
+      return Result.fail(new KinuError('bad_input', `profile cache received two catalogs for account ${accountId} at version ${envelope.version}`));
     }
 
-    ensureSecretDir(AGENT_HOME);
-    writeSecretFile(path, `${JSON.stringify({ accounts: { ...cache.accounts, [accountId]: envelope } }, null, 2)}\n`);
+    return Result.succeed({ accounts: { ...cache.accounts, [accountId]: envelope } });
   });
 }
 
-function assertCachedEntry(accountId: string, envelope: ProfileCatalogEnvelope): void {
+/** Read, decided and written under the config lock, so two processes never interleave their writes. */
+function cacheAccountProfile(accountId: string, envelope: ProfileCatalogEnvelope): Effect.Effect<void, KinuError> {
+  const path = profileCachePath();
+
+  return Effect.flatMap(Effect.fromResult(cachedEntry(accountId, envelope)), () => Effect.flatMap(Effect.promise(() => withConfigLock(path, () => {
+    const next = Result.flatMap(readCacheFile(path), (cache) => withEnvelope(cache, accountId, envelope));
+
+    if (Result.isSuccess(next) && next.success !== null) {
+      ensureSecretDir(AGENT_HOME);
+      writeSecretFile(path, `${JSON.stringify(next.success, null, 2)}\n`);
+    }
+
+    return next;
+  })), (written) => Effect.asVoid(Effect.fromResult(written))));
+}
+
+function cachedEntry(accountId: string, envelope: ProfileCatalogEnvelope): Result.Result<void, KinuError> {
   const authority = envelope.authority;
 
   if (authority.kind !== 'account' || authority.accountId !== accountId) {
     const carried = authority.kind === 'account' ? authority.accountId : authority.kind;
-    throw new Error(`profile cache entry for ${accountId} carries mismatching authority "${carried}"`);
+
+    return Result.fail(new KinuError('bad_input', `profile cache entry for ${accountId} carries mismatching authority "${carried}"`));
   }
 
-  assertDigestMatches(envelope);
+  return digestMatches(envelope);
 }
 
 type AccountReadSource = 'server' | 'cache';
@@ -164,12 +178,12 @@ export function readAccountProfile(accountId: string): Promise<AccountRead> {
 
     return yield* Effect.catchCause(Effect.gen(function* () {
       const envelope = yield* Effect.promise(async () => getCloudProfile(auth.origin, auth.token));
-      yield* Effect.promise(async () => cacheAccountProfile(accountId, envelope));
+      yield* cacheAccountProfile(accountId, envelope);
 
       return { envelope, source: 'server' } satisfies AccountRead;
     }), (failed) => Effect.gen(function* () {
       const error = Cause.squash(failed);
-      const cached = loadCachedAccountProfile(accountId);
+      const cached = yield* loadCachedAccountProfile(accountId);
 
       if (!cached) return yield* Effect.failCause(failed);
       diagnostics.failure(
@@ -183,19 +197,19 @@ export function readAccountProfile(accountId: string): Promise<AccountRead> {
   }));
 }
 
-function readKnownProfile(): ProfileCatalogEnvelope | null {
+function readKnownProfile(): Effect.Effect<ProfileCatalogEnvelope | null, KinuError> {
   const authority = resolveProfileAuthority();
 
-  return authority.kind === 'local' ? loadLocalProfileAuthority() : loadCachedAccountProfile(authority.accountId);
+  return authority.kind === 'local' ? localProfileAuthority() : loadCachedAccountProfile(authority.accountId);
 }
 
 /** Never seeds or fetches. */
 export function readDefaultTier(): TierAssignment | null {
-  return readKnownProfile()?.catalog.tiers.default ?? null;
+  return settleSync(Effect.map(readKnownProfile(), (known) => known?.catalog.tiers.default ?? null));
 }
 
 export function readDefaultAccounts(): Readonly<Record<string, string>> {
-  return readKnownProfile()?.catalog.accounts ?? {};
+  return settleSync(Effect.map(readKnownProfile(), (known) => known?.catalog.accounts ?? {}));
 }
 
 export function createProfileAuthorityReader(): ProfileEnvelopeSource {
@@ -232,23 +246,24 @@ export function writeAccountProfile(
     const result = yield* Effect.promise(async () => updateCloudProfile(auth.origin, auth.token, { catalog, expectedVersion }));
 
     if (Result.isFailure(result)) {
-      return yield* Effect.die(new Error(
+      return yield* new KinuError(
+        'unavailable',
         `the account profile changed while this edit was open `
         + `(current version ${result.failure.currentVersion}, digest ${result.failure.currentDigest}); run the same command again`,
-      ));
+      );
     }
 
     const envelope = result.success;
-    yield* Effect.promise(async () => cacheAccountProfile(accountId, envelope));
+    yield* cacheAccountProfile(accountId, envelope);
 
     return envelope;
   }));
 }
 
-function assertDigestMatches(envelope: ProfileCatalogEnvelope): void {
+function digestMatches(envelope: ProfileCatalogEnvelope): Result.Result<void, KinuError> {
   const actual = profileCatalogDigest(envelope.catalog);
 
-  if (actual !== envelope.digest) {
-    throw new Error(`profile catalog digest mismatch: envelope says "${envelope.digest}", catalog hashes to "${actual}"`);
-  }
+  return actual === envelope.digest
+    ? Result.void
+    : Result.fail(new KinuError('bad_input', `profile catalog digest mismatch: envelope says "${envelope.digest}", catalog hashes to "${actual}"`));
 }

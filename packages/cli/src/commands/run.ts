@@ -30,7 +30,8 @@ import {
   readLocalMemory,
   searchLocalMemory,
 } from '../local-inspection';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { chainOf, hold, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { Cause, Effect, Exit, Result } from 'effect';
 
 /** `--no-transcript` arrives as `transcript: false`, not `noTranscript: true`. */
 interface TranscriptFlags {
@@ -65,7 +66,7 @@ export async function runCommand(name: string, promptParts: string[], opts: Agen
     return;
   }
 
-  const failed = await runOneShot({ json: outputMode === 'json', headless: false }, opts, async () => ({ target, rawPrompt }));
+  const failed = await runOneShot({ json: outputMode === 'json', headless: false }, opts, Effect.succeed({ target, rawPrompt }));
 
   await exitOneShot(failed);
 }
@@ -87,15 +88,17 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
     auth: opts.auth,
     noAutoEvolve: opts.autoEvolve === false,
     ...transcriptOptions(opts),
-  }, async () => {
-    const rawPrompt = await buildPrompt(promptParts);
+  }, Effect.gen(function* () {
+    const rawPrompt = yield* Effect.promise(() => buildPrompt(promptParts));
 
     if (!rawPrompt) {
-      throw new Error('A task prompt is required. Usage: kinu exec "task" [--workspace <name>] [--json]');
+      return yield* new KinuError('bad_input', 'A task prompt is required. Usage: kinu exec "task" [--workspace <name>] [--json]');
     }
 
-    return { target: resolveAgentTarget(resolveExecWorkspaceName(opts.workspace)), rawPrompt };
-  });
+    const workspace = yield* execWorkspaceName(opts.workspace);
+
+    return { target: resolveAgentTarget(workspace), rawPrompt };
+  }));
 
   await exitOneShot(failed);
 }
@@ -111,14 +114,15 @@ async function exitOneShot(failed: boolean): Promise<never> {
   process.exit(failed ? 1 : 0);
 }
 
-function resolveExecWorkspaceName(explicit?: string): string {
-  if (explicit?.trim()) return explicit.trim();
+function execWorkspaceName(explicit?: string): Effect.Effect<string, KinuError> {
+  if (explicit?.trim()) return Effect.succeed(explicit.trim());
   const agents = listConfiguredAgentRefs();
 
-  if (agents.length === 1) return agents[0].name;
-  throw new Error(agents.length === 0
+  if (agents.length === 1) return Effect.succeed(agents[0].name);
+
+  return Effect.fail(new KinuError('bad_input', agents.length === 0
     ? 'No workspaces configured. Create one with: kinu create <name>, or pass --workspace <name>.'
-    : `Multiple workspaces configured. Pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
+    : `Multiple workspaces configured. Pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`));
 }
 
 /** A one-shot run's outcome: its first failure, the one line --json reports for it. */
@@ -136,17 +140,17 @@ interface OneShotRun {
 async function runOneShot(
   surface: { json: boolean; headless: boolean },
   opts: AgentClientFlags & TranscriptFlags,
-  prepare: () => Promise<{ target: AgentTarget; rawPrompt: string }>,
+  prepare: Effect.Effect<{ target: AgentTarget; rawPrompt: string }, KinuError>,
 ): Promise<boolean> {
   const run: OneShotRun = { ...surface, failure: null };
+  const ran = await hold(Effect.flatMap(prepare, ({ target, rawPrompt }) => Effect.promise(() => oneShotTurn(target, rawPrompt, opts, run))));
 
-  try {
-    const { target, rawPrompt } = await prepare();
-    await oneShotTurn(target, rawPrompt, opts, run);
-  } catch (err) {
-    // On a terminal an error event already printed the first failure; a later throw is usually the same one.
-    if (!run.json && run.failure === null) printFailure({ cause: err });
-    run.failure ??= describeProviderError({ cause: err });
+  if (Exit.isFailure(ran)) {
+    const cause = Cause.squash(ran.cause);
+
+    // On a terminal an error event already printed the first failure; a later one is usually the same one.
+    if (!run.json && run.failure === null) printFailure({ cause });
+    run.failure ??= describeProviderError({ cause });
   }
 
   if (run.json && run.failure !== null) process.stdout.write(`${JSON.stringify({ type: 'error', message: run.failure })}\n`);
@@ -250,29 +254,30 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
 }
 
 /** Both backends answer `model` through the AgentClient contract. */
-async function modelRpcCommand(cmd: JsonObject, client: AgentClient): Promise<JsonValue> {
+function modelRpcCommand(cmd: JsonObject, client: AgentClient): Effect.Effect<JsonValue> {
   const spec = stringField(cmd, 'spec');
 
-  return decodeJsonValue({ value: spec ? await client.setModel(spec) : { spec: await client.getModelSpec() } });
+  return Effect.promise(async () => decodeJsonValue({ value: spec ? await client.setModel(spec) : { spec: await client.getModelSpec() } }));
 }
 
 async function respondToRpcCommand(
   cmd: JsonObject,
   client: AgentClient,
   output: (input: { value: unknown }) => void,
-  run: () => Promise<JsonValue>,
+  run: () => Effect.Effect<JsonValue, KinuError>,
 ): Promise<void> {
-  try {
-    const data = await (cmd.type === 'model' ? modelRpcCommand(cmd, client) : run());
-    output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: true, data } });
-  } catch (err) {
-    output({ value: { id: cmd.id, type: 'response', command: cmd.type, success: false, error: renderThrownChain({ cause: err }) } });
-  }
+  const answered = await hold(cmd.type === 'model' ? modelRpcCommand(cmd, client) : run());
+
+  output({
+    value: Exit.isSuccess(answered)
+      ? { id: cmd.id, type: 'response', command: cmd.type, success: true, data: answered.value }
+      : { id: cmd.id, type: 'response', command: cmd.type, success: false, error: chainOf(answered.cause) },
+  });
 }
 
 /** What differs between backends in the RPC loop: how a non-prompt command is answered and what a prompt reports. */
 interface RpcBackend {
-  readonly command: (cmd: JsonObject) => Promise<JsonValue>;
+  readonly command: (cmd: JsonObject) => Effect.Effect<JsonValue, KinuError>;
   readonly prompt: (id: JsonObject['id'], message: string) => Promise<void>;
 }
 
@@ -290,25 +295,27 @@ async function runRpc(
 
     for await (const line of rl) {
       if (!line.trim()) continue;
-      const cmd = parseRpc(line);
+      const parsed = parseRpc(line);
 
-      if (!cmd.ok) { output({ value: { type: 'response', success: false, error: cmd.error } }); continue; }
+      if (Result.isFailure(parsed)) { output({ value: { type: 'response', success: false, error: parsed.failure } }); continue; }
 
-      if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
+      const cmd = parsed.success;
 
-      if (cmd.value.type !== 'prompt') {
-        await respondToRpcCommand(cmd.value, client, output, () => backend.command(cmd.value));
+      if (cmd.type === 'exit' || cmd.type === 'shutdown') break;
+
+      if (cmd.type !== 'prompt') {
+        await respondToRpcCommand(cmd, client, output, () => backend.command(cmd));
         continue;
       }
 
-      const message = stringField(cmd.value, 'message') ?? '';
+      const message = stringField(cmd, 'message') ?? '';
 
       if (!message) {
-        output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
+        output({ value: { id: cmd.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
         continue;
       }
 
-      await backend.prompt(cmd.value.id, message);
+      await backend.prompt(cmd.id, message);
     }
   };
 
@@ -359,11 +366,9 @@ async function runRpc(
       },
     });
   } finally {
-    try {
-      await client.close();
-    } catch (error) {
-      process.stderr.write(`note: closing the workspace client failed: ${renderThrownChain({ cause: error })}\n`);
-    }
+    const closed = await hold(Effect.promise(() => client.close()));
+
+    if (Exit.isFailure(closed)) process.stderr.write(`note: closing the workspace client failed: ${chainOf(closed.cause)}\n`);
   }
 }
 
@@ -390,61 +395,64 @@ interface RpcInspection {
   readonly webhook?: (input: ReturnType<typeof webhookTriggerInput>) => Promise<JsonValue>;
 }
 
-type RpcHandler = (cmd: JsonObject, on: RpcInspection) => Promise<JsonValue>;
+type RpcHandler = (cmd: JsonObject, on: RpcInspection) => Effect.Effect<JsonValue, KinuError>;
+
+const refused = (message: string): Effect.Effect<never, KinuError> => Effect.fail(new KinuError('bad_input', message));
 
 const limitOf = (cmd: JsonObject, fallback: number): number => numberField(cmd, 'limit') ?? fallback;
 
 /** Each RPC command, its fields and defaults read once for every backend. */
 const RPC_COMMANDS = {
-  get_state: (_cmd, on) => on.state(),
-  state: (_cmd, on) => on.state(),
-  status: (_cmd, on) => on.status(),
-  tools: (_cmd, on) => on.tools(),
-  triggers: (_cmd, on) => on.triggers(),
-  jobs: (cmd, on) => on.jobs(limitOf(cmd, 20)),
-  memory: async (cmd, on) => {
+  get_state: (_cmd, on) => Effect.promise(() => on.state()),
+  state: (_cmd, on) => Effect.promise(() => on.state()),
+  status: (_cmd, on) => Effect.promise(() => on.status()),
+  tools: (_cmd, on) => Effect.promise(() => on.tools()),
+  triggers: (_cmd, on) => Effect.promise(() => on.triggers()),
+  jobs: (cmd, on) => Effect.promise(() => on.jobs(limitOf(cmd, 20))),
+  memory: (cmd, on) => {
     const query = stringField(cmd, 'query');
 
-    return query ? on.searchMemory(query, limitOf(cmd, 10)) : { content: await on.memory() };
+    return Effect.promise(async () => (query ? on.searchMemory(query, limitOf(cmd, 10)) : { content: await on.memory() }));
   },
   events: (cmd, on) => {
     const variant = stringField(cmd, 'variant');
     const since = numberField(cmd, 'since');
 
-    return on.events({ limit: limitOf(cmd, 50), ...(variant && { variant }), ...(since !== undefined && { since }) });
+    return Effect.promise(() => on.events({ limit: limitOf(cmd, 50), ...(variant && { variant }), ...(since !== undefined && { since }) }));
   },
-  timeline: (cmd, on) => on.timeline(limitOf(cmd, 100)),
+  timeline: (cmd, on) => Effect.promise(() => on.timeline(limitOf(cmd, 100))),
   swarm: (cmd, on) => {
     const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
 
-    return nodeId ? on.searchNode(nodeId) : on.searchTree();
+    return Effect.promise(() => (nodeId ? on.searchNode(nodeId) : on.searchTree()));
   },
-  heads: (cmd, on) => on.heads(limitOf(cmd, 20)),
-  executors: (_cmd, on) => on.executors(),
+  heads: (cmd, on) => Effect.promise(() => on.heads(limitOf(cmd, 20))),
+  executors: (_cmd, on) => Effect.promise(() => on.executors()),
   exec: (cmd, on) => {
     const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
     const command = stringField(cmd, 'command');
 
-    if (!executor) throw new Error('executor required');
+    if (!executor) return refused('executor required');
 
-    if (!command) throw new Error('command required');
+    if (!command) return refused('command required');
 
-    return on.exec(executor, command);
+    return Effect.promise(() => on.exec(executor, command));
   },
-  stop: (_cmd, on) => on.stop(),
+  stop: (_cmd, on) => Effect.promise(() => on.stop()),
   webhook: (cmd, on) => {
     const label = stringField(cmd, 'label');
 
-    if (!label) throw new Error('label required');
+    if (!label) return refused('label required');
+    const webhook = on.webhook;
 
-    if (on.webhook === undefined) throw new Error('Unsupported command');
+    if (webhook === undefined) return refused('Unsupported command');
 
-    return on.webhook(webhookTriggerInput(label, {
+    return Effect.promise(() => webhook(webhookTriggerInput(label, {
       authMode: stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode'),
       secret: stringField(cmd, 'secret'),
       contentType: stringField(cmd, 'contentType'),
       rateLimit: numberField(cmd, 'rateLimit'),
-    }));
+    })));
   },
 } satisfies Record<string, RpcHandler>;
 
@@ -453,12 +461,10 @@ type RpcCommand = keyof typeof RPC_COMMANDS;
 const isRpcCommand = (type: string): type is RpcCommand => Object.hasOwn(RPC_COMMANDS, type);
 
 /** One RPC command on one backend. */
-async function runRpcCommand(cmd: JsonObject, on: RpcInspection): Promise<JsonValue> {
+function runRpcCommand(cmd: JsonObject, on: RpcInspection): Effect.Effect<JsonValue, KinuError> {
   const type = commandType(cmd);
 
-  if (!isRpcCommand(type)) throw new Error('Unsupported command');
-
-  return await RPC_COMMANDS[type](cmd, on);
+  return isRpcCommand(type) ? RPC_COMMANDS[type](cmd, on) : refused('Unsupported command');
 }
 
 /** A cloud workspace's answers, as its RPC gives them. */
@@ -667,20 +673,17 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
   }
 }
 
-type RpcParseResult = { ok: true; value: JsonObject } | { ok: false; error: string };
-
 const RpcCommandSchema = v.objectWithRest({ type: v.string() }, JsonValueSchema);
 
-function parseRpc(line: string): RpcParseResult {
-  try {
-    const parsed = v.safeParse(RpcCommandSchema, parseJsonObject(line));
+/** The command a line carries, or why it carries none. */
+function parseRpc(line: string): Result.Result<JsonObject, string> {
+  const object = Result.try({ try: () => parseJsonObject(line), catch: (cause) => renderThrownChain({ cause }) });
 
-    return parsed.success
-      ? { ok: true, value: parsed.output }
-      : { ok: false, error: 'Command must be an object with type' };
-  } catch (err) {
-    return { ok: false, error: renderThrownChain({ cause: err }) };
-  }
+  return Result.flatMap(object, (value) => {
+    const parsed = v.safeParse(RpcCommandSchema, value);
+
+    return parsed.success ? Result.succeed(parsed.output) : Result.fail('Command must be an object with type');
+  });
 }
 
 /** Long enough for a real pipe to start delivering, short enough not to stall a harness that inherits an idle stdin. */
@@ -700,11 +703,9 @@ async function readOptionalStdin(): Promise<string> {
   ]);
 
   if (first === 'idle') {
-    try {
-      await reader.cancel();
-    } catch (cause) {
-      process.stderr.write(`note: releasing idle stdin failed: ${renderThrownChain({ cause })}\n`);
-    }
+    const released = await hold(Effect.promise(() => reader.cancel()));
+
+    if (Exit.isFailure(released)) process.stderr.write(`note: releasing idle stdin failed: ${chainOf(released.cause)}\n`);
 
     process.stderr.write(
       `note: stdin was open but idle for ${OPTIONAL_STDIN_GRACE_MS}ms and was ignored; ` +
