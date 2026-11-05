@@ -8,7 +8,7 @@ import { decodeJsonValue, JsonValueSchema, programNamespace } from '@kinu.run/co
 import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@kinu.run/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeFileSync, unlinkSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
 import { chainOf, classify, settle } from '@kinu.run/core/obs';
 import { Effect, Result } from 'effect';
@@ -90,7 +90,9 @@ async function runToCompletion(
   extension: string,
   cwd?: string,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const stem = join(tmpdir(), `kinu-exec-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  // A directory of its own, made only for its owner: no other local user can guess its path or plant a file there first.
+  const dir = mkdtempSync(join(tmpdir(), 'kinu-exec-'));
+  const stem = join(dir, 'program');
   const tmpFile = `${stem}${extension}`;
   const outFile = `${stem}.out`;
   const errFile = `${stem}.err`;
@@ -114,9 +116,7 @@ async function runToCompletion(
       stderr: await Bun.file(errFile).text(),
     };
   } finally {
-    rmSync(tmpFile, { force: true });
-    unlinkSync(outFile);
-    unlinkSync(errFile);
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 
