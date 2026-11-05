@@ -267,7 +267,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
         <Field label="Display name">
           <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
             {(value) => (
-              <TextInput value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} />
+              <TextInput aria-label="Display name" value={value} maxLength={WORKSPACE_TITLE_MAX} onChange={(e) => displayName.edit(e.target.value)} />
             )}
           </FieldState>
         </Field>

@@ -185,7 +185,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
 
   return (
     <Surface look="page" className="fixed inset-0 overflow-y-auto">
-      <div className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8">
+      <main className="mx-auto flex min-h-full w-full max-w-2xl flex-col justify-center px-4 py-8">
         <div className="mb-6 flex justify-center"><KinuLogo /></div>
         <h1 className="t-page-title text-center">Let's set up your account</h1>
 
@@ -278,7 +278,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
             )}
           </div>
         </Surface>
-      </div>
+      </main>
     </Surface>
   );
 }

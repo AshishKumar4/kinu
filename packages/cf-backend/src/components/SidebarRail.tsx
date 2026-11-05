@@ -61,7 +61,7 @@ export function SidebarRail({ folded }: { folded: boolean }) {
   };
 
   return (
-    <Surface look="chrome" as="aside"
+    <Surface look="chrome" as="aside" aria-label="Sidebar"
       className={`p-sidebar-rail relative hidden shrink-0 overflow-hidden border-r p-border md:block ${railOpen ? "w-60" : "w-14 cursor-pointer"}`}
       data-rail={railOpen ? "" : undefined}
       data-rail-collapsed={railOpen ? undefined : ""}

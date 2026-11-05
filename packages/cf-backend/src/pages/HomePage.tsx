@@ -66,7 +66,7 @@ function MissionHome() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <main className="mx-auto grid min-h-full w-full max-w-[var(--layout-home-frame)] grid-cols-1 content-start gap-6 px-6 py-[var(--layout-home-pad)] md:content-center md:px-8 lg:grid-cols-[var(--layout-home)]">
+      <div className="mx-auto grid min-h-full w-full max-w-[var(--layout-home-frame)] grid-cols-1 content-start gap-6 px-6 py-[var(--layout-home-pad)] md:content-center md:px-8 lg:grid-cols-[var(--layout-home)]">
         <header className="col-span-full mb-3">
           <h1 className="t-page-title t-hero p-text">
             What do you wanna work on?
@@ -104,7 +104,7 @@ function MissionHome() {
             </Surface>
           </section>
         )}
-      </main>
+      </div>
     </div>
   );
 }

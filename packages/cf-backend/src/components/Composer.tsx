@@ -327,9 +327,10 @@ export function Composer({
         {menu !== undefined && <SlashMenu menu={menu} />}
         {attachments && <AttachmentTray attachments={attachments} />}
 
-        {/* Shift+Enter is the field's own line break; Enter alone sends. */}
+        {/* Shift+Enter is the field's own line break; Enter alone sends. A textarea keeps its textbox role (no combobox:
+            ARIA allows that only on an input), so the menu is announced through its controls and its active option. */}
         <TextArea bare data-composer-field ref={textareaRef} value={value} onChange={(e) => onValueChange(e.target.value)}
-          {...slash !== undefined && { role: "combobox", "aria-autocomplete": "list", "aria-expanded": menu !== undefined, "aria-controls": slash.listId }}
+          {...slash !== undefined && { "aria-autocomplete": "list", "aria-controls": slash.listId }}
           aria-activedescendant={menu?.highlighted === undefined ? undefined : menu.optionId(menu.highlighted)}
           onKeyDown={(e) => {
             if (composing(e.nativeEvent)) return;
