@@ -4,7 +4,7 @@
  * caller disposes the answer: on staging f62dfcb9 that held AgentWorkspaceRPC calls open a median of 82 s (up to
  * 19 min), and the runtime reported answered calls as hung when it closed them. A list carries the disposer too;
  * the platform let a relay end as it handed one on, and the list leaves as a copy all the same, so no relayed answer
- * carries a received disposer. The measurements are in packages/cf-backend/tests/workerd/relayed-answer.test.ts.
+ * carries a received disposer. The measurements are in packages/cf-backend/tests/workerd/second/relayed-answer.test.ts.
  */
 export async function relayedAnswer<T>(received: Promise<T>): Promise<T> {
   const answer = await received;

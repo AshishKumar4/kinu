@@ -115,7 +115,7 @@ export function initMailboxTables(sql: SqlExec): void {
   sql.exec('CREATE INDEX IF NOT EXISTS mail_attachments_message ON mail_attachments (message_id)');
   sql.exec('CREATE INDEX IF NOT EXISTS mail_attachments_digest ON mail_attachments (digest)');
   // Search: regenerable from the messages and their R2 parts; rowid is mail_messages' rowid. contentless_delete and
-  // long MATCH queries were measured in workerd and on a deployed object (tests/workerd/mail-search.test.ts).
+  // long MATCH queries were measured in workerd and on a deployed object (tests/workerd/second/mail-search.test.ts).
   // Bytes no row names any more, kept until `due_at`: past the 30 days a restore of this object reaches, so a mailbox
   // restored to before the emptying finds the bytes its rows name (ARCHITECTURE-DECISIONS W7).
   sql.exec(`

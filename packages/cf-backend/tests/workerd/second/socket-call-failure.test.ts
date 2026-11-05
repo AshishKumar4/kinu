@@ -6,7 +6,7 @@
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
-import { PROBE_REFUSAL } from './socket-call-probe';
+import { PROBE_REFUSAL } from '../socket-call-probe';
 
 const RpcFrameSchema = v.object({ type: v.literal('rpc'), id: v.string(), success: v.boolean(), error: v.optional(v.string()) });
 

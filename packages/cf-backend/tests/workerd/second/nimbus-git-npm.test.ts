@@ -6,8 +6,8 @@
  */
 import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
-import { GIT_BRANCH, GIT_COMMIT_MESSAGE, GIT_FILE, GIT_FILE_CONTENT, GIT_REPO_PATH } from './git-http-fake';
-import { REGISTRY_ENTRY, REGISTRY_FANOUT_PKGS, REGISTRY_HOST, REGISTRY_MANIFEST, REGISTRY_PKG } from './npm-registry-fake';
+import { GIT_BRANCH, GIT_COMMIT_MESSAGE, GIT_FILE, GIT_FILE_CONTENT, GIT_REPO_PATH } from '../git-http-fake';
+import { REGISTRY_ENTRY, REGISTRY_FANOUT_PKGS, REGISTRY_HOST, REGISTRY_MANIFEST, REGISTRY_PKG } from '../npm-registry-fake';
 
 const subject = (name: string) => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName(name));
 

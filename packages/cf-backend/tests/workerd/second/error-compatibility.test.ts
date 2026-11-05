@@ -3,8 +3,8 @@ import { expect, test } from 'vitest';
 import { Effect } from 'effect';
 import { endedStandingOf } from '@kinu.run/core';
 import { authoredRefusal, classifyErrorCode, KinuError, settle } from '@kinu.run/core/obs';
-import { createWorkersTracer } from '../../src/obs/cf-tracer';
-import { DevboxError, devboxFailure } from '../../../devbox/src/errors';
+import { createWorkersTracer } from '../../../src/obs/cf-tracer';
+import { DevboxError, devboxFailure } from '../../../../devbox/src/errors';
 
 // Compat 2026-09-28: native RPC carries own fields, not subclasses; rejection checks run after the microtask checkpoint.
 test('RPC preserves classification and cause without preserving the subclass', async () => {
