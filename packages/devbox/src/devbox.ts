@@ -972,9 +972,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     });
   }
 
-  async #startNative(inputs: StartInputs, source: StartSource | undefined): Promise<void> {
-    if (this.#closed) refuse(new DevboxError("io", DESTROYED_START));
-    const container = this.#container();
+  #startNative(inputs: StartInputs, source: StartSource | undefined): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      if (this.#closed) return yield* Effect.fail(new DevboxError("io", DESTROYED_START));
+
+      yield* Effect.promise(() => this.#startNativeOn(this.#container(), inputs, source));
+    });
+  }
+
+  /** The start on `container`: what an admission a teardown has not closed runs. */
+  async #startNativeOn(container: Container, inputs: StartInputs, source: StartSource | undefined): Promise<void> {
     const generation = this.#generation;
     // No await separates teardown admission from the platform start. Native exec never starts one.
     const wasRunning = container.running;
@@ -1542,16 +1549,16 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const startsContainer = this.ctx.container?.running !== true;
     this.#trace('startup.admit.enter', { generation, running: !startsContainer });
 
-    const admitted = await caught(async () => {
+    const admitted = await hold(Effect.gen({ self: this }, function* () {
       const startable = startsContainer ? this.#startable() : undefined;
 
       if (startable instanceof DevboxError) {
-        await this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: startable });
+        yield* Effect.promise(() => this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: startable }));
 
         return;
       }
 
-      const source = startable === undefined ? undefined : await this.#startSource(startable);
+      const source = startable === undefined ? undefined : yield* Effect.promise(() => this.#startSource(startable));
 
       if (source?.kind === 'pending') {
         this.#awaitingGolden = source;
@@ -1560,7 +1567,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         return;
       }
 
-      await this.#startNative(inputs, source);
+      yield* this.#startNative(inputs, source);
 
       if (this.#awaitingGolden !== undefined) return;
 
@@ -1568,9 +1575,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
       // `golden` means the box's own snapshot was missing: its restore rebuilds from the backup, the slow start.
       this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation), source: source?.kind ?? 'running' });
-    });
+    }));
 
-    if ('cause' in admitted) await this.#refuseAdmission({ generation, since, startsContainer, inputs }, admitted);
+    if (Exit.isFailure(admitted)) await this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: Cause.squash(admitted.cause) });
   }
 
   /** An admission that did not start: retried only where waiting can change the answer, else parked once (D94, amending
