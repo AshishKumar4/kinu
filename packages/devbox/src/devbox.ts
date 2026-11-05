@@ -1402,66 +1402,70 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return { cause: new DevboxError("io", reason) };
     }
 
-    const ran = await caught(async () => {
-      await this.#stampBootId(generation);
+    const ran = await hold(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(() => this.#stampBootId(generation));
 
-      if (this.#owns(generation)) await this.#attachAndRestore(generation, claim, steps);
-    });
+      if (this.#owns(generation)) yield* this.#attachAndRestore(generation, claim, steps);
+    }));
 
-    if ('value' in ran) return undefined;
+    if (Exit.isSuccess(ran)) return undefined;
+    const failed = { cause: Cause.squash(ran.cause) };
 
     // Fenced as `#recover` is: a superseded attempt clears nothing its successor holds.
-    if (!this.#stoppedUnder(started)) await this.#recover(generation, claim, ran);
+    if (!this.#stoppedUnder(started)) await this.#recover(generation, claim, failed);
     else if (this.#owns(generation)) this.#invalidateGeneration();
 
-    return ran;
+    return failed;
   }
 
   /** One budget for all phases (D19): an attach overrun replaces the identity; a later step's
    *  exhaustion is reported in `unready` and never re-arms. */
-  async #attachAndRestore(
+  #attachAndRestore(
     generation: number,
     claim: RecoveryClaim,
     steps: RestoreSteps,
-  ): Promise<void> {
-    const outcome = await steps.attach(
-      async () => await this.#requireStorage().attach(),
-      (failure) => {
-        console.error(
-          '[devbox] the attach overran its budget and was abandoned; it later settled '
-          + `with: ${describe({ cause: failure.cause })}`,
-        );
-      },
-    );
+  ): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const outcome = yield* steps.attach(
+        async () => await this.#requireStorage().attach(),
+        (failure) => {
+          console.error(
+            '[devbox] the attach overran its budget and was abandoned; it later settled '
+            + `with: ${describe({ cause: failure.cause })}`,
+          );
+        },
+      );
 
-    // The attach is the long await and everything after is a write: the generation may have
-    // turned over, leaving an outcome for a container that no longer exists.
-    if (!this.#owns(generation)) return;
-    this.#stampPhase('attached');
-    // Written only by a drive that reaches `attached` through an attach; a service-only rerun
-    // keeps its generation's record.
-    await this.ctx.storage.put(LAST_ATTACH_KEY, outcome);
-    console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
-    // Boot proof and durable settlement still need their shares after services.
-    steps.declare(2);
-    const restored = await this.#restartWorkloads(generation, steps);
+      // The attach is the long await and everything after is a write: the generation may have
+      // turned over, leaving an outcome for a container that no longer exists.
+      if (!this.#owns(generation)) return;
+      this.#stampPhase('attached');
+      // Written only by a drive that reaches `attached` through an attach; a service-only rerun
+      // keeps its generation's record.
+      yield* Effect.promise(() => this.ctx.storage.put(LAST_ATTACH_KEY, outcome));
+      console.log(`[devbox] attach ${outcome.kind}: ${outcome.detail}`);
+      // Boot proof and durable settlement still need their shares after services.
+      steps.declare(2);
+      const restored = yield* Effect.promise(() => this.#restartWorkloads(generation, steps));
 
-    if (!this.#owns(generation)) return;
+      if (!this.#owns(generation)) return;
 
-    // Re-prove the early instance stamp before publishing its settled phase.
-    const stamped = await steps.run(
-      async () => await this.#stampBootId(generation),
-      logLate('the boot-id stamp'),
-    );
+      // Re-prove the early instance stamp before publishing its settled phase.
+      const stamped = yield* Effect.promise(() => steps.run(
+        async () => await this.#stampBootId(generation),
+        logLate('the boot-id stamp'),
+      ));
 
-    if (!this.#owns(generation)) return;
-    // PUBLISHED, not just held: the durable row is what a post-reset activation
-    // adopts, and the stamp above is what it checks the container against.
-    await this.#settle(settledRestoration(restored, stamped.kind));
-    // Only a successful attempt clears the ladder, and only while the row still names it: a
-    // partial restore (work dir but not every service) still clears it; `repair` reports the rest.
-    await this.#releaseRecovery(claim, generation);
+      if (!this.#owns(generation)) return;
+      // PUBLISHED, not just held: the durable row is what a post-reset activation
+      // adopts, and the stamp above is what it checks the container against.
+      yield* Effect.promise(() => this.#settle(settledRestoration(restored, stamped.kind)));
+      // Only a successful attempt clears the ladder, and only while the row still names it: a
+      // partial restore (work dir but not every service) still clears it; `repair` reports the rest.
+      yield* Effect.promise(() => this.#releaseRecovery(claim, generation));
+    });
   }
+
 
   /** Only the start coordinator opens restoration; recovery first retires unsafe work. */
   devboxStartup(): Promise<void> {

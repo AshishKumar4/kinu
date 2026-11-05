@@ -313,7 +313,7 @@ describe('an incident is written off only when the host says it LANDED', () => {
 describe('the attach budget', () => {
   const attachWithin = <T>(
     budgetMs: number, work: () => Promise<T>, onOverrun: (failure: { readonly cause: unknown }) => void,
-  ): Promise<T> => racedRestoreSteps(openStartBudget(budgetMs)).attach(work, onOverrun);
+  ): Promise<T> => settle(racedRestoreSteps(openStartBudget(budgetMs)).attach(work, onOverrun));
 
   test('work that overruns is abandoned, and its late failure is still reported', async () => {
     const told = Promise.withResolvers<string>();
