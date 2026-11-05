@@ -1,7 +1,7 @@
 // withBackgroundThreshold: races a tool's work against the surface's detach threshold. Inline if it
 // finishes first; otherwise `deps.onThreshold` takes the live promise. A refused detach keeps waiting.
-import { Effect, Exit } from 'effect';
-import { hold, settle } from '../obs/effect';
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
@@ -83,8 +83,9 @@ function detachOn<T>(input: {
   readonly moved: () => Moved;
 }): Effect.Effect<T | BackgroundHandle> {
   return Effect.gen(function* () {
-    // An exit either way, so the race's loser is observed and never an unhandled rejection.
-    const settled = hold(Effect.promise(() => input.promise));
+    // An outcome either way, so the race's loser is observed and never an unhandled rejection; one hop, as a trigger
+    // resolved already beats work that settles in the same tick.
+    const settled = Promise.allSettled([input.promise]);
     const winner = yield* Effect.promise(() => Promise.race([settled, input.trigger]));
 
     input.release?.();
@@ -99,7 +100,9 @@ function detachOn<T>(input: {
 
     const foreground = winner ?? (yield* Effect.promise(() => settled));
 
-    return Exit.isSuccess(foreground) ? foreground.value : yield* Effect.failCause(foreground.cause);
+    const [outcome] = foreground;
+
+    return outcome.status === 'fulfilled' ? outcome.value : yield* Effect.die(outcome.reason);
   });
 }
 

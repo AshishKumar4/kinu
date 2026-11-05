@@ -1062,14 +1062,18 @@ export class BackgroundJobRunner {
     this.runToSettlement(job.id, job.kind, () => resume.redrive(job.kind, this.storedInput(job.id), job.workMode, controller.signal));
   }
 
+  /** A row that is not JSON is the raw text it holds; any other failure reading it is a fault. */
   private storedInput(jobId: string): JsonValue {
     const raw = this.deps.store.getInput(jobId);
 
     if (raw === null) return null;
+    // Boxed, so a stored JSON `null` stays null rather than reading as the tolerated failure.
+    const parsed = tolerate(() => ({ value: parseJsonValue(raw) }), 'malformed-input');
 
-    // A row that is not JSON is the raw text it holds.
-    return tolerate(() => parseJsonValue(raw), 'malformed-input') ?? raw;
+    return parsed === undefined ? raw : parsed.value;
   }
+
+
 
   /** Sink errors must not reach the fiber or recovery path. */
   private notifySettled(jobId: string): void {
