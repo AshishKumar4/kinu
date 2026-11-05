@@ -500,7 +500,12 @@ async function answer(request: Request, env: Env, ctx: ExecutionContext): Promis
     if (url.pathname === '/cleanup') return Response.json(await cleared(env, name));
 
     return await contractRoute(url, name, box, body);
-  } catch (cause) { return Response.json({ error: describeThrown({ cause }) }, { status: 500 }); }
+  } catch (cause) {
+    // The platform's own flags on a lost call, so a red says whether it judged the call safe to ask again.
+    const flags = v.safeParse(v.object({ retryable: v.optional(v.boolean()), overloaded: v.optional(v.boolean()) }), cause);
+
+    return Response.json({ error: describeThrown({ cause }), platform: flags.success ? flags.output : null }, { status: 500 });
+  }
 }
 
 export default {

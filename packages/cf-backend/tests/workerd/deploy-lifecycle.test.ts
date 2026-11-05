@@ -615,6 +615,43 @@ describe('the deploy page', () => {
     });
   });
 
+  // Owner, 2026-10-31: Connectors are an optional step before Deploy. The apps are made for the address the Kinu will
+  // have, held on the sign-in, and bound by its first run; nothing touches the account until then.
+  it('holds GitHub\'s app and Google\'s client made before a Kinu exists, and its first run binds both', async () => {
+    await env.DEPLOY_FAKE.reset();
+
+    const cookie = await signedInPage();
+    const kinu = { account: DEPLOY_FAKE_ACCOUNT, name: 'kinu' };
+    const asked = await page(cookie, 'POST', '/api/deploy/github', JSON.stringify({ ...kinu, before: { kind: 'workers' } }));
+    const form = v.parse(v.object({ action: v.string(), manifest: v.string() }), JSON.parse(asked.body));
+    const state = new URL(form.action).searchParams.get('state') ?? '';
+    const bound = asked.setCookie.find((each) => each.startsWith(`${DEPLOY_STATE_COOKIE}=`))?.split(';')[0] ?? '';
+    const made = await env.DEPLOY_DOOR_PROBE.hit('GET', `/deploy/github?code=${DEPLOY_FAKE_GITHUB_CODE}&state=${encodeURIComponent(state)}`, { cookie: `${bound}; ${cookie}` });
+    const google = await page(cookie, 'POST', '/api/deploy/google', JSON.stringify({ ...kinu, client: { clientId: '123-abc.apps.googleusercontent.com', clientSecret: 'GOCSPX-secret' }, before: true }));
+    const held = JSON.parse((await page(cookie, 'GET', `/api/deploy/connectors?account=${DEPLOY_FAKE_ACCOUNT}&name=kinu`)).body);
+    const untouched = (await env.DEPLOY_FAKE.state()).secrets;
+    // A domain the run still has to add has no address yet, so no app can name it.
+    const early = await page(cookie, 'POST', '/api/deploy/github', JSON.stringify({ ...kinu, before: { kind: 'domain', domain: 'elsewhere.example', host: 'kinu.elsewhere.example' } }));
+
+    await page(cookie, 'POST', '/api/deploy/runs', newKinu);
+    await pageRun().settledAfter(['done']);
+    const { versionSecrets } = await env.DEPLOY_FAKE.state();
+
+    expect({
+      manifest: v.parse(v.object({ url: v.string() }), JSON.parse(form.manifest)).url,
+      made: { status: made.status, location: made.location }, google: google.status, held,
+      untouched: [untouched.MCP_GITHUB_CLIENT_ID, untouched.MCP_GOOGLE_CLIENT_ID], early: early.status,
+      // The version the run uploaded carries them as its own secrets.
+      bound: versionSecrets.filter((name) => name.startsWith('MCP_')).sort(),
+    }).toEqual({
+      manifest: `https://${ADDRESS}`,
+      made: { status: 302, location: '/deploy?github=kinu-probe&kinu=kinu&before=1' }, google: 200,
+      held: { github: 'kinu-probe', google: true, origin: `https://${ADDRESS}` },
+      untouched: [undefined, undefined], early: 400,
+      bound: ['MCP_GITHUB_CLIENT_ID', 'MCP_GITHUB_CLIENT_SECRET', 'MCP_GOOGLE_CLIENT_ID', 'MCP_GOOGLE_CLIENT_SECRET'],
+    });
+  });
+
   it('offers a Kinu on an older build its update and installs it in place; one on the channel\'s build is offered nothing', async () => {
     await env.DEPLOY_FAKE.reset();
     await env.DEPLOY_FAKE.existing();

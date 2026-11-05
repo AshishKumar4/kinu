@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Effect } from "effect";
 import { useSearchParams } from "react-router-dom";
 import type { ConnectEnded } from "@kinu.run/core";
-import type { DeployedKinu, DeployRunRequest, DeployRunView, DeploySession } from "@kinu.run/core/deploy";
+import type { AddressAsk, DeployedKinu, DeployRunRequest, DeployRunView, DeploySession } from "@kinu.run/core/deploy";
 import { detach } from "@kinu.run/core/obs";
 import { Loader } from "@/components/ui/Loader";
 import { beginConnect } from "@/lib/connect-window";
@@ -43,9 +43,9 @@ function githubOf(params: URLSearchParams): GithubReturn | null {
   const app = params.get("github") ?? "";
   const error = params.get("github_error") ?? "";
 
-  if (app !== "") return { made: app, kinu: params.get("kinu") ?? "" };
+  if (app !== "") return { made: app, kinu: params.get("kinu") ?? "", before: params.get("before") === "1" };
 
-  return error === "" ? null : { error };
+  return error === "" ? null : { error, before: params.get("before") === "1" };
 }
 
 /** A run that waits on a sign-in to carry on: one paused past its grant, or one whose domain is ready to move onto. */
@@ -156,8 +156,13 @@ export default function DeployPage() {
       }
     }
 
-    go(session.deployments.length > 0 ? { kind: "manage", session } : { kind: "ready", session, readyFor: { kind: "new" } });
-  }), [follow, go]);
+    // Back from GitHub for a Kinu not deployed yet: to the screen it left, saying why when GitHub made no app.
+    const before = github?.before === true;
+
+    go(session.deployments.length > 0 && !before ? { kind: "manage", session } : { kind: "ready", session, readyFor: { kind: "new" } });
+
+    if (before && "error" in github) setRefusal({ error: `Couldn't connect GitHub: ${github.error}`, status: 0, need: null, refused: null });
+  }), [follow, github, go]);
 
   // `here` is false once the page has left (or mounted again): an arrival in flight then does nothing more, so a run is
   // carried on at most once however often the page arrives.
@@ -303,6 +308,17 @@ export default function DeployPage() {
     return Effect.sync(() => go({ kind: "ready", session, readyFor: { kind: picked, kinu } }));
   };
 
+  // The tab goes to GitHub for a Kinu not deployed yet, and comes back to its Ready screen once the app is made.
+  const githubBefore = (account: string, name: string, address: AddressAsk) => Effect.gen(function* () {
+    setDeploying(true);
+    setRefusal(null);
+    const refused = yield* makeGithubApp(account, name, address);
+
+    if (refused === null) return;
+    setDeploying(false);
+    setRefusal(refused);
+  });
+
   const backTo = (session: DeploySession) => go(session.deployments.length > 0 ? { kind: "manage", session } : { kind: "start" });
 
   // The Kinus read again in place, the one open kept open: its update offer and connectors as they are now.
@@ -349,7 +365,8 @@ export default function DeployPage() {
 
     return (
       <DeployReady session={session} readyFor={readyFor} deploying={deploying} refusal={refusal} refusalActions={refusalActions}
-        onDeploy={(request) => detach(deploy(request, request.kind))} onBack={() => backTo(session)} />
+        onDeploy={(request) => detach(deploy(request, request.kind))} onConnectGithub={(account, name, address) => detach(githubBefore(account, name, address))}
+        onBack={() => backTo(session)} />
     );
   }
 

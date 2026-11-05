@@ -4,10 +4,12 @@
  * changes an existing Kinu: its Domain step, or mail at its domain.
  */
 import { useCallback, useEffect, useState } from "react";
+import * as v from "valibot";
+import { tolerate } from "@kinu.run/core/obs";
 import { CpuIcon, EnvelopeSimpleIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
 import {
   DEFAULT_INSTANCE_NAME, gatewayCreditsUrl,
-  type DeployAction, type DeployChoice, type DeployedKinu, type DeployPreflight, type DeployRunRequest, type DeploySession, type DeployZone,
+  type AddressAsk, type DeployAction, type DeployChoice, type DeployedKinu, type DeployPreflight, type DeployRunRequest, type DeploySession, type DeployZone,
   type GatewayCredits, type MailPreview, type MailPurpose,
 } from "@kinu.run/core/deploy";
 import { fmtUsd } from "@kinu.run/core";
@@ -19,6 +21,7 @@ import {
   DeployShell, Disclosure, Extra, HandOff, Lack, Line, NeedBox, Refused, Unreadable, WhatGetsMade, type RefusalActions,
 } from "@/components/deploy/DeployParts";
 import { DeployDomain, type PickedDomain } from "@/components/deploy/DeployDomain";
+import { ConnectorsBefore } from "@/components/deploy/DeployConnectors";
 import { useDeployRead, type Reading } from "@/components/deploy/use-deploy-read";
 import { readMailPreview, readPreflight, type DeployRefused } from "@/lib/deploy-page-api";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -40,6 +43,9 @@ interface ReadyActions extends RefusalActions {
   readonly deploying: boolean;
   readonly refusal: DeployRefused | null;
 }
+
+/** GitHub's app made for a Kinu not deployed yet: the tab goes to GitHub and comes back to this screen. */
+export type ConnectGithubBefore = (account: string, name: string, address: AddressAsk) => void;
 
 const PURPOSE: Record<MailPurpose, string> = {
   receive: "Brings its mail to Cloudflare",
@@ -139,6 +145,28 @@ interface Choices {
 }
 
 const NO_CHOICES: Choices = { domain: null, computer: false, mail: null };
+
+/** What a new Kinu's screen held when its tab went to GitHub, to stand again when the tab comes back. */
+const CHOICES_KEY = "kinu-deploy-choices";
+
+const HeldChoicesSchema = v.object({
+  account: v.string(),
+  choices: v.object({
+    domain: v.nullable(v.object({ name: v.string(), zone: v.nullable(v.string()), host: v.string() })),
+    computer: v.boolean(),
+    mail: v.nullable(v.string()),
+  }),
+});
+
+/** The choices this tab held for an account before it went to GitHub, taken once. */
+function heldChoices(): v.InferOutput<typeof HeldChoicesSchema> | null {
+  const raw = sessionStorage.getItem(CHOICES_KEY);
+
+  sessionStorage.removeItem(CHOICES_KEY);
+  const parsed = v.safeParse(HeldChoicesSchema, raw === null ? null : tolerate(() => JSON.parse(raw), 'malformed-input'));
+
+  return parsed.success ? parsed.output : null;
+}
 
 /** The hand-off a credits purchase is: the account is read again until its credits change. */
 const CREDITS = "credits";
@@ -285,15 +313,16 @@ function MailExtra({ account, domain, mail, onMail, onReady, onDomain }: {
   );
 }
 
+/** Where the chosen Kinu answers, as the run is asked it. */
+function addressOf(picked: PickedDomain | null): AddressAsk {
+  return picked === null
+    ? { kind: "workers" }
+    : { kind: "domain", ...(picked.zone === null ? { domain: picked.name } : { zone: picked.zone }), host: picked.host };
+}
+
 /** Asked of the run for what was chosen. */
 function requestOf(account: string, name: string, choices: Choices): DeployRunRequest {
-  const picked = choices.domain;
-
-  const address = picked === null
-    ? { kind: "workers" as const }
-    : { kind: "domain" as const, ...(picked.zone === null ? { domain: picked.name } : { zone: picked.zone }), host: picked.host };
-
-  return { kind: "new", account, name, address, computer: choices.computer, mail: choices.mail === null ? null : { host: choices.mail } };
+  return { kind: "new", account, name, address: addressOf(choices.domain), computer: choices.computer, mail: choices.mail === null ? null : { host: choices.mail } };
 }
 
 /** A new Kinu's Domain step: a domain picked, or workers.dev kept (`null`). */
@@ -315,7 +344,9 @@ function NewDomain({ account, name, preflight, onPick, onBack }: {
   );
 }
 
-function NewKinu({ session, actions, onDeploy, onBack }: { session: DeploySession; actions: ReadyActions; onDeploy: (asked: DeployRunRequest) => void; onBack: () => void }) {
+function NewKinu({ session, actions, onDeploy, onConnectGithub, onBack }: {
+  session: DeploySession; actions: ReadyActions; onDeploy: (asked: DeployRunRequest) => void; onConnectGithub: ConnectGithubBefore; onBack: () => void;
+}) {
   if (session.accounts.length === 0) {
     return (
       <DeployShell dot={1} screen="ready" title="Ready to deploy"
@@ -325,7 +356,7 @@ function NewKinu({ session, actions, onDeploy, onBack }: { session: DeploySessio
     );
   }
 
-  return <ForAccount session={session} actions={actions} onDeploy={onDeploy} onBack={onBack} />;
+  return <ForAccount session={session} actions={actions} onDeploy={onDeploy} onConnectGithub={onConnectGithub} onBack={onBack} />;
 }
 
 /** Every lack this account was read with on this visit, in the order first read: one met since is shown done. */
@@ -356,15 +387,18 @@ function ReadyFoot({ back, cost, deploying, blocked, onDeploy, onBack }: {
   );
 }
 
-function ForAccount({ session, actions, onDeploy, onBack }: { session: DeploySession; actions: ReadyActions; onDeploy: (asked: DeployRunRequest) => void; onBack: () => void }) {
-  const [account, setAccount] = useState(session.accounts[0]?.id ?? "");
+function ForAccount({ session, actions, onDeploy, onConnectGithub, onBack }: {
+  session: DeploySession; actions: ReadyActions; onDeploy: (asked: DeployRunRequest) => void; onConnectGithub: ConnectGithubBefore; onBack: () => void;
+}) {
+  const [returned] = useState(heldChoices);
+  const [account, setAccount] = useState(returned?.account ?? session.accounts[0]?.id ?? "");
   // The need a hand-off was opened for: the account is read again every few seconds until it is met.
   const [handedOff, setHandedOff] = useState<string | null>(null);
   // The credits a purchase was opened at: any change to them is the purchase landing.
   const [creditsAt, setCreditsAt] = useState<string | null>(null);
   const checked = useDeployRead(account, async () => readPreflight(account), { onFocus: true, every: handedOff === null ? null : RECHECK_MS });
   const [choosingDomain, setChoosingDomain] = useState(false);
-  const [choices, setChoices] = useState<Choices>(NO_CHOICES);
+  const [choices, setChoices] = useState<Choices>(returned?.choices ?? NO_CHOICES);
   const [mailReady, setMailReady] = useState(false);
   const onMail = useCallback((mail: string | null) => setChoices((held) => ({ ...held, mail })), []);
   const handOff = (need: string) => { setHandedOff(need); actions.onHandedOff(need); };
@@ -414,6 +448,12 @@ function ForAccount({ session, actions, onDeploy, onBack }: { session: DeploySes
             <MailExtra account={account} domain={choices.domain} mail={choices.mail} onMail={onMail} onReady={setMailReady} onDomain={() => setChoosingDomain(true)} />
             <Credits account={account} credits={preflight.credits} waiting={handedOff === CREDITS}
               onHandedOff={() => { setCreditsAt(JSON.stringify(preflight.credits)); handOff(CREDITS); }} />
+            {name !== "" && (
+              <ConnectorsBefore account={account} name={name} address={addressOf(choices.domain)} busy={actions.deploying} onConnectGithub={() => {
+                sessionStorage.setItem(CHOICES_KEY, JSON.stringify({ account, choices }));
+                onConnectGithub(account, name, addressOf(choices.domain));
+              }} />
+            )}
           </div>
           <div className="sm:hidden"><Line label="Cost"><span className="t-public-body p-text">{COST}</span></Line></div>
           <WhatGetsMade name={name === "" ? DEFAULT_INSTANCE_NAME : name} domain={choices.domain?.name ?? null} computer={choices.computer} mail={choices.mail} />
@@ -465,18 +505,19 @@ function AddMail({ kinu, actions, onChange, onBack }: { kinu: DeployedKinu; acti
   );
 }
 
-export function DeployReady({ session, readyFor, deploying, refusal, refusalActions, onDeploy, onBack }: {
+export function DeployReady({ session, readyFor, deploying, refusal, refusalActions, onDeploy, onConnectGithub, onBack }: {
   session: DeploySession;
   readyFor: ReadyFor;
   deploying: boolean;
   refusal: DeployRefused | null;
   refusalActions: RefusalActions;
   onDeploy: (asked: DeployRunRequest) => void;
+  onConnectGithub: ConnectGithubBefore;
   onBack: () => void;
 }) {
   const actions: ReadyActions = { ...refusalActions, deploying, refusal };
 
-  if (readyFor.kind === "new") return <NewKinu session={session} actions={actions} onDeploy={onDeploy} onBack={onBack} />;
+  if (readyFor.kind === "new") return <NewKinu session={session} actions={actions} onDeploy={onDeploy} onConnectGithub={onConnectGithub} onBack={onBack} />;
 
   const { kinu } = readyFor;
   const change = (asked: ChangeAsked) => onDeploy({ kind: "change", account: kinu.account, name: kinu.name, ...asked });

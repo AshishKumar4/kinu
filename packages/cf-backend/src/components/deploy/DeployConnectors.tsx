@@ -1,22 +1,26 @@
 /**
  * A Kinu's connectors (core deploy/connectors.ts): GitHub and Google, which need an app of the Kinu's own, each connected
  * by its own steps; then every other plugin of the catalog, which needs nothing here and is connected in the Kinu itself.
+ * Before a Kinu is deployed (`ConnectorsBefore`), its apps are made for the address it will have and held until its
+ * deploy binds them.
  */
 import { useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, MCP_PRESETS } from "@kinu.run/core";
-import { GOOGLE_SETUP, googleRedirect, type DeployedKinu } from "@kinu.run/core/deploy";
+import { GOOGLE_SETUP, googleRedirect, type AddressAsk, type DeployedKinu, type OAuthClient } from "@kinu.run/core/deploy";
 import { detach } from "@kinu.run/core/obs";
 import { Button } from "@/components/ui/Button";
 import { BrandMark, PRESET_MARK, type BrandName } from "@/components/ui/BrandMark";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { IconTile } from "@/components/ui/IconTile";
 import { TextInput } from "@/components/ui/Field";
-import { setGoogleClient } from "@/lib/deploy-page-api";
+import { readConnectorsBefore, setGoogleClient, type DeployHeard } from "@/lib/deploy-page-api";
+import { useDeployRead } from "@/components/deploy/use-deploy-read";
 
-/** GitHub's return to the page once it made a Kinu's app: the app, for the Kinu named, or GitHub's or Cloudflare's words. */
-export type GithubReturn = { readonly made: string; readonly kinu: string } | { readonly error: string };
+/** GitHub's return to the page once it made a Kinu's app: the app, for the Kinu named (`before` it is deployed, held for
+ *  its deploy), or GitHub's or Cloudflare's words. */
+export type GithubReturn = { readonly made: string; readonly kinu: string; readonly before: boolean } | { readonly error: string; readonly before: boolean };
 
 /** Where an owner's GitHub Apps are listed, each with its installations. */
 const GITHUB_APPS = "https://github.com/settings/apps";
@@ -75,18 +79,21 @@ function Step({ n, children }: { n: number; children: ReactNode }) {
   );
 }
 
-/** The steps to the Kinu's own Google client, and its fields; saved, the Kinu's Google sign-in uses it. */
-function GoogleClientSteps({ kinu, onSaved, onCancel }: { kinu: DeployedKinu; onSaved: () => void; onCancel: () => void }) {
+/** Where a Google client is saved: on the Kinu, or held for its deploy. */
+type SaveGoogle = (client: OAuthClient) => Promise<DeployHeard<{ readonly google: boolean }>>;
+
+/** The steps to the Kinu's own Google client at `origin`, and its fields; saved, the Kinu's Google sign-in uses it. */
+function GoogleClientSteps({ origin, save: saveClient, onSaved, onCancel }: { origin: string; save: SaveGoogle; onSaved: () => void; onCancel: () => void }) {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [saving, setSaving] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
-  const redirect = googleRedirect(kinu.url);
+  const redirect = googleRedirect(origin);
 
   const save = () => Effect.gen(function* () {
     setSaving(true);
     setRefused(null);
-    const heard = yield* Effect.promise(async () => setGoogleClient(kinu.account, kinu.name, { clientId, clientSecret }));
+    const heard = yield* Effect.promise(async () => saveClient({ clientId, clientSecret }));
 
     setSaving(false);
 
@@ -153,7 +160,7 @@ function GoogleConnector({ kinu, onChanged }: { kinu: DeployedKinu; onChanged: (
   return (
     <Connector id="google" brand="google" title="Google" copy="Works through Composio: each person connects Gmail, Drive and Calendar in Kinu's Plugins."
       action={!open && <Button size="sm" variant="secondary" onClick={() => setOpen(true)}>Use your own app</Button>}>
-      {open ? <GoogleClientSteps kinu={kinu} onSaved={onChanged} onCancel={() => setOpen(false)} /> : undefined}
+      {open ? <GoogleClientSteps origin={kinu.url} save={async (client) => setGoogleClient(kinu.account, kinu.name, client)} onSaved={onChanged} onCancel={() => setOpen(false)} /> : undefined}
     </Connector>
   );
 }
@@ -181,6 +188,61 @@ export function DeployConnectors({ kinu, github, busy, onConnectGithub, onChange
             action={<External href={`${kinu.url}${APP_ROUTES.plugins}`}>Connect in Kinu</External>} />
         ))}
       </ul>
+    </section>
+  );
+}
+
+/**
+ * GitHub and Google for a Kinu not deployed yet (the owner, 2026-10-31: connectors are an optional step before Deploy):
+ * each app is made now for the address the Kinu will have, and its deploy binds it. With no address yet (a workers.dev
+ * name or a domain the deploy makes first), they wait for the Kinu, as every other plugin does.
+ */
+export function ConnectorsBefore({ account, name, address, busy, onConnectGithub }: {
+  account: string; name: string; address: AddressAsk; busy: boolean; onConnectGithub: () => void;
+}) {
+  const [changed, setChanged] = useState(0);
+  const [googleOpen, setGoogleOpen] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
+  const read = useDeployRead(`${account}/${name}/${JSON.stringify(address)}/${String(changed)}`, async () => readConnectorsBefore(account, name, address));
+  const held = read?.state === "read" ? read.answer : null;
+  const later = "Its address is made by the deploy, so connect it once Kinu is live.";
+
+  const composio = () => Effect.gen(function* () {
+    const heard = yield* Effect.promise(async () => setGoogleClient(account, name, null, true));
+
+    if ("refusal" in heard) setRefused(heard.refusal.error);
+    else setChanged((count) => count + 1);
+  });
+
+  if (held === null) return null;
+
+  const github = held.github !== null
+    ? <Connector id="github" brand="github" title="GitHub" copy="Its app is made. Kinu takes it when it deploys; install it on your repositories then." action={null} />
+    : <Connector id="github" brand="github" title="GitHub" copy={held.origin === null ? later : "Lets its agents work in your repositories. GitHub makes the app in one click."}
+      action={held.origin !== null && <Button size="sm" variant="secondary" disabled={busy} onClick={onConnectGithub}>Connect</Button>} />;
+
+  const google = held.google
+    ? (
+      <Connector id="google" brand="google" title="Google" copy="Your own Google app. Kinu takes it when it deploys."
+        action={<Button size="sm" variant="ghost" onClick={() => detach(composio())}>Use Composio instead</Button>}>
+        {refused !== null && <p role="alert" className="t-meta p-danger">{refused}</p>}
+      </Connector>
+    )
+    : (
+      <Connector id="google" brand="google" title="Google" copy="Works through Composio: each person connects Gmail, Drive and Calendar in Kinu's Plugins."
+        action={held.origin !== null && !googleOpen && <Button size="sm" variant="secondary" onClick={() => setGoogleOpen(true)}>Use your own app</Button>}>
+        {held.origin !== null && googleOpen
+          ? <GoogleClientSteps origin={held.origin} save={async (client) => setGoogleClient(account, name, client, true)}
+            onSaved={() => { setGoogleOpen(false); setChanged((count) => count + 1); }} onCancel={() => setGoogleOpen(false)} />
+          : undefined}
+      </Connector>
+    );
+
+  return (
+    <section data-deploy-connectors-before aria-labelledby="deploy-connectors-before">
+      <h3 id="deploy-connectors-before" className="t-public-item">Connectors</h3>
+      <ul className="mt-1">{github}{google}</ul>
+      <p className="t-meta">Every other plugin connects in Kinu once it is live.</p>
     </section>
   );
 }

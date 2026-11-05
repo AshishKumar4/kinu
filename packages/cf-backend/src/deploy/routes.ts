@@ -15,11 +15,11 @@
 import { Hono, type Context, type Next } from 'hono';
 import { ownRequest } from '../nimbus-route';
 import {
-  CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_GITHUB_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID, DEPLOY_SESSION_STATE,
+  AddressAskSchema, CLOUDFLARE_DEPLOY_SCOPES, DEPLOY_API, DEPLOY_CALLBACK_PATH, DEPLOY_GITHUB_PATH, DEPLOY_PAGE_PATH, DEPLOY_RUN_ID, DEPLOY_SESSION_STATE,
   DEPLOY_SOCKET_PROTOCOL, DeployDomainsSchema, DeployInputsSchema, GITHUB_APP_NEW, GoogleClientSchema, INSTANCE_NAME, DeployPreflightSchema, DeployRunRequestSchema, DeployRunViewSchema,
-  DeploySessionSchema, MailPreviewSchema, RELEASE_MANIFEST_PATH, SIGN_IN_AGAIN_NEED,
+  ConnectorsBeforeSchema, DeploySessionSchema, MailPreviewSchema, RELEASE_MANIFEST_PATH, SIGN_IN_AGAIN_NEED,
   accountChoices, authorizeUrl, bearerTransport, buildOf, causeWords, convertedGithubApp, deployedKinus, domainsMatching,
-  fetchReleaseManifest, githubAppManifest, heard, judgeRefusal, kinuOrigin, mailHostPreview, setConnector, mintDeployRun, parseReleaseManifest, plannedRun, preflight, promptedSecrets, runKeyDigest,
+  fetchReleaseManifest, githubAppManifest, heard, judgeRefusal, kinuOrigin, mailHostPreview, setConnector, mintDeployRun, parseReleaseManifest, plannedOrigin, plannedRun, preflight, promptedSecrets, runKeyDigest,
   type CloudflareTransport, type CloudflareUser, type CloudflareWords, type DeployChoice, type DeployOptions, type DeployRunView,
   type DeploySession,
   type UpdateBuild,
@@ -121,7 +121,7 @@ async function fromThePage(c: Context<FamilyEnv<Env, DeployVariables>>, next: Ne
   return undefined;
 }
 
-for (const path of ['signin', 'session', 'preflight', 'domains', 'mail', 'github', 'google', 'runs', 'runs/current', 'runs/current/*']) {
+for (const path of ['signin', 'session', 'preflight', 'domains', 'mail', 'github', 'google', 'connectors', 'runs', 'runs/current', 'runs/current/*']) {
   deployRoutes.use(`${DEPLOY_API}/${path}`, fromThePage);
 }
 
@@ -150,6 +150,9 @@ deployRoutes.get(`${DEPLOY_API}/mail`, noHead<FamilyEnv<Env, DeployVariables>>((
 deployRoutes.post(`${DEPLOY_API}/github`, noHead<FamilyEnv<Env, DeployVariables>>((c) => githubManifest(c.req.raw, c.env)));
 
 deployRoutes.post(`${DEPLOY_API}/google`, noHead<FamilyEnv<Env, DeployVariables>>((c) => googleClient(c.req.raw, c.env)));
+
+// The connectors set up for a Kinu not yet deployed, held on this sign-in until its run binds them.
+deployRoutes.get(`${DEPLOY_API}/connectors`, noHead<FamilyEnv<Env, DeployVariables>>((c) => connectorsBefore(c.req.raw, c.env, new URL(c.req.url).searchParams)));
 
 // A JSON body is the page's run; the CLI's mint carries none and is answered a run key, as before.
 deployRoutes.post(`${DEPLOY_API}/runs`, noHead<FamilyEnv<Env, DeployVariables>>((c) => (
@@ -397,9 +400,13 @@ function toPage(params: Readonly<Record<string, string>>): Response {
 
 const KinuSchema = { account: CloudflareIdSchema, name: v.pipe(v.string(), v.regex(INSTANCE_NAME)) };
 
-const GithubAskSchema = v.object(KinuSchema);
+/** `before`: the Kinu is not deployed yet, and this is where it will answer; its first run binds what is made. */
+const GithubAskSchema = v.object({ ...KinuSchema, before: v.optional(AddressAskSchema) });
 
-const GoogleAskSchema = v.object({ ...KinuSchema, client: v.nullable(GoogleClientSchema) });
+const GoogleAskSchema = v.object({ ...KinuSchema, client: v.nullable(GoogleClientSchema), before: v.optional(v.literal(true)) });
+
+/** The mark a GitHub `state` carries for an app made before its Kinu. */
+const BEFORE = 'before';
 
 /**
  * The manifest of the GitHub App for a Kinu of this sign-in's account, and GitHub's form the page posts it to. Its
@@ -410,12 +417,19 @@ function githubManifest(request: Request, env: Env): Effect.Effect<Response, Kin
     const asked = yield* Effect.promise(async () => safeJson(request, GithubAskSchema));
 
     if (asked === null) return err(400, 'That is not a Kinu this page can add GitHub to.');
-    const state = `${asked.account}.${asked.name}.${randomToken(SESSION_TOKEN_BYTES)}`;
+    const { before } = asked;
+    const state = [asked.account, asked.name, randomToken(SESSION_TOKEN_BYTES), ...(before === undefined ? [] : [BEFORE])].join('.');
     const back = new URL(DEPLOY_GITHUB_PATH, new URL(request.url).origin).href;
 
-    const answer = yield* pageRead(request, env, (transport) => Effect.map(kinuOrigin(transport, asked.account, asked.name), (origin) => ({
+    const origin = (transport: CloudflareTransport) => (before === undefined
+      ? kinuOrigin(transport, asked.account, asked.name)
+      : Effect.flatMap(plannedOrigin(transport, asked.account, asked.name, before), (planned) => (planned === null
+        ? new KinuError('bad_input', 'This Kinu\'s address is made by its deploy. Add GitHub once it is live.')
+        : Effect.succeed(planned))));
+
+    const answer = yield* pageRead(request, env, (transport) => Effect.map(origin(transport), (at) => ({
       action: `${GITHUB_APP_NEW}?state=${encodeURIComponent(state)}`,
-      manifest: JSON.stringify(githubAppManifest(origin, back)),
+      manifest: JSON.stringify(githubAppManifest(at, back)),
     })));
 
     if (answer.ok) answer.headers.append('set-cookie', setCookie(DEPLOY_STATE_COOKIE_NAME, sha256Hex(state), STATE_TTL_MS));
@@ -432,7 +446,7 @@ function githubManifest(request: Request, env: Env): Effect.Effect<Response, Kin
 function githubMade(request: Request, env: Env, url: URL): Effect.Effect<Response, KinuError> {
   const state = url.searchParams.get('state') ?? '';
   const code = url.searchParams.get('code') ?? '';
-  const [account = '', name = ''] = state.split('.');
+  const [account = '', name = '', , mark = ''] = state.split('.');
   const bound = readCookie(request, DEPLOY_STATE_COOKIE_NAME) ?? '';
 
   if (code === '' || bound === '' || !timingSafeEqual(bound, sha256Hex(state))) return Effect.succeed(burnt(err(400, 'This browser did not start making that GitHub App.')));
@@ -443,12 +457,23 @@ function githubMade(request: Request, env: Env, url: URL): Effect.Effect<Respons
     if (held === null) return toPage({ github_error: 'The sign-in with Cloudflare ended. Sign in again, then add GitHub once more.' });
     const app = yield* convertedGithubApp(code);
 
+    if (mark === BEFORE) {
+      yield* Effect.promise(async () => held.session.holdConnector({ account, name }, 'github', app));
+      diagnostics.event('deploy.github_app_held', { account, name, slug: app.slug });
+
+      return toPage({ github: app.slug, kinu: name, before: '1' });
+    }
+
     yield* setConnector(bearerTransport(held.token), { account, name }, 'github', app);
     diagnostics.event('deploy.github_app_bound', { account, name, slug: app.slug });
 
     return toPage({ github: app.slug, kinu: name });
   }).pipe(
-    Effect.catchCause((failed) => Effect.succeed(toPage({ github_error: causeWords(failed).message }))),
+    Effect.catchCause((failed) => {
+      const said = causeWords(failed).message;
+
+      return Effect.succeed(mark === BEFORE ? toPage({ github_error: said, before: '1' }) : toPage({ github_error: said }));
+    }),
     Effect.map(burnt),
   );
 }
@@ -460,10 +485,40 @@ function googleClient(request: Request, env: Env): Effect.Effect<Response, KinuE
     const asked = v.safeParse(GoogleAskSchema, yield* Effect.promise(async () => tolerateAsync(async () => request.json(), 'malformed-input')));
 
     if (!asked.success) return err(400, asked.issues[0]?.message ?? 'That is not a Google client this page can set.');
-    const { account, name, client } = asked.output;
+    const { account, name, client, before } = asked.output;
+
+    if (before === true) {
+      return yield* pageRead(request, env, (_transport, _user, session) => Effect.as(
+        Effect.promise(async () => session.holdConnector({ account, name }, 'google', client)), { google: client !== null },
+      ));
+    }
 
     return yield* pageRead(request, env, (transport) => Effect.as(setConnector(transport, { account, name }, 'google', client), { google: client !== null }));
   });
+}
+
+/** The Kinu not deployed yet a page asks of: its account, its name, and where it will answer (`zone` and `host` for its
+ *  own domain, neither for workers.dev). */
+const BeforeAskSchema = v.object({ ...KinuSchema, address: AddressAskSchema });
+
+/** What this sign-in holds for a Kinu it has not deployed yet, and the address its apps name. */
+function connectorsBefore(request: Request, env: Env, params: URLSearchParams): Effect.Effect<Response, KinuError> {
+  const zone = params.get('zone');
+  const host = params.get('host') ?? '';
+
+  const asked = v.safeParse(BeforeAskSchema, {
+    account: params.get('account') ?? '', name: params.get('name') ?? '',
+    address: zone === null ? { kind: 'workers' } : { kind: 'domain', zone, host },
+  });
+
+  if (!asked.success) return Effect.succeed(err(400, 'That is not a Kinu this page can read.'));
+  const { account, name, address } = asked.output;
+
+  return pageRead(request, env, (transport, _user, session) => Effect.gen(function* () {
+    const held = yield* Effect.promise(async () => session.heldConnectors({ account, name }));
+
+    return v.parse(ConnectorsBeforeSchema, { ...held, origin: yield* plannedOrigin(transport, account, name, address) });
+  }));
 }
 
 /** Cloudflare's refusal of a read in its own words (its path, code and message), never a bare route error. */
@@ -662,7 +717,10 @@ function beginRun(request: Request, env: Env): Effect.Effect<Response, KinuError
     const grant = yield* Effect.promise(async () => held.session.surrender());
 
     if (grant === null) return signInFirst();
-    const runId = yield* Effect.promise(async () => run.begin(held.user.id, planned.plan, grant));
+    // A new Kinu's first run binds the connectors set up for it, by the name they were set up for, before it was made.
+    const kinu = { account: asked.account, name: asked.name };
+    const secrets = asked.kind === 'new' ? yield* Effect.promise(async () => held.session.connectorSecrets(kinu)) : {};
+    const runId = yield* Effect.promise(async () => run.begin(held.user.id, planned.plan, grant, secrets));
 
     if (runId === null) return err(409, 'A run is already going in this account; continue it.');
     yield* Effect.promise(async () => held.session.follow(asked.account));

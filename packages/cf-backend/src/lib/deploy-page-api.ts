@@ -6,10 +6,10 @@
 import * as v from "valibot";
 import { Effect } from "effect";
 import {
-  DEPLOY_API, DeployDomainsSchema, DeployNeedSchema, DeployPreflightSchema, DeployRefusalSchema, DeployRunViewSchema,
+  ConnectorsBeforeSchema, DEPLOY_API, DeployDomainsSchema, DeployNeedSchema, DeployPreflightSchema, DeployRefusalSchema, DeployRunViewSchema,
   DeploySessionSchema, MailPreviewSchema,
   type DeployDomain, type DeployNeed, type DeployPreflight, type DeployRefusal, type DeployRunRequest, type DeployRunView,
-  type DeploySession, type MailPreview, type OAuthClient,
+  type AddressAsk, type ConnectorsBefore, type DeploySession, type MailPreview, type OAuthClient,
 } from "@kinu.run/core/deploy";
 import { settle, tolerateAsync } from "@kinu.run/core/obs";
 import { respond, type HttpRequest } from "./http";
@@ -96,10 +96,11 @@ const GithubFormSchema = v.object({ action: v.string(), manifest: v.string() });
 
 /**
  * Hands this tab to GitHub, which shows the app it would make for the Kinu `name` and makes it on one click, then
- * returns to the page (`?github=<app>` or `?github_error=`). A refusal stays on the page.
+ * returns to the page (`?github=<app>` or `?github_error=`). `before`: the Kinu is not deployed yet and will answer
+ * there; the app is held for its first run. A refusal stays on the page.
  */
-export function makeGithubApp(account: string, name: string): Effect.Effect<DeployRefused | null> {
-  return Effect.map(heard(GithubFormSchema, "/github", { method: "POST", json: { account, name } }), (asked) => {
+export function makeGithubApp(account: string, name: string, before?: AddressAsk): Effect.Effect<DeployRefused | null> {
+  return Effect.map(heard(GithubFormSchema, "/github", { method: "POST", json: { account, name, before } }), (asked) => {
     if ("refusal" in asked) return asked.refusal;
     // GitHub takes a manifest only as a posted form field.
     const form = document.createElement("form");
@@ -118,7 +119,20 @@ export function makeGithubApp(account: string, name: string): Effect.Effect<Depl
   });
 }
 
-/** Gives the Kinu `name` the person's own Google client, or with null takes it away, back to Composio. */
-export function setGoogleClient(account: string, name: string, client: OAuthClient | null): Promise<DeployHeard<{ readonly google: boolean }>> {
-  return settle(heard(v.object({ google: v.boolean() }), "/google", { method: "POST", json: { account, name, client } }));
+/** Gives the Kinu `name` the person's own Google client, or with null takes it away, back to Composio. `before`: held
+ *  for the Kinu's first run, which binds it. */
+export function setGoogleClient(account: string, name: string, client: OAuthClient | null, before?: true): Promise<DeployHeard<{ readonly google: boolean }>> {
+  return settle(heard(v.object({ google: v.boolean() }), "/google", { method: "POST", json: { account, name, client, before } }));
+}
+
+/** The connectors set up for the Kinu `name` before it is deployed at `address`, and the address their apps name. */
+export function readConnectorsBefore(account: string, name: string, address: AddressAsk): Promise<DeployHeard<ConnectorsBefore>> {
+  const query = new URLSearchParams({ account, name });
+
+  if (address.kind === "domain") {
+    query.set("zone", address.zone ?? "");
+    query.set("host", address.host);
+  }
+
+  return settle(heard(ConnectorsBeforeSchema, `/connectors?${query.toString()}`));
 }
