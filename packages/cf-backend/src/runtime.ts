@@ -9,7 +9,7 @@ import type { ToolSet } from 'ai';
 import type { AgentRuntime, ActorHandle, RoutedLLM, Schedule, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   objectNamed,
-  nimbusSessionShell, createShellSession,
+  nimbusSessionShell, nimbusShellSession,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor, processRetryTool,
   workspaceFilePlane, standardMounts, contextMount, skillsMount, type WorkspacePrincipal,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
@@ -335,12 +335,7 @@ export function createCFRuntime(
   const home = hooks.workspaceExecution?.home ?? WORKSPACE_ROOT;
   const sessionShell = nimbusSessionShell(executionBox, { home });
 
-  const shellSession = createShellSession({
-    home,
-    userRoots: () => agentFileVfs.userRoots(),
-    stored: async (name) => await sessionShell.cwd?.(name) ?? null,
-    detachFrees: true,
-  });
+  const shellSession = nimbusShellSession(sessionShell, home, () => agentFileVfs);
 
   const planes = cloudPlanes(home);
   const shell = withApprovalGatedShell(sessionShell, { filesOwner: 'agent', shellSession, planes }, approvalPolicy);
