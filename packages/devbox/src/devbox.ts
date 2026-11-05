@@ -1632,13 +1632,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           throw new DevboxError("io", 'attached-container repair could not claim recovery');
         }
 
-        try {
+        const repaired = await caught(async () => {
           await this.#repairAttachedAttempt(generation, retryBootStamp);
 
           if (this.#owns(generation)) await this.#releaseRecovery(claim, generation);
-        } catch (error) {
-          await this.#recover(generation, claim, { cause: error });
-          throw error;
+        });
+
+        if ('cause' in repaired) {
+          await this.#recover(generation, claim, repaired);
+          throw repaired.cause;
         }
       });
     });
@@ -1827,21 +1829,22 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#invalidateGeneration(this.#flights.startup);
     const replacing = this.#generation;
 
-    try {
+    const destroyed = await caught(async () => {
       await this.#destroyContainer();
       await this.#awaitContainerStopped();
-    } catch (error) {
-      if (!this.#owns(replacing)) throw error;
+    });
+
+    if ('cause' in destroyed) {
+      if (!this.#owns(replacing)) throw destroyed.cause;
       // A failed destroy leaves the abandoned work running, so keep refusing even though
       // `#invalidateGeneration` made the box look ready; attaching over it is the overlap.
       await this.#settle({
         phase: 'unattached',
-        reason: `${reason}; and the container identity could not be destroyed: `
-          + describe({ cause: error }),
+        reason: `${reason}; and the container identity could not be destroyed: ${describe(destroyed)}`,
         // Terminal: the abandoned work still runs there. Only a caller asking by name may attach.
         retry: false,
       });
-      throw error;
+      throw destroyed.cause;
     }
 
     console.error(
@@ -3902,8 +3905,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // container it ends, which is no failure; a kill that refuses fails the stop (`endEveryProcess`).
     const sending = endEveryProcess(container);
 
-    try { await Promise.all([sending, ending]); }
-    catch (cause) { if (container.running) throw cause; }
+    const ended = await caught(async () => Promise.all([sending, ending]));
+
+    if ('cause' in ended && container.running) throw ended.cause;
 
     // The box ended this container itself: the next one is a start, not a replacement.
     await this.ctx.storage.delete(BOOT_ID_KEY);
