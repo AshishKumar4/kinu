@@ -223,7 +223,8 @@ const StoredConnectRunSchema = v.object({ run: ConnectRunSchema });
 /** What a server's login does for each request: the access token it presents, and its renewal by a refresh token. */
 interface McpLoginSide {
   readonly token: () => Effect.Effect<string | undefined, KinuError>;
-  readonly renew: () => Effect.Effect<void, KinuError>;
+  /** `refused` is the token the refused request carried, where it is known. */
+  readonly renew: (refused: string | undefined) => Effect.Effect<void, KinuError>;
 }
 
 /**
@@ -247,8 +248,23 @@ class McpBearer implements AuthProvider {
 
 /** A login with a refresh token: a refusal renews it, and the transport sends the request again, once. */
 class RenewingMcpBearer extends McpBearer {
-  onUnauthorized(): Promise<void> {
-    return settle(this.noted(this.login.renew()));
+  /** The token each response's request carried: requests share one bearer, so a refusal names its own token. */
+  readonly #carried = new WeakMap<Response, string>();
+
+  /** `fetch`, noting the token each request carried against the response it got. */
+  carrying(fetch: McpFetch): McpFetch {
+    return async (url, init) => {
+      const response = await fetch(url, init);
+      const carried = /^(?:Bearer|DPoP) (.+)$/iu.exec(new Headers(init?.headers).get('authorization') ?? '')?.[1];
+
+      if (carried !== undefined) this.#carried.set(response, carried);
+
+      return response;
+    };
+  }
+
+  onUnauthorized(ctx: Parameters<NonNullable<AuthProvider['onUnauthorized']>>[0]): Promise<void> {
+    return settle(this.noted(this.login.renew(this.#carried.get(ctx.response))));
   }
 }
 
@@ -264,8 +280,20 @@ export class UserMcpServers {
   private readonly clients = new Map<string, Promise<Exit.Exit<McpLive, KinuError>>>();
 
   /** One renewal of a server's login at a time, every request that meets it joining it: a provider that rotates refresh
-   *  tokens revokes a grant whose token is presented twice. */
-  private readonly renewals = flight((server: McpServer) => this.renewal(server), { key: (server) => server.id });
+   *  tokens revokes a grant whose token is presented twice. One renewal per stale access token, every request that holds
+   *  it joining: a token is stale only while it is the one stored, so one flight at a time refreshes a login. */
+  private readonly renewals = flight((input: { readonly server: McpServer; readonly stale: string }) => this.renewal(input.server, input.stale),
+    { key: (input) => `${input.server.id}\n${input.stale}` });
+
+  /** A refused request's renewal, of the token it carried, else of the one stored now. */
+  private refusedRenewal(server: McpServer, refused: string | undefined): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const stale = refused ?? keptLogin(yield* attempt({ doing: `reading the sign-in of MCP server ${server.name}`, otherwise: 'io' }, async () => this.oauthProvider(server).tokens()))?.access_token;
+
+      if (stale === undefined) return yield* this.loginEnded(server, 'its sign-in has no refresh token to renew it by');
+      yield* this.renewals({ server, stale });
+    });
+  }
 
   /** MCP tool calls in flight, by the id each caller sent: `userMcp_cancelCall` stops one. */
   private readonly _mcpCalls = new Map<string, McpCallInFlight>();
@@ -373,7 +401,7 @@ export class UserMcpServers {
       const expiresAt = login.expires_at;
 
       if (expiresAt === undefined || expiresAt - Date.now() > RENEW_BEFORE_MS) return login.access_token;
-      const renewed = yield* Effect.result(this.renewals(server));
+      const renewed = yield* Effect.result(this.renewals({ server, stale: login.access_token }));
 
       if (Result.isSuccess(renewed)) return renewed.success;
 
@@ -383,11 +411,15 @@ export class UserMcpServers {
     });
   }
 
-  private renewal(server: McpServer): Effect.Effect<string, KinuError> {
+  /** `stale` renewed, or the token that already replaced it: a request that read it before a renewal saved its successor
+   *  is sent with the successor, and nothing is refreshed twice. */
+  private renewal(server: McpServer, stale: string): Effect.Effect<string, KinuError> {
     return Effect.gen({ self: this }, function* () {
       const provider = this.oauthProvider(server);
       const doing = `reading the sign-in of MCP server ${server.name}`;
       const login = keptLogin(yield* attempt({ doing, otherwise: 'io' }, async () => provider.tokens()));
+
+      if (login !== null && login.access_token !== stale) return login.access_token;
       const refreshToken = login?.refresh_token;
 
       if (login === null || refreshToken === undefined) return yield* this.loginEnded(server, 'its sign-in has no refresh token to renew it by');
@@ -419,7 +451,7 @@ export class UserMcpServers {
     return Effect.gen({ self: this }, function* () {
       if (yield* this.headersHoldCredential(server)) return undefined;
       const login = keptLogin(yield* attempt({ doing: `reading the sign-in of MCP server ${server.name}`, otherwise: 'io' }, async () => this.oauthProvider(server).tokens()));
-      const side: McpLoginSide = { token: () => this.bearerToken(server), renew: () => Effect.asVoid(this.renewals(server)) };
+      const side: McpLoginSide = { token: () => this.bearerToken(server), renew: (refused) => this.refusedRenewal(server, refused) };
 
       return login?.refresh_token === undefined ? new McpBearer(side) : new RenewingMcpBearer(side);
     });
@@ -433,7 +465,8 @@ export class UserMcpServers {
     return Effect.gen({ self: this }, function* () {
       const wire = yield* this.wire();
       const bearer = yield* this.bearer(server);
-      const endpoint: McpEndpoint = { name: server.name, url: server.server_url, transport: server.transport, fetch: this.fetchFor(server), bearer };
+      const fetch = this.fetchFor(server);
+      const endpoint: McpEndpoint = { name: server.name, url: server.server_url, transport: server.transport, fetch: bearer instanceof RenewingMcpBearer ? bearer.carrying(fetch) : fetch, bearer };
       const reached = yield* Effect.result(wire.connectMcp(endpoint, server.session));
 
       if (Result.isSuccess(reached)) {
