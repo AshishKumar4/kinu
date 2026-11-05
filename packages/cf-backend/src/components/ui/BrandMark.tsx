@@ -120,10 +120,12 @@ export function presetBrand(connection: string | null): BrandName | undefined {
   return preset === undefined ? undefined : PRESET_MARK[preset.id];
 }
 
-export function BrandMark({ brand, size = 16, bare = false, className }: {
+export function BrandMark({ brand, size = 16, bare = false, named = true, className }: {
   brand: BrandName;
   size?: number;
   bare?: boolean;
+  /** Its brand as its hover title; off where words beside it already name the brand, and the mark must add no text. */
+  named?: boolean;
   className?: string;
 }) {
   const { icon, ink, theme }: { icon: BrandIcon; ink?: boolean; theme?: boolean } = BRANDS[brand];
@@ -131,7 +133,7 @@ export function BrandMark({ brand, size = 16, bare = false, className }: {
   const mark = (
     <svg viewBox={icon.viewBox ?? "0 0 24 24"} width={size} height={size} aria-hidden="true"
       className={`${theme && bare ? "text-[var(--c-text-2)]" : ""}${className !== undefined ? ` ${className}` : ""}`}>
-      <title>{icon.title}</title>
+      {named && <title>{icon.title}</title>}
       <path d={icon.path} fill={theme && bare ? "currentColor" : `#${icon.hex}`} />
     </svg>
   );
