@@ -544,6 +544,22 @@ describe('an idle wake dreams first', () => {
     close();
   });
 
+  test('a note stamped in the same millisecond as one folded, landing after that pass read, is still folded', async () => {
+    const { fold, memory, seen, window, facts, close } = folding();
+    const instant = new Date().toISOString();
+
+    // Stamped together, appended apart: the second lands after the first pass read the notes.
+    await appendMemoryNote(memory, 'The staging database runs pg-15', { date: instant });
+    await fold().runTerminal();
+    await appendMemoryNote(memory, 'Upgraded: the staging database runs pg-17', { date: instant });
+    window.read = 6;
+    await fold().runTerminal();
+
+    expect(facts.recall('database')?.value).toBe('pg-17');
+    expect(seen).toEqual(['pg-15', 'pg-17']);
+    close();
+  });
+
   test('a pass whose commit failed after its paid answer replays it, notes and all, and folds no note twice', async () => {
     let commits = 0;
 

@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
 import { effectsAlreadyDone, preparedOutput, prepareOutput, recordEffectDone, retirePreparedOutput } from '../identity/effect-tombstones';
+import { sha256Hex } from '../safety/argument-digest';
 import type { FactsStore } from '../memory/facts';
 import {
   accountProposals, applySleepTimeUpdate, runSleepTimeCompute, SleepTimeUpdateSchema, SLEEP_TIME_CADENCE, sleepTimeDue, sleepTimeWakeAt, sleepTimeWindow,
@@ -24,11 +25,11 @@ const SETTLED_AT = 'settled';
 
 const CLOSED_AT = 'closed';
 
-/** When the newest note a pass folded into facts was written: the next pass folds the notes written after it. */
-const NOTES_FOLDED = 'notes_folded';
+/** Each note a pass folded into facts, by its stamp and text: a note is folded once, whenever it lands. */
+const NOTE_FOLDED = 'sleep_time_note';
 
-/** The notes a first pass folds: the newest, so a workspace with years of them is not read whole. */
-const FIRST_FOLD = 20;
+/** The notes one pass folds, oldest first: a workspace with years of them drains over its passes. */
+const FOLD_CAP = 20;
 
 /**
  * One pass at a time over an actor's facts, whichever trigger starts it, each reading its window under the lock: an idle
@@ -242,9 +243,9 @@ export class SleepTimeLane {
     return this.deps.sql<{ at: number }>`SELECT at FROM sleep_time_marks WHERE actor_id = ${this.deps.actor.actorId} AND mark = ${mark}`[0]?.at ?? null;
   }
 
-  private mark(mark: string, at = Date.now()): void {
+  private mark(mark: string): void {
     this.deps.actor.assertCurrent();
-    void this.deps.sql`INSERT INTO sleep_time_marks (actor_id, mark, at) VALUES (${this.deps.actor.actorId}, ${mark}, ${at})
+    void this.deps.sql`INSERT INTO sleep_time_marks (actor_id, mark, at) VALUES (${this.deps.actor.actorId}, ${mark}, ${Date.now()})
       ON CONFLICT(actor_id, mark) DO UPDATE SET at = excluded.at`;
   }
 
@@ -292,11 +293,11 @@ export class SleepTimeLane {
 
       if (stored === undefined) {
         // The paid answer, so a replay applies it instead of buying another.
-        // With the notes it folded, so a replay moves the watermark as the first application would have.
-        prepareOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key }, JSON.stringify({ ...update, notesThrough: kept?.through ?? null }));
+        // With the notes it folded, so a replay records them as the first application would have.
+        prepareOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key }, JSON.stringify({ ...update, notesFolded: kept?.keys ?? [] }));
       }
 
-      const notesThrough = stored === undefined ? kept?.through ?? null : stored.notesThrough;
+      const folded = stored === undefined ? kept?.keys ?? [] : stored.notesFolded;
 
       const proposals = account === undefined ? [] : accountProposals(update, window.turns);
 
@@ -304,7 +305,7 @@ export class SleepTimeLane {
       const summary = this.deps.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.deps.facts, update);
 
-        if (notesThrough !== null) this.mark(NOTES_FOLDED, notesThrough);
+        for (const note of folded) recordEffectDone(this.deps.sql, this.deps.actor, { scope: NOTE_FOLDED, key: note });
 
         for (const [index, proposal] of proposals.entries()) {
           void this.deps.sql`INSERT INTO account_proposal_outbox (delivery, proposal_json)
@@ -369,20 +370,19 @@ export class SleepTimeLane {
     })));
   }
 
-  /** The notes written after the newest one the last pass folded, and the newest of them; the newest few on a first
-   *  pass. A note with no date is never folded. A read that fails costs the pass its notes, never its turns. */
-  private keptNotes(): Effect.Effect<{ readonly fresh: readonly MemoryNote[]; readonly through: number | null } | null> {
+  /** The oldest notes not yet folded, with their keys. A read that fails costs the pass its notes, never its turns. */
+  private keptNotes(): Effect.Effect<{ readonly fresh: readonly MemoryNote[]; readonly keys: readonly string[] } | null> {
     const read = this.deps.notes;
 
     if (read === undefined) return Effect.succeed(null);
 
     return attempt({ doing: "reading the agent's notes the pass folds into facts", otherwise: 'io' }, read).pipe(
       Effect.map((notes) => {
-        const folded = this.instant(NOTES_FOLDED);
-        const dated = notes.filter((note): note is MemoryNote & { readonly writtenAt: number } => note.writtenAt !== undefined);
-        const fresh = folded === null ? dated.slice(-FIRST_FOLD) : dated.filter((note) => note.writtenAt > folded);
+        const keyed = notes.map((note) => ({ note, key: sha256Hex(`${note.updatedAt}\n${note.content}`, 32) }));
+        const done = effectsAlreadyDone(this.deps.sql, this.deps.actor, NOTE_FOLDED, keyed.map(({ key }) => key));
+        const fresh = keyed.filter(({ key }) => !done.has(key)).slice(0, FOLD_CAP);
 
-        return { fresh, through: fresh.reduce<number | null>((newest, note) => Math.max(newest ?? note.writtenAt, note.writtenAt), null) };
+        return { fresh: fresh.map(({ note }) => note), keys: fresh.map(({ key }) => key) };
       }),
       Effect.catch((failure) => Effect.sync(() => {
         diagnostics.failure('memory.notes_read_failed', failure, { workspace: this.deps.workspace });
@@ -398,8 +398,8 @@ export class SleepTimeLane {
     this.clear(SETTLED_AT, CLOSED_AT);
   }
 
-  /** The answer a pass paid for and has not yet applied, with the newest note it folded (null before notes were). */
-  private recordedUpdate(key: string): { readonly update: SleepTimeUpdate; readonly notesThrough: number | null } | undefined {
+  /** The answer a pass paid for and has not yet applied, with the notes it folded. */
+  private recordedUpdate(key: string): { readonly update: SleepTimeUpdate; readonly notesFolded: readonly string[] } | undefined {
     const held = preparedOutput(this.deps.sql, this.deps.actor, { scope: PROCESSED, key });
 
     if (held === undefined) return undefined;
@@ -407,7 +407,7 @@ export class SleepTimeLane {
 
     return {
       update: v.parse(SleepTimeUpdateSchema, answer),
-      notesThrough: v.parse(v.object({ notesThrough: v.optional(v.nullable(v.number()), null) }), answer).notesThrough,
+      notesFolded: v.parse(v.object({ notesFolded: v.optional(v.array(v.string()), []) }), answer).notesFolded,
     };
   }
 }
