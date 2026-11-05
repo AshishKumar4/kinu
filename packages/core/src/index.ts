@@ -2199,7 +2199,7 @@ export { pageSchema, positionPageSchema, PositionCursorSchema, PositionPageReque
 export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
 
 export {
-  newestOpener, restoredRows, rowText, UIMessageSchema,
+  MESSAGE_AMENDED_FRAME, MessageAmendedFrameSchema, newestOpener, restoredRows, rowText, UIMessageSchema,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, announcementOf,
 } from './utils/ui-message';
 

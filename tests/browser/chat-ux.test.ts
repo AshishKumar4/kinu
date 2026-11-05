@@ -2078,6 +2078,52 @@ async function claimIs(page: Page, claim: Record<string, string | number>): Prom
 }
 
 /**
+ * A row the room stamps after it ended (its phase lines, a rating) arrives alone. The tab holds rows from three places:
+ * the room's newest window, rows that slid out of an older one, and pages read from history. The stamp redraws the row
+ * in whichever holds it, and a stamp for a row the tab never drew draws nothing.
+ */
+describe('a row stamped after it ended', () => {
+  test('the stamp redraws the row where the tab holds it, and an id it does not hold changes nothing', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      const chat = '[data-transcript].overflow-y-auto';
+      const shows = (words: string) => page.waitForFunction((at, said) => (document.querySelector(at)?.textContent ?? '').includes(said), {}, chat, words);
+      const said = () => page.$eval(chat, (scroller) => scroller.textContent ?? '');
+
+      const amend = (message: { id: string; role: 'user' | 'assistant'; parts: { type: 'text'; text: string }[] }) => page.evaluate((detail) => {
+        window.dispatchEvent(new CustomEvent('gallery:amend-row', { detail }));
+      }, { message });
+
+      await page.setViewport({ width: 1280, height: 860 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=slates&slates=2&history=80&historyLatency=0`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector(chat);
+
+      await amend({ id: 'sb-a3', role: 'assistant', parts: [{ type: 'text', text: 'Added a last-failure column, and who broke it.' }] });
+      await shows('and who broke it');
+
+      // The reader goes up to the history just above the window, and the page holding its newest row lands.
+      await page.$eval(chat, (scroller) => {
+        const reserved = scroller.querySelector<HTMLElement>('[data-history-reserve]')?.offsetHeight ?? 0;
+
+        scroller.scrollTop = Math.max(0, reserved - 100);
+      });
+      await shows('Answer 79.');
+      await amend({ id: 'hist-00079', role: 'assistant', parts: [{ type: 'text', text: 'Answer 79, stamped after its end.' }] });
+      await shows('stamped after its end');
+      expect(await said()).not.toContain('Answer 79. openDb');
+
+      const rows = await page.$eval(chat, (scroller) => scroller.children.length);
+
+      await amend({ id: 'nowhere', role: 'assistant', parts: [{ type: 'text', text: 'Never drawn.' }] });
+      await page.evaluate(() => new Promise((painted) => { requestAnimationFrame(() => requestAnimationFrame(painted)); }));
+      expect(await said()).not.toContain('Never drawn.');
+      expect(await page.$eval(chat, (scroller) => scroller.children.length)).toBe(rows);
+      await page.close();
+    });
+  });
+});
+
+/**
  * The root's claim decides what the page offers. Admitted, the page paints one live indicator and offers Stop. A
  * claim whose isolate died never settles on its own: the page paints no indicator, offers recovery rather than a
  * Stop that would never land, and recovery settles it.

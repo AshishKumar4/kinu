@@ -13,6 +13,12 @@ import { textOfPart } from './text';
 export const UIMessageSchema = v.custom<UIMessage>((value) =>
   v.is(v.object({ id: v.string(), role: v.picklist(['user', 'assistant', 'system']), parts: v.array(v.unknown()) }), value));
 
+/** A finished row stamped after its end (its phase lines, a rating), sent alone to the chat that holds it: a tab replaces
+ *  the row with this id wherever it holds one, and ignores an id it does not hold. */
+export const MESSAGE_AMENDED_FRAME = 'kinu_message_amended';
+
+export const MessageAmendedFrameSchema = v.object({ type: v.literal(MESSAGE_AMENDED_FRAME), message: UIMessageSchema });
+
 /** Row id = prefix + producer identity; the primary key is the idempotency mechanism. */
 export const PROGRAMMATIC_MESSAGE_ID_PREFIX = 'programmatic:';
 

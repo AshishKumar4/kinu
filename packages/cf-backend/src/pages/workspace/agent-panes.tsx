@@ -191,7 +191,7 @@ function SubagentChatColumn({
   useEffect(() => () => { showPlanWindow(null); }, [showPlanWindow]);
 
   const chat = useChatThread({
-    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, seedEdge: state.seedEdge,
+    rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, seedEdge: state.seedEdge, amended: state.amended,
     steerRuns: state.steerRuns, actor: state.paneActorId,
   });
 
