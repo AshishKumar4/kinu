@@ -132,11 +132,6 @@ export function observe<A>(program: Effect.Effect<A, DevboxError>, observer: { r
   } });
 }
 
-/** Ends the caller with `failure`, through the failure channel, as a promise-facing method of the box answers it. */
-export function refuse(refusal: DevboxError): never {
-  return settleSync(Effect.fail(refusal));
-}
-
 export function startOverrun(label: string, budgetMs: number): DevboxError {
   return new DevboxError('start-overrun', `${label} exceeded its ${budgetMs}ms budget and was abandoned; the work it left running inside the container cannot be fenced from here.`);
 }

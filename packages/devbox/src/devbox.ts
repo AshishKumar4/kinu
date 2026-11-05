@@ -70,7 +70,8 @@ import {
 } from './lifecycle';
 import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, type ResourceScope } from './operation-lanes';
 import { SupervisedProcesses, type EndTold } from './supervised-processes';
-import { DevboxError, attempt, attempted, attemptSync, caught, hold, refuse, whenLost, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
+import { AbsentContainer } from './absent-container';
+import { DevboxError, attempt, attempted, attemptSync, caught, hold, whenLost, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
@@ -3939,13 +3940,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   #supervisedClient: SupervisedProcesses | undefined;
   enableInternet = true;
 
+  /** A server that runs no container answers as one that refuses everything asked of it (`AbsentContainer`). */
+  #absent: AbsentContainer | undefined;
+
   #container(): Container {
-    const container = this.ctx.container;
-
-    // A dev server runs no container (vite.config.ts), so a box there is refused once rather than retried.
-    if (container === undefined) refuse(new DevboxError('configuration', NO_CONTAINER));
-
-    return container;
+    return this.ctx.container ?? (this.#absent ??= new AbsentContainer(NO_CONTAINER));
   }
 
   #files(): Files { return this.#fileClient ??= new Files(seamedContainer(this.#container())); }
