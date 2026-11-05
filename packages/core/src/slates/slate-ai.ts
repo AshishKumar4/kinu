@@ -6,11 +6,14 @@
 import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { generateReported, streamTextReported, type GenerateRequest, type StreamRequest } from '../providers/model-invocation';
-import type { ModelCallReport, ModelOperationSink } from '../events/model-call';
+import type { ModelCallReport, ModelOperationSink, SpendSource } from '../events/model-call';
 import { normalizeUsage } from '../usage';
 import { JsonValueSchema } from '../utils/json';
 import type { SlateRoute } from './surface';
 import type { SlateSurfaceValue } from './rpc';
+import { AI } from '../operations/ai';
+import type { AiAnswer, AiRunInput } from '../operations/ai';
+import type { ActorOrigin } from '../identity/workspace-actors';
 
 export type SlateAiRoute = Extract<SlateRoute, { kind: 'ai' }>;
 
@@ -21,6 +24,21 @@ export interface SlateAiSeams {
   readonly operations: ModelOperationSink;
 }
 
+/**
+ * An agent program's `ai.run`: the slate's call, filed where the actor's own steps are (a search's head under `head`,
+ * every other agent under `agent`) and named as the program's, so its spend reads apart from the turn's steps.
+ */
+export async function programAiAnswer(input: AiRunInput, named: SlateAiModel, seams: SlateAiSeams & { readonly origin: ActorOrigin }): Promise<AiAnswer> {
+  const { origin, report } = seams;
+  const source: SpendSource = origin === 'swarm' ? 'head' : 'agent';
+  const answer = await slateAiAnswer({ kind: 'ai', ...input }, named, { ...seams, report: (call) => { report({ ...call, via: PROGRAM_AI_CALL }); } }, source);
+
+  return v.parse(AI.run.output, answer);
+}
+
+/** How a program's call is named in its spend row. */
+const PROGRAM_AI_CALL = 'ai.run';
+
 /** The model the answering account's resolved profile names for the call: its spec, and the tier that named it. */
 export interface SlateAiModel {
   readonly spec: string;
@@ -28,10 +46,10 @@ export interface SlateAiModel {
 }
 
 /** `ai.run`'s answer, or `ai.stream`'s text as UTF-8 bytes, from the model the answering account's profile names. */
-export async function slateAiAnswer(route: SlateAiRoute, named: SlateAiModel, seams: SlateAiSeams): Promise<SlateSurfaceValue> {
+export async function slateAiAnswer(route: SlateAiRoute, named: SlateAiModel, seams: SlateAiSeams, source: SpendSource = 'slate'): Promise<SlateSurfaceValue> {
   const { spec } = named;
   const model = seams.resolveModel(spec);
-  const spend = { source: 'slate' as const, report: seams.report, operations: seams.operations };
+  const spend = { source, report: seams.report, operations: seams.operations };
 
   if (route.stream === true) return slateAiStream({ model, prompt: route.prompt, ...(route.system !== undefined && { system: route.system }) }, { spend, spec });
   const input: GenerateRequest = { model, prompt: route.prompt, ...(route.system !== undefined && { system: route.system }) };

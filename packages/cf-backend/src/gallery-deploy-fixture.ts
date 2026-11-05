@@ -69,9 +69,6 @@ export type DeployFixtureState = (typeof DEPLOY_FIXTURE_STATES)[number]["id"];
 /** Where a sign-in in Cloudflare's window left the review: its end told the page, which reads the door again. */
 let signedInAs: DeployFixtureState | null = null;
 
-/** How often the account was read: an upgrade on Cloudflare shows on the read after the first. */
-let preflightReads = 0;
-
 function stateNow(): DeployFixtureState {
   const said = new URLSearchParams(location.search).get("deploy");
 
@@ -277,9 +274,20 @@ function sessionOf(state: DeployFixtureState): DeploySession {
 
 // ── Reads ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Whether the page had the focus back after it first read the account: an "upgrading" or "credits-added" account
+ * changed on Cloudflare while the person was away, so only a read after their return sees it. Counting reads instead
+ * broke on a page whose first read runs twice under StrictMode.
+ */
+let read = false;
+
+let cameBack = false;
+
+window.addEventListener("focus", () => { cameBack = read; });
+
 function preflightOf(state: DeployFixtureState): DeployPreflight {
-  preflightReads += 1;
-  const free = state === "free" || (state === "upgrading" && preflightReads === 1);
+  read = true;
+  const free = state === "free" || (state === "upgrading" && !cameBack);
   const noR2 = state === "r2" || state === "free" || state === "upgrading";
 
   return {
@@ -289,7 +297,7 @@ function preflightOf(state: DeployFixtureState): DeployPreflight {
     plan: free ? "free" : "paid",
     zones: ZONES,
     needs: [...free ? [needOf(PLAN_REFUSED)] : [], ...noR2 ? [needOf(R2_REFUSED)] : []],
-    credits: state === "no-credits" || (state === "credits-added" && preflightReads === 1)
+    credits: state === "no-credits" || (state === "credits-added" && !cameBack)
       ? { balance: 0, card: false, autoTopUp: null }
       : { balance: 18.4, card: true, autoTopUp: { threshold: 5, amount: 20 } },
     checkedAt: "2026-10-21T08:00:00.000Z",

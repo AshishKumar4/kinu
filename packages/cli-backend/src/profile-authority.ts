@@ -85,7 +85,7 @@ export interface LocalProfileAuthority {
    * Profile for work outside a chat turn: empty tool surface and the default work
    * mode, since these lanes resolve tiers only.
    */
-  resolvePreTurn(availableTools?: readonly string[]): Promise<ResolvedTurnProfile>;
+  resolvePreTurn(availableTools?: readonly string[], explicitTier?: string): Promise<ResolvedTurnProfile>;
   /** The tier, model and effort the actor's next turn resolves to, before it runs. */
   nextTurnTier(options: { readonly workMode: WorkMode; readonly ancestors?: readonly PinnedProfile[] }): Promise<ResolvedTurnProfile['tier']>;
   refreshListing(): void;
@@ -153,12 +153,13 @@ export function createLocalProfileAuthority(deps: {
     normalizeSpec,
     envelope,
     inputs,
-    async resolvePreTurn(availableTools = []) {
+    async resolvePreTurn(availableTools = [], explicitTier?: string) {
       const authority = await inputs();
 
       return resolveTurnProfile({
         ...authority,
         ...ownProfileChoices(deps.config, authority),
+        ...(explicitTier !== undefined && { explicitTier }),
         workMode: 'build',
         availableTools,
         activeSkills: [],

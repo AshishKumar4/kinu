@@ -4,10 +4,10 @@ import { DevboxError, settle, settleSync } from './errors';
 /** The container of a box on a server that runs none, as a local dev server never does (vite.config.ts): it is never
  *  running, and everything asked of it is refused in `reason`'s words, once, rather than retried. */
 export class AbsentContainer implements Container {
-  readonly #reason: string;
+  readonly #words: string;
 
   constructor(reason: string) {
-    this.#reason = reason;
+    this.#words = reason;
   }
 
   get running(): boolean { return false; }
@@ -39,6 +39,6 @@ export class AbsentContainer implements Container {
   inspect(): Promise<ContainerInfo | null> { return settle(Effect.fail(this.#refusal())); }
 
   #refusal(): DevboxError {
-    return new DevboxError('configuration', this.#reason);
+    return new DevboxError('configuration', this.#words);
   }
 }

@@ -9,7 +9,7 @@ type MissionGovernor, type ModelCallSink, type ModelOperationSink,
 type SeatedActor, type WriteObserver,
 runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
 actorNamespaces, hostedSurfaceActor, SURFACE_POLICY, headMergeLLM, spawnSeatedHead,
-localMissionScope, type CodemodeBuilder, } from '@kinu.run/core'
+localMissionScope, type CodemodeBuilder, type ActorOrigin, type AiDeps, } from '@kinu.run/core'
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 
 export interface CLIHeadRuntimeDeps {
@@ -35,13 +35,15 @@ export interface CLIHeadRuntimeDeps {
    * it `fileChanges` reports nothing for a head that rewrote the tree.
    */
   hostHead: (input: HeadInput, writes: WriteObserver) => Promise<HeadSeat>;
+  /** `ai.*` for a hosted actor's programs, as that actor's own spend. */
+  programAi: (origin: ActorOrigin) => AiDeps;
 }
 
 export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
     spawnHead: async (input) => spawnSeatedHead(input, {
       seat: deps.hostHead,
-      codemode: (seat) => hostedCodemodeTool(seat.actor, deps.webSearch),
+      codemode: (seat) => hostedCodemodeTool(seat.actor, deps.webSearch, deps.programAi(seat.actor.record.origin)),
       webSearch: deps.webSearch,
       split: () => (request) => runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request),
       mission: () => localMissionScope(deps.governor(), input.missionLabels ?? []),
@@ -64,7 +66,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
  * runtime, never the parent's (a fork must not move its parent's program state), and it never inherits the authority
  * to delegate. A node's programs report where its native `report` does.
  */
-export function hostedCodemodeTool(actor: SeatedActor, search: WebSearchProvider): CodemodeBuilder {
+export function hostedCodemodeTool(actor: SeatedActor, search: WebSearchProvider, ai: AiDeps): CodemodeBuilder {
   return (codemode, reach) => {
     // A program here runs in this process, which holds no Browser Run socket client; it runs the store operations its
     // native tools run.
@@ -77,6 +79,7 @@ export function hostedCodemodeTool(actor: SeatedActor, search: WebSearchProvider
       github: null,
       // A head or a swarm node, whose run ends with it, holds no wait on its owner.
       ownerWaits: null,
+      ai,
     });
 
     const reported = codemode.report;

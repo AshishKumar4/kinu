@@ -114,6 +114,8 @@ interface WorkSurfaceProps {
   /** Live deltas, drawn under the durable steps until each one lands. */
   headDeltas?: HeadDeltas;
   isStreaming: boolean;
+  /** Moves with each context the agent measured: the activity surface reads again on it. */
+  contextMeasures?: number;
   executors: ExecutorInfo[];
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
@@ -371,7 +373,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               />
             )}
             {openPort && <div className="p-pane"><div className="p-pane-card"><PreviewFrame url={previewUrlOf(openPort, surface, props.previewAddress)} label={previewPortTitle(openPort)} publicLink={publicLink} /></div></div>}
-            <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
+            <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} contextMeasures={props.contextMeasures} />
             {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
           </Suspense>
         </ErrorBoundary>
@@ -387,6 +389,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
   );
 }
 
-function SideSurface({ shown, rpc, isStreaming }: Pick<WorkSurfaceProps, "rpc" | "isStreaming"> & { shown: SurfaceKind | null }) {
-  return shown === ACTIVITY_SURFACE ? <ActivitySurface rpc={rpc} isStreaming={isStreaming} /> : null;
+function SideSurface({ shown, rpc, isStreaming, contextMeasures = 0 }: Pick<WorkSurfaceProps, "rpc" | "isStreaming" | "contextMeasures"> & { shown: SurfaceKind | null }) {
+  return shown === ACTIVITY_SURFACE ? <ActivitySurface rpc={rpc} isStreaming={isStreaming} measured={contextMeasures} /> : null;
 }

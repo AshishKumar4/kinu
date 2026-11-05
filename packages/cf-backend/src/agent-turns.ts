@@ -1,5 +1,5 @@
 /** The workspace half of an agent's turns (D9): their tools and sources. */
-import { hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
+import { diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect, Exit } from 'effect';
 import {
   AgentOpenTurns, TurnFences, type FencedRow, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, scaffoldProviders, runWorkModeInvocation,
@@ -90,6 +90,8 @@ interface OpenTurn {
   recalled?: TurnReads['recalled'];
   /** The opening the workspace's fence admitted for it: what it offers and closes must still be that one. */
   readonly fenced?: OpenedAt;
+  /** Each stage of its reading, in milliseconds, reported as `agent.prepare_timing`. */
+  timing?: Readonly<Record<string, number>>;
   /** A run's end, which its agent tells with a report (`runEnded`). */
   readonly ended?: ReturnType<typeof Promise.withResolvers<AgentTurnEnd>>;
   /** Its advisor's read-only tools over the agent's stores, on a ledger of their own (`advisorRead`). */
@@ -520,10 +522,20 @@ export class AgentTurns {
 
   /** Null when the opening it prepares was overtaken while it read: see {@link offeredFacts}. */
   private async read(turn: OpenTurn): Promise<PreparedAgentTurn | null> {
+    const began = performance.now();
     const prepared = await prepareHostedTurn(this.deps.seams(), turn.reference, turn.request);
+
+    turn.timing = { hostedMs: performance.now() - began };
     // Every turn is the owner's limits' to admit (a suspended account starts none, a platform model's day is bounded),
     // asked beside the rest of its reading.
-    const [read] = await Promise.all([this.readPrepared(turn, prepared), this.deps.admitModel(prepared.model)]);
+    const admitting = performance.now();
+
+    const [read] = await Promise.all([this.readPrepared(turn, prepared), this.deps.admitModel(prepared.model).then(() => {
+      turn.timing = { ...turn.timing, admitMs: performance.now() - admitting };
+    })]);
+
+    // Where a turn's preparation spends its time, stage by stage (#103: the agent isolate exports no spans of its own).
+    diagnostics.event('agent.prepare_timing', { ...turn.timing, totalMs: performance.now() - began });
 
     return read;
   }
@@ -533,8 +545,20 @@ export class AgentTurns {
     const { actor, input, surface } = prepared;
 
     turn.prepared = prepared;
+    let at = performance.now();
+
+    const lap = (stage: string): void => {
+      const now = performance.now();
+
+      turn.timing = { ...turn.timing, [`${stage}Ms`]: now - at };
+      at = now;
+    };
+
     [turn.accountFacts, turn.mail] = await Promise.all([surface.sources.accountFacts?.(), surface.sources.mail?.()]);
+    lap('accountMail');
     const version = await actor.runtime.identity.scaffold.version();
+
+    lap('scaffold');
 
     const scaffold = this.scaffold(actor, version);
     const mode = this.mode(turn, prepared);
@@ -551,10 +575,13 @@ export class AgentTurns {
       },
     )]);
 
+    lap('sources');
     turn.recalled = recalled;
 
     turn.memoryTail = sources.memoryTail ?? undefined;
     const advisorTools = await this.advisorTools(turn, surface.stores);
+
+    lap('advisor');
     const brief = run?.brief?.(callableToolNames(mode, surface.offered));
     const facts = this.offeredFacts(turn, prepared);
 

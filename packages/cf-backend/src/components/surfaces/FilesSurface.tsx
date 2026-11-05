@@ -909,7 +909,8 @@ function OfflineMountTile({ row }: { row: OfflineRow }) {
       <PlugIcon size={32} className="p-text-3" />
       <span className="t-body max-w-full truncate p-text-3">{row.name}</span>
       {row.label !== null && <span data-mount-badge className="t-meta max-w-full truncate p-text-3">{row.label}</span>}
-      <span className="t-meta flex items-baseline gap-2">
+      {/* Stacked: side by side they are wider than a tile, and the panel's edge cut "offline" off (kinu.run, 2026-11-05). */}
+      <span className="t-meta flex flex-col items-center">
         <span className="p-text-3">offline</span>
         {row.onConnect && (
           <Button variant="ghost" size="sm" data-files-connect onClick={row.onConnect}>Connect</Button>

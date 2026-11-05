@@ -7,6 +7,7 @@ import type { Impact } from '@agent-core/core/facets';
 import { COMPUTER_OWNER_ONLY } from '../execution/secrets-caller';
 import type { Operation } from '../operations/operation';
 import { AGENT } from '../operations/agent';
+import { AI } from '../operations/ai';
 import { AGENTS_IMPACTS, AGENTS_SLATE } from '../operations/agents';
 import { DB } from '../operations/db';
 import { EXECUTOR_CATALOG } from '../operations/executors';
@@ -29,7 +30,7 @@ export type ActionEffect = 'read' | 'mutate';
 
 /** Every eval namespace the catalog declares, each operation by its name; an executor's are all it may serve. */
 const DECLARED = new Map(Object.entries({
-  memory: MEMORY, tasks: TASKS, web: WEB, file: FILE, db: DB, agent: AGENT,
+  memory: MEMORY, tasks: TASKS, web: WEB, file: FILE, db: DB, agent: AGENT, ai: AI,
   ...Object.fromEntries(EXECUTOR_CATALOG),
 }).map(([namespace, ops]) => [namespace, new Map(Object.values<Operation>(ops).map((op) => [op.name, op]))]));
 

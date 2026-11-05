@@ -235,6 +235,7 @@ export class UserDO extends Agent<Env> {
     evalAccount: () => isEvalAccountEmail(this.env.DEV_USER_EMAIL ?? '', this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? ''),
     markOf: (workspace) => this.workspaces.markOf(workspace),
     tearDown: (workspace) => this.workspaces.tearDownWorkspace(workspace, this.name),
+    withdrawProposals: (workspace) => { this.accountMemory.withdrawFrom(workspace); },
   });
 
   private readonly workspaceDeletions = new WorkspaceDeletionJobs({

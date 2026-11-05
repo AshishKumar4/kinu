@@ -442,6 +442,22 @@ it('a line typed between attaches adds exactly itself, its output and one prompt
   expect(readable(added.slice(ended))).toBe(readable(lastPrompt));
 });
 
+// Production, 2026-11-05: a brand-new workspace's first shell said "Runtime resumed": no runtime had run before it.
+it('a new workspace\'s first terminal claims no resume, whether or not its object restarted before the pane opened', async () => {
+  for (const restarted of [false, true]) {
+    const name = `fresh-${String(restarted)}`;
+    const subject = () => env.SLATE_DURABILITY_PROBE.get(env.SLATE_DURABILITY_PROBE.idFromName(name));
+    const workspace = `durability-${name}`;
+
+    await subject().serveSlate({ workspace, owner: 'durability-owner', id: `beside-${name}`, body: 'served' });
+
+    if (restarted) await abortAllDurableObjects();
+    const screen = (await subject().reattachTerminal(workspace)).output;
+
+    expect(screen.includes('Runtime resumed'), `restarted: ${String(restarted)}: ${JSON.stringify(screen.slice(0, 300))}`).toBe(false);
+  }
+});
+
 it("after its object restarts, a terminal's notice is said once however often a pane attaches", async () => {
   const { subject, workspace } = await settledTerminal('reattach-notice');
 

@@ -19,7 +19,16 @@ diff --git a/dist/hosted/runtime.js b/dist/hosted/runtime.js
 index e779245..80b4ea1 100644
 --- a/dist/hosted/runtime.js
 +++ b/dist/hosted/runtime.js
-@@ -75,7 +75,10 @@ class RuntimeOwner {
+@@ -64,6 +64,8 @@
+     supervisor = null;
+     flushScheduled = false;
+     recoveryNotice = false;
++    /** Whether a person has typed in this runtime's terminal: only their shell has state a later runtime resumes. */
++    shellTyped = false;
+     legacyNotice = null;
+     scheduling = new Set();
+     fileLeases = new Map();
+@@ -75,7 +77,10 @@
      supervisorDeliveries;
      constructor(options) {
          this.options = options;
@@ -31,6 +40,46 @@ index e779245..80b4ea1 100644
          hostNamespaceBinding(options.env, 'HostedRuntime');
          this.supervisorDeliveries = openSupervisorDeliveries(options.ctx);
          const exports = Reflect.get(options.ctx, 'exports');
+@@ -95,7 +100,9 @@
+         options.ports.setClientSocketActivity(() => noteResidentClient(this, this.keepaliveCycle));
+         this.terminal = new WebSocketTerminal(null, (data) => {
+             appendScrollback(options.ctx, data, Date.now());
+-            persistShellState(options.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv(), vars: this.shell.getVariableAttributes() });
++            // Output alone, a process's that no one typed, saves no shell: a new workspace's first pane would say it resumed.
++            if (this.shellTyped)
++                persistShellState(options.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv(), vars: this.shell.getVariableAttributes() });
+         }, (send) => void this.processes.releaseOutput(this.shellProcessPid, send));
+         this._cpRegistry = options.workspace.registry;
+         this.services = services.bindRuntimeServices(this, {
+@@ -352,6 +359,8 @@
+             return;
+         }
+         await this.attachTerminal(ws, 'wake');
++        if (input.type === 'input')
++            this.shellTyped = true;
+         const completion = this.terminal.handleMessage(input);
+         if (completion) {
+             this.options.lifecycle.waitUntil(completion.catch((error) => {
+@@ -362,7 +371,8 @@
+                 persistShellState(this.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv(), vars: this.shell.getVariableAttributes() });
+             }));
+         }
+-        persistShellState(this.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv(), vars: this.shell.getVariableAttributes() });
++        if (this.shellTyped)
++            persistShellState(this.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv(), vars: this.shell.getVariableAttributes() });
+     }
+     terminalClose(ws, selection = {}) {
+         if (selection.terminal)
+@@ -370,7 +380,8 @@
+         if (this.terminal.ws !== ws)
+             return;
+         this.terminal.flushNow();
+-        persistShellState(this.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv(), vars: this.shell.getVariableAttributes() });
++        if (this.shellTyped)
++            persistShellState(this.ctx, { cwd: this.shell.getCwd(), env: this.shell.getEnv(), vars: this.shell.getVariableAttributes() });
+         this.terminal.detach();
+         this.processes.flushLogs();
+     }
 diff --git a/dist/hosted/session.d.ts b/dist/hosted/session.d.ts
 index 5c6e973..862aef2 100644
 --- a/dist/hosted/session.d.ts

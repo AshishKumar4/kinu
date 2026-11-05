@@ -3,7 +3,7 @@
  * surfaces beside it, and the settings it runs by. Each opens what the page already offers for it.
  */
 import { Cause, Effect } from "effect";
-import { APP_ROUTES, COMPACTED, slashCommand, type CompactOutcome, type ConversationMessage, type SurfaceKind, workspaceRoute } from "@kinu.run/core";
+import { APP_ROUTES, COMPACTED, DEFAULT_ROLE_ID, describeTakePick, hasComparableTakes, slashCommand, type AlternateTakeSet, type CompactOutcome, type ConversationMessage, type SurfaceKind, type TakePickOutcome, workspaceRoute } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import type { ComposerCommand } from "@/components/SlashMenu";
 import { settingsPath } from "@/components/SettingsRail";
@@ -25,6 +25,49 @@ export interface WorkspaceCommandHandles {
   readonly go: (path: string) => Effect.Effect<void>;
   /** Says what a command did, or why it did nothing (the default). */
   readonly say: (words: string, tone?: "info") => void;
+  /** The agent's active role, and choosing another, which applies from its next turn. */
+  readonly role: { readonly current: () => Promise<string | null>; readonly choose: (id: string) => Promise<string> };
+  /** The newest turn's alternate takes, if any; opening their comparison, and picking one. */
+  readonly takes: {
+    readonly latest: AlternateTakeSet | undefined;
+    readonly open: (set: AlternateTakeSet) => void;
+    readonly pick: (set: AlternateTakeSet, nodeId: string) => Promise<TakePickOutcome>;
+  };
+}
+
+/** `run`, its failure said with `doing`. */
+function told(at: WorkspaceCommandHandles, doing: string, run: () => Promise<void>): Effect.Effect<void> {
+  return Effect.catchCause(Effect.promise(run), (failed) => Effect.sync(() => { at.say(`Could not ${doing}: ${renderThrownChain({ cause: Cause.squash(failed) })}`); }));
+}
+
+/** `/role` shows the active role; `/role <id>` chooses one, as the CLI's does. */
+function roleCommand(at: WorkspaceCommandHandles): ComposerCommand {
+  return {
+    ...slashCommand("/role", "/role [id]"),
+    run: (id) => (id === ""
+      ? told(at, "read the role", async () => { at.say(`Role: ${await at.role.current() ?? DEFAULT_ROLE_ID}`, "info"); })
+      : told(at, "choose the role", async () => { at.say(`Role: ${await at.role.choose(id)}. It applies from the next turn.`, "info"); })),
+  };
+}
+
+/** `/takes` opens the newest comparison; `/takes <n>` picks its n-th take. */
+function takesCommand(at: WorkspaceCommandHandles): ComposerCommand {
+  return {
+    ...slashCommand("/takes", "/takes [n]"),
+    run: (n) => {
+      const set = at.takes.latest;
+
+      if (!hasComparableTakes(set)) return Effect.sync(() => { at.say("No alternate takes yet. They appear after a /branch redirect settles."); });
+
+      if (n === "") return Effect.sync(() => { at.takes.open(set); });
+      const index = Number(n);
+      const candidate = Number.isInteger(index) ? set.candidates[index - 1] : undefined;
+
+      if (candidate === undefined) return Effect.sync(() => { at.say(`No take "${n}". /takes lists ${String(set.candidates.length)}.`); });
+
+      return told(at, "pick the take", async () => { at.say(describeTakePick(await at.takes.pick(set, candidate.nodeId), index), "info"); });
+    },
+  };
 }
 
 export function workspaceCommands(at: WorkspaceCommandHandles): ComposerCommand[] {
@@ -56,6 +99,10 @@ export function workspaceCommands(at: WorkspaceCommandHandles): ComposerCommand[
         else at.walkBack(id);
       })), (failed) => Effect.sync(() => { at.say(`Could not read this chat's history: ${renderThrownChain({ cause: Cause.squash(failed) })}`); })),
     },
+    roleCommand(at),
+    takesCommand(at),
+    { ...slashCommand("/status"), run: show("Agent") },
+    { ...slashCommand("/refine"), run: show("Agent") },
     { ...slashCommand("/tree"), run: show("Swarms") },
     { ...slashCommand("/jobs"), run: show("Work") },
     { ...slashCommand("/memory"), run: show("Agent") },
@@ -63,6 +110,8 @@ export function workspaceCommands(at: WorkspaceCommandHandles): ComposerCommand[
     { ...slashCommand("/settings"), run: go(settings) },
     { ...slashCommand("/approval"), run: go(settings) },
     { ...slashCommand("/advisor"), run: go(settings) },
+    { ...slashCommand("/instructions"), run: go(`${settings}#instructions`) },
+    { ...slashCommand("/always"), run: go(`${settings}#always-active`) },
     { ...slashCommand("/stats"), run: go(settingsPath("usage")) },
     { ...slashCommand("/accounts"), run: go(settingsPath("providers")) },
     { ...slashCommand("/models"), run: go(settingsPath("models")) },

@@ -17,13 +17,6 @@ export const REAL_CLOCK: Clock = {
   },
 };
 
-export function waitOn(clock: Clock, ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  clock.after(ms, resolve);
-
-  return promise;
-}
-
 /** Lets the event loop run whatever is waiting before this continues: a yield, not a wait (no time passes for it). Work
  *  that can take long in one isolate turn yields between its slices; see the drawn page's slice. */
 export function nextLoopTurn(): Promise<void> {

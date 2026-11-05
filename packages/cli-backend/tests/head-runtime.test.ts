@@ -20,8 +20,7 @@ import {
 import {
   MERGE_POLICY_BINDING, MERGE_POLICY_JUDGE_MODEL, MERGE_POLICY_SPEND_SOURCE,
   mergePolicyProfile, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, createTestActorsOver,
-  type ScriptedTurnResult, workspaceDatabase,
-} from '@kinu.run/test-utils';
+  type ScriptedTurnResult, workspaceDatabase, UNASKED_AI } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
@@ -110,6 +109,7 @@ function headDeps(
 
   return {
     hostHead: headSeatFactory(parent, host, 'fixture-run', { writes, model: resolve }),
+    programAi: () => UNASKED_AI,
 
     profile: async () => mergePolicyProfile(),
     bindMergeModel: (route) => {

@@ -6,7 +6,7 @@ import { Data, Effect } from 'effect';
 import { settleSync } from '@kinu.run/core/obs';
 import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
-  CraftStore, AgentStores, AgentsSwarmDeps, ModelCallSink, RunEventRecorder,
+  CraftStore, AgentStores, AgentsSwarmDeps, ModelCallSink, RunEventRecorder, AiDeps,
 } from '@kinu.run/core';
 import { tool } from 'ai';
 import {
@@ -48,6 +48,9 @@ export class UnsupportedTestCapability extends Data.TaggedError('UnsupportedTest
 export function refuse(capability: string, option: string): never {
   return settleSync(Effect.die(new UnsupportedTestCapability(capability, option)));
 }
+
+/** `ai.*` for a suite whose programs ask no model: a call refuses by name. */
+export const UNASKED_AI: AiDeps = { run: async () => refuse('a model call (ai.run)', 'ai') };
 
 /** A spend sink for a suite that observes no spend: each report is dropped. */
 export const unobservedSpend: ModelCallSink = () => undefined;

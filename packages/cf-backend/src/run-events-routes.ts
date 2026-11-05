@@ -1,8 +1,9 @@
 /**
  * HTTP routes for the durable run-event log: list runs, page events, and an SSE
- * stream with Last-Event-ID resume. The stream polls the DO over RPC, which cannot
- * hold a persistent server-push channel here. Both forward the stored text, in
- * pages PLATFORM_CATALOG `run_events.page_bytes` bounds.
+ * stream with Last-Event-ID resume. The stream reads the log only after a write
+ * rang the workspace's doorbell (`RunWrites`), so a follower of an idle run reads
+ * nothing. Both forward the stored text, in pages PLATFORM_CATALOG
+ * `run_events.page_bytes` bounds.
  */
 
 import { Hono } from 'hono';
@@ -10,7 +11,7 @@ import type { OrchestratorAgent } from "./orchestrator";
 import { boundRunEventQuery, RUN_EVENT_LIMIT_MAX, type RunEventType, type StoredRunEvent } from "@kinu.run/core";
 import * as v from 'valibot';
 import { resumeIndexFromLastEventId } from '@kinu.run/core';
-import { waitOn, type Clock } from "@kinu.run/core";
+import type { Clock } from "@kinu.run/core";
 import { Cause, Effect, Exit } from 'effect';
 import { diagnostics, hold, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import { rawParam, type FamilyEnv } from './api/context';
@@ -26,12 +27,44 @@ function reportingAs(surface: string): (failed: Cause.Cause<unknown>) => Effect.
   });
 }
 
-const SSE_POLL_MS = 500;
-
 /** How long one browser SSE subscription stays open before the client reconnects. */
 const SSE_TIMEOUT_MS = 5 * 60 * 1000;
 
+/** The longest a stream waits on the doorbell before it writes a heartbeat, which only keeps the socket open. */
 const SSE_HEARTBEAT_MS = 15_000;
+
+/** The most event text one stream reads; past it the stream ends, and the client resumes from its Last-Event-ID. */
+const SSE_READ_BYTES = 8 * 1024 * 1024;
+
+/** The workspace's run-event writes as a count, which a stream waits to pass the count it read at. This object's own
+ *  writes ring it, and every call main's isolate makes to the workspace, as what it wrote it wrote before calling: a
+ *  turn's events are each followed by a call (its step's, its tool's, its end's), so a stream reads only after one. */
+export class RunWrites {
+  private count = 0;
+  private readonly waiting = new Set<() => void>();
+
+  constructor(private readonly clock: Clock) {}
+
+  ring(): void {
+    this.count += 1;
+
+    for (const wake of this.waiting) wake();
+  }
+
+  /** The count once it is not `seen`, or after `ms` (at most a heartbeat) with it unchanged. */
+  async after(seen: number, ms: number): Promise<number> {
+    if (this.count !== seen) return this.count;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const disarm = this.clock.after(Math.max(0, Math.min(ms, SSE_HEARTBEAT_MS)), resolve);
+
+    this.waiting.add(resolve);
+    await promise;
+    disarm();
+    this.waiting.delete(resolve);
+
+    return this.count;
+  }
+}
 
 const ALLOWED_TYPES = [
   'run_start', 'turn_start', 'tool_call_end',
@@ -40,7 +73,7 @@ const ALLOWED_TYPES = [
   'turn_end', 'run_end',
 ] as const satisfies readonly RunEventType[];
 
-export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEventText'>;
+export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEventText' | 'awaitRunWrites'>;
 
 
 function parseTypesParam(s: string | null): RunEventType[] | undefined {
@@ -134,14 +167,14 @@ interface RunEventStreamOptions {
   readonly runId: string;
   readonly sinceIndex: number;
   readonly signal: AbortSignal;
-  /** The stream's clock (D19): a test drives poll iterations instead of sleeping. */
+  /** The stream's clock (D19): its deadline and first-byte measure. */
   readonly clock: Clock;
 }
 
 function streamRunEvents(options: RunEventStreamOptions): Response {
   const { agent: stub, runId, sinceIndex, signal, clock } = options;
   const encoder = new TextEncoder();
-  // Stop polling the DO the moment the client goes away (stream cancel or request abort).
+  // Stop asking the DO the moment the client goes away (stream cancel or request abort).
   let closed = false;
   // A cancelled stream's controller is unusable; an aborted request's is closed below so an attached reader sees the end.
   let cancelled = false;
@@ -150,7 +183,7 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
     async start(controller) {
       const startedAt = clock.now();
       let cursor = sinceIndex;
-      let heartbeatAt = clock.now();
+      let read = 0;
       signal.addEventListener('abort', () => { closed = true; }, { once: true });
 
       // First event, not headers, is what a reader waits for.
@@ -168,12 +201,19 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
 
       // Stored JSON holds no raw newline: one `data:` line.
       const send = (ev: StoredRunEvent) => {
-        controller.enqueue(encoder.encode(`id: ${ev.eventIndex}\nevent: ${ev.type}\ndata: ${ev.payload}\n\n`));
+        const frame = encoder.encode(`id: ${ev.eventIndex}\nevent: ${ev.type}\ndata: ${ev.payload}\n\n`);
+
+        controller.enqueue(frame);
         cursor = Math.max(cursor, ev.eventIndex);
-        heartbeatAt = clock.now();
+        read += frame.byteLength;
       };
 
+      const over = () => closed || clock.now() - startedAt >= SSE_TIMEOUT_MS || read >= SSE_READ_BYTES;
+
       const streamed = await hold(Effect.promise(async () => {
+        // The count before the first read: a write after it, during any read, wakes the next wait at once.
+        let seen = await stub.awaitRunWrites(-1, 0);
+
         // Pages drain back to back; an empty one means caught up. The client's EventSource auto-reconnects with Last-Event-ID.
         for (;;) {
           const page = await stub.getRunEventText(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_MAX });
@@ -182,18 +222,20 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
           // Reported even when the replay is empty, or the measurement would only count backlogged streams.
           reportFirstByte(page.length);
 
-          if (page.some((e) => e.type === 'run_end') || closed || clock.now() - startedAt >= SSE_TIMEOUT_MS) break;
+          if (page.some((e) => e.type === 'run_end') || over()) break;
 
           if (page.length > 0) continue;
+          let rung = seen;
 
-          if (clock.now() - heartbeatAt >= SSE_HEARTBEAT_MS) {
-            controller.enqueue(encoder.encode(`:heartbeat ${clock.now()}\n\n`));
-            heartbeatAt = clock.now();
+          // Caught up: nothing is read until a write rings, however long the run is idle.
+          while (rung === seen && !over()) {
+            rung = await stub.awaitRunWrites(seen, SSE_HEARTBEAT_MS);
+
+            if (rung === seen && !closed) controller.enqueue(encoder.encode(`:heartbeat ${clock.now()}\n\n`));
           }
 
-          await waitOn(clock, SSE_POLL_MS);
-
-          if (closed) break;
+          if (over()) break;
+          seen = rung;
         }
 
         if (!cancelled) controller.close();

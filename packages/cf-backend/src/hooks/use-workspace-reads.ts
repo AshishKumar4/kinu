@@ -153,6 +153,8 @@ export function useWorkspaceReads(link: ChatLink) {
   const [slateReloads, setSlateReloads] = useState<ReadonlyMap<string, number>>(new Map());
   const [changesMoved, setChangesMoved] = useState(0);
   const [readMoves, setReadMoves] = useState<ReadMoves>({});
+  /** Each context the agent measured, as its room tells it: a step it recorded, or a request it admitted. */
+  const [contextMeasures, setContextMeasures] = useState(0);
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
   const [ownerQuestions, setOwnerQuestions] = useState<AskingAgent[]>([]);
   /** The owner's decisions, answers and Retries whose crossing did not reach their agent, until its wake delivers each. */
@@ -637,7 +639,15 @@ export function useWorkspaceReads(link: ChatLink) {
     return rpc("executeInExecutor", [executorId, command]);
   }, [rpc]);
 
-  const extension: WorkspaceExtension = { snapshot: applySnapshot, frame: paneFrame, refresh: refreshLiveData, jobs: refreshBackgroundJobs };
+  /** A context the agent measured moves only the activity read; every other frame is the pane's. */
+  const frame = (msg: SocketFrame): Promise<void> => {
+    if (msg.type !== "context_fill") return paneFrame(msg);
+    setContextMeasures((measured) => measured + 1);
+
+    return Promise.resolve();
+  };
+
+  const extension: WorkspaceExtension = { snapshot: applySnapshot, frame, refresh: refreshLiveData, jobs: refreshBackgroundJobs };
 
   return {
     extension,
@@ -671,6 +681,7 @@ export function useWorkspaceReads(link: ChatLink) {
       slateReloads,
       changesMoved,
       readMoves,
+      contextMeasures,
       pendingConsents,
       ownerQuestions,
       owedIntents,
