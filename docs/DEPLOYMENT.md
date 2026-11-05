@@ -440,7 +440,7 @@ Requests follow the preview limits (developers.openai.com/siwc/token-sharing-ope
 
 | Binding | Type | Description |
 |---------|------|-------------|
-| `OrchestratorAgent` | Durable Object | The workspace agent (`OrchestratorAgent extends ActorAgent extends Agent<Env>`) |
+| `OrchestratorAgent` | Durable Object | The workspace agent (`OrchestratorAgent extends Agent<Env>`) |
 | `UserDO` | Durable Object | Per-user profile, CLI tokens, devices |
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents and the alert outbox (one instance, `site`) |
 | `KinuDevbox` | Durable Object + Container | `KinuDevbox` (`@kinu.run/devbox`) on the `durable_object` scheduling policy; one container per workspace, started at the size the box records |

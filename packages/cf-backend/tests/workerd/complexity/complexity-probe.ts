@@ -160,7 +160,7 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     return new WorkspaceActorDirectory(this.executor, { workspaceId, ownerUserId: '' }).createMain({ name: 'complexity' });
   }
 
-  /** The actor's stores exactly as the orchestrator builds them (actor-agent.ts `stores`). */
+  /** The actor's stores exactly as the orchestrator builds them (orchestrator.ts `stores`). */
   private stores(actor: ActorHandle): AgentStores {
     return createAgentStores(() => this.executor, () => actor, (write) => this.ctx.storage.transactionSync(write), async () => ({
       vfs: storeFiles(() => this.workspace(), { home: WORKSPACE_ROOT }),
