@@ -50,7 +50,7 @@ export interface LocalPeerEndpointDeps {
   /** Dereferenced per received message; the file plane is built lazily. */
   vfs(): VFS;
   /** Unresolvable name is a refusal that dead-letters; a throw is retried with backoff. */
-  deliver(peer: string, msg: PeerMessage): Promise<ReceiveResult>;
+  deliver(peer: string, msg: PeerMessage): Effect.Effect<ReceiveResult, KinuError>;
   /** Run another host pass no later than `at`. */
   scheduleDispatch(at: number): void;
   onAdmitted(): void;

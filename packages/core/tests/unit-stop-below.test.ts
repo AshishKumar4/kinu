@@ -2,6 +2,8 @@
 // hires with it but left them counted working on its roster; the CLI dismissed them first. Both now run core's
 // `stopAgentsBelow` (cf-backend/tests/unit-stop-below.test.ts drives the cloud's).
 import { describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
+import { settle } from '../src/obs/effect';
 import { stopAgentsBelow } from '../src/subagents/hire-lifecycle';
 import type { WorkspaceActor } from '../src/identity/workspace-actors';
 import type { ActorReference } from '../src/identity/actor-handle';
@@ -48,9 +50,9 @@ function world() {
     ports: {
       directory: { list: () => ACTORS, retained: (id: string) => byId.get(id) ?? null },
       roster,
-      retire: async (owner: ActorReference, retirement: { readonly name: string; readonly destroy: boolean }) => {
+      retire: (owner: ActorReference, retirement: { readonly name: string; readonly destroy: boolean }) => Effect.sync(() => {
         acts.push(`retire ${retirement.name} under ${owner.actorId}${retirement.destroy ? ' destroyed' : ''}`);
-      },
+      }),
       cancelOwed: (row: WorkspaceActor) => { acts.push(`cancel ${row.name}`); },
       stopTurn: async (row: WorkspaceActor) => {
         acts.push(`cut ${row.name}`);
@@ -65,7 +67,7 @@ describe('a Stop below an agent', () => {
   test('cuts every turn, blocks what rests, and retires a stopped task agent with its hires first, history kept', async () => {
     const { acts, status, ports } = world();
 
-    await stopAgentsBelow('main', ports);
+    await settle(stopAgentsBelow('main', ports));
 
     // Deepest first (`stoppedBelow`): `docs` is blocked before its hirer is retired, and dismissed with it.
     expect(acts).toEqual([

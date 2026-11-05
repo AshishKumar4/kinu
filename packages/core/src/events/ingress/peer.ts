@@ -24,7 +24,7 @@ import {
   type JsonValue,
 } from '../../utils/json';
 import { Effect } from 'effect';
-import { renderThrownChain, settle, settleSync } from '../../obs/index';
+import { renderThrownChain, settle, settleSync, type KinuError } from '../../obs/index';
 
 export interface PeerMessage {
   sender_event_id: string;
@@ -143,7 +143,8 @@ export interface PeerHubDeps {
   selfAgentName(): string;
   /** Throws when the agent is unclaimed. */
   selfUserId(): string;
-  deliver(receiver_agent_name: string, msg: PeerMessage): Promise<ReceiveResult>;
+  /** Fails when the receiver cannot be reached: the outbox retries it. */
+  deliver(receiver_agent_name: string, msg: PeerMessage): Effect.Effect<ReceiveResult, KinuError>;
   isSameOwner(sender_user_id: string): Promise<boolean>;
   /** Awaited: on a Durable Object an unawaited storage write is not retained
    *  (`do.wait_until.no_op`). */
@@ -344,8 +345,8 @@ export class PeerHub {
       ...(queued.reply_expected === true && { reply_expected: true }),
     };
 
-    return Effect.tryPromise({ try: () => this.deps.deliver(queued.receiver_agent_name, wire), catch: (cause) => ({ cause }) }).pipe(Effect.match({
-      onFailure: (failed): OutboxDisposition => ({ status: 'retry', reason: renderThrownChain(failed) }),
+    return this.deps.deliver(queued.receiver_agent_name, wire).pipe(Effect.match({
+      onFailure: (failed): OutboxDisposition => ({ status: 'retry', reason: renderThrownChain({ cause: failed }) }),
       // Deduped by the receiver (crash redelivery) still counts as sent.
       onSuccess: (result): OutboxDisposition => (result.admitted || result.event_id
         ? { status: 'sent' }

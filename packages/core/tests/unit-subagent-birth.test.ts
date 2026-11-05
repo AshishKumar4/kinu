@@ -6,6 +6,7 @@ import { actorReferenceOf } from '../src/identity/actor-handle';
 import { SubagentRosterStore } from '../src/subagents/roster';
 import { admitSubagentBirth, recoverSubagentLifecycles, type SubagentBirthRequest } from '../src/subagents/birth';
 import { admitSubagentTask, describeSubagentHandoff, type SubagentRuntime } from '../src/subagents/support';
+import { attemptInItsWords } from '../src/obs/effect';
 import { EventLog } from '../src/events/hub/log';
 import { initEventsHubTables } from '../src/events/hub/schema';
 import { KinuError } from '../src/obs/error';
@@ -28,31 +29,31 @@ function setup() {
   let interruptDeletion = false;
 
   const runtime: SubagentRuntime = {
-    spawn: async (seed) => {
+    spawn: (seed) => attemptInItsWords('unavailable', async () => {
       const entry = directory.apply(main, [], { action: 'register', name: seed.name, creationId: seed.creationId, origin: 'agent', lifetime: seed.lifetime });
 
       if (interruptSeed) { interruptSeed = false; throw new KinuError('unavailable', 'Seed acknowledgement lost.'); }
 
       return entry.reference;
-    },
-    cancelBirth: async (seed) => {
+    }),
+    cancelBirth: (seed) => attemptInItsWords('unavailable', async () => {
       const actor = directory.apply(main, [], { action: 'cancelCreation', name: seed.name, creationId: seed.creationId, origin: 'agent', lifetime: seed.lifetime });
 
       if (actor.state !== 'deleted') directory.apply(main, [], { action: 'release', name: seed.name, reference: actor.reference });
 
       return actor.reference;
-    },
-    assign: async (_name, input) => {
+    }),
+    assign: (_name, input) => attemptInItsWords('unavailable', async () => {
       const admission = admitSubagentTask(events, { ...input, fromWorkspace: 'workspace', kind: 'task', now: 100 });
 
       if (interruptAssignment) { interruptAssignment = false; throw new KinuError('unavailable', 'Assignment acknowledgement lost.'); }
 
       return describeSubagentHandoff({ admission, turnInFlight: false, live: { lastActivity: 0, recentSteps: [] } });
-    },
-    status: async () => ({ lastActivity: 0, recentSteps: [] }),
-    message: async () => { throw new KinuError('unsupported', 'This test does not send a second message.'); },
-    rename: async () => { throw new KinuError('unsupported', 'This test does not rename actors.'); },
-    dismiss: async (name, { keepHistory }, reference) => {
+    }),
+    status: () => attemptInItsWords('unavailable', async () => ({ lastActivity: 0, recentSteps: [] })),
+    message: () => attemptInItsWords('unavailable', async () => { throw new KinuError('unsupported', 'This test does not send a second message.'); }),
+    rename: () => attemptInItsWords('unavailable', async () => { throw new KinuError('unsupported', 'This test does not rename actors.'); }),
+    dismiss: (name, { keepHistory }, reference) => attemptInItsWords('unavailable', async () => {
       if (keepHistory) return { stoppedJobs: [] };
       const actor = directory.apply(main, [], { action: 'retire', name, reference });
 
@@ -61,7 +62,7 @@ function setup() {
       if (actor.state !== 'deleted') directory.apply(main, [], { action: 'release', name, reference });
 
       return { stoppedJobs: [] };
-    },
+    }),
   };
 
   const admit = (assignment: SubagentBirthRequest['assignment'] = { body: 'Read the source.', mode: 'plan' }) => admitSubagentBirth(roster, runtime, {

@@ -72,8 +72,8 @@ import {
   isSubagentOrigin,
   CHAT_SESSION_ID,
 } from '@kinu.run/core';
-import { Effect, Result } from 'effect';
-import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, settleSync, settleLogged, settleLoggedSync, detach } from '@kinu.run/core/obs';
+import { Deferred, Effect, Result } from 'effect';
+import { KinuError, attempt, attemptInItsWords, diagnostics, hold, inItsWords, logged, refusalOf, settle, settleSync, settleLogged, detach } from '@kinu.run/core/obs';
 import { watchStatements } from '@kinu.run/core/identity';
 import {
   createCLIRuntime, shareLocalWorkspacePlane, cleanupFacetScratch, soulOf, writeTransaction, type CLIRuntime,
@@ -230,7 +230,7 @@ export class LocalAgentHost {
   private readonly byActor = new Map<string, HostEntry>();
   private readonly listeners = new Set<AgentEventListener>();
   /** First-open fence per address; recovery must run once under concurrent cold opens. */
-  private readonly opening = new Map<string, Promise<HostEntry>>();
+  private readonly opening = new Map<string, Deferred.Deferred<HostEntry, KinuError>>();
   private readonly trees = new Map<string, HostTree>();
   private closed = false;
   /** Passes started outside a turn; close() joins them before ending the sessions they use. */
@@ -279,11 +279,6 @@ export class LocalAgentHost {
   }
 
   /** Session events stay live after an interactive client disconnects. */
-  /** A task child's retire; a failure is the outcome. */
-  retireTaskChild(work: () => Promise<void>): Promise<Result.Result<void, KinuError>> {
-    return settle(Effect.result(attempt({ doing: 'retiring a task child after its answer', otherwise: 'io' }, work)));
-  }
-
   subscribe(listener: AgentEventListener): () => void {
     return settleSync(Effect.gen({ self: this }, function* () {
       if (this.closed) return yield* Effect.die(new Error('LocalAgentHost is closed.'));
@@ -294,8 +289,8 @@ export class LocalAgentHost {
   }
 
   /** Open once, recover once, keep alive until close(). Accepts a root or a roster path. */
-  async acquire(address: string): Promise<LocalAgentSession> {
-    return (await this.resolveEntry(address)).session;
+  acquire(address: string): Promise<LocalAgentSession> {
+    return settle(Effect.map(this.resolveEntry(address), (entry) => entry.session));
   }
 
   peek(name: string): LocalAgentSession | null {
@@ -303,53 +298,49 @@ export class LocalAgentHost {
   }
 
   /** One driver pass, gated on the driver lease; refused is a normal outcome, not a failure. */
-  async tick(name: string, now = Date.now()): Promise<LocalTickResult> {
-    return await this.tickEntry(await this.resolveEntry(name), now);
+  tick(name: string, now = Date.now()): Promise<LocalTickResult> {
+    return settle(Effect.flatMap(this.resolveEntry(name), (entry) => this.tickEntry(entry, now)));
   }
 
   /** The runtime an opened agent works over, as its opener built it. */
-  async runtime(address: string): Promise<CLIRuntime> {
-    return (await this.resolveEntry(address)).ws.rt;
+  runtime(address: string): Promise<CLIRuntime> {
+    return settle(Effect.map(this.resolveEntry(address), (entry) => entry.ws.rt));
   }
 
   /**
    * Takes the driver lease for `address`'s workspace now, as a client does before its person types; the refusal names
    * who holds it. An interactive host keeps it until close.
    */
-  async takeDriver(address: string): Promise<ReturnType<DriverLeaseHold['acquire']>> {
-    return (await this.resolveEntry(address)).tree.hold.acquire();
+  takeDriver(address: string): Promise<ReturnType<DriverLeaseHold['acquire']>> {
+    return settle(Effect.map(this.resolveEntry(address), (entry) => entry.tree.hold.acquire()));
   }
 
   /** Subagent operations for one agent, root or subagent, down to the depth cap. */
-  async team(address: string): Promise<TeamToolDeps> {
-    const entry = await this.resolveEntry(address);
+  team(address: string): Promise<TeamToolDeps> {
+    return settle(Effect.map(this.resolveEntry(address), (entry) => {
+      entry.team ??= this.buildTeam(entry);
 
-    entry.team ??= this.buildTeam(entry);
-
-    return entry.team;
+      return entry.team;
+    }));
   }
 
   /** Peer mail for one root agent; null for a subagent. */
-  async peers(address: string): Promise<LocalPeerEndpoint | null> {
-    return (await this.resolveEntry(address)).peers;
+  peers(address: string): Promise<LocalPeerEndpoint | null> {
+    return settle(Effect.map(this.resolveEntry(address), (entry) => entry.peers));
   }
 
   /** Turns interrupted in this process, read from unsettled durable claims so cold and warm hosts agree. */
-  async resumable(address: string, limit?: number): Promise<ReturnType<ActorHost['resumable']>> {
-    const entry = await this.resolveEntry(address);
-
-    return limit === undefined ? entry.tree.host.resumable() : entry.tree.host.resumable(limit);
+  resumable(address: string, limit?: number): Promise<ReturnType<ActorHost['resumable']>> {
+    return settle(Effect.map(this.resolveEntry(address), (entry) => (limit === undefined ? entry.tree.host.resumable() : entry.tree.host.resumable(limit))));
   }
 
-  async actors(address: string): Promise<readonly WorkspaceActor[]> {
-    return describeActors(await this.resolveEntry(address));
+  actors(address: string): Promise<readonly WorkspaceActor[]> {
+    return settle(Effect.map(this.resolveEntry(address), describeActors));
   }
 
   /** The workspace-wide work read `listWorkspaceWork` exposes over RPC. */
-  async workspaceWork(address: string): Promise<WorkspaceWork> {
-    const entry = await this.resolveEntry(address);
-
-    return readWorkspaceWork(entry.ws.rt.storage.sql, entry.ws.rt.actor, describeActors(entry));
+  workspaceWork(address: string): Promise<WorkspaceWork> {
+    return settle(Effect.map(this.resolveEntry(address), (entry) => readWorkspaceWork(entry.ws.rt.storage.sql, entry.ws.rt.actor, describeActors(entry))));
   }
 
   /**
@@ -374,118 +365,130 @@ export class LocalAgentHost {
     }
   }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
-    this.closed = true;
-    const openings = await Promise.allSettled(this.opening.values());
-    await Promise.all(this.answerPasses);
+  close(): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.closed) return;
+      this.closed = true;
 
-    for (const opening of openings) {
-      if (opening.status === 'rejected') {
-        diagnostics.failure(
-          'host.agent_open_failed',
-          toKinuError({ doing: 'opening a local agent during host shutdown', cause: opening.reason, otherwise: 'io' }),
-        );
-      }
-    }
+      // An opening's failure is its asker's; here it is only recorded. Snapshot: each opening leaves the map as it settles.
+      yield* Effect.forEach(Array.from(this.opening.values()), (opening) => Effect.catch(Deferred.await(opening), (failure) => Effect.sync(() => {
+        diagnostics.failure('host.agent_open_failed', failure);
+      })), { discard: true });
 
-    for (const entry of [...this.entries.values()].reverse()) {
-      await settleLogged('host.session_teardown_failed', { doing: 'ending a hosted local session', otherwise: 'io' }, () => entry.session.end(), { agent: entry.key });
-    }
+      yield* Effect.promise(() => Promise.all(this.answerPasses));
 
-    // Runtime objects, then lease, then file, once per tree. The lease is released before the handle
-    // closes so a daemon can drive again after an interactive process exits.
-    for (const tree of this.trees.values()) {
-      tree.host.releaseAll();
-      tree.hold.release();
-      tree.db.close();
-    }
-
-    this.entries.clear();
-    this.byActor.clear();
-    this.trees.clear();
-  }
-
-  private async resolveEntry(address: string): Promise<HostEntry> {
-    if (this.closed) throw new Error('LocalAgentHost is closed.');
-    const pending = this.opening.get(address);
-
-    if (pending) return await pending;
-
-    const existing = this.entries.get(address);
-
-    if (existing) return existing;
-
-    const separator = address.lastIndexOf('/');
-
-    if (separator >= 0) {
-      if (separator === 0 || separator === address.length - 1) {
-        throw new Error(`invalid local agent address "${address}"`);
+      for (const entry of [...this.entries.values()].reverse()) {
+        yield* logged('host.session_teardown_failed', { doing: 'ending a hosted local session', otherwise: 'io' }, () => entry.session.end(), { agent: entry.key });
       }
 
-      const parent = await this.resolveEntry(address.slice(0, separator));
+      // Runtime objects, then lease, then file, once per tree. The lease is released before the handle
+      // closes so a daemon can drive again after an interactive process exits.
+      for (const tree of this.trees.values()) {
+        tree.host.releaseAll();
+        tree.hold.release();
+        tree.db.close();
+      }
 
-      return await this.openChildEntry(parent, address.slice(separator + 1));
-    }
-
-    const opening = this.createTopLevel(address);
-    this.opening.set(address, opening);
-
-    try {
-      const entry = await opening;
-
-      // Opened here first, so this process opens every hire under it: what each was left, or left owing, runs again.
-      await this.openTree(entry);
-
-      return entry;
-    } finally {
-      if (this.opening.get(address) === opening) this.opening.delete(address);
-    }
+      this.entries.clear();
+      this.byActor.clear();
+      this.trees.clear();
+    }));
   }
 
-  private async createTopLevel(name: string): Promise<HostEntry> {
-    const ref = this.opts.roster().find((candidate) => candidate.name === name);
+  /** A refusal once close() began: nothing opens, births or retires after it. */
+  private open(): Effect.Effect<void, KinuError> {
+    return Effect.suspend(() => (this.closed ? Effect.fail(new KinuError('unavailable', 'LocalAgentHost is closed.')) : Effect.void));
+  }
 
-    if (!ref) {
-      throw new Error(`agent "${name}" has no local ref: nothing records which`
-        + ' directory or virtual workspace it belongs to, so it cannot be bound.');
-    }
+  /**
+   * `open` run once for `key`, every asker meanwhile joining it, and the key free again once it settles; `held` answers
+   * first with an entry already hosted.
+   */
+  private once(
+    key: string,
+    held: () => Effect.Effect<HostEntry | null, KinuError>,
+    open: () => Effect.Effect<HostEntry, KinuError>,
+  ): Effect.Effect<HostEntry, KinuError> {
+    return Effect.suspend(() => {
+      const pending = this.opening.get(key);
 
-    const dbPath = this.opts.dbPath(name);
+      if (pending) return Deferred.await(pending);
 
-    if (!existsSync(dbPath)) throw new Error(`agent "${name}" does not exist at ${dbPath}`);
+      return Effect.flatMap(held(), (existing) => {
+        if (existing !== null) return Effect.succeed(existing);
+        const opened = Deferred.makeUnsafe<HostEntry, KinuError>();
+        this.opening.set(key, opened);
 
-    const liveReads = new LiveReadsNotice((frame) => { this.entries.get(name)?.session.host.broadcast(frame); }, (flush) => {
-      if (this.opts.deferLiveReads) this.opts.deferLiveReads(flush);
-      else setImmediate(flush);
+        return Effect.onExit(open(), (exit) => Effect.andThen(Deferred.done(opened, exit), Effect.sync(() => {
+          if (this.opening.get(key) === opened) this.opening.delete(key);
+        })));
+      });
     });
+  }
 
-    const db = new Database(dbPath);
-    watchStatements(db, (query) => { liveReads.moved(readsWrittenBy(query)); });
+  private resolveEntry(address: string): Effect.Effect<HostEntry, KinuError> {
+    return Effect.andThen(this.open(), Effect.suspend(() => {
+      const pending = this.opening.get(address);
 
-    try {
-      const ws = await this.opts.open(ref, db, dbPath);
-      const tree = this.createTree(db, ws, liveReads);
-      this.trees.set(name, tree);
+      if (pending) return Deferred.await(pending);
+      const existing = this.entries.get(address);
 
-      try {
-        const actor = await tree.host.acquire(actorReferenceOf(ws.rt.actor), { kind: 'actor' });
+      if (existing) return Effect.succeed(existing);
+      const separator = address.lastIndexOf('/');
 
-        return await this.buildEntry({ key: name, name, ref, parentKey: null, tree, actor, ws });
-      } catch (error) {
-        // This path discards the tree without reaching close(), so release its lease here or the
-        // `driver_lease` row names a holder that no longer exists.
-        // Recorded, not thrown: it must not replace the open failure below, but must stay visible.
-        settleLoggedSync('driver.lease_release_failed', { doing: 'releasing the discarded tree\'s driver lease', otherwise: 'io' },
-          () => tree.hold.release(), { workspace: name });
-
-        this.trees.delete(name);
-        throw error;
+      if (separator < 0) {
+        // Opened here first, so this process opens every hire under it: what each was left, or left owing, runs again.
+        return Effect.tap(this.once(address, () => Effect.succeed(null), () => this.createTopLevel(address)), (entry) => this.openTree(entry));
       }
-    } catch (error) {
-      db.close();
-      throw error;
-    }
+
+      if (separator === 0 || separator === address.length - 1) {
+        return Effect.fail(new KinuError('bad_input', `invalid local agent address "${address}"`));
+      }
+
+      return Effect.flatMap(this.resolveEntry(address.slice(0, separator)), (parent) => this.openChildEntry(parent, address.slice(separator + 1)));
+    }));
+  }
+
+  private createTopLevel(name: string): Effect.Effect<HostEntry, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const ref = this.opts.roster().find((candidate) => candidate.name === name);
+
+      if (!ref) {
+        return yield* new KinuError('missing', `agent "${name}" has no local ref: nothing records which`
+          + ' directory or virtual workspace it belongs to, so it cannot be bound.');
+      }
+
+      const dbPath = this.opts.dbPath(name);
+
+      if (!existsSync(dbPath)) return yield* new KinuError('missing', `agent "${name}" does not exist at ${dbPath}`);
+
+      const liveReads = new LiveReadsNotice((frame) => { this.entries.get(name)?.session.host.broadcast(frame); }, (flush) => {
+        if (this.opts.deferLiveReads) this.opts.deferLiveReads(flush);
+        else setImmediate(flush);
+      });
+
+      const db = new Database(dbPath);
+      watchStatements(db, (query) => { liveReads.moved(readsWrittenBy(query)); });
+
+      return yield* Effect.onError(Effect.gen({ self: this }, function* () {
+        const ws = yield* attemptInItsWords('io', () => this.opts.open(ref, db, dbPath));
+        const tree = this.createTree(db, ws, liveReads);
+        this.trees.set(name, tree);
+
+        const built = Effect.flatMap(
+          attemptInItsWords('io', () => tree.host.acquire(actorReferenceOf(ws.rt.actor), { kind: 'actor' })),
+          (actor) => this.buildEntry({ key: name, name, ref, parentKey: null, tree, actor, ws }),
+        );
+
+        // This path discards the tree without reaching close(), so its lease is released here or the `driver_lease` row
+        // names a holder that no longer exists; a refused release is recorded, never in place of the open's failure.
+        return yield* Effect.onError(built, () => Effect.andThen(
+          logged('driver.lease_release_failed', { doing: 'releasing the discarded tree\'s driver lease', otherwise: 'io' },
+            async () => { tree.hold.release(); }, { workspace: name }),
+          Effect.sync(() => { this.trees.delete(name); }),
+        ));
+      }), () => Effect.sync(() => { db.close(); }));
+    });
   }
 
   /** The one actor host over a root's database; none of its factories opens a file. */
@@ -560,35 +563,35 @@ export class LocalAgentHost {
    * One actor's runtime. A root's is prepared before the host exists; a hire's is retained for the
    * entry built next; a head's or node's is per acquisition and retained nowhere.
    */
-  private async runtimeFor(
+  private runtimeFor(
     runtimes: Map<string, CLIRuntime>,
     db: Database,
     bound: BoundActor,
-  ): Promise<AgentRuntime> {
-    const prepared = runtimes.get(bound.reference.actorId);
+  ): Effect.Effect<AgentRuntime, KinuError> {
+    return Effect.suspend(() => {
+      const prepared = runtimes.get(bound.reference.actorId);
 
-    if (prepared) return prepared;
-    const parentId = bound.reference.parentActorId;
+      if (prepared) return Effect.succeed(prepared);
+      const parentId = bound.reference.parentActorId;
 
-    if (parentId === null) {
-      throw new KinuError('missing', 'A local root is opened before its host, never by it.');
-    }
+      if (parentId === null) return Effect.fail(new KinuError('missing', 'A local root is opened before its host, never by it.'));
 
-    const parent = this.requireActorEntry(parentId);
+      const parent = this.requireActorEntry(parentId);
 
-    const binding = bindLocalActorReference(parent.ws.rt.actor, bound.reference);
-    // The host's handle: the release fence is bound to this object.
-    adoptLocalActorHandle(parent.ws.rt.actor, bound.reference, bound.handle);
-    const openConfig = this.childOpenConfig(parent, binding);
+      const binding = bindLocalActorReference(parent.ws.rt.actor, bound.reference);
+      // The host's handle: the release fence is bound to this object.
+      adoptLocalActorHandle(parent.ws.rt.actor, bound.reference, bound.handle);
+      const openConfig = this.childOpenConfig(parent, binding);
 
-    const built = createCLIRuntime(db, {
-      ...openConfig, agentName: binding.name, actor: bound.handle, stores: bound.stores,
+      const built = createCLIRuntime(db, {
+        ...openConfig, agentName: binding.name, actor: bound.handle, stores: bound.stores,
+      });
+
+      const shared = shareLocalWorkspacePlane(built, parent.ws.rt);
+      runtimes.set(bound.reference.actorId, shared);
+
+      return Effect.succeed(shared);
     });
-
-    const shared = shareLocalWorkspacePlane(built, parent.ws.rt);
-    runtimes.set(bound.reference.actorId, shared);
-
-    return shared;
   }
 
   /** Remove one destroyed actor's scratch home, named from its storage key and kind; its rows go with the directory row. */
@@ -598,7 +601,7 @@ export class LocalAgentHost {
     return Promise.resolve();
   }
 
-  private async buildEntry(input: {
+  private buildEntry(input: {
     key: string;
     name: string;
     ref: HostedAgentRef;
@@ -606,14 +609,17 @@ export class LocalAgentHost {
     tree: HostTree;
     actor: HostedActor;
     ws: LocalHostedAgent;
-  }): Promise<HostEntry> {
-    const config = input.ws.rt.actor.config;
-    const hubSql = sqlStorageOver(input.tree.db);
+  }): Effect.Effect<HostEntry, KinuError> {
     const orchestration = input.tree.orchestrations.get(input.actor.reference.actorId);
 
-    if (!orchestration) {
-      throw new KinuError('missing', 'The hosted actor was acquired without an orchestration.');
-    }
+    return orchestration === undefined
+      ? Effect.fail(new KinuError('missing', 'The hosted actor was acquired without an orchestration.'))
+      : Effect.suspend(() => this.hostEntry(input, orchestration));
+  }
+
+  private hostEntry(input: Parameters<LocalAgentHost['buildEntry']>[0], orchestration: LocalOrchestration): Effect.Effect<HostEntry, KinuError> {
+    const config = input.ws.rt.actor.config;
+    const hubSql = sqlStorageOver(input.tree.db);
 
     // Consumed: empty the handover slot so a re-acquisition cannot pick it up.
     input.tree.orchestrations.delete(input.actor.reference.actorId);
@@ -722,58 +728,44 @@ export class LocalAgentHost {
       entry.session.setParentRelay(this.parentRelayFor(entry));
     }
 
-    try {
-      if (input.ws.mcpServers && Object.keys(input.ws.mcpServers).length > 0) {
-        await session.connectMcp(input.ws.mcpServers);
-      }
+    // Recovery for a process that died after publishing or mid-drain: reclaim leased rows, then run
+    // reactor events and parent-admitted assignments. Under the lease bracket because all three
+    // convert rows. Nothing else re-drives an assignment after restart, so local task children need
+    // no `recovered` report (cf differs: it claims per turn).
+    const recovered = attemptInItsWords('io', async () => {
+      if (input.ws.mcpServers && Object.keys(input.ws.mcpServers).length > 0) await session.connectMcp(input.ws.mcpServers);
 
-      // Recovery for a process that died after publishing or mid-drain: reclaim leased rows, then run
-      // reactor events and parent-admitted assignments. Under the lease bracket because all three
-      // convert rows. Nothing else re-drives an assignment after restart, so local task children need
-      // no `recovered` report (cf differs: it claims per turn).
       await this.drive(entry, async () => {
         await session.recoverBackgroundJobs();
         session.reclaimStrandedEventDeliveries();
         await session.flushPendingDrains();
         await this.drainAssignedWork(entry);
       });
+    });
 
-      return entry;
-    } catch (error) {
+    return Effect.as(Effect.catch(recovered, (failure) => Effect.gen({ self: this }, function* () {
       this.entries.delete(input.key);
       this.byActor.delete(input.actor.reference.actorId);
-      const cleanupErrors: Error[] = [];
 
-      try {
-        await session.end();
-      } catch (cleanupError) {
-        cleanupErrors.push(new Error('ending the failed hosted session', { cause: cleanupError }));
-      }
+      const ended = yield* Effect.result(attempt({ doing: 'ending the failed hosted session', otherwise: 'io' }, () => session.end()));
 
       // Runtime objects go back to the host; the lease stays with the tree until close(). Only a child
-      // releases: the root's tree is discarded by `createTopLevel`'s catch, and a release refusal would
-      // bury the real failure in an AggregateError.
-      if (input.actor.reference.parentActorId !== null) {
-        try {
-          input.tree.host.release(input.actor.reference);
-        } catch (cleanupError) {
-          cleanupErrors.push(new Error('releasing the failed hosted actor', { cause: cleanupError }));
-        }
-      }
+      // releases: the root's tree is discarded by `createTopLevel`, and a release refusal would
+      // bury the real failure.
+      const released = input.actor.reference.parentActorId === null
+        ? Result.succeed(undefined)
+        : yield* Effect.result(attempt({ doing: 'releasing the failed hosted actor', otherwise: 'io' }, async () => { input.tree.host.release(input.actor.reference); }));
 
       input.tree.orchestrations.delete(input.actor.reference.actorId);
       input.tree.runtimes.delete(input.actor.reference.actorId);
+      const unreleased = [ended, released].filter(Result.isFailure).map((outcome) => outcome.failure);
 
-      if (cleanupErrors.length > 0) {
-        throw new AggregateError(
-          [new Error(`opening hosted agent "${input.key}"`, { cause: error }), ...cleanupErrors],
-          `opening hosted agent "${input.key}" failed and its session or hosted actor did not release`,
-          { cause: error },
-        );
-      }
+      if (unreleased.length === 0) return yield* failure;
 
-      throw error;
-    }
+      return yield* new KinuError(failure.code, `opening hosted agent "${input.key}" failed and its session or hosted actor did not release`, {
+        cause: new AggregateError([failure, ...unreleased], failure.message),
+      });
+    })), entry);
   }
 
   /**
@@ -781,68 +773,57 @@ export class LocalAgentHost {
    * restart reaches every level of it. A hire this process has not opened is opened here; one still being born, or being
    * deleted, is its birth's or its deletion's to finish.
    */
-  private async hiresOf(parent: HostEntry): Promise<HostEntry[]> {
-    const hires: HostEntry[] = [];
+  private hiresOf(parent: HostEntry): Effect.Effect<HostEntry[]> {
+    const live = parent.roster.list().filter((roster) => roster.birth === null && !roster.deleteRequested);
 
-    for (const roster of parent.roster.list()) {
-      if (roster.birth !== null || roster.deleteRequested) continue;
+    return Effect.map(Effect.forEach(live, (roster) => Effect.catch(
+      Effect.map(this.openChildEntry(parent, roster.name), (hire): HostEntry | null => hire),
+      (failure) => Effect.sync(() => {
+        diagnostics.failure('host.subagent_recovery_failed', failure, { parent: parent.key, subagent: roster.name });
 
-      await settleLogged('host.subagent_recovery_failed', { doing: 'recovering a local subagent', otherwise: 'io' }, async () => {
-        hires.push(await this.openChildEntry(parent, roster.name));
-      }, { parent: parent.key, subagent: roster.name });
-    }
-
-    return hires;
+        return null;
+      }),
+    )), (hires) => hires.filter((hire): hire is HostEntry => hire !== null));
   }
 
   /** Every hire under `entry`, at every level its roster records, opened. */
-  private async openTree(entry: HostEntry): Promise<void> {
-    for (const hire of await this.hiresOf(entry)) await this.openTree(hire);
+  private openTree(entry: HostEntry): Effect.Effect<void> {
+    return Effect.flatMap(this.hiresOf(entry), (hires) => Effect.forEach(hires, (hire) => this.openTree(hire), { discard: true }));
   }
 
-  private async openChildEntry(parent: HostEntry, childName: string): Promise<HostEntry> {
-    if (this.closed) throw new Error('LocalAgentHost is closed.');
-    const key = `${parent.key}/${childName}`;
-    const binding = openLocalActor(parent.ws.rt.actor, childName);
-    const openingKey = `${parent.key}/${binding.storageKey}`;
-    const pending = this.opening.get(openingKey);
+  private openChildEntry(parent: HostEntry, childName: string): Effect.Effect<HostEntry, KinuError> {
+    // Its binding refuses a retired creation in its own words.
+    const bound = inItsWords('io', Effect.sync(() => openLocalActor(parent.ws.rt.actor, childName)));
 
-    if (pending) return await pending;
-    const existing = parent.children.get(childName);
+    return Effect.andThen(this.open(), Effect.flatMap(bound, (binding) => {
+      return this.once(`${parent.key}/${binding.storageKey}`, () => Effect.suspend(() => {
+        const existing = parent.children.get(childName);
 
-    if (existing) {
-      if (existing.ws.rt.actor.actorId !== binding.reference.actorId) throw new KinuError('denied', 'The cached actor is a different creation.');
-      requireLocalActorWorkspace(parent.ws.rt.actor, existing.ws.rt.actor);
+        if (!existing) return Effect.succeed(null);
 
-      return existing;
-    }
+        if (existing.ws.rt.actor.actorId !== binding.reference.actorId) return Effect.fail(new KinuError('denied', 'The cached actor is a different creation.'));
+        requireLocalActorWorkspace(parent.ws.rt.actor, existing.ws.rt.actor);
 
-    const opening = this.openExistingChild(parent, binding, key);
-    this.opening.set(openingKey, opening);
-
-    try {
-      return await opening;
-    } finally {
-      if (this.opening.get(openingKey) === opening) this.opening.delete(openingKey);
-    }
+        return Effect.succeed(existing);
+      }), () => this.openExistingChild(parent, binding, `${parent.key}/${childName}`));
+    }));
   }
 
   /** Bind an already-created subagent; `openLocalActor` already refused a retired creation. */
-  private async openExistingChild(
+  private openExistingChild(
     parent: HostEntry,
     binding: LocalActorBinding,
     key: string,
-  ): Promise<HostEntry> {
+  ): Effect.Effect<HostEntry, KinuError> {
     const childName = binding.name;
-    const actor = await parent.tree.host.acquire(binding.reference, { kind: 'actor' });
 
-    try {
+    return Effect.flatMap(attemptInItsWords('io', () => parent.tree.host.acquire(binding.reference, { kind: 'actor' })), (actor) => Effect.onError(Effect.gen({ self: this }, function* () {
       const rt = parent.tree.runtimes.get(binding.reference.actorId);
 
-      if (!rt) throw new KinuError('missing', 'The hosted subagent has no bound runtime.');
+      if (!rt) return yield* new KinuError('missing', 'The hosted subagent has no bound runtime.');
       const ws = this.childHostedAgent(parent, binding, rt);
 
-      const entry = await this.buildEntry({
+      const entry = yield* this.buildEntry({
         key,
         name: childName,
         ref: childRef(parent, childName),
@@ -856,10 +837,7 @@ export class LocalAgentHost {
       parent.children.set(childName, entry);
 
       return entry;
-    } catch (error) {
-      parent.tree.host.release(binding.reference);
-      throw error;
-    }
+    }), () => Effect.sync(() => { parent.tree.host.release(binding.reference); })));
   }
 
   /** The parent's provider wiring, directory forced to the parent's ref: a child binds no other plane. */
@@ -915,52 +893,51 @@ export class LocalAgentHost {
    * Peer hop into a named root of this virtual workspace. A non-member is refused (dead-lettered);
    * an unopenable member throws so the outbox retries.
    */
-  private async deliverToPeer(
+  private deliverToPeer(
     sender: HostEntry,
     peer: string,
     msg: PeerMessage,
-  ): Promise<ReceiveResult> {
+  ): Effect.Effect<ReceiveResult, KinuError> {
     const ref = this.opts.roster().find((candidate) => candidate.name === peer);
 
     if (!ref || peer === sender.name || !samePeerGroup(ref, sender.ref)) {
-      return {
+      return Effect.succeed({
         admitted: false,
         reason: `"${peer}" is not a peer in virtual workspace "${sender.ref.workspaceId}"`,
-      };
+      });
     }
 
-    const receiver = await this.resolveEntry(peer);
-
-    if (!receiver.peers) {
-      throw new Error(`peer "${peer}" is bound without a peer transport`);
-    }
-
-    return receiver.peers.receive(msg);
+    // An unopenable member fails, so the outbox retries.
+    return Effect.flatMap(this.resolveEntry(peer), ({ peers: endpoint }) => (endpoint === null
+      ? Effect.fail(new KinuError('unavailable', `peer "${peer}" is bound without a peer transport`))
+      : attemptInItsWords('io', () => endpoint.receive(msg))));
   }
 
   /**
    * One agent's pass, then each subagent's, each under the tree lease plus its own `host.run`.
    * `ran` describes this agent; subagent schedules still ride back.
    */
-  private async tickEntry(entry: HostEntry, now: number): Promise<LocalTickResult> {
-    const outcome = await this.drive(entry, () => this.runPass(entry, now));
-    let nextAt = outcome.ran ? outcome.value : nextTriggerAt(entry.tree.db);
+  private tickEntry(entry: HostEntry, now: number): Effect.Effect<LocalTickResult, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const outcome = yield* attemptInItsWords('io', () => this.drive(entry, () => this.runPass(entry, now)));
+      let nextAt = outcome.ran ? outcome.value : nextTriggerAt(entry.tree.db);
 
-    for (const child of await this.hiresOf(entry)) {
-      const childNext = (await this.tickEntry(child, now)).nextAt;
+      for (const child of yield* this.hiresOf(entry)) {
+        const childNext = (yield* this.tickEntry(child, now)).nextAt;
 
-      if (childNext !== null) nextAt = nextAt === null ? childNext : Math.min(nextAt, childNext);
-    }
+        if (childNext !== null) nextAt = nextAt === null ? childNext : Math.min(nextAt, childNext);
+      }
 
-    return outcome.ran ? { ran: true, nextAt } : { ran: false, nextAt, heldBy: outcome.heldBy };
+      return outcome.ran ? { ran: true, nextAt } : { ran: false, nextAt, heldBy: outcome.heldBy };
+    });
   }
 
   /** One pass's converting steps; the lease is re-checked between them: an interactive process may preempt. */
   private async runPass(entry: HostEntry, now: number): Promise<number | null> {
-    const hold = entry.tree.hold;
+    const lease = entry.tree.hold;
     const lifecyclePending = await recoverSubagentLifecycles(entry.roster, this.childRuntime(entry.tree, entry.key));
 
-    if (!hold.held()) return nextTriggerAt(entry.tree.db);
+    if (!lease.held()) return nextTriggerAt(entry.tree.db);
 
     if (entry.parentKey === null) {
       // Finish a retirement this process interrupted; only the recorded storage path lives outside the database.
@@ -970,18 +947,18 @@ export class LocalAgentHost {
         if (record) await this.discardActorBytes(entry.ws, record);
       });
 
-      if (!hold.held()) return nextTriggerAt(entry.tree.db);
+      if (!lease.held()) return nextTriggerAt(entry.tree.db);
     }
 
     await entry.session.fireDueTriggers(now);
 
-    if (!hold.held()) return nextTriggerAt(entry.tree.db);
+    if (!lease.held()) return nextTriggerAt(entry.tree.db);
     await entry.session.flushPendingDrains();
 
-    if (!hold.held()) return nextTriggerAt(entry.tree.db);
+    if (!lease.held()) return nextTriggerAt(entry.tree.db);
     await this.drainAssignedWork(entry);
 
-    if (!hold.held()) return nextTriggerAt(entry.tree.db);
+    if (!lease.held()) return nextTriggerAt(entry.tree.db);
     await entry.session.runDueEvolution();
 
     let next = nextTriggerAt(entry.tree.db);
@@ -1179,26 +1156,28 @@ export class LocalAgentHost {
     return {
       ...this.treeRetirement(tree),
       parent: () => ({ reference: parentOf().actor.reference, record: parentOf().actor.record }),
-      born: (reference, name, seed) => this.bornChild(parentOf(), reference, name, seed),
-      asHire: async (_reference, name, body) => {
-        const entry = await this.openChildEntry(parentOf(), name);
-
-        return await body({ entry, handle: entry.actor.handle, exec: sqlStorageOver(entry.tree.db), turnInFlight: () => entry.session.turnInFlight() });
-      },
+      born: (reference, name, seed) => Effect.suspend(() => this.bornChild(parentOf(), reference, name, seed)),
+      asHire: (_reference, name, body) => Effect.flatMap(
+        Effect.suspend(() => this.openChildEntry(parentOf(), name)),
+        (entry) => body({ entry, handle: entry.actor.handle, exec: sqlStorageOver(entry.tree.db), turnInFlight: () => entry.session.turnInFlight() }),
+      ),
       // Admitted and owed to the child as one: its next pass, under the driver lease, hands it over.
-      deliver: async (hire, admit) => {
-        if (this.closed) throw new Error('LocalAgentHost is closed.');
+      deliver: (hire, admit) => Effect.andThen(this.open(), Effect.sync(() => {
         const admission = hire.entry.deliveries.record(admit);
 
         if (admission.admitted) this.wake(hire.entry, 'subagent task');
 
         return admission;
-      },
+      })),
       hirerName: () => (parentOf().parentKey === null ? MAIN_AGENT : parentOf().name),
       // Nothing on this machine is told a title moved: its lists read a hire's title where they draw it.
       announce: () => {},
       // Only a hire this host holds runs jobs here; one it does not hold has none running.
-      retireJobs: async (actorId) => await this.byActor.get(actorId)?.session.retireJobs() ?? { stopped: [], refused: [] },
+      retireJobs: (actorId) => {
+        const held = this.byActor.get(actorId);
+
+        return held === undefined ? Effect.succeed({ stopped: [], refused: [] }) : attemptInItsWords('io', () => held.session.retireJobs());
+      },
     };
   }
 
@@ -1235,10 +1214,7 @@ export class LocalAgentHost {
       return Effect.fail(new KinuError('missing', `No live agent ${actorId} in this workspace.`));
     }
 
-    return Effect.flatMap(this.entryOf(tree, record.parentActorId), (parent) => attempt(
-      { doing: `opening ${record.name} to tell it the owner's decision`, otherwise: 'io' },
-      () => this.openChildEntry(parent, record.name),
-    ));
+    return Effect.flatMap(this.entryOf(tree, record.parentActorId), (parent) => this.openChildEntry(parent, record.name));
   }
 
   /** The entry an issued actor id belongs to. */
@@ -1279,90 +1255,69 @@ export class LocalAgentHost {
   }
 
   /** A hire the lifecycle just registered, written by `seed` and hosted; a birth already under way is joined. */
-  private async bornChild(parent: HostEntry, reference: ActorReference, name: string, seed: (config: AgentConfigStore) => void): Promise<void> {
-    if (this.closed) throw new Error('LocalAgentHost is closed.');
-    const key = `${parent.key}/${name}`;
-    const binding = bindLocalActorReference(parent.ws.rt.actor, reference);
+  private bornChild(parent: HostEntry, reference: ActorReference, name: string, seed: (config: AgentConfigStore) => void): Effect.Effect<void, KinuError> {
+    return Effect.andThen(this.open(), Effect.suspend(() => {
+      const binding = bindLocalActorReference(parent.ws.rt.actor, reference);
 
-    if (binding.name !== name) throw new KinuError('denied', 'The actor alias does not match its directory record.');
-    const openingKey = `${parent.key}/${binding.storageKey}`;
-    const pending = this.opening.get(openingKey);
+      if (binding.name !== name) return Effect.fail(new KinuError('denied', 'The actor alias does not match its directory record.'));
 
-    if (pending) {
-      await pending;
+      return Effect.asVoid(this.once(`${parent.key}/${binding.storageKey}`, () => Effect.suspend(() => {
+        const existing = this.entries.get(`${parent.key}/${name}`);
 
-      return;
-    }
+        if (!existing) return Effect.succeed(null);
 
-    const existing = this.entries.get(key);
-
-    if (existing) {
-      if (existing.ws.rt.actor.actorId !== binding.reference.actorId) throw new KinuError('denied', 'The actor alias is held by a different creation.');
-
-      return;
-    }
-
-    const opening = this.birthChildEntry(parent, name, seed, binding);
-    this.opening.set(openingKey, opening);
-
-    try {
-      await opening;
-    } finally {
-      if (this.opening.get(openingKey) === opening) this.opening.delete(openingKey);
-    }
+        return existing.ws.rt.actor.actorId === binding.reference.actorId
+          ? Effect.succeed(existing)
+          : Effect.fail(new KinuError('denied', 'The actor alias is held by a different creation.'));
+      }), () => this.birthChildEntry(parent, name, seed, binding)));
+    }));
   }
 
   /** Create one subagent: descriptor rows then its hosted actor. A transaction, not a file creation. */
-  private async birthChildEntry(
+  private birthChildEntry(
     parent: HostEntry,
     name: string,
     seed: (config: AgentConfigStore) => void,
     binding: LocalActorBinding,
-  ): Promise<HostEntry> {
+  ): Effect.Effect<HostEntry, KinuError> {
     const key = `${parent.key}/${name}`;
     const tree = parent.tree;
     const sql = wrapDatabase(tree.db).sql;
 
-    try {
-      writeTransaction(tree.db, () => {
-        // The child's own handle; stores below are scoped to it, so one database holds N descriptors.
-        seed(bindLocalActor(sql, binding).config);
-      });
-      const actor = await tree.host.acquire(binding.reference, { kind: 'actor' });
+    return Effect.onError(Effect.gen({ self: this }, function* () {
+      // The child's own handle; stores below are scoped to it, so one database holds N descriptors.
+      yield* inItsWords('io', Effect.sync(() => writeTransaction(tree.db, () => { seed(bindLocalActor(sql, binding).config); })));
+      const actor = yield* attemptInItsWords('io', () => tree.host.acquire(binding.reference, { kind: 'actor' }));
       const rt = tree.runtimes.get(binding.reference.actorId);
 
-      if (!rt) throw new KinuError('missing', 'The created subagent has no bound runtime.');
-      const config = rt.actor.config;
-      const descriptor = subagentDescriptorSource(config).read();
+      if (!rt) return yield* new KinuError('missing', 'The created subagent has no bound runtime.');
 
-      if (!descriptor) throw new Error(`subagent "${name}" has no readable descriptor after creation`);
-      const ws = this.childHostedAgent(parent, binding, rt);
+      if (!subagentDescriptorSource(rt.actor.config).read()) {
+        return yield* new KinuError('missing', `subagent "${name}" has no readable descriptor after creation`);
+      }
 
-      const entry = await this.buildEntry({
+      const entry = yield* this.buildEntry({
         key,
         name,
         ref: childRef(parent, name),
         parentKey: parent.key,
         tree,
         actor,
-        ws,
+        ws: this.childHostedAgent(parent, binding, rt),
       });
 
       requireLocalActorWorkspace(parent.ws.rt.actor, rt.actor);
       parent.children.set(name, entry);
 
       return entry;
-    } catch (error) {
+    }), () => Effect.sync(() => {
       tree.host.release(binding.reference);
-      const installed = this.entries.get(key);
 
-      if (installed?.ws.rt.actor.actorId === binding.reference.actorId) {
+      if (this.entries.get(key)?.ws.rt.actor.actorId === binding.reference.actorId) {
         this.entries.delete(key);
         this.byActor.delete(binding.reference.actorId);
       }
-
-      throw error;
-    }
+    }));
   }
 
   /** Stops the agents below `key` (core `stopAgentsBelow`), off the Stop's turn and joined by close(): a session here has
@@ -1373,7 +1328,7 @@ export class LocalAgentHost {
     if (entry === undefined || this.closed) return;
     const { tree } = entry;
 
-    this.retireOffTurn(entry.name, () => stopAgentsBelow(entry.actor.reference.actorId, {
+    this.retireOffTurn(entry.name, stopAgentsBelow(entry.actor.reference.actorId, {
       ...this.treeRetirement(tree),
       cancelOwed: (actor) => { this.cancelOwed(tree, actor); },
       stopTurn: async (actor) => {
@@ -1404,9 +1359,10 @@ export class LocalAgentHost {
   }
 
   /** A task agent's retire, off its turn and joined by close(). */
-  private retireOffTurn(agent: string, work: () => Promise<void>): void {
-    const pass: Promise<void> = this.retireTaskChild(work).then((outcome) => {
-      if (Result.isFailure(outcome)) diagnostics.failure('host.task_child_release_failed', outcome.failure, { agent });
+  private retireOffTurn(agent: string, work: Effect.Effect<void, KinuError>): void {
+    const pass: Promise<void> = hold(Effect.catch(work, (failure) => Effect.sync(() => {
+      diagnostics.failure('host.task_child_release_failed', failure, { agent });
+    }))).then(() => {
       this.answerPasses.delete(pass);
     });
 
@@ -1416,24 +1372,25 @@ export class LocalAgentHost {
   /** Every job in the child's subtree stops first: a refusal removes nobody, and no process outlives the agent it answers. */
   /** Retires `retirement`'s actor under `owner`: first what this host holds of it (its session, its entries, its runtime),
    *  then the host's retirement, as every retirement on this machine ends. */
-  private async retireHeld(tree: HostTree, owner: ActorReference, retirement: ActorRetirement): Promise<void> {
-    if (this.closed) throw new Error('LocalAgentHost is closed.');
-    const { actorId } = retirement.reference;
-    const held = this.byActor.get(actorId);
+  private retireHeld(tree: HostTree, owner: ActorReference, retirement: ActorRetirement): Effect.Effect<void, KinuError> {
+    return Effect.andThen(this.open(), Effect.gen({ self: this }, function* () {
+      const { actorId } = retirement.reference;
+      const held = this.byActor.get(actorId);
 
-    if (held) {
-      await held.session.end();
-      const parent = held.parentKey === null ? undefined : this.entries.get(held.parentKey);
+      if (held) {
+        yield* attemptInItsWords('io', () => held.session.end());
+        const parent = held.parentKey === null ? undefined : this.entries.get(held.parentKey);
 
-      if (parent?.children.get(held.name)?.ws.rt.actor.actorId === actorId) parent.children.delete(held.name);
+        if (parent?.children.get(held.name)?.ws.rt.actor.actorId === actorId) parent.children.delete(held.name);
 
-      if (this.entries.get(held.key)?.ws.rt.actor.actorId === actorId) this.entries.delete(held.key);
-      this.byActor.delete(actorId);
-    }
+        if (this.entries.get(held.key)?.ws.rt.actor.actorId === actorId) this.entries.delete(held.key);
+        this.byActor.delete(actorId);
+      }
 
-    tree.runtimes.delete(actorId);
-    tree.orchestrations.delete(actorId);
-    await tree.host.retire(owner, retirement);
+      tree.runtimes.delete(actorId);
+      tree.orchestrations.delete(actorId);
+      yield* attemptInItsWords('io', () => tree.host.retire(owner, retirement));
+    }));
   }
 
   /** What the agent is owed and has not taken, handed to its chat and run under the driver lease. The root's pass cancels

@@ -1,6 +1,7 @@
 // Peer transport: two real hubs over in-memory SQLite wired back-to-back through PeerHub, the seams the
 // orchestrator wires to DO RPC.
 import { describe, test, expect } from 'bun:test';
+import { attemptInItsWords } from '@kinu.run/core/obs';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
@@ -81,13 +82,13 @@ function makeNetwork() {
       vfs: () => vfs,
       selfAgentName: () => name,
       selfUserId: () => userId,
-      deliver: async (receiverName: string, msg: PeerMessage): Promise<ReceiveResult> => {
+      deliver: (receiverName: string, msg: PeerMessage) => attemptInItsWords('unavailable', async (): Promise<ReceiveResult> => {
         const peer = network.get(receiverName);
 
         if (!peer || !peer.online) throw new Error(`receiver DO unreachable: ${receiverName}`);
 
         return peer.hub.receive(msg);
-      },
+      }),
       isSameOwner: async (uid) => uid === userId,
       scheduleDispatch: async (at) => {
         if (!agent) throw new Error('agent network fixture not initialized');

@@ -10,6 +10,7 @@ import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { SubagentRosterStore } from '../src/subagents/roster';
 import { admitSubagentBirth } from '../src/subagents/birth';
 import type { SubagentRuntime } from '../src/subagents/support';
+import { Effect } from 'effect';
 import { KinuError } from '../src/obs/error';
 import { explorationActorKey } from '../src/identity/actor-key';
 
@@ -22,10 +23,10 @@ function setup() {
 
   roster.ensureSchema();
 
-  const unused = async (): Promise<never> => { throw new KinuError('unsupported', 'A birth asks nothing else here.'); };
+  const unused = (): Effect.Effect<never, KinuError> => Effect.fail(new KinuError('unsupported', 'A birth asks nothing else here.'));
 
   const runtime: SubagentRuntime = {
-    spawn: async (seed) => directory.apply(main, [], { action: 'register', name: seed.name, creationId: seed.creationId, origin: seed.origin, lifetime: seed.lifetime }).reference,
+    spawn: (seed) => Effect.sync(() => directory.apply(main, [], { action: 'register', name: seed.name, creationId: seed.creationId, origin: seed.origin, lifetime: seed.lifetime }).reference),
     cancelBirth: unused, assign: unused, status: unused, message: unused, rename: unused, dismiss: unused,
   };
 

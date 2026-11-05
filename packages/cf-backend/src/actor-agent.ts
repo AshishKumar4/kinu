@@ -864,11 +864,10 @@ export abstract class ActorAgent extends Agent<Env> {
       return temporaryPortFor({
         roster, runtime: hostedSubagentRuntime(seams, () => bound), directory: this.actorDirectoryStore(),
         afterTurn: (child, work) => {
-          this.detachOwned(Effect.promise(async () => {
+          this.detachOwned(Effect.andThen(Effect.promise(async () => {
             await this.agentTurnSettled(child);
             await this.actorHost().run(child, { kind: 'actor' }, () => Promise.resolve());
-            await work();
-          }));
+          }), work));
         },
       });
     });
@@ -3957,7 +3956,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Owns a detached task so it can be joined; a reset cancels promises silently
    * (`do.background_task.cancelled_on_reset`). Not durable; the body names its own failures.
    */
-  protected detachOwned(body: Effect.Effect<void>): void {
+  protected detachOwned(body: Effect.Effect<void, KinuError>): void {
     const owner: AsyncTaskOwner = { promise: null };
     this._backgroundTasks.add(owner);
     owner.promise = hold(Effect.ensuring(Effect.catchCause(body, recording({ doing: 'running a detached activation task', otherwise: 'io' }, (failure) => {

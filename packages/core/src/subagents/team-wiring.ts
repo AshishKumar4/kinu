@@ -3,6 +3,8 @@
  * workspace's directory is derived here: its depth (`delegationBudgetOf`), its hires' names (`agentNamer`), its clock
  * and its place in the tree. A backend passes only what it alone reaches: its stores, its runtime and its transport.
  */
+import type { Effect } from 'effect';
+import type { KinuError } from '../obs/error';
 import type { ActorReference } from '../identity/actor-handle';
 import type { WorkspaceActor, WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { TeamToolDeps } from '../delegation/agents-tool';
@@ -32,7 +34,7 @@ export function temporaryPortFor(deps: {
   readonly roster: SubagentRosterStore;
   readonly runtime: SubagentRuntime;
   readonly directory: Pick<WorkspaceActorDirectory, 'namesFrom'>;
-  afterTurn(child: ActorReference, work: () => Promise<void>): void;
+  afterTurn(child: ActorReference, work: Effect.Effect<void, KinuError>): void;
 }): TemporaryAgentPort {
   return createTemporaryAgentPort({
     roster: deps.roster, runtime: deps.runtime, afterTurn: (child, work) => { deps.afterTurn(child, work); },
