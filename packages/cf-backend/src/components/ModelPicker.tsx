@@ -112,6 +112,8 @@ export function ModelPicker({
   const tests = useModelTests(test);
   const [highlighted, setHighlighted] = useState<ModelMenuEntry | null>(null);
 
+  const shown = selected?.label ?? (value === '' ? placeholder : listed);
+
   const combobox = (
     <Combobox
       items={items}
@@ -133,11 +135,11 @@ export function ModelPicker({
       disabled={disabled}
       size={size}
     >
-      <Combobox.TriggerValue className={`min-w-0 max-w-full ${className ?? ""}`}>
+      {/* A combobox takes no name from what it shows, so the trigger names its role and its model itself. */}
+      <Combobox.TriggerValue className={`min-w-0 max-w-full ${className ?? ""}`} aria-label={`${label}: ${shown}`}>
         <span className="flex min-w-0 items-center gap-2" data-model-picker={label}>
-          <span className="sr-only">{label}: </span>
           {selected !== null && <ProviderIcon provider={selected.provider} />}
-          <span className={`min-w-0 truncate ${selected === null ? "p-text-3" : ""}`}>{selected?.label ?? (value === '' ? placeholder : listed)}</span>
+          <span className={`min-w-0 truncate ${selected === null ? "p-text-3" : ""}`}>{shown}</span>
         </span>
       </Combobox.TriggerValue>
       <Combobox.Content className="w-[var(--layout-picker)]">

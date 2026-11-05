@@ -2,10 +2,10 @@
 // (POST {account}/ai/v1/chat/completions + cf-aig-gateway-id header).
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
-import { createTestUserDO, testOwner } from './helpers/user-do';
+import { createTestUserDO, testOwner, TEST_USER_ENV } from './helpers/user-do';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { asFetchFunction, parseJsonObject, type JsonValue, type OAuthCredential, type AuthRequest } from '@kinu.run/core';
+import { asFetchFunction, createCredentialCipher, parseJsonObject, type JsonValue, type OAuthCredential, type AuthRequest } from '@kinu.run/core';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
@@ -587,6 +587,25 @@ describe('UserDO gateway credential derivation', () => {
     } finally {
       harness.close();
       network.restore();
+    }
+  });
+
+  test('a stored login that no longer reads as one answers the listing with the failure, never a crash', async () => {
+    const restore = stubGatewayListing([{ id: 'gw-one', authentication: false }]);
+    const harness = createTestUserDO({ durableObjectId: 'stale-login' });
+
+    try {
+      const owner = await testOwner();
+      await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, oauthCredential());
+      // The row opens, and what it holds is no longer a login's shape.
+      const cipher = await createCredentialCipher(TEST_USER_ENV);
+      const stale = await cipher.seal(`stale-login:${CLOUDFLARE_OAUTH_CRED_KEY}`, JSON.stringify({ kind: 'oauth' }));
+      harness.db.run('UPDATE user_credentials SET value = ? WHERE key = ?', [stale, CLOUDFLARE_OAUTH_CRED_KEY]);
+
+      expect(await harness.userDO.listAIGateways(owner)).toMatchObject({ connected: true, gateways: [], error: expect.any(String) });
+    } finally {
+      harness.close();
+      restore();
     }
   });
 });

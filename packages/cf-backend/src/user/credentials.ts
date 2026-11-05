@@ -4,7 +4,7 @@ import {
   GOOGLE_OAUTH_CRED_KEY, googleCredentialExpiring, googleGrantOf, refreshGoogleCredential, type GoogleGrant,
   MAIN_ACCOUNT, accountCredentialKey, fetchGatewayCredits, type GatewayCreditsRead,
 } from '@kinu.run/core';
-import { attempt, authoredRefusal, diagnostics, joining, KinuError, renderThrownChain, settle, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { attempt, authoredRefusal, diagnostics, inItsWords, joining, KinuError, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { getOAuthProvider } from '../auth/providers';
 import type { UserObjectHost } from './user-host';
@@ -20,12 +20,12 @@ function checkpointAad(account: string, key: string): string {
 }
 
 /** Through `tolerate`, never a caught parse error: a JSON error message quotes the text it choked on, the decrypted secret. */
-function decodedCredential(key: string, plaintext: string): Credential {
+function decodedCredential(key: string, plaintext: string): Effect.Effect<Credential, KinuError> {
   const decoded = tolerate(() => parseJsonValue(plaintext), 'malformed-input');
 
-  if (decoded === undefined) throw new KinuError('bad_input', `the stored credential ${key} did not decode as JSON`);
+  if (decoded === undefined) return Effect.fail(new KinuError('bad_input', `the stored credential ${key} did not decode as JSON`));
 
-  return validateCredential({ key, value: decoded });
+  return inItsWords('bad_input', Effect.sync(() => validateCredential({ key, value: decoded })));
 }
 
 interface HeldLogin {
@@ -203,24 +203,24 @@ export class UserCredentials {
 
   /** Null when no credential is stored; a stored row that does not open or decode rejects,
    * so callers can tell "not connected" from "connected but unreadable". */
-  async readCredential(key: string): Promise<Credential | null> {
-    return (await this.readCredentialAt(key))?.cred ?? null;
+  readCredential(key: string): Promise<Credential | null> {
+    return settle(Effect.map(this.credentialAt(key), (stored) => stored?.cred ?? null));
   }
 
   /** The row and its revision, read in one step. */
-  private async readCredentialAt(key: string): Promise<{ readonly cred: Credential; readonly revision: number } | null> {
-    const row = this.host.sqlx<{ value: string }>(`SELECT value FROM user_credentials WHERE key = ?`, key)[0];
-    const revision = this.credentialRevision(key);
+  private credentialAt(key: string): Effect.Effect<{ readonly cred: Credential; readonly revision: number } | null, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const row = this.host.sqlx<{ value: string }>(`SELECT value FROM user_credentials WHERE key = ?`, key)[0];
+      const revision = this.credentialRevision(key);
 
-    if (!row) return null;
-    let plaintext: string;
+      if (!row) return null;
+      const cipher = yield* Effect.promise(() => this.cipher());
 
-    try { plaintext = await (await this.cipher()).open(this.credentialAad(key), row.value); }
-    catch (err) {
-      throw toKinuError({ doing: `opening the stored credential ${key}`, cause: err, otherwise: 'bad_input' });
-    }
+      const plaintext = yield* attempt({ doing: `opening the stored credential ${key}`, otherwise: 'bad_input' },
+        () => cipher.open(this.credentialAad(key), row.value));
 
-    return { cred: decodedCredential(key, plaintext), revision };
+      return { cred: yield* decodedCredential(key, plaintext), revision };
+    });
   }
 
   /** Every stored credential sealed for `account`: a reset recreates this object under a new id, which its own seal binds. */
@@ -256,7 +256,7 @@ export class UserCredentials {
         const plaintext = yield* attempt({ doing: `opening the checkpointed credential ${key}`, otherwise: 'bad_input' },
           () => cipher.open(checkpointAad(account, key), sealed));
 
-        const cred = decodedCredential(key, plaintext);
+        const cred = yield* decodedCredential(key, plaintext);
         const resealed = yield* Effect.promise(() => this.sealCredential(key, cred));
 
         if (this.commitCredential({ key, kind: cred.kind, sealed: resealed, expectRevision: revision })) restored.push(key);
@@ -439,54 +439,58 @@ export class UserCredentials {
     // `cloudflare.ai-gateway` and `cloudflare.web-search` are derived views of the Cloudflare login: same bearer and
     // refresh, but cf-aig-gateway-id names the user's selected gateway (null until selected for my-gateway).
     const storedKey = storedCredentialKey(key);
-    const stored = await this.readCredentialAt(storedKey);
 
-    if (!stored) return null;
+    return settle(Effect.gen({ self: this }, function* () {
+      const stored = yield* this.credentialAt(storedKey);
 
-    if (key === CLOUDFLARE_WEB_SEARCH_CRED_KEY && (stored.cred.kind !== 'oauth' || !grantsWebSearch(stored.cred))) return null;
-    // Explicitly non-null so the refresh reassignment below doesn't re-widen to `Credential | null`.
-    let cred: Credential = stored.cred;
+      if (!stored) return null;
 
-    const issuer = subscriptionIssuer(storedKey);
-    // Refused on the login this store still holds; one another caller already rotated is served as it stands.
-    const refused = opts?.rejected !== undefined && refusedLogin(credentialToHeaders(storedKey, cred), opts.rejected);
+      if (key === CLOUDFLARE_WEB_SEARCH_CRED_KEY && (stored.cred.kind !== 'oauth' || !grantsWebSearch(stored.cred))) return null;
+      // Explicitly non-null so the refresh reassignment below doesn't re-widen to `Credential | null`.
+      let cred: Credential = stored.cred;
 
-    if (issuer !== null && cred.kind === 'oauth') {
-      const held = { cred, revision: stored.revision };
-      const usable = await usableLogin({ issuer, credential: cred, refused, renew: () => this.refreshSubscriptionLogin(storedKey, held, issuer) });
+      const issuer = subscriptionIssuer(storedKey);
+      // Refused on the login this store still holds; one another caller already rotated is served as it stands.
+      const refused = opts?.rejected !== undefined && refusedLogin(credentialToHeaders(storedKey, cred), opts.rejected);
 
-      if (usable === null) return null;
-      cred = usable;
-    }
+      if (issuer !== null && cred.kind === 'oauth') {
+        const held = { cred, revision: stored.revision };
+        const usable = yield* Effect.promise(() => usableLogin({ issuer, credential: held.cred, refused, renew: () => this.refreshSubscriptionLogin(storedKey, held, issuer) }));
 
-    if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
-      const needRefresh = refused || isCloudflareCredentialExpiring(cred);
-
-      if (needRefresh) {
-        if (!cred.refreshToken) return null;
-        const refreshed = await this.refreshCloudflareInternal({ cred, revision: stored.revision });
-
-        if (refreshed === 'revoked') return null;
-
-        if (!('failed' in refreshed)) cred = refreshed;
+        if (usable === null) return null;
+        cred = usable;
       }
-    }
 
-    // A credential whose stored shape doesn't match its key is a defect and must not reach
-    // the caller as "not connected".
-    const headers = credentialToHeaders(storedKey, cred);
+      if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
+        const needRefresh = refused || isCloudflareCredentialExpiring(cred);
 
-    if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
-      const gatewayId = this.selectedAIGatewayId();
+        if (needRefresh) {
+          if (!cred.refreshToken) return null;
+          const held = { cred, revision: stored.revision };
+          const refreshed = yield* Effect.promise(() => this.refreshCloudflareInternal(held));
 
-      if (!gatewayId) return null;
-      headers['cf-aig-gateway-id'] = gatewayId;
-    } else if (key === CLOUDFLARE_OAUTH_CRED_KEY || key === CLOUDFLARE_WEB_SEARCH_CRED_KEY) {
-      // Use the user's selected gateway if any, otherwise the platform's configured default.
-      headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.host.env);
-    }
+          if (refreshed === 'revoked') return null;
 
-    return { headers, ...credentialEndpoint(storedKey, cred) };
+          if (!('failed' in refreshed)) cred = refreshed;
+        }
+      }
+
+      // A credential whose stored shape doesn't match its key is a defect and must not reach
+      // the caller as "not connected".
+      const headers = credentialToHeaders(storedKey, cred);
+
+      if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
+        const gatewayId = this.selectedAIGatewayId();
+
+        if (!gatewayId) return null;
+        headers['cf-aig-gateway-id'] = gatewayId;
+      } else if (key === CLOUDFLARE_OAUTH_CRED_KEY || key === CLOUDFLARE_WEB_SEARCH_CRED_KEY) {
+        // Use the user's selected gateway if any, otherwise the platform's configured default.
+        headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.host.env);
+      }
+
+      return { headers, ...credentialEndpoint(storedKey, cred) };
+    }));
   }
 
 
@@ -500,24 +504,27 @@ export class UserCredentials {
 
   /** Null when no usable Cloudflare credential is stored; rejects when the login
    * is there and its refresh failed. */
-  private async cloudflareAPICredential(): Promise<{ accessToken: string; accountId: string } | null> {
-    const stored = await this.readCredentialAt(CLOUDFLARE_OAUTH_CRED_KEY);
+  private cloudflareAPICredential(): Effect.Effect<{ accessToken: string; accountId: string } | null, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const stored = yield* this.credentialAt(CLOUDFLARE_OAUTH_CRED_KEY);
 
-    if (stored?.cred.kind !== 'oauth' || !isCloudflareCredentialUsable(stored.cred)) return null;
-    let cred = stored.cred;
+      if (stored?.cred.kind !== 'oauth' || !isCloudflareCredentialUsable(stored.cred)) return null;
+      let cred = stored.cred;
 
-    if (isCloudflareCredentialExpiring(cred)) {
-      const refreshed = await this.refreshCloudflareInternal({ cred, revision: stored.revision });
+      if (isCloudflareCredentialExpiring(cred)) {
+        const held = { cred, revision: stored.revision };
+        const refreshed = yield* Effect.promise(() => this.refreshCloudflareInternal(held));
 
-      if (refreshed === 'revoked') return null;
+        if (refreshed === 'revoked') return null;
 
-      if ('failed' in refreshed) throw refreshed.failed;
-      cred = refreshed;
-    }
+        if ('failed' in refreshed) return yield* refreshed.failed;
+        cred = refreshed;
+      }
 
-    const accountId = accountIdFromCloudflareCredential(cred);
+      const accountId = accountIdFromCloudflareCredential(cred);
 
-    return accountId ? { accessToken: cred.accessToken, accountId } : null;
+      return accountId ? { accessToken: cred.accessToken, accountId } : null;
+    });
   }
 
   /** With exactly one gateway and nothing selected, selects it (persisted). Never throws:
@@ -530,25 +537,30 @@ export class UserCredentials {
   }> {
     await this.host.requireTier(caller, 'ai_gateway.admin');
     let selectedId = this.selectedAIGatewayId();
+    const refused = (failed: { readonly cause: unknown }) => authoredRefusal({ doing: 'listing your Cloudflare AI Gateways', ...failed });
+    const refusing = <A>(run: () => Promise<A>) => Effect.tryPromise({ try: run, catch: (cause) => refused({ cause }) });
 
-    try {
-      const api = await this.cloudflareAPICredential();
+    const listed = Effect.gen({ self: this }, function* () {
+      // A login that does not open or decode is an answer here too, not a crash.
+      const api = yield* Effect.catchDefect(Effect.mapError(this.cloudflareAPICredential(), (cause) => refused({ cause })), (cause) => Effect.fail(refused({ cause })));
 
       if (!api) return { connected: false, selectedId, gateways: [], error: null };
-      const gateways = await fetchCloudflareAIGateways(api.accountId, api.accessToken);
+      const gateways = yield* refusing(() => fetchCloudflareAIGateways(api.accountId, api.accessToken));
 
       if (!selectedId && gateways.length === 1) {
-        await this.selectAIGateway(await ownerCaller(this.host.env), gateways[0].id);
+        const owner = yield* refusing(() => ownerCaller(this.host.env));
+        yield* refusing(() => this.selectAIGateway(owner, gateways[0].id));
         selectedId = gateways[0].id;
       }
 
       return { connected: true, selectedId, gateways, error: null };
-    } catch (cause) {
-      const error = authoredRefusal({ doing: 'listing your Cloudflare AI Gateways', cause });
+    });
+
+    return settle(Effect.catch(listed, (error) => Effect.sync(() => {
       diagnostics.failure('user.ai_gateways_unread', error);
 
       return { connected: true, selectedId, gateways: [], error: renderThrownChain({ cause: error }) };
-    }
+    })));
   }
 
   /** The gateway names the `cf-aig-gateway-id` every Cloudflare request sends, so a change moves the credentials'
@@ -607,15 +619,18 @@ export class UserCredentials {
    */
   async readGatewayCredits(caller: UserCaller, deploymentShown: boolean): Promise<GatewayCreditsRead | null> {
     await this.host.requireTier(caller, 'ai_gateway.admin');
-    const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
-    const api = cred?.kind === 'oauth' && grantsWebSearch(cred) ? await this.cloudflareAPICredential() : null;
     const { CLOUDFLARE_ACCOUNT_ID: own, KINU_AI_CREDITS_TOKEN: token } = this.host.env;
 
-    if (api !== null) return settle(Effect.map(fetchGatewayCredits(api.accountId, api.accessToken), (credits) => ({ payer: 'yours' as const, account: api.accountId, credits })));
+    return settle(Effect.gen({ self: this }, function* () {
+      const stored = yield* this.credentialAt(CLOUDFLARE_OAUTH_CRED_KEY);
+      const api = stored?.cred.kind === 'oauth' && grantsWebSearch(stored.cred) ? yield* this.cloudflareAPICredential() : null;
 
-    if (!deploymentShown || own === undefined || own === '' || token === undefined || token === '') return null;
+      if (api !== null) return yield* Effect.map(fetchGatewayCredits(api.accountId, api.accessToken), (credits) => ({ payer: 'yours' as const, account: api.accountId, credits }));
 
-    return settle(Effect.map(fetchGatewayCredits(own, token), (credits) => ({ payer: 'deployment' as const, account: own, credits })));
+      if (!deploymentShown || own === undefined || own === '' || token === undefined || token === '') return null;
+
+      return yield* Effect.map(fetchGatewayCredits(own, token), (credits) => ({ payer: 'deployment' as const, account: own, credits }));
+    }));
   }
 
   /** Point Workers AI at another of this login's accounts. The AI Gateway selection belongs
@@ -694,26 +709,29 @@ export class UserCredentials {
    */
   async googleToken(caller: UserCaller, opts?: { readonly refused?: boolean }): Promise<string | null> {
     await this.host.requireTier(caller, 'google.token');
-    const stored = await this.readCredentialAt(GOOGLE_OAUTH_CRED_KEY);
 
-    if (stored?.cred.kind !== 'oauth') return null;
-    const held = { cred: stored.cred, revision: stored.revision };
+    return settle(Effect.gen({ self: this }, function* () {
+      const stored = yield* this.credentialAt(GOOGLE_OAUTH_CRED_KEY);
 
-    if (opts?.refused !== true && !googleCredentialExpiring(held.cred)) return held.cred.accessToken;
+      if (stored?.cred.kind !== 'oauth') return null;
+      const held = { cred: stored.cred, revision: stored.revision };
 
-    const renewed = await this.refreshOAuthCredential(
-      GOOGLE_OAUTH_CRED_KEY,
-      held,
-      () => refreshGoogleCredential(this.host.env, held.cred),
-      async (revision) => {
-        this.retireRejectedCredential(GOOGLE_OAUTH_CRED_KEY, revision);
-        await this.host.googleMoved?.();
-      },
-    );
+      if (opts?.refused !== true && !googleCredentialExpiring(held.cred)) return held.cred.accessToken;
 
-    if (renewed === 'revoked') return null;
+      const renewed = yield* Effect.promise(() => this.refreshOAuthCredential(
+        GOOGLE_OAUTH_CRED_KEY,
+        held,
+        () => refreshGoogleCredential(this.host.env, held.cred),
+        async (revision) => {
+          this.retireRejectedCredential(GOOGLE_OAUTH_CRED_KEY, revision);
+          await this.host.googleMoved?.();
+        },
+      ));
 
-    return 'failed' in renewed ? held.cred.accessToken : renewed.accessToken;
+      if (renewed === 'revoked') return null;
+
+      return 'failed' in renewed ? held.cred.accessToken : renewed.accessToken;
+    }));
   }
 
   /** A rejected refresh deletes only that login's row, so its connect CTA resurfaces. */

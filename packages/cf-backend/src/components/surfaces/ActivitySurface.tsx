@@ -739,7 +739,8 @@ export function LogBlock({ log }: { log: readonly ActivityLogEntry[] }) {
           Nothing has been logged yet. The first turn starts the log.
         </p>
       ) : (
-        <Surface look="panel" as="ol" className="max-h-72 overflow-y-auto m-0 list-none p-0">
+        // A list that scrolls on its own takes the focus, so a keyboard can scroll it too.
+        <Surface look="panel" as="ol" tabIndex={0} aria-label="Activity log, newest first" className="max-h-72 overflow-y-auto m-0 list-none p-0">
           {rows}
         </Surface>
       )}

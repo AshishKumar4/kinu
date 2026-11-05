@@ -83,7 +83,7 @@ function Shell() {
 
       {drawerOpen && (
         <Drawer side="left" label="Menu" onClose={() => setDrawerOpen(false)} data-drawer="">
-          <Surface look="chrome" as="aside" className="h-full border-r p-border p-shadow-overlay">
+          <Surface look="chrome" as="aside" aria-label="Menu" className="h-full border-r p-border p-shadow-overlay">
             <Sidebar />
           </Surface>
         </Drawer>

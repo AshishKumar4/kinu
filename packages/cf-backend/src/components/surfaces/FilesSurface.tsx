@@ -467,7 +467,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   }, [atRoot, confirmDelete, filter, filtered, open, path, preview, renaming, selected, view.layout]);
 
   useEffect(() => {
-    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+    listRef.current?.querySelector('[aria-current="true"]')?.scrollIntoView({ block: "nearest" });
   }, [selected]);
 
   const dirCount = filtered.filter((e) => e.type === "dir").length;
@@ -847,7 +847,7 @@ function EntryRow(props: EntryProps) {
   return (
     <div
       data-files-entry
-      aria-selected={props.selected || undefined}
+      aria-current={props.selected || undefined}
       title={entry.name}
       {...entryProps(entryState(props), `group relative grid ${COLUMNS} ${ROW_HEIGHT}`)}
       onClick={() => { onSelect(); onOpen(); }}
@@ -884,7 +884,7 @@ function EntryTile(props: EntryProps) {
   return (
     <div
       data-files-entry
-      aria-selected={props.selected || undefined}
+      aria-current={props.selected || undefined}
       title={entry.name}
       {...entryProps({ ...entryState(props), tile: true }, "group relative flex min-w-0 flex-col items-center gap-1 px-2 pb-2 pt-3")}
       onClick={() => { onSelect(); onOpen(); }}

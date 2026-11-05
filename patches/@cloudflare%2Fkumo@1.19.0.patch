@@ -1,0 +1,32 @@
+diff --git a/dist/chunks/combobox-eaowwt1xr4d23gsn.js b/dist/chunks/combobox-eaowwt1xr4d23gsn.js
+index eb6aa22..1d03184 100644
+--- a/dist/chunks/combobox-eaowwt1xr4d23gsn.js
++++ b/dist/chunks/combobox-eaowwt1xr4d23gsn.js
+@@ -77,12 +77,14 @@ const J = {
+ };
+ function z({
+   className: o,
++  "aria-label": l,
+   ...t
+ }) {
+   const n = u(g), r = J[n];
+   return /* @__PURE__ */ m(
+     C,
+     {
++      "aria-label": l,
+       className: i(
+         p({ size: n }),
+         "relative flex items-center",
+diff --git a/dist/src/components/combobox/combobox.d.ts b/dist/src/components/combobox/combobox.d.ts
+index 1c0f668..6077f84 100644
+--- a/dist/src/components/combobox/combobox.d.ts
++++ b/dist/src/components/combobox/combobox.d.ts
+@@ -153,6 +153,8 @@ declare namespace Content {
+ }
+ declare function TriggerValue({ className, ...props }: ComboboxBase.Value.Props & {
+     className?: string;
++    /** The trigger's accessible name: a combobox takes none from the value it shows. */
++    "aria-label"?: string;
+ }): import("react/jsx-runtime").JSX.Element;
+ declare namespace TriggerValue {
+     var displayName: string;

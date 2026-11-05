@@ -373,7 +373,8 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-text-3 { color: var(--c-text-3); }
 @utility p-accent-fg { color: var(--c-accent-fg); }
 /* Words that go somewhere: the accent, underlined under a pointer. */
-@utility p-link { color: var(--c-accent-fg); &:hover { text-decoration: underline; } }
+/* A link inside running text is underlined: its colour alone sits under 3:1 against the text around it (WCAG 1.4.1). */
+@utility p-link { color: var(--c-accent-fg); &:hover { text-decoration: underline; } :where(p, li) & { text-decoration: underline; text-underline-offset: 2px; } }
 @utility p-accent-mark { color: var(--c-accent-mark); }
 @utility p-accent { color: var(--c-accent); }
 @utility p-selected { background: var(--c-selected); }
