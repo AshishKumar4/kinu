@@ -132,7 +132,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     id: 'model.call',
     family: 'turn',
     event: 'model.call',
-    site: 'packages/cf-backend/src/orchestrator.ts',
+    site: 'packages/cf-backend/src/workspace-actor/accounting.ts',
     mechanism: 'writer',
     emitter: 'recordModelRow',
     means: 'One model request outside the turn loop as well as inside it: a '
