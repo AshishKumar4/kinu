@@ -419,6 +419,11 @@ export const HISTORY_HELD = new URLSearchParams(location.search).get("historyHol
 /** `&historyUneven=1`: pages alternate row heights. */
 export const HISTORY_UNEVEN = new URLSearchParams(location.search).get("historyUneven") === "1";
 
+/** `&transcript=seed-short` or `seed-long`: the chat opened on its seed, as the room sends it: the newest seed's worth of a
+ *  chat of one-line rows, or of long answers, with `&history=N` rows of the same chat before them. */
+export const SEED_SERIES = new Map<string, "short" | "long">([["seed-short", "short"], ["seed-long", "long"]])
+  .get(new URLSearchParams(location.search).get("transcript") ?? "") ?? null;
+
 export const HISTORY_PICTURE = `data:image/svg+xml;utf8,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="480" height="220"><rect width="480" height="220" fill="#3a3530"/><text x="24" y="120" fill="#e8dcc4" font-size="28">chart</text></svg>')}`;
 
 export const NO_GALLERY_FIGURES = { activeMs: 0, cacheEma: null };

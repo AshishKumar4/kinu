@@ -18,7 +18,7 @@ import { LongTurnNotes, seedLongTurn } from "@/gallery-long-turn-view";
 import PlanReviewView from "@/components/surfaces/PlanReviewView";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
-import { APP_ROUTES } from "@kinu.run/core";
+import { APP_ROUTES, CHAT_SEED_ROWS, restoredRows } from "@kinu.run/core";
 import WorkspacePage from "@/pages/WorkspacePage";
 import { DeviceRow } from "@/components/devices/DeviceRow";
 import { StandingApprovalsCard } from "@/pages/SettingsPage";
@@ -32,15 +32,15 @@ import { lastValue, type AsyncResource } from "@/hooks/use-async-resource";
 import type { ExecutorInfo } from "@kinu.run/core";
 import type { DirEntry, EnvironmentInfo, PendingAction } from "@kinu.run/core";
 import type { UserDevice } from "@/lib/user-api";
-import { galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
-import { BACKGROUND_JOBS, BRAIN_STATUS, CHANGELOG, EMPTY_TREES, GALLERY_ASK, NOW, NO_HEAD_ACTIVITY, PC_CONSENTED_ROOT, PC_MOUNT, PENDING_ACTIONS, SHELL_GRANTS, WORKSPACE_PAGE_NAME } from "@/gallery-data";
+import { galleryChatStartsAt, galleryServerPush, seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
+import { BACKGROUND_JOBS, BRAIN_STATUS, CHANGELOG, EMPTY_TREES, GALLERY_ASK, HISTORY_ROWS, NOW, NO_HEAD_ACTIVITY, PC_CONSENTED_ROOT, PC_MOUNT, PENDING_ACTIONS, SEED_SERIES, SHELL_GRANTS, WORKSPACE_PAGE_NAME } from "@/gallery-data";
 import { AGENT_TASKS, EVENT_CARD_ROWS, GALLERY_ANSWERS, GalleryComposer, PAGE_ANSWERS, QUALITY_DAYS, QUALITY_WINDOW, REFUSED_THREAD, REVERT_THREAD, SYSTEM_EVENT_ROWS, WORK_ANSWERS, filesPage, galleryAgentPlan, galleryOwedIntents, galleryReadFault, galleryRpc, msg, seedCompositeTree, slateRpc, type MountedFrame, useBuildingJob, workRpc, workspacePageWire } from "@/gallery-shared";
 import { ActivityView } from "@/gallery-activity-log";
 import { CompactPreviewGallery } from "./gallery-preview-tabs";
 import { ComputerPreviewFrame } from "@/gallery-secrets";
 import { SlateFallbackFrame } from "@/gallery-slate-fallback";
 import { assistantHomeFrame, focusWorkspaceFrame } from "./gallery-assistant";
-import { framed, type FrameTable } from "@/gallery-shared";
+import { framed, historyRow, type FrameTable } from "@/gallery-shared";
 
 /** The gallery's answers over the wire, for frames whose own client reads them as a socket would. */
 const stubRpc: SocketCall = wireOf(GALLERY_ANSWERS);
@@ -228,6 +228,13 @@ const ASKED_THREAD: UIMessage[] = [
 ];
 
 function seedFrameTranscript(transcript: string | null): void {
+  // The newest seed's worth of the chat, as the room sends it, reading on from the `&history=N` rows before it.
+  if (SEED_SERIES !== null) {
+    seedGalleryChat(restoredRows(Array.from({ length: CHAT_SEED_ROWS }, (_, at) => historyRow(HISTORY_ROWS + at))));
+
+    if (HISTORY_ROWS > 0) galleryChatStartsAt("", { before: HISTORY_ROWS });
+  }
+
   seedToolRuns(transcript);
   seedLongTurn(transcript);
 

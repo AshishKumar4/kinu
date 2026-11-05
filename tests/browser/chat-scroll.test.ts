@@ -381,6 +381,10 @@ interface LongChat {
   readonly middle: { readonly read: string; readonly shown: number | null };
   /** The same, under newest rows far taller than a page's, whose chat reads no newest page (it came with the seed). */
   readonly middleTall: { readonly read: string; readonly shown: number | null };
+  /** A chat of one-line rows, then one of long answers, opened on its seed with every older page held. */
+  readonly seeds: readonly SeedOpen[];
+  /** Per older page landing under a reader holding still, scrolled up from each seed. */
+  readonly fromSeed: readonly (readonly LongFrame[])[];
 }
 
 interface Observed {
@@ -638,11 +642,22 @@ function nextPaint(page: Page): Promise<void> {
   });
 }
 
-async function openLong(newPage: Gallery['newPage'], origin: string, query: string): Promise<Page> {
+/** The chat a long-chat scenario opens on, and the window it is read in. */
+interface LongOpen {
+  readonly transcript: string;
+  readonly viewport: { readonly width: number; readonly height: number };
+}
+
+const SLATES_CHAT: LongOpen = { transcript: 'transcript=slates&slates=2', viewport: { width: 1280, height: 860 } };
+
+/** A tall desktop, 1440 px of window: the most chat a seed has to fill. */
+const TALL_DESKTOP = { width: 2560, height: 1440 };
+
+async function openLong(newPage: Gallery['newPage'], origin: string, query: string, chat: LongOpen = SLATES_CHAT): Promise<Page> {
   const page = await newPage();
 
-  await page.setViewport({ width: 1280, height: 860 });
-  await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=slates&slates=2&${query}`, { waitUntil: 'networkidle0' });
+  await page.setViewport(chat.viewport);
+  await page.goto(`${origin}/gallery.html?frame=workspacepage&${chat.transcript}&${query}`, { waitUntil: 'networkidle0' });
   await page.waitForSelector(LONG);
   await page.evaluate(() => document.fonts.ready);
   await nextPaint(page);
@@ -651,8 +666,9 @@ async function openLong(newPage: Gallery['newPage'], origin: string, query: stri
 }
 
 /** Opens a held long chat and records `landings` older pages landing under a reader holding still. */
-async function stillReaderLandings(newPage: Gallery['newPage'], origin: string, query: string, into: LongFrame[][]): Promise<void> {
-  const held = await openLong(newPage, origin, `${query}&historyHold=1`);
+async function stillReaderLandings(newPage: Gallery['newPage'], origin: string, query: string, chat: LongOpen = SLATES_CHAT): Promise<LongFrame[][]> {
+  const into: LongFrame[][] = [];
+  const held = await openLong(newPage, origin, `${query}&historyHold=1`, chat);
 
   await held.evaluate(() => { window.dispatchEvent(new Event('gallery:release-page')); });
   await untilLong(held, { kind: 'quiet' }, `the first held page never settled (${query})`);
@@ -685,6 +701,8 @@ async function stillReaderLandings(newPage: Gallery['newPage'], origin: string, 
   }
 
   await held.close();
+
+  return into;
 }
 
 /** The scrollbar dragged to the middle of a long chat: the first page it read, and the first row in view once it landed. */
@@ -717,6 +735,35 @@ async function middleDrag(newPage: Gallery['newPage'], origin: string, query: st
   return landed;
 }
 
+/** A chat opened on its seed with every older page held: where its oldest seeded row and the reserve above it sit
+ *  against the top of the scroller, and whether the reader is at its newest row. */
+const SeedOpenSchema = v.object({ oldestTop: v.nullable(v.number()), reserveBottom: v.nullable(v.number()), atBottom: v.boolean() });
+
+type SeedOpen = v.InferOutput<typeof SeedOpenSchema>;
+
+/** The seed's chat, `&history=2000` rows before it, on a tall desktop. Its oldest seeded row is the 2000th, by its words. */
+const seedChat = (kind: 'short' | 'long'): LongOpen => ({ transcript: `transcript=seed-${kind}`, viewport: TALL_DESKTOP });
+
+async function seedOpen(newPage: Gallery['newPage'], origin: string, kind: 'short' | 'long'): Promise<SeedOpen> {
+  const page = await openLong(newPage, origin, 'history=2000&historyHold=1', seedChat(kind));
+
+  try {
+    return v.parse(SeedOpenSchema, await page.$eval(LONG, (scroller, oldest) => {
+      const box = scroller.getBoundingClientRect();
+      const row = [...scroller.children].find((child) => (child.textContent ?? '').includes(oldest));
+      const reserve = scroller.querySelector('[data-history-reserve]');
+
+      return {
+        oldestTop: row === undefined ? null : row.getBoundingClientRect().top - box.top,
+        reserveBottom: reserve === null ? null : reserve.getBoundingClientRect().bottom - box.top,
+        atBottom: scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2,
+      };
+    }, kind === 'short' ? 'Next 2000?' : 'Turn 2000.'));
+  } finally {
+    await page.close();
+  }
+}
+
 async function measureLong(newPage: Gallery['newPage'], origin: string): Promise<LongChat> {
   const stillReader: LongFrame[][] = [];
   const uneven: LongFrame[][] = [];
@@ -727,12 +774,20 @@ async function measureLong(newPage: Gallery['newPage'], origin: string): Promise
   let dragMs = 0;
   let middle: LongChat['middle'] = { read: '', shown: null };
   let middleTall: LongChat['middle'] = { read: '', shown: null };
+  const seeds: SeedOpen[] = [];
+  const fromSeed: LongFrame[][] = [];
 
   try {
+    // Opened on its seed alone, every older page held: the seed is all a first paint can show.
+    for (const kind of ['short', 'long'] as const) {
+      seeds.push(await seedOpen(newPage, origin, kind));
+      fromSeed.push(...await stillReaderLandings(newPage, origin, 'history=2000', seedChat(kind)));
+    }
+
     // Held pages: each older page lands when released, and nothing lands between a painted frame and its reading.
-    await stillReaderLandings(newPage, origin, 'history=2000', stillReader);
-    await stillReaderLandings(newPage, origin, 'history=2000&historyUneven=1', uneven);
-    await stillReaderLandings(newPage, origin, 'history=2000&tallTail=1', tallTail);
+    stillReader.push(...await stillReaderLandings(newPage, origin, 'history=2000'));
+    uneven.push(...await stillReaderLandings(newPage, origin, 'history=2000&historyUneven=1'));
+    tallTail.push(...await stillReaderLandings(newPage, origin, 'history=2000&tallTail=1'));
 
     // A fling up a long chat: every painted frame shows transcript, never the reserve, while history remains.
     const flung = await openLong(newPage, origin, 'history=2000&historyLatency=250');
@@ -774,9 +829,9 @@ async function measureLong(newPage: Gallery['newPage'], origin: string): Promise
     middle = await middleDrag(newPage, origin, 'history=5000&historyLatency=250');
     middleTall = await middleDrag(newPage, origin, 'history=5000&historyLatency=250&tallTail=1');
 
-    return { refused: null, stillReader, uneven, tallTail, fling, drag, dragAsks, dragMs, middle, middleTall };
+    return { refused: null, stillReader, uneven, tallTail, fling, drag, dragAsks, dragMs, middle, middleTall, seeds, fromSeed };
   } catch (err) {
-    return { refused: firstLine({ cause: err }), stillReader, uneven, tallTail, fling, drag, dragAsks, dragMs, middle, middleTall };
+    return { refused: firstLine({ cause: err }), stillReader, uneven, tallTail, fling, drag, dragAsks, dragMs, middle, middleTall, seeds, fromSeed };
   }
 }
 
@@ -917,6 +972,30 @@ describe('a long workspace chat, as the reader sees it', () => {
   // rows, a landing page's shorter rows shrank the reserve, and the reader was thrown to the bottom.
   test('a reader holding still sees the row they read stay put on every painted frame as older pages land', () => {
     for (const frames of [...observed.long.stillReader, ...observed.long.uneven, ...observed.long.tallTail]) {
+      const tops = frames.flatMap((frame) => frame.anchorTop === null ? [] : [frame.anchorTop]);
+
+      expect(tops.length).toBeGreaterThan(1);
+      expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(1);
+    }
+  });
+
+  // Owner 2026-11-05: the seed is cut to what a first paint needs, and must still fill a tall desktop for a chat of
+  // one-line rows as for long answers, so the first paint never shows a half-empty chat that fills on its own.
+  test('a chat opened on its seed fills a tall desktop: its oldest seeded row and the reserve sit above the top', () => {
+    expect(observed.long.seeds).toHaveLength(2);
+
+    for (const seed of observed.long.seeds) {
+      expect(seed.atBottom).toBe(true);
+      expect(seed.oldestTop).not.toBeNull();
+      expect(seed.oldestTop ?? 1).toBeLessThanOrEqual(0);
+      expect(seed.reserveBottom ?? 0).toBeLessThanOrEqual(0);
+    }
+  });
+
+  test('scrolled up from the seed, the row being read stays put on every painted frame as older pages land', () => {
+    expect(observed.long.fromSeed).toHaveLength(4);
+
+    for (const frames of observed.long.fromSeed) {
       const tops = frames.flatMap((frame) => frame.anchorTop === null ? [] : [frame.anchorTop]);
 
       expect(tops.length).toBeGreaterThan(1);
