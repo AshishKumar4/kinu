@@ -66,11 +66,11 @@ const CountSchema = v.pipe(v.string(), v.regex(/EXEC (\d+)\/(\d+) LOST (\S+)/u))
 function programDetail(absent: boolean, jobId: string | undefined, status: string | undefined, line: string): string {
   if (absent) return 'no eval call ran the program in this turn';
 
-  if (jobId === undefined) return `the program answered ${line.slice(0, 300)}`;
+  if (jobId === undefined) return `the program answered ${line.slice(0, 1200)}`;
 
   return status === undefined
     ? `the program detached as ${jobId}, which had not settled when the budget was spent`
-    : `the program detached as ${jobId}, which settled ${status} with ${line.slice(0, 300)}`;
+    : `the program detached as ${jobId}, which settled ${status} with ${line.slice(0, 1200)}`;
 }
 
 describe(SUITE, () => {
