@@ -64,7 +64,7 @@ export { MailPreviewSchema, mailHostPreview, type MailPreview, type MailPurpose,
 export { mailRoutesOf, type MailRoutes, type MailRoutingEnv } from './mail-rules';
 
 export {
-  ConnectorsBeforeSchema, GITHUB_APP_NEW, GOOGLE_SETUP, GoogleClientSchema, HeldConnectorsSchema, convertedGithubApp, githubAppManifest, googleRedirect, kinuOrigin, setConnector,
+  ConnectorsBeforeSchema, GITHUB_APP_NEW, GOOGLE_SETUP, GoogleClientSchema, convertedGithubApp, githubAppManifest, googleRedirect, kinuOrigin, setConnector,
   type ConnectorsBefore, type GithubApp, type HeldConnectors, type KinuWorker, type OAuthClient,
 } from './connectors';
 

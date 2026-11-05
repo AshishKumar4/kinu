@@ -320,6 +320,21 @@ function addressOf(picked: PickedDomain | null): AddressAsk {
     : { kind: "domain", ...(picked.zone === null ? { domain: picked.name } : { zone: picked.zone }), host: picked.host };
 }
 
+/** The optional connectors before Deploy, once the Kinu has a name; GitHub's leaves the tab, so the choices are kept. */
+function ConnectorsStep({ account, name, choices, busy, onConnectGithub }: {
+  account: string; name: string; choices: Choices; busy: boolean; onConnectGithub: ConnectGithubBefore;
+}) {
+  if (name === "") return null;
+  const address = addressOf(choices.domain);
+
+  return (
+    <ConnectorsBefore account={account} name={name} address={address} busy={busy} onConnectGithub={() => {
+      sessionStorage.setItem(CHOICES_KEY, JSON.stringify({ account, choices }));
+      onConnectGithub(account, name, address);
+    }} />
+  );
+}
+
 /** Asked of the run for what was chosen. */
 function requestOf(account: string, name: string, choices: Choices): DeployRunRequest {
   return { kind: "new", account, name, address: addressOf(choices.domain), computer: choices.computer, mail: choices.mail === null ? null : { host: choices.mail } };
@@ -448,12 +463,7 @@ function ForAccount({ session, actions, onDeploy, onConnectGithub, onBack }: {
             <MailExtra account={account} domain={choices.domain} mail={choices.mail} onMail={onMail} onReady={setMailReady} onDomain={() => setChoosingDomain(true)} />
             <Credits account={account} credits={preflight.credits} waiting={handedOff === CREDITS}
               onHandedOff={() => { setCreditsAt(JSON.stringify(preflight.credits)); handOff(CREDITS); }} />
-            {name !== "" && (
-              <ConnectorsBefore account={account} name={name} address={addressOf(choices.domain)} busy={actions.deploying} onConnectGithub={() => {
-                sessionStorage.setItem(CHOICES_KEY, JSON.stringify({ account, choices }));
-                onConnectGithub(account, name, addressOf(choices.domain));
-              }} />
-            )}
+            <ConnectorsStep account={account} name={name} choices={choices} busy={actions.deploying} onConnectGithub={onConnectGithub} />
           </div>
           <div className="sm:hidden"><Line label="Cost"><span className="t-public-body p-text">{COST}</span></Line></div>
           <WhatGetsMade name={name === "" ? DEFAULT_INSTANCE_NAME : name} domain={choices.domain?.name ?? null} computer={choices.computer} mail={choices.mail} />

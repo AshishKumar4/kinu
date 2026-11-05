@@ -106,7 +106,7 @@ export const GoogleClientSchema = v.object({
 export type OAuthClient = v.InferOutput<typeof GoogleClientSchema>;
 
 /** The connectors a person set up for a Kinu before its first deploy, which the deploy binds: GitHub's app by its slug. */
-export const HeldConnectorsSchema = v.object({ github: v.nullable(v.string()), google: v.boolean() });
+const HeldConnectorsSchema = v.object({ github: v.nullable(v.string()), google: v.boolean() });
 
 export type HeldConnectors = v.InferOutput<typeof HeldConnectorsSchema>;
 
