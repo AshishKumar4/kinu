@@ -1,7 +1,8 @@
 // Lifecycle contracts not already exercised by the box flows, and incident delivery effects.
 import { describe, expect, test } from 'bun:test';
 
-import { startOverrun } from '../src/errors';
+import { settle, startOverrun } from '../src/errors';
+import { Effect } from 'effect';
 import {
   describeThrown,
   healthProbeCommand,
@@ -312,7 +313,7 @@ describe('an incident is written off only when the host says it LANDED', () => {
 describe('the attach budget', () => {
   const attachWithin = <T>(
     budgetMs: number, work: () => Promise<T>, onOverrun: (failure: { readonly cause: unknown }) => void,
-  ): Promise<T> => racedRestoreSteps(openStartBudget(budgetMs)).attach(work, onOverrun);
+  ): Promise<T> => settle(racedRestoreSteps(openStartBudget(budgetMs)).attach(work, onOverrun));
 
   test('work that overruns is abandoned, and its late failure is still reported', async () => {
     const told = Promise.withResolvers<string>();
@@ -377,26 +378,27 @@ import {
 import type { CheckpointOutcome } from '../src/storage';
 
 describe('the checkpoint lane — one checkpoint at a time', () => {
-  const ok = (): Promise<CheckpointOutcome> => Promise.resolve({
-    kind: 'committed', reason: undefined, bytes: 1, movedBytes: 1,
-  });
+  const committed = (): CheckpointOutcome => ({ kind: 'committed', reason: undefined, bytes: 1, movedBytes: 1 });
+  const ok = () => Effect.sync(committed);
+  /** A checkpoint whose work is a promise's, as the box's own awaits storage. */
+  const working = (work: () => Promise<CheckpointOutcome>) => () => Effect.promise(work);
 
   test('concurrent callers of the SAME kind JOIN one operation', async () => {
     const lane = createCheckpointLane();
     let calls = 0;
     const release = Promise.withResolvers<void>();
 
-    const op = async (): Promise<CheckpointOutcome> => {
+    const op = working(async () => {
       calls += 1;
       await release.promise;
 
-      return Promise.resolve(ok());
-    };
+      return committed();
+    });
 
-    const first = lane.run('tick', op);
+    const first = settle(lane.run('tick', op));
     expect(lane.busy()).toBe(true);
     expect(Bun.peek.status(first)).toBe('pending');
-    const second = lane.run('tick', op);
+    const second = settle(lane.run('tick', op));
     release.resolve();
     const [a, b] = await Promise.all([first, second]);
     expect(calls).toBe(1);
@@ -407,11 +409,11 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
     const lane = createCheckpointLane();
     const parked = Promise.withResolvers<void>();
 
-    const running = lane.run('tick', async () => {
+    const running = settle(lane.run('tick', working(async () => {
       await parked.promise;
 
-      return await ok();
-    });
+      return committed();
+    })));
 
     expect(lane.busy()).toBe(true);
     parked.resolve();
@@ -425,25 +427,25 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
     const events: string[] = [];
     const release = Promise.withResolvers<void>();
 
-    const slowTick = async (): Promise<CheckpointOutcome> => {
+    const slowTick = working(async () => {
       events.push('tick:start');
       await release.promise;
       events.push('tick:end');
 
-      return Promise.resolve(ok());
-    };
+      return committed();
+    });
 
-    const quiesce = async (): Promise<CheckpointOutcome> => {
+    const quiesce = working(async () => {
       events.push('quiesce:start');
       events.push('quiesce:end');
 
-      return Promise.resolve(ok());
-    };
+      return committed();
+    });
 
-    const first = lane.run('tick', slowTick);
+    const first = settle(lane.run('tick', slowTick));
     expect(lane.busy()).toBe(true);
     expect(Bun.peek.status(first)).toBe('pending');
-    const second = lane.run('quiesce', quiesce);
+    const second = settle(lane.run('quiesce', quiesce));
     release.resolve();
     await Promise.all([first, second]);
     // A quiesce joining an in-flight tick could inherit `skipped` and stop over just-landed work;
@@ -456,13 +458,13 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
   test('a rejected run rejects its joiners and leaves the gate usable', async () => {
     const lane = createCheckpointLane();
 
-    const failing = (): Promise<CheckpointOutcome> =>
-      Promise.reject(new Error('store unreachable'));
+    const failing = working(async () => await Promise.reject(new Error('store unreachable')));
 
-    const joiner = lane.run('tick', failing);
-    await expect(lane.run('tick', failing)).rejects.toThrow('store unreachable');
-    await expect(joiner).rejects.toThrow('store unreachable');
-    await expect(lane.run('tick', ok)).resolves.toHaveProperty('kind', 'committed');
+    // The second joins the first: both are answered by the one run's failure.
+    const runs = await Promise.allSettled([settle(lane.run('tick', failing)), settle(lane.run('tick', failing))]);
+
+    expect(runs.map((run) => (run.status === 'rejected' ? String(run.reason) : run.status))).toEqual(['Error: store unreachable', 'Error: store unreachable']);
+    await expect(settle(lane.run('tick', ok))).resolves.toHaveProperty('kind', 'committed');
   });
 });
 

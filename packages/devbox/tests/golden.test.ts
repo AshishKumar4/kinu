@@ -27,7 +27,7 @@ class Platform {
       tools,
       read: () => this.state,
       write: (state) => { this.state = state; },
-      start: async (from) => { this.calls.push('image' in from ? `start ${from.image}` : `start ${from.snapshot}`); },
+      start: (from) => Effect.sync(() => { this.calls.push('image' in from ? `start ${from.image}` : `start ${from.snapshot}`); }),
       exec: async (command) => {
         if (command.includes('debian_version')) return { stdout: '13.6 v24.20.0 aaaa', stderr: '', exitCode: 0 };
 
@@ -49,11 +49,12 @@ class Platform {
 
         return `golden-${String(this.#taken)}`;
       },
-      destroy: async () => {
+      // A container that will not stop answers as the box's own destroy does: a failure it did not own.
+      destroy: () => Effect.suspend(() => {
         this.calls.push('destroy');
 
-        if (this.stopRefused !== undefined) throw new Error(this.stopRefused);
-      },
+        return this.stopRefused === undefined ? Effect.void : Effect.die(new Error(this.stopRefused));
+      }),
       build: async () => { this.builds += 1; },
       tell: (box, answer) => Effect.sync(() => { this.told.push([box, answer]); }),
       delete: (ref) => {

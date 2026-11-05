@@ -2,6 +2,8 @@
 import type { CheckpointKind, CheckpointOutcome } from './storage';
 import { DEVBOX_WORKDIR } from './wire';
 import { describeThrown } from './lifecycle';
+import { Cause, Effect, Exit } from 'effect';
+import { hold as exitOf, type DevboxError } from './errors';
 
 /** Namespaces distinguish files, ports and processes; a subtree claims every descendant. */
 export interface ResourceScope {
@@ -177,33 +179,31 @@ interface CheckpointLane {
   drain(): Promise<void>;
   /** Same kind in flight joins it; a different kind queues, so a quiesce never inherits a tick's
    *  `skipped` and stops over just-landed work. */
-  run(kind: CheckpointKind, op: () => Promise<CheckpointOutcome>): Promise<CheckpointOutcome>;
+  run(kind: CheckpointKind, op: () => Effect.Effect<CheckpointOutcome, DevboxError>): Effect.Effect<CheckpointOutcome, DevboxError>;
 }
 
 export function createCheckpointLane(): CheckpointLane {
-  const inFlight: Partial<Record<CheckpointKind, Promise<CheckpointOutcome>>> = {};
+  const inFlight: Partial<Record<CheckpointKind, Promise<Exit.Exit<CheckpointOutcome, DevboxError>>>> = {};
   let tail: Promise<unknown> = Promise.resolve();
 
   return {
     busy: () => Object.values(inFlight).some(run => run !== undefined),
     drain: async () => { await tail; },
-    run(kind, op) {
+    run: (kind, op) => Effect.flatten(Effect.promise(() => {
       const pending = inFlight[kind];
 
       if (pending !== undefined) return pending;
-      const run = tail.then(() => op());
+      const run = tail.then(async () => exitOf(op()));
       inFlight[kind] = run;
 
-      const cleaned = Promise.allSettled([run]).then(([outcome]) => {
-        if (outcome?.status === 'rejected') console.error(`[devbox] ${kind} checkpoint rejected: ${describeThrown({ cause: outcome.reason })}`);
+      // The next lane entry observes cleanup too; no detached promise remains.
+      tail = run.then((exit) => {
+        if (Exit.isFailure(exit)) console.error(`[devbox] ${kind} checkpoint rejected: ${describeThrown({ cause: Cause.squash(exit.cause) })}`);
 
         if (inFlight[kind] === run) inFlight[kind] = undefined;
       });
 
-      // The next lane entry observes cleanup too; no detached promise remains.
-      tail = cleaned;
-
       return run;
-    },
+    })),
   };
 }

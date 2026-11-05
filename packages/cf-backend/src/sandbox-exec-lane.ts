@@ -66,20 +66,18 @@ function pause(clock: Clock, ms: number, signal: AbortSignal | undefined): Promi
 
 /** The box's readiness, held while it is on its way (holdReadiness, D79, D108), so a call asks again instead of handing
  *  its agent a refusal to retry; the call's `signal` ends the hold as it ends the call. */
-async function readinessPastBase(
+function readinessPastBase(
   handle: Pick<ContainerOperations, 'resolveReadiness'>, clock: Clock, signal: AbortSignal | undefined,
-): Promise<Readiness> {
+): Effect.Effect<Readiness, KinuError> {
   let held = false;
 
-  const readiness = await holdReadiness({
-    ask: () => handle.resolveReadiness(), wait: (ms) => pause(clock, ms, signal), now: () => clock.now(), gone: () => signal?.aborted === true,
+  const readiness = holdReadiness({
+    ask: () => callDevbox(() => handle.resolveReadiness()), wait: (ms) => pause(clock, ms, signal), now: () => clock.now(), gone: () => signal?.aborted === true,
     pending: () => { held = true; },
   });
 
   // Only a hold the signal ended is a cancellation; a call that was never held runs on to its own abort handling.
-  if (held) signal?.throwIfAborted();
-
-  return readiness;
+  return Effect.tap(readiness, () => Effect.try({ try: () => { if (held) signal?.throwIfAborted(); }, catch: (cause) => fromDevbox({ cause }) }));
 }
 
 function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
@@ -192,7 +190,7 @@ export function adaptCloudflareSandbox(
   // `signal`: the call's own, which ends a hold for the box's base as it ends the call.
   const onContainer = <T>(run: () => Promise<T>, signal?: AbortSignal): Effect.Effect<T, KinuError> => Effect.gen(function* () {
     yield* configured;
-    const readiness = yield* callDevbox(() => readinessPastBase(handle, clock, signal));
+    const readiness = yield* readinessPastBase(handle, clock, signal);
 
     if (readiness.kind === 'pending') return yield* fromDevbox({ cause: new SandboxPending(readiness.reason) });
 

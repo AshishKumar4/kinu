@@ -54,7 +54,7 @@ test("a computer terminal on a box that must restore is answered at once, told w
             close: () => { throw new Error("the terminal unexpectedly closed"); },
           },
           held: () => true,
-          ask: async () => restoreDone ? { kind: "restored" } : { kind: "pending", reason, quiescing: true },
+          ask: () => Effect.sync(() => (restoreDone ? { kind: "restored" as const } : { kind: "pending" as const, reason, quiescing: true })),
           wait: async () => { await restored.promise; },
           now: () => 0,
           attach: () => Effect.sync(() => {
