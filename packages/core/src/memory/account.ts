@@ -25,6 +25,8 @@ export interface AccountNoteHit {
   readonly id: string;
   readonly text: string;
   readonly score: number;
+  /** When the owner kept it. */
+  readonly at: number;
 }
 
 /** A key as the store keeps it: normalized, with something left once it is. */
@@ -142,8 +144,7 @@ function rankNotes(notes: readonly AccountNote[], query: string, limit: number):
     .map((note) => ({ id: note.id, text: note.content, score: lexicalGroupRelevance(groups, note.content), at: note.createdAt }))
     .filter((hit) => hit.score >= floor)
     .sort((a, b) => b.score - a.score || b.at - a.at || a.id.localeCompare(b.id))
-    .slice(0, limit)
-    .map(({ id, text, score }) => ({ id, text, score }));
+    .slice(0, limit);
 }
 
 interface ProposalRow {

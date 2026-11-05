@@ -15,6 +15,8 @@ export interface LexicalHit {
   readonly endLine: number;
   readonly score: number;
   readonly snippet: string;
+  /** When its note was last written, as indexed. */
+  readonly writtenAt?: number;
 }
 
 export interface HybridHit {
@@ -36,8 +38,14 @@ export interface HybridHit {
 
 export type LexicalSearchFn = (query: string, limit: number) => Promise<LexicalHit[]>;
 
+/** A semantic hit's canonical text and its note's write time, read back. */
+export interface RehydratedSnippet {
+  readonly text: string;
+  readonly writtenAt?: number;
+}
+
 /** The vector store holds no chunk text, so semantic-only hits need their text read back. Null when unreadable. */
-export type SnippetRehydrator = (hit: VectorSearchHit) => Promise<string | null>;
+export type SnippetRehydrator = (hit: VectorSearchHit) => Promise<RehydratedSnippet | null>;
 
 /** Remote candidates must still identify the canonical chunk and content. */
 export function memorySnippetRehydrator(memory: Pick<Memory, 'chunk'>): SnippetRehydrator {
@@ -47,7 +55,7 @@ export function memorySnippetRehydrator(memory: Pick<Memory, 'chunk'>): SnippetR
     if (chunk === null || hit.hash === undefined || chunk.hash !== hit.hash
       || chunk.path !== hit.path || chunk.startLine !== hit.startLine || chunk.endLine !== hit.endLine) return null;
 
-    return chunk.text;
+    return { text: chunk.text, ...(chunk.writtenAt !== undefined && { writtenAt: chunk.writtenAt }) };
   };
 }
 
@@ -67,6 +75,8 @@ export interface HybridSearchOptions {
   /** The account's notes the query matches, a fourth source that degrades as the others do. */
   accountNotes?: (query: string, limit: number) => Promise<readonly AccountNoteHit[]>;
   rehydrate?: SnippetRehydrator;
+  /** The clock ages are read against. */
+  now?: number;
 }
 
 /** Arm outcomes are values: whether a failure degrades or is the answer depends on the other arms. */
@@ -107,9 +117,9 @@ export function hybridSearch(
   
       return armOf(async () => {
         const hits = await Promise.all(outcome.hits.map(async (hit) => {
-          const text = await rehydrate(hit);
+          const read = await rehydrate(hit);
 
-          return text === null ? null : { ...hit, text };
+          return read === null ? null : { ...hit, ...read };
         }));
 
         return hits.flatMap((hit) => hit === null ? [] : [hit]);
@@ -155,7 +165,7 @@ export function hybridSearch(
       return yield* Effect.die(new AggregateError(failures, 'hybrid search failed: no retrieval source answered', { cause: only }));
     }
 
-    return yield* fused({ lexical, semantic, factArm, accountNotes: noteArm.kind === 'answered' ? noteArm.hits : [], finalK, rrfK });
+    return yield* fused({ lexical, semantic, factArm, accountNotes: noteArm.kind === 'answered' ? noteArm.hits : [], finalK, rrfK, now: options.now ?? Date.now() });
   }));
 }
 
@@ -166,6 +176,7 @@ interface FuseInput {
   readonly accountNotes: readonly AccountNoteHit[];
   readonly finalK: number;
   readonly rrfK: number;
+  readonly now: number;
 }
 
 function armOf<Hit>(
@@ -181,12 +192,12 @@ function armOf<Hit>(
   );
 }
 
-function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK }: FuseInput): Effect.Effect<HybridHit[]> {
+function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, now }: FuseInput): Effect.Effect<HybridHit[]> {
   const lexicalHits: readonly LexicalHit[] = lexical.kind === 'answered' ? lexical.hits : [];
 
   const factHits: readonly FactSearchHit[] = factArm.kind === 'answered' ? factArm.hits : [];
 
-  const semanticHits: readonly VectorSearchHit[] = semantic.kind === 'answered'
+  const semanticHits: readonly (VectorSearchHit & { readonly writtenAt?: number })[] = semantic.kind === 'answered'
     ? semantic.hits
     : [];
 
@@ -199,30 +210,107 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK }: FuseI
   const byIdSem = new Map(semanticHits.map((h) => [h.id, h]));
   const byIdNote = new Map(noteHits.map((h) => [h.id, h]));
 
-  return Effect.sync(() => merged.slice(0, finalK).map((m) => {
-    const l = byIdLex.get(m.id);
-    const f = byIdFact.get(m.id);
-    const s = byIdSem.get(m.id);
-    const n = byIdNote.get(m.id);
-    const sources = hitSources({ l, f, s, n });
-    const snippet = l?.snippet ?? f?.snippet ?? n?.text ?? s?.text ?? '';
+  return Effect.sync(() => {
+    const candidates = merged.map((m) => {
+      const l = byIdLex.get(m.id);
+      const f = byIdFact.get(m.id);
+      const s = byIdSem.get(m.id);
+      const n = byIdNote.get(m.id);
+      const scope = hitScope(f, n);
+      const writtenAt = f?.lastObservedAt ?? n?.at ?? l?.writtenAt ?? s?.writtenAt;
+      const kind = memoryKind(f, n);
 
-    const hit: HybridHit = {
-      id: m.id,
-      path: l?.path ?? s?.path ?? '',
-      startLine: l?.startLine ?? s?.startLine ?? 0,
-      endLine: l?.endLine ?? s?.endLine ?? 0,
-      snippet,
-      rrfScore: m.rrfScore,
-      sources,
-      ...hitScope(f, n),
-      ...(f !== undefined && { factKey: f.key }),
-      lexicalScore: l?.score,
-      semanticScore: s?.score,
-    };
+      const hit: HybridHit = {
+        id: m.id,
+        path: l?.path ?? s?.path ?? '',
+        startLine: l?.startLine ?? s?.startLine ?? 0,
+        endLine: l?.endLine ?? s?.endLine ?? 0,
+        snippet: l?.snippet ?? f?.snippet ?? n?.text ?? s?.text ?? '',
+        // Fused rank, kept at least 70% and down to it as the memory ages (mnemopi `core/beam/recall.ts`).
+        rrfScore: m.rrfScore * (0.7 + 0.3 * survival(kind, writtenAt === undefined ? null : now - writtenAt)),
+        sources: hitSources({ l, f, s, n }),
+        ...scope,
+        ...(f !== undefined && { factKey: f.key }),
+        lexicalScore: l?.score,
+        semanticScore: s?.score,
+      };
 
-    return hit;
-  }));
+      return hit;
+    });
+
+    return diverse(candidates.sort((a, b) => b.rrfScore - a.rrfScore), finalK);
+  });
+}
+
+/** What a recalled memory is, which decides how fast it ages. */
+type MemoryKind = 'note' | 'fact' | 'account-fact' | 'account-note';
+
+/** Weibull shape and scale in hours per kind, mnemopi's `core/weibull.ts`: a note is a learning, a workspace fact a fact,
+ *  and what the owner kept for every workspace a preference or a profile line, which age slowest. */
+const AGING: Readonly<Record<MemoryKind, { readonly k: number; readonly etaHours: number }>> = {
+  note: { k: 0.7, etaHours: 1440 },
+  fact: { k: 0.8, etaHours: 720 },
+  'account-fact': { k: 0.4, etaHours: 4380 },
+  'account-note': { k: 0.3, etaHours: 8760 },
+};
+
+function memoryKind(fact: FactSearchHit | undefined, note: AccountNoteHit | undefined): MemoryKind {
+  if (fact !== undefined) return fact.scope === 'account' ? 'account-fact' : 'fact';
+
+  return note === undefined ? 'note' : 'account-note';
+}
+
+/** How much of a memory survives `ageMs`: 1 when new or of unknown age, falling toward 0. */
+function survival(kind: MemoryKind, ageMs: number | null): number {
+  if (ageMs === null || ageMs <= 0) return 1;
+  const { k, etaHours } = AGING[kind];
+
+  return Math.exp(-((ageMs / 3_600_000 / etaHours) ** k));
+}
+
+/** How much of a recall's ranking is relevance rather than difference from what is already chosen (mnemopi `mmr.ts`). */
+const MMR_LAMBDA = 0.7;
+
+/**
+ * The best `limit` hits, each next one chosen by maximal marginal relevance: its score, less how much its words repeat a
+ * hit already chosen (Jaccard over word sets), so near-copies of one note do not crowd out a different one.
+ */
+function diverse(ranked: readonly HybridHit[], limit: number): HybridHit[] {
+  const top = ranked[0]?.rrfScore ?? 0;
+
+  if (top <= 0) return ranked.slice(0, limit);
+  const words = new Map(ranked.map((hit) => [hit.id, new Set(hit.snippet.toLowerCase().split(/[^\p{L}\p{N}_]+/u).filter(Boolean))]));
+  const chosen: HybridHit[] = [];
+  const left = [...ranked];
+
+  while (chosen.length < limit && left.length > 0) {
+    let best = 0;
+    let bestValue = -Infinity;
+
+    for (const [at, hit] of left.entries()) {
+      const own = words.get(hit.id) ?? new Set<string>();
+      const repeat = Math.max(0, ...chosen.map((picked) => jaccard(own, words.get(picked.id) ?? new Set())));
+      const value = MMR_LAMBDA * (hit.rrfScore / top) - (1 - MMR_LAMBDA) * repeat;
+
+      if (value > bestValue) {
+        best = at;
+        bestValue = value;
+      }
+    }
+
+    chosen.push(...left.splice(best, 1));
+  }
+
+  return chosen;
+}
+
+function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let shared = 0;
+
+  for (const word of a) if (b.has(word)) shared += 1;
+
+  return shared / (a.size + b.size - shared);
 }
 
 type HitSource = HybridHit['sources'][number];

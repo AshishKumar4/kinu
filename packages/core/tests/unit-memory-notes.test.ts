@@ -7,7 +7,7 @@ import { createWorkspaceBundle, createMemoryMemory, createTestRuntime } from './
 import { MemoryStore, type IndexedChunk } from '@kinu.run/agent-utils/memory';
 import { adaptMemory, backfillMemoryVectors, forgetMemoryVectors } from '../src/memory/vector-sync';
 import { hybridSearch, memorySnippetRehydrator } from '../src/memory/hybrid-search';
-import type { VectorStore } from '../src/memory/vector-store';
+import { createNoopVectorStore, type VectorStore } from '../src/memory/vector-store';
 import { appendMemoryNote, memoryIndexPath, parseMemoryNotes, readMemoryTail } from '../src/memory/note';
 import type { Memory } from '../src/types/primitives';
 
@@ -209,3 +209,48 @@ async function memoryWritablePath(memory: Memory, vfs: VFS): Promise<string> {
 
   return seeded.path;
 }
+
+describe('recall ranks by age and by difference', () => {
+  /** A real note index over the workspace's files, its notes written `ageDays` ago as the indexer read their files. */
+  async function notes(entries: ReadonlyArray<{ readonly path: string; readonly text: string; readonly ageDays: number }>) {
+    const { rt, workspace } = createTestRuntime();
+    const indexed = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
+    const now = Date.now();
+
+    indexed.ensureSchema();
+
+    for (const entry of entries) {
+      await indexed.writeFile(entry.path, entry.text);
+      await indexed.indexFile(entry.path, entry.text, null, now - entry.ageDays * 86_400_000);
+    }
+
+    const lexical = async (query: string, limit: number) => (await indexed.search(query, limit, async () => {})).map((hit) => ({
+      id: `${hit.path}:${hit.startLine}-${hit.endLine}`, ...hit,
+    }));
+
+    return { search: (query: string, finalK: number) => hybridSearch(query, lexical, createNoopVectorStore(), { finalK, now }) };
+  }
+
+  test('of two notes that match alike, the one written this week outranks one from months ago', async () => {
+    const { search } = await notes([
+      { path: 'memory/old.md', text: 'The deploy target is staging.', ageDays: 120 },
+      { path: 'memory/new.md', text: 'As of this week the deploy target is production, not staging.', ageDays: 2 },
+    ]);
+
+    expect((await search('deploy target', 2)).map((hit) => hit.path)).toEqual(['memory/new.md', 'memory/old.md']);
+  });
+
+  test('copies of one note do not crowd out a different note that also answers', async () => {
+    const { search } = await notes([
+      { path: 'memory/a.md', text: 'Rotate the API key monthly.', ageDays: 1 },
+      { path: 'memory/b.md', text: 'Rotate the API key monthly!', ageDays: 1 },
+      { path: 'memory/c.md', text: 'Rotate the API key monthly, always.', ageDays: 1 },
+      { path: 'memory/d.md', text: 'The vault holds the API key; the owner rotates it by hand.', ageDays: 1 },
+    ]);
+
+    const recalled = (await search('rotate API key', 2)).map((hit) => hit.path);
+
+    expect(recalled).toHaveLength(2);
+    expect(recalled).toContain('memory/d.md');
+  });
+});

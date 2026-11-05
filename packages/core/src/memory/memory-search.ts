@@ -26,6 +26,7 @@ export async function searchMemoryHits(
   const lexical: LexicalSearchFn = async (q, k) => (await memory.search(q, k)).map((r) => ({
     // The vector store's chunk id, so RRF fuses both.
     id: `${r.path}:${r.startLine}-${r.endLine}`, path: r.path, startLine: r.startLine, endLine: r.endLine, score: r.score, snippet: r.snippet,
+    ...(r.writtenAt !== undefined && { writtenAt: r.writtenAt }),
   }));
 
   const hits = await hybridSearch(query, lexical, index, {

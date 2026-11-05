@@ -127,7 +127,7 @@ describe('hybridSearch', () => {
     });
 
   test('a lexical snippet is never replaced by a rehydrated one', async () => {
-      const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus), { rehydrate: async () => 'rehydrated text' });
+      const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus), { rehydrate: async () => ({ text: 'rehydrated text' }) });
       expect(present(out.find((hit) => hit.id === 'shared'), "the 'shared' hit").snippet).toBe('shared snippet');
     });
 

@@ -8,7 +8,7 @@ const SNIPPET_MAX_CHARS = 700;
 
 const utf8 = new TextEncoder();
 
-interface ChunkRow { id: string; path: string; start_line: number; end_line: number; hash: string }
+interface ChunkRow { id: string; path: string; start_line: number; end_line: number; hash: string; written_at: number | null }
 
 interface FtsRow extends ChunkRow { rank: number }
 
@@ -20,6 +20,8 @@ export interface IndexedChunk {
 	startLine: number;
 	endLine: number;
 	text: string;
+	/** When its note was last written, as indexed; absent for a note indexed before the store kept it. */
+	writtenAt?: number;
 }
 
 /** Chunks a vector index must upsert and chunk ids it must delete after (re)indexing a file. */
@@ -54,6 +56,13 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 		CREATE TABLE IF NOT EXISTS memory_note_files (
 			path  TEXT PRIMARY KEY,
 			stamp TEXT
+		)
+	`;
+	// When each indexed note was last written, the age a recall ranks it by. Its own table: a genesis is never reshaped.
+	void sql`
+		CREATE TABLE IF NOT EXISTS memory_note_times ( /* derived from memory_note_files */
+			path       TEXT PRIMARY KEY,
+			written_at INTEGER NOT NULL
 		)
 	`;
 	void sql`
@@ -100,29 +109,31 @@ export class MemoryStore {
 		}
 	}
 
-	/** Each indexed note's stamp, by path. */
+	/** Each indexed note's stamp, by path; null for one indexed before its write time was kept, so it is taken in again. */
 	stamps(): Map<string, NoteStamp> {
-		const rows = this.sql<{ path: string; stamp: NoteStamp }>`SELECT path, stamp FROM memory_note_files`;
+		const rows = this.sql<{ path: string; stamp: NoteStamp }>`SELECT f.path, CASE WHEN t.path IS NULL THEN NULL ELSE f.stamp END AS stamp
+			FROM memory_note_files f LEFT JOIN memory_note_times t ON t.path = f.path`;
 
 		return new Map(rows.map((row) => [row.path, row.stamp]));
 	}
 
 	/** The stamp `path` was indexed at; undefined when it never was. */
 	stampOf(path: string): NoteStamp | undefined {
-		return this.sql<{ stamp: NoteStamp }>`SELECT stamp FROM memory_note_files WHERE path = ${path}`.at(0)?.stamp;
+		return this.sql<{ stamp: NoteStamp }>`SELECT CASE WHEN t.path IS NULL THEN NULL ELSE f.stamp END AS stamp
+			FROM memory_note_files f LEFT JOIN memory_note_times t ON t.path = f.path WHERE f.path = ${path}`.at(0)?.stamp;
 	}
 
-	/** (Re)index a note as the file `stamp` names held it; the vector index's delta. */
-	async indexFile(path: string, content: string, stamp: NoteStamp = null): Promise<MemoryIndexDelta> {
-		return this.replaceChunks(path, content, stamp);
+	/** (Re)index a note as the file `stamp` names held it, last written at `writtenAt`; the vector index's delta. */
+	async indexFile(path: string, content: string, stamp: NoteStamp = null, writtenAt = Date.now()): Promise<MemoryIndexDelta> {
+		return this.replaceChunks(path, content, stamp, writtenAt);
 	}
 
 	/** A note that is gone, or is no file: its chunks and its stamp leave. */
 	async forgetFile(path: string): Promise<MemoryIndexDelta> {
-		return this.replaceChunks(path, '', undefined);
+		return this.replaceChunks(path, '', undefined, null);
 	}
 
-	private async replaceChunks(path: string, content: string, stamp: NoteStamp | undefined): Promise<MemoryIndexDelta> {
+	private async replaceChunks(path: string, content: string, stamp: NoteStamp | undefined, writtenAt: number | null): Promise<MemoryIndexDelta> {
 		const chunks = await chunkMarkdown(content);
 		const delta: MemoryIndexDelta = { upserted: [], deletedIds: [] };
 
@@ -161,6 +172,11 @@ export class MemoryStore {
 			else void this.sql`
 				INSERT INTO memory_note_files (path, stamp) VALUES (${path}, ${stamp})
 				ON CONFLICT(path) DO UPDATE SET stamp = excluded.stamp`;
+
+			if (writtenAt === null) void this.sql`DELETE FROM memory_note_times WHERE path = ${path}`;
+			else void this.sql`
+				INSERT INTO memory_note_times (path, written_at) VALUES (${path}, ${writtenAt})
+				ON CONFLICT(path) DO UPDATE SET written_at = excluded.written_at`;
 			this.queueProjection(delta);
 		});
 
@@ -191,8 +207,9 @@ export class MemoryStore {
 	async chunksByIds(ids: readonly string[]): Promise<IndexedChunk[]> {
 		if (ids.length === 0) return [];
 
-		const rows = this.sql<ChunkRow>`SELECT id, path, start_line, end_line, hash FROM memory_note_chunks
-			WHERE id IN (SELECT value FROM json_each(${JSON.stringify(ids)})) ORDER BY id`;
+		const rows = this.sql<ChunkRow>`SELECT mc.id, mc.path, mc.start_line, mc.end_line, mc.hash, nt.written_at FROM memory_note_chunks mc
+			LEFT JOIN memory_note_times nt ON nt.path = mc.path
+			WHERE mc.id IN (SELECT value FROM json_each(${JSON.stringify(ids)})) ORDER BY mc.id`;
 
 		return this.hydrateChunks(rows);
 	}
@@ -201,6 +218,7 @@ export class MemoryStore {
 	private async hydrateChunks(rows: readonly ChunkRow[]): Promise<IndexedChunk[]> {
 		return (await chunkTexts(rows, (path) => this.readFile(path))).flatMap(({ row, text }) => text === null ? [] : [{
 			id: row.id, path: row.path, startLine: row.start_line, endLine: row.end_line, text, hash: row.hash,
+			...(row.written_at !== null && { writtenAt: row.written_at }),
 		}]);
 	}
 
@@ -264,14 +282,16 @@ async function searchMemoryChunks({ sql, read, reindex }: NoteIndex, query: stri
 		endLine: r.end_line,
 		snippet: text.length > SNIPPET_MAX_CHARS ? text.slice(0, SNIPPET_MAX_CHARS) + "..." : text,
 		score: Math.abs(r.rank) / (1 + Math.abs(r.rank)),
+		...(r.written_at !== null && { writtenAt: r.written_at }),
 	}]));
 }
 
 function runFtsQuery(sql: SqlExecutor, ftsQuery: string, limit: number): FtsRow[] {
 	return sql<FtsRow>`
-		SELECT mc.id, mc.path, mc.start_line, mc.end_line, mc.hash, bm25(memory_note_chunks_fts) AS rank
+		SELECT mc.id, mc.path, mc.start_line, mc.end_line, mc.hash, nt.written_at, bm25(memory_note_chunks_fts) AS rank
 		FROM memory_note_chunks_fts
 		JOIN memory_note_chunks mc ON mc.rowid = memory_note_chunks_fts.rowid
+		LEFT JOIN memory_note_times nt ON nt.path = mc.path
 		WHERE memory_note_chunks_fts MATCH ${ftsQuery}
 		ORDER BY rank ASC, mc.rowid ASC
 		LIMIT ${limit}
