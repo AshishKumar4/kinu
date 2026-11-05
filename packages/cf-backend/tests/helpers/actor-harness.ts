@@ -941,7 +941,7 @@ export async function wakeForDelegatedTask(
   workspace: ActorHarness<HarnessOrchestratorAgent>, actorId: string, task: string,
 ): Promise<void> {
   // As its hirer's `agents` tool assigns it: admitted, and owed the agent as its delivery.
-  await workspace.agent.observeHirerRuntime(actorId).assign(workspace.agent.agentOf(actorId).name, { body: task, mode: 'build' });
+  await settle(workspace.agent.observeHirerRuntime(actorId).assign(workspace.agent.agentOf(actorId).name, { body: task, mode: 'build' }));
 }
 
 /** Core's background-job journal over the object's stored rows: main's, or the agent `actorId`'s. */

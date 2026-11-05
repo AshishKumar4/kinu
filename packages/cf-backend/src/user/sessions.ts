@@ -21,12 +21,8 @@ const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 
 /** A CLI device-code approval redeemed twice; the poll route answers it as already-delivered.
  * Crosses the DO RPC boundary as its message. */
-class CliAuthorizationSpentError extends Error {
-  constructor(options: ErrorOptions) {
-    super('That CLI authorization has already been redeemed.', options);
-    this.name = 'CliAuthorizationSpentError';
-  }
-}
+/** Its words are the contract `cli/auth-store.ts` reads across the DO RPC boundary. */
+const AUTHORIZATION_SPENT = 'That CLI authorization has already been redeemed.';
 
 export interface CliTokenVerification {
   ok: boolean;
@@ -333,17 +329,19 @@ export class UserSessions {
     const now = Date.now();
     const expiresAt = now + CLI_TOKEN_TTL_MS;
 
-    try {
-      this.host.sqlx(
-        `INSERT INTO user_cli_tokens (token_hash, label, created_at, expires_at, authorization_hash)
-         VALUES (?, ?, ?, ?, ?)`,
-        tokenHash, cleanCliTokenLabel(label), now, expiresAt, authorizationHash,
-      );
-    } catch (cause) {
-      throw new CliAuthorizationSpentError({ cause });
-    }
+    // The authorization hash's unique index refuses a second redemption.
+    const inserted = Effect.try({
+      try: () => {
+        this.host.sqlx(
+          `INSERT INTO user_cli_tokens (token_hash, label, created_at, expires_at, authorization_hash)
+           VALUES (?, ?, ?, ?, ?)`,
+          tokenHash, cleanCliTokenLabel(label), now, expiresAt, authorizationHash,
+        );
+      },
+      catch: (cause) => new KinuError('denied', AUTHORIZATION_SPENT, { cause }),
+    });
 
-    return { token, tokenHash, expiresAt };
+    return settle(Effect.as(inserted, { token, tokenHash, expiresAt }));
   }
 
   async verifyCliToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {

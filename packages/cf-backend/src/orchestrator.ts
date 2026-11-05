@@ -2765,13 +2765,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       vfs: () => this.rt.storage.vfs,
       selfAgentName: () => this.name,
       selfUserId: () => this.requireOwner(),
-      deliver: async (receiverAgentName, msg) => {
+      deliver: (receiverAgentName, msg) => attemptInItsWords('unavailable', async () => {
         const stub = this.env.OrchestratorAgent.get(
           this.env.OrchestratorAgent.idFromName(receiverAgentName),
         );
 
         return await stub.receivePeerMessage(msg);
-      },
+      }),
       isSameOwner: async (senderUserId) => senderUserId === this.getOwnerUserId(),
       scheduleDispatch: (at) => this.wakes.arm(KINU_TIMER_JOB, at),
       onAdmitted: () => { this.armDurableWake(); },

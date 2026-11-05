@@ -255,7 +255,7 @@ describe('one browser approval mints one CLI token', () => {
 
     const first = await harness.userDO.mintCliToken(owner, USER_ID, AUTHORIZATION, 'terminal');
     await expect(harness.userDO.mintCliToken(owner, USER_ID, AUTHORIZATION, 'terminal'))
-      .rejects.toMatchObject({ name: 'CliAuthorizationSpentError' });
+      .rejects.toMatchObject({ code: 'denied' });
 
     expect((await harness.userDO.listCliTokens(owner)).map((row) => row.tokenHash))
       .toEqual([first.tokenHash]);

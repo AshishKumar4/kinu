@@ -897,20 +897,20 @@ export class LocalAgentHost {
     sender: HostEntry,
     peer: string,
     msg: PeerMessage,
-  ): Promise<ReceiveResult> {
+  ): Effect.Effect<ReceiveResult, KinuError> {
     const ref = this.opts.roster().find((candidate) => candidate.name === peer);
 
     if (!ref || peer === sender.name || !samePeerGroup(ref, sender.ref)) {
-      return Promise.resolve({
+      return Effect.succeed({
         admitted: false,
         reason: `"${peer}" is not a peer in virtual workspace "${sender.ref.workspaceId}"`,
       });
     }
 
-    // The peer hub's transport is a promise: an unopenable member rejects, so its outbox retries.
-    return settle(Effect.flatMap(this.resolveEntry(peer), ({ peers: endpoint }) => (endpoint === null
+    // An unopenable member fails, so the outbox retries.
+    return Effect.flatMap(this.resolveEntry(peer), ({ peers: endpoint }) => (endpoint === null
       ? Effect.fail(new KinuError('unavailable', `peer "${peer}" is bound without a peer transport`))
-      : attemptInItsWords('io', () => endpoint.receive(msg)))));
+      : attemptInItsWords('io', () => endpoint.receive(msg))));
   }
 
   /**
