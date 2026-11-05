@@ -9,9 +9,10 @@ import { once } from 'node:events';
 import { closeSync, openSync, readSync } from 'node:fs';
 import { ACCENT, DIM } from './display';
 
+/** What could not be asked, named: no flag answers every question, so none is promised. */
 class NonInteractiveError extends Data.TaggedError('NonInteractiveError')<{ readonly message: string }> {
-  constructor(message = 'This step needs an interactive terminal. Re-run from a terminal, or pass flags to skip prompts.') {
-    super({ message });
+  constructor(label: string) {
+    super({ message: `This step asks "${label.replace(/[:?›\s]+$/u, '')}" and needs an interactive terminal to answer it. Re-run it from a terminal.` });
   }
 }
 
@@ -83,7 +84,7 @@ export function ask(label: string, fallback = ''): Promise<string> {
   return settle(Effect.gen(function* () {
     const tty = yield* openTerminal();
 
-    if (!tty) return yield* Effect.die(new NonInteractiveError());
+    if (!tty) return yield* Effect.die(new NonInteractiveError(label));
 
     return yield* Effect.ensuring(Effect.sync(() => {
       const suffix = fallback ? ` ${DIM(`[${fallback}]`)}` : '';
@@ -116,7 +117,7 @@ export function askSecret(label: string, fallback = ''): Promise<string> {
   return settle(Effect.gen(function* () {
     const tty = yield* openTerminal();
 
-    if (!tty) return yield* Effect.die(new NonInteractiveError());
+    if (!tty) return yield* Effect.die(new NonInteractiveError(label));
 
     return yield* Effect.ensuring(Effect.gen(function* () {
       process.stdout.write(`${DIM(label)}${fallback ? DIM(' [saved/default]') : ''} ${ACCENT('›')} `);

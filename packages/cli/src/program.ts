@@ -267,7 +267,7 @@ export function buildProgram(): Command {
     program
       .command('triggers <name> [action] [value]')
       .helpGroup(CONFIGURE)
-      .description('List, schedule, cancel or create workspace triggers')
+      .description('List a workspace\'s triggers; add one with every (a cron), at (a time) or webhook (a label); cancel one by its id')
       .option('--auth-mode <mode>', 'Webhook auth mode: hmac, bearer, or mtls')
       .option('--secret <value>', 'Webhook secret for hmac or bearer auth')
       .option('--content-type <type>', 'Accepted webhook content type')
