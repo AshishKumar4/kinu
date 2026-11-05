@@ -21,8 +21,8 @@ import {
   type RefinementRequestView,
   type ModelTestResult,
 } from '@kinu.run/core';
-import { attempt, detach, diagnostics, KinuError, renderThrownChain, settle, tolerate } from '@kinu.run/core/obs';
-import { Effect } from 'effect';
+import { attemptInItsWords, detach, diagnostics, flight, inItsWords, KinuError, renderThrownChain, settle, settleSync, tolerate } from '@kinu.run/core/obs';
+import { Effect, Result } from 'effect';
 import {
   FileRestorePlanSchema, FileRestoreResultSchema, ReasoningEffortSchema, type WorkspaceSpend,
 } from '@kinu.run/core';
@@ -173,7 +173,8 @@ export class CloudAgentClient implements AgentClient {
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
   private readonly recorder = new SessionRecorder('cloud');
   private ws: WebSocket | null = null;
-  private connectPromise: Promise<void> | null = null;
+  /** The connection being opened, every asker meanwhile joining it. */
+  private readonly connecting = flight(() => this.openSocket());
   /** A socket that dies after close() must not reconnect. */
   private closed = false;
   private readonly activeTurns = new Map<string, CloudTurnStream>();
@@ -182,7 +183,7 @@ export class CloudAgentClient implements AgentClient {
   private readonly pendingRpcs = new Map<string, { resolve: (value: JsonValue) => void; reject: (err: Error) => void }>();
   /** Kept visible until the actor confirms its durable cancellation sweep. */
   private readonly stoppingTurnIds = new Set<string>();
-  private stopPromise: Promise<void> | null = null;
+  private sweeping = false;
   /** Held until the submission or RPC ack reaches the event stream; ids keep cleanup identity-safe. */
   private readonly launchedTasks = new Map<string, Promise<void>>();
   /** Every prefix, and each live machine's own name once {@link readMachines} has listed them. */
@@ -205,46 +206,31 @@ export class CloudAgentClient implements AgentClient {
     this.transcriptOptions = opts.transcript ?? {};
     this.activeCliSession = createCliSession(opts.agentName, this.transcriptOptions);
     this.consents = {
-      listPending: () => this.callHttp('listPendingConsents', v.array(PendingDeviceConsentSchema)),
-      resolve: (consentId, decision) => this.callHttp(
-        'resolveDeviceConsent', ResolvedDeviceConsentSchema, [consentId, decision],
-      ),
+      listPending: () => settle(this.http('listPendingConsents', v.array(PendingDeviceConsentSchema))),
+      resolve: (consentId, decision) => settle(this.http('resolveDeviceConsent', ResolvedDeviceConsentSchema, [consentId, decision])),
     };
     this.checkpoints = subagentName ? null : {
-      list: async (limit, turnId) => v.parse(
-        FileCheckpointListingSchema,
-        await this.callRpc('listFileCheckpoints', [limit ?? 50, turnId ?? null]),
-      ),
-      plan: async (dir, id) => v.parse(FileRestorePlanSchema, await this.callRpc('planFileRestore', [dir, id])),
-      restore: async (dir, id) => v.parse(
-        FileRestoreResultSchema, await this.callRpc('restoreFileCheckpoint', [dir, id]),
-      ),
+      list: (limit, turnId) => settle(this.rpcAs('listFileCheckpoints', [limit ?? 50, turnId ?? null], FileCheckpointListingSchema)),
+      plan: (dir, id) => settle(this.rpcAs('planFileRestore', [dir, id], FileRestorePlanSchema)),
+      restore: (dir, id) => settle(this.rpcAs('restoreFileCheckpoint', [dir, id], FileRestoreResultSchema)),
     };
     // The agent's questions, the workspace agent's: a window on a subagent answers its hirer, not the owner.
     this.questions = subagentName ? null : {
       // A hosted agent's questions are answered from the web app's stack, where its window is.
-      list: async () => v.parse(v.array(AskingAgentSchema), await this.callRpc('listOwnerQuestions', [])).filter((asking) => asking.actor === null),
-      answer: async (id, answers) => v.parse(v.nullable(OwedIntentSchema), await this.callRpc('answerOwnerQuestions', [id, v.parse(JsonValueSchema, answers)])),
+      list: () => settle(Effect.map(this.rpcAs('listOwnerQuestions', [], v.array(AskingAgentSchema)), (asked) => asked.filter((asking) => asking.actor === null))),
+      answer: (id, answers) => settle(Effect.suspend(() => this.rpcAs('answerOwnerQuestions', [id, v.parse(JsonValueSchema, answers)], v.nullable(OwedIntentSchema)))),
     };
     // The workspace's one queue, its hosted agents' commands included, as the web's main stack shows it.
     this.approvals = subagentName ? null : {
-      list: async () => v.parse(v.array(DeferredApprovalSchema), await this.callRpc('listDeferredApprovals', [])),
-      decide: async (ids, decision) => v.parse(
-        v.object({ decided: v.array(v.string()) }), await this.callRpc('decideDeferredApprovals', [ids, decision]),
-      ),
+      list: () => settle(this.rpcAs('listDeferredApprovals', [], v.array(DeferredApprovalSchema))),
+      decide: (ids, decision) => settle(this.rpcAs('decideDeferredApprovals', [ids, decision], v.object({ decided: v.array(v.string()) }))),
     };
     // The sealed plan RPCs (`agent-rpc-access.ts`).
     this.plans = subagentName ? null : {
-      active: async () => v.parse(CloudPlanReviewSchema, await this.callRpc('getActivePlanReview', [])),
-      saveAnnotations: async (id, revision, annotations) => v.parse(
-        PlanReviewResultSchema,
-        await this.callRpc('savePlanReviewAnnotations', [id, revision, v.parse(JsonValueSchema, annotations)]),
-      ),
-      decide: async (id, revision, decision, feedback) => v.parse(
-        v.union([OwedIntentSchema, PlanDecisionOutcomeSchema]),
-        await this.callRpc('decidePlanReview', [id, revision, decision, feedback ?? null]),
-      ),
-      dismiss: async (id, revision) => v.parse(PlanReviewResultSchema, await this.callRpc('dismissPlanReview', [id, revision])),
+      active: () => settle(this.rpcAs('getActivePlanReview', [], CloudPlanReviewSchema)),
+      saveAnnotations: (id, revision, annotations) => settle(Effect.suspend(() => this.rpcAs('savePlanReviewAnnotations', [id, revision, v.parse(JsonValueSchema, annotations)], PlanReviewResultSchema))),
+      decide: (id, revision, decision, feedback) => settle(this.rpcAs('decidePlanReview', [id, revision, decision, feedback ?? null], v.union([OwedIntentSchema, PlanDecisionOutcomeSchema]))),
+      dismiss: (id, revision) => settle(this.rpcAs('dismissPlanReview', [id, revision], PlanReviewResultSchema)),
     };
   }
 
@@ -268,12 +254,7 @@ export class CloudAgentClient implements AgentClient {
   readMachines(): Promise<void> {
     if (!this.mayCall('getExecutors')) return Promise.resolve();
 
-    const read = attempt(
-      { doing: 'reading the workspace\'s machines for chat links', otherwise: 'unavailable' },
-      () => this.callHttp('getExecutors', ExecutorMountsSchema),
-    );
-
-    return settle(Effect.match(read, {
+    return settle(Effect.match(this.http('getExecutors', ExecutorMountsSchema), {
       onSuccess: (executors) => { this.links = cloudFileLinks(this.origin, this.cloudName, executors.flatMap((executor) => executor.mounts ?? [])); },
       onFailure: (unread) => { diagnostics.failure('chat.machines_unread', unread); },
     }));
@@ -286,8 +267,8 @@ export class CloudAgentClient implements AgentClient {
   }
 
   /** A submit arriving mid-turn is routed through the server inbox and answered with where it landed. */
-  async send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentSendResult> {
-    return this.submit(prompt, opts, this.activeTurns.size > 0);
+  send(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): Promise<AgentSendResult> {
+    return settle(this.submit(prompt, opts, this.activeTurns.size > 0));
   }
 
   branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
@@ -302,173 +283,167 @@ export class CloudAgentClient implements AgentClient {
       this.emit({ type: 'broadcast', event });
     };
 
-    const taskId = randomRequestId();
-    let task: Promise<void> | null = null;
-    task = (async () => {
-      try {
-        const result = await this.callRpc('branchTurn', [text]);
-        const admitted = v.parse(BranchTurnResultSchema, result);
-
-        if (!admitted.accepted) fail(admitted.reason);
-      } catch (cause) {
-        fail(renderThrownChain({ cause }));
-      } finally {
-        if (this.launchedTasks.get(taskId) === task) this.launchedTasks.delete(taskId);
-      }
-    })();
-    this.launchedTasks.set(taskId, task);
+    this.waitUntil(settle(Effect.match(this.rpcAs('branchTurn', [text], BranchTurnResultSchema), {
+      onSuccess: (admitted) => { if (!admitted.accepted) fail(admitted.reason); },
+      onFailure: (failure) => { fail(failure.message); },
+    })));
 
     return true;
   }
 
-  private async submit(prompt: AgentPrompt, opts: AgentClientSendOptions, steered: boolean): Promise<AgentSendResult> {
-    const text = promptText(prompt).trim();
-    const files = promptFiles(prompt);
+  private submit(prompt: AgentPrompt, opts: AgentClientSendOptions, steered: boolean): Effect.Effect<AgentSendResult, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const text = promptText(prompt).trim();
+      const files = promptFiles(prompt);
 
-    if (!text && files.length === 0) throw new Error('prompt required');
-    await this.ensureOpen();
-    const ws = this.ws;
+      if (!text && files.length === 0) return yield* new KinuError('bad_input', 'prompt required');
+      const ws = yield* this.opened();
 
-    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
+      // The JSONL log records attachment names, never the data-URL payloads.
+      const sessionEntry: JsonObject = {
+        text,
+        cwd: opts.cwd ?? process.cwd(),
+        backend: 'cloud',
+      };
 
-    // The JSONL log records attachment names, never the data-URL payloads.
-    const sessionEntry: JsonObject = {
-      text,
-      cwd: opts.cwd ?? process.cwd(),
-      backend: 'cloud',
-    };
+      if (steered) sessionEntry.steered = true;
 
-    if (steered) sessionEntry.steered = true;
+      if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
+      this.activeCliSession.append('user', sessionEntry);
 
-    if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
-    this.activeCliSession.append('user', sessionEntry);
+      // A message to a running turn starts no turn; turn-start is announced only if a stream comes back.
+      if (!steered) this.emit({ type: 'turn-start', kind: 'user', text });
 
-    // A message to a running turn starts no turn; turn-start is announced only if a stream comes back.
-    if (!steered) this.emit({ type: 'turn-start', kind: 'user', text });
-
-    const requestId = randomRequestId();
-
-    return await new Promise<AgentSendResult>((resolve, reject) => {
-      const turn = new CloudTurnStream((event) => this.emit(event), { resolve, reject }, { deferStart: steered ? text : null });
+      const requestId = randomRequestId();
+      const answered = Promise.withResolvers<AgentSendResult>();
+      const turn = new CloudTurnStream((event) => this.emit(event), answered, { deferStart: steered ? text : null });
       this.activeTurns.set(requestId, turn);
 
-      try {
-        // A turn this send opens is a one-shot run's own task, run where the CLI is; a send into a running turn steers it.
-        // The terminal draws no pages, so the agent answering this turn writes none.
-        const opened: JsonObject = {
-          [TERMINAL_TURN_KEY]: true, ...(this.oneShot && { oneShot: true }), ...(opts.cwd !== undefined && opts.cwd !== '' && { cwd: opts.cwd }),
-        };
+      const sent = Effect.try({
+        try: () => {
+          // A turn this send opens is a one-shot run's own task, run where the CLI is; a send into a running turn steers it.
+          // The terminal draws no pages, so the agent answering this turn writes none.
+          const opened: JsonObject = {
+            [TERMINAL_TURN_KEY]: true, ...(this.oneShot && { oneShot: true }), ...(opts.cwd !== undefined && opts.cwd !== '' && { cwd: opts.cwd }),
+          };
 
-        const metadata: SendMetadata = {
-          ...(opts.mode !== undefined && { kinuMode: opts.mode }), ...(opts.tier !== undefined && { kinuTier: opts.tier }),
-          ...(!steered && Object.keys(opened).length > 0 && { kinuTurn: opened }),
-        };
+          const metadata: SendMetadata = {
+            ...(opts.mode !== undefined && { kinuMode: opts.mode }), ...(opts.tier !== undefined && { kinuTier: opts.tier }),
+            ...(!steered && Object.keys(opened).length > 0 && { kinuTurn: opened }),
+          };
 
-        const body: JsonObject = {
-          messages: [decodeJsonValue({ value: createUserUiMessage(requestId, text, files, metadata) })],
-          trigger: 'submit-message',
-        };
+          const body: JsonObject = {
+            messages: [decodeJsonValue({ value: createUserUiMessage(requestId, text, files, metadata) })],
+            trigger: 'submit-message',
+          };
 
-        const request: JsonObject = {
-          id: requestId,
-          init: {
-            method: 'POST',
-            body: JSON.stringify(body),
-          },
-          type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST,
-        };
+          const request: JsonObject = {
+            id: requestId,
+            init: {
+              method: 'POST',
+              body: JSON.stringify(body),
+            },
+            type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST,
+          };
 
-        ws.send(JSON.stringify(request));
-      } catch (err) {
-        // The request never left: a failed send, not a turn that failed.
+          ws.send(JSON.stringify(request));
+        },
+        catch: (cause) => cause,
+      });
+
+      // The request never left: a failed send, not a turn that failed.
+      yield* Effect.catch(sent, (cause) => Effect.sync(() => {
         this.activeTurns.delete(requestId);
-        turn.refused(renderThrownChain({ cause: err }));
-      }
+        turn.refused(renderThrownChain({ cause }));
+      }));
+
+      return yield* attemptInItsWords('unavailable', () => answered.promise);
     });
   }
 
-  async fork(point: ForkPoint): Promise<AgentForkResult> {
-    if (this.activeTurns.size > 0) return settle(Effect.fail(new KinuError('denied', 'Cannot fork while a turn is running.')));
-    const rows = await this.history();
-    const pivotRow = rows[findForkPivot(rows, point)];
+  fork(point: ForkPoint): Promise<AgentForkResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.activeTurns.size > 0) return yield* new KinuError('denied', 'Cannot fork while a turn is running.');
+      const rows = yield* attemptInItsWords('unavailable', () => this.history());
+      const pivotRow = rows[findForkPivot(rows, point)];
 
-    if (pivotRow === undefined) return settle(Effect.fail(new KinuError('missing', "Could not locate that message in the agent's chat history.")));
-    // A walk-back leaves files as they are: the agent is told what its rewound turns left.
-    await this.callRpc('revertConversation', [pivotRow.id, { chatOnly: true }]);
+      if (pivotRow === undefined) return yield* new KinuError('missing', "Could not locate that message in the agent's chat history.");
+      // A walk-back leaves files as they are: the agent is told what its rewound turns left.
+      yield* this.rpc('revertConversation', [pivotRow.id, { chatOnly: true }]);
 
-    return { client: this, label: `before ${pivotRow.id}` };
+      return { client: this, label: `before ${pivotRow.id}` };
+    }));
   }
 
-  /** For surfaces that must not force a websocket open; live-session ops use callRpc. */
-  private callHttp<T>(method: AgentRpcMethod, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
-    if (this.subagentName) {
-      return this.callRpc(method, args).then((result) => v.parse(schema, result));
-    }
-
-    return this.callParentHttp(method, schema, args);
+  /** For surfaces that must not force a websocket open; live-session ops use the socket. */
+  private http<T>(method: AgentRpcMethod, schema: v.GenericSchema<unknown, T>, args: JsonValue[] = []): Effect.Effect<T, KinuError> {
+    return this.subagentName ? this.rpcAs(method, args, schema) : this.parentHttp(method, schema, args);
   }
 
   private mayCall(method: AgentRpcMethod): boolean {
     return this.subagentName === null || hostedWindowCalls(method);
   }
 
-  private callParentHttp<Input, T = Input>(method: AgentRpcMethod, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Promise<T> {
-    return callAgentRpc({ origin: this.origin, token: this.token, name: this.cloudName, method, schema, args });
+  private parentHttp<Input, T = Input>(method: AgentRpcMethod, schema: v.GenericSchema<Input, T>, args: JsonValue[] = []): Effect.Effect<T, KinuError> {
+    return attemptInItsWords('unavailable', () => callAgentRpc({ origin: this.origin, token: this.token, name: this.cloudName, method, schema, args }));
   }
 
-  private async callRpc(method: AgentRpcMethod, args: JsonValue[]): Promise<JsonValue> {
-    if (!this.mayCall(method)) throw new Error(`${method} is not available in an additional agent's session.`);
-    await this.ensureOpen();
-    const ws = this.ws;
+  /** `method` asked of the workspace over the socket, opened first if it is not. */
+  private rpc(method: AgentRpcMethod, args: JsonValue[]): Effect.Effect<JsonValue, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      if (!this.mayCall(method)) return yield* new KinuError('denied', `${method} is not available in an additional agent's session.`);
+      const ws = yield* this.opened();
+      const id = randomRequestId();
 
-    if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
-    const id = randomRequestId();
-
-    return await new Promise<JsonValue>((resolve, reject) => {
-      this.pendingRpcs.set(id, { resolve, reject });
-
-      try {
+      // A send that throws rejects the answer it was waiting for, and its entry goes with it.
+      const answered = attemptInItsWords('unavailable', () => new Promise<JsonValue>((resolve, reject) => {
+        this.pendingRpcs.set(id, { resolve, reject });
         ws.send(JSON.stringify({ type: 'rpc', id, method, args }));
-      } catch (err) {
-        this.pendingRpcs.delete(id);
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
+      }));
+
+      return yield* Effect.tapError(answered, () => Effect.sync(() => { this.pendingRpcs.delete(id); }));
     });
+  }
+
+  /** {@link rpc}'s answer read as `schema`: an answer of another shape is a failure, not a defect. */
+  private rpcAs<T>(method: AgentRpcMethod, args: JsonValue[], schema: v.GenericSchema<unknown, T>): Effect.Effect<T, KinuError> {
+    return Effect.flatMap(this.rpc(method, args), (answer) => inItsWords('unavailable', Effect.sync(() => v.parse(schema, answer))));
   }
 
   /** The SDK frame aborts the chat request; the actor RPC awaits every foreground device outcome. */
   stop(): string[] {
-    const ws = this.ws;
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const ws = this.ws;
 
-    for (const id of this.activeTurns.keys()) {
-      try {
+      for (const id of this.activeTurns.keys()) {
         if (ws?.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.CHAT_REQUEST_CANCEL, id }));
+          const cancelled = Effect.try({ try: () => { ws.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.CHAT_REQUEST_CANCEL, id })); }, catch: (cause) => cause });
+
+          yield* Effect.catch(cancelled, (cause) => Effect.sync(() => {
+            this.emit({ type: 'error', message: `Could not signal stream cancellation: ${renderThrownChain({ cause })}` });
+          }));
         }
-      } catch (error) {
-        this.emit({
-          type: 'error',
-          message: `Could not signal stream cancellation: ${renderThrownChain({ cause: error })}`,
-        });
+
+        this.stoppingTurnIds.add(id);
       }
 
-      this.stoppingTurnIds.add(id);
-    }
+      if (this.stoppingTurnIds.size > 0 && !this.sweeping) {
+        this.sweeping = true;
+        this.waitUntil(settle(this.settleStoppedTurns()));
+      }
 
-    if (this.stoppingTurnIds.size > 0 && !this.stopPromise) {
-      this.stopPromise = this.settleStoppedTurns();
-    }
-
-    return [];
+      return [];
+    }));
   }
 
-  private async settleStoppedTurns(): Promise<void> {
-    try {
-      await this.callRpc('cancelCurrentWork', []);
-    } catch (cause) {
-      this.emit({ type: 'error', message: renderThrownChain({ cause }) });
-    } finally {
-      this.stopPromise = null;
+  /** The actor's durable cancellation sweep; the turns stay visible until it answers, whichever way. */
+  private settleStoppedTurns(): Effect.Effect<void> {
+    const swept = Effect.catch(Effect.asVoid(this.rpc('cancelCurrentWork', [])), (failure) => Effect.sync(() => {
+      this.emit({ type: 'error', message: failure.message });
+    }));
+
+    return Effect.ensuring(swept, Effect.sync(() => {
+      this.sweeping = false;
 
       for (const id of this.stoppingTurnIds) {
         this.stoppingTurnIds.delete(id);
@@ -478,53 +453,53 @@ export class CloudAgentClient implements AgentClient {
         this.activeTurns.delete(id);
         turn.settle();
       }
-    }
+    }));
+  }
+
+  /** Holds a run nothing awaits until it ends, so `close` waits for it; the run answers its own failures. */
+  private waitUntil(run: Promise<void>): void {
+    const id = randomRequestId();
+
+    this.launchedTasks.set(id, run.finally(() => { this.launchedTasks.delete(id); }));
   }
 
   async close(): Promise<void> {
     this.closed = true;
-    this.failInFlight(new Error('Cloud workspace connection closed.'));
+    this.failInFlight(new KinuError('unavailable', 'Cloud workspace connection closed.'));
     this.ws?.close();
     this.ws = null;
-    this.connectPromise = null;
-    await Promise.all([
-      ...this.launchedTasks.values(),
-      ...(this.stopPromise ? [this.stopPromise] : []),
-    ]);
+    await Promise.all(this.launchedTasks.values());
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
     return readConversation((request) => this.historyPage(request));
   }
 
-  private async historyPage(request: Parameters<Parameters<typeof readConversation>[0]>[0]): Promise<v.InferOutput<typeof CloudChatPageSchema>> {
+  /** One page of the conversation, newest first, as `readConversation` and `recordedAnswer` walk it. */
+  historyPage(request: Parameters<Parameters<typeof readConversation>[0]>[0]): Promise<v.InferOutput<typeof CloudChatPageSchema>> {
     const name = this.subagentName;
 
     if (name === null) {
-      return await this.callHttp('getChatHistoryPage', CloudChatPageSchema, [request.cursor === undefined ? {} : { cursor: { before: request.cursor.before } }]);
+      return settle(this.http('getChatHistoryPage', CloudChatPageSchema, [request.cursor === undefined ? {} : { cursor: { before: request.cursor.before } }]));
     }
 
-    const read = await this.inspectSubagent({ path: [name], view: 'history', page: request });
-
-    if (read.view !== 'history') throw new Error(read.view === 'missing' ? read.error : `the conversation read answered "${read.view}"`);
-
-    return read.page;
+    return settle(Effect.flatMap(this.inspect({ path: [name], view: 'history', page: request }), (read) => (read.view === 'history'
+      ? Effect.succeed(read.page)
+      : Effect.fail(new KinuError('missing', read.view === 'missing' ? read.error : `the conversation read answered "${read.view}"`)))));
   }
 
-  private async ownSnapshot(name: string): Promise<v.InferOutput<typeof ActorSnapshotSchema>> {
-    return v.parse(ActorSnapshotSchema, await this.callRpc('getActorSnapshot', [name]));
+  private ownSnapshot(name: string): Effect.Effect<v.InferOutput<typeof ActorSnapshotSchema>, KinuError> {
+    return this.rpcAs('getActorSnapshot', [name], ActorSnapshotSchema);
   }
 
-  async status(): Promise<AgentClientStatus> {
+  status(): Promise<AgentClientStatus> {
     if (this.subagentName !== null) {
-      const own = await this.ownSnapshot(this.subagentName);
-
-      return { name: own.displayName, purpose: own.mission, model: own.model.model, reasoningEffort: own.reasoningEffort, roleId: own.role };
+      return settle(Effect.map(this.ownSnapshot(this.subagentName), (own) => ({
+        name: own.displayName, purpose: own.mission, model: own.model.model, reasoningEffort: own.reasoningEffort, roleId: own.role,
+      })));
     }
 
-    const status = await this.callHttp('getAgentStatus', CloudAgentStatusSchema);
-
-    return {
+    return settle(Effect.map(this.http('getAgentStatus', CloudAgentStatusSchema), (status) => ({
       name: status.displayName ?? status.name,
       purpose: status.purpose,
       model: status.model ?? null,
@@ -535,79 +510,76 @@ export class CloudAgentClient implements AgentClient {
       messageCount: status.messageCount,
       searchNodeCount: status.searchNodeCount,
       context: status.context ?? null,
-    };
+    })));
   }
 
-  async describeTools(): Promise<AgentToolSurface> {
-    const tools = await this.callHttp('getToolDescriptions', CloudToolDescriptionsSchema);
-
-    return {
+  describeTools(): Promise<AgentToolSurface> {
+    return settle(Effect.map(this.http('getToolDescriptions', CloudToolDescriptionsSchema), (tools) => ({
       builtIn: tools.builtIn.map(({ name, description }) => ({ name, description })),
       crafted: tools.crafted.map(({ name, description }) => ({ name, description })),
-    };
+    })));
   }
 
   async readMemory(): Promise<string> {
-    return await this.callHttp('getMemoryContent', v.string());
+    return await settle(this.http('getMemoryContent', v.string()));
   }
 
-  async changelog(): Promise<AgentChangelogView> {
-    const result = v.parse(EvolutionChangelogViewSchema, await this.callRpc('getEvolutionChangelog', [{ limit: 50 }]));
-    const view: AgentChangelogView = { entries: result.entries, unseenCount: result.unseenCount };
+  changelog(): Promise<AgentChangelogView> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const result = yield* this.rpcAs('getEvolutionChangelog', [{ limit: 50 }], EvolutionChangelogViewSchema);
 
-    // A silently dropped ack leaves the digest unseen forever; report it through the error channel.
-    const acked = attempt({ doing: 'marking the changelog as seen', otherwise: 'unavailable' }, () => this.callRpc('markChangelogSeen', []));
+      // A silently dropped ack leaves the digest unseen forever; report it through the error channel.
+      yield* Effect.catch(this.rpc('markChangelogSeen', []), (failure) => Effect.sync(() => {
+        this.emit({ type: 'error', message: `Could not mark the changelog as seen: ${failure.message}` });
+      }));
 
-    return settle(Effect.as(Effect.catch(acked, (failure) => Effect.sync(() => {
-      this.emit({ type: 'error', message: `Could not mark the changelog as seen: ${renderThrownChain({ cause: failure.cause })}` });
-    })), view));
+      return { entries: result.entries, unseenCount: result.unseenCount };
+    }));
   }
 
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    return v.parse(ChangelogRevertResultSchema, await this.callRpc('revertChangelogEntry', [id]));
+    return await settle(this.rpcAs('revertChangelogEntry', [id], ChangelogRevertResultSchema));
   }
 
   async refinements(): Promise<RefinementListing> {
-    return v.parse(RefinementListingSchema, await this.callRpc('listRefinements', [20]));
+    return await settle(this.rpcAs('listRefinements', [20], RefinementListingSchema));
   }
 
   async requestRefinement(opts?: { turnIds?: readonly string[] }): Promise<RefinementRequestView> {
-    return v.parse(RefinementRequestViewSchema, await this.callRpc('requestRefinement', [
+    return await settle(this.rpcAs('requestRefinement', [
       opts?.turnIds === undefined ? {} : { turnIds: [...opts.turnIds] },
-    ]));
+    ], RefinementRequestViewSchema));
   }
 
-  async inspectSubagent(request: SubagentInspectionRequest): Promise<SubagentInspectionResult> {
-    const input = v.parse(SubagentInspectionRequestSchema, request);
+  inspectSubagent(request: SubagentInspectionRequest): Promise<SubagentInspectionResult> {
+    return settle(this.inspect(request));
+  }
 
-    return this.callParentHttp('inspectSubagent', SubagentInspectionResultSchema, [decodeJsonValue({ value: input })]);
+  private inspect(request: SubagentInspectionRequest): Effect.Effect<SubagentInspectionResult, KinuError> {
+    return Effect.suspend(() => this.parentHttp('inspectSubagent', SubagentInspectionResultSchema, [decodeJsonValue({ value: v.parse(SubagentInspectionRequestSchema, request) })]));
   }
 
   async workspaceWork(): Promise<WorkspaceWork> {
-    return this.callParentHttp('listWorkspaceWork', WorkspaceWorkSchema);
+    return settle(this.parentHttp('listWorkspaceWork', WorkspaceWorkSchema));
   }
 
   async latestTakes(): Promise<AlternateTakeSet | null> {
     if (!this.mayCall('latestAlternateTakes')) return null;
 
-    return v.parse(v.nullable(AlternateTakeSetSchema), await this.callRpc('latestAlternateTakes', []));
+    return await settle(this.rpcAs('latestAlternateTakes', [], v.nullable(AlternateTakeSetSchema)));
   }
 
   async pickTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
-    return v.parse(TakePickOutcomeSchema, await this.callRpc('pickAlternateTake', [takeId, nodeId]));
+    return await settle(this.rpcAs('pickAlternateTake', [takeId, nodeId], TakePickOutcomeSchema));
   }
 
   async setRole(roleId: string): Promise<{ role: string }> {
-    return v.parse(v.object({ role: v.string() }), await this.callRpc('setRole', [roleId]));
+    return await settle(this.rpcAs('setRole', [roleId], v.object({ role: v.string() })));
   }
 
   /** Inherits the workspace mission with a blank `displayName`; `name` is the slug to open it by. */
-  async createAdditionalAgent(): Promise<{ name: string; displayName: string }> {
-    const result = this.subagentName
-      ? await this.callParentHttp('createSubagentAgent', AdditionalAgentSchema)
-      : v.parse(AdditionalAgentSchema, await this.callRpc('createSubagentAgent', []));
-
-    return result;
+  createAdditionalAgent(): Promise<{ name: string; displayName: string }> {
+    return settle(this.subagentName ? this.parentHttp('createSubagentAgent', AdditionalAgentSchema) : this.rpcAs('createSubagentAgent', [], AdditionalAgentSchema));
   }
 
   /** Keeps the parent workspace name for ticket scope and parent-owned actions. */
@@ -622,84 +594,77 @@ export class CloudAgentClient implements AgentClient {
     });
   }
 
-  async renameAdditionalAgent(name: string, displayName: string): Promise<{ name: string; displayName: string }> {
-    const result = await this.callParentHttp(
-      'renameSubagentAgent',
-      AdditionalAgentEnvelopeSchema,
-      [name, displayName],
-    );
-
-    return result.subagent;
+  renameAdditionalAgent(name: string, displayName: string): Promise<{ name: string; displayName: string }> {
+    return settle(Effect.map(this.parentHttp('renameSubagentAgent', AdditionalAgentEnvelopeSchema, [name, displayName]), (renamed) => renamed.subagent));
   }
 
-  async searchNodes(): Promise<AgentSearchNode[]> {
-    const rows = await this.callHttp('getMctsTree', v.array(SearchNodeProjectionSchema));
-
-    return rows.map((node) => ({
+  searchNodes(): Promise<AgentSearchNode[]> {
+    return settle(Effect.map(this.http('getMctsTree', v.array(SearchNodeProjectionSchema)), (rows) => rows.map((node) => ({
       depth: node.depth,
       status: node.status,
       value: node.value ?? 0,
       visits: node.visits ?? 0,
       action: node.action ?? null,
-    }));
+    }))));
   }
 
   async listJobs(limit = 20, actor?: string): Promise<AgentJobSummary[]> {
     const owner = actor ?? this.subagentName;
     const args: JsonValue[] = owner === null ? [limit] : [limit, owner];
-    const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), args);
 
-    return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status, label: job.label ?? null, ...(job.output !== undefined && { output: job.output }) }));
+    return settle(Effect.map(this.http('listBackgroundJobs', v.array(CloudBackgroundJobSchema), args), (jobs) => jobs.map((job) => ({
+      id: job.id, kind: job.kind, status: job.status, label: job.label ?? null, ...(job.output !== undefined && { output: job.output }),
+    }))));
   }
 
   async cancelJob(jobId: string): Promise<{ ok: boolean }> {
-    return await this.callHttp('cancelBackgroundJob', CancelJobSchema, this.subagentName === null ? [jobId] : [jobId, this.subagentName]);
+    return await settle(this.http('cancelBackgroundJob', CancelJobSchema, this.subagentName === null ? [jobId] : [jobId, this.subagentName]));
   }
 
   async getModelSpec(): Promise<string | null> {
-    if (this.subagentName !== null) return (await this.ownSnapshot(this.subagentName)).model.model;
+    if (this.subagentName !== null) return settle(Effect.map(this.ownSnapshot(this.subagentName), (answer) => answer.model.model));
 
-    return (await this.callHttp('getStoredModelSpec', StoredModelSpecSchema)).spec;
+    return settle(Effect.map(this.http('getStoredModelSpec', StoredModelSpecSchema), (answer) => answer.spec));
   }
 
   async setModel(spec: string): Promise<{ spec: string }> {
     const name = this.subagentName;
 
-    if (name !== null) return { spec: v.parse(SetModelResultSchema, await this.callRpc('setModel', [spec, name])).spec };
+    if (name !== null) return settle(Effect.map(this.rpcAs('setModel', [spec, name], SetModelResultSchema), (answer) => ({ spec: answer.spec })));
 
-    return { spec: (await this.callHttp('setModel', SetModelResultSchema, [spec])).spec };
+    return settle(Effect.map(this.http('setModel', SetModelResultSchema, [spec]), (answer) => ({ spec: answer.spec })));
   }
 
   async getReasoningEffort(): Promise<ReasoningEffort | null> {
-    if (this.subagentName !== null) return (await this.ownSnapshot(this.subagentName)).reasoningEffort;
+    if (this.subagentName !== null) return settle(Effect.map(this.ownSnapshot(this.subagentName), (answer) => answer.reasoningEffort));
 
-    return (await this.callHttp('getReasoningEffort', ReasoningEffortViewSchema)).effort;
+    return settle(Effect.map(this.http('getReasoningEffort', ReasoningEffortViewSchema), (answer) => answer.effort));
   }
 
   async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
     const args: JsonValue[] = this.subagentName === null ? [effort] : [effort, this.subagentName];
 
-    return { effort: (await this.callHttp('setReasoningEffort', SetEffortAnswerSchema, args)).effort };
+    return settle(Effect.map(this.http('setReasoningEffort', SetEffortAnswerSchema, args), (answer) => ({ effort: answer.effort })));
   }
 
   async workspaceSpend(): Promise<WorkspaceSpend> {
-    return (await this.callHttp('getActivitySnapshot', ActivitySpendSchema)).spend;
+    return settle(Effect.map(this.http('getActivitySnapshot', ActivitySpendSchema), (answer) => answer.spend));
   }
 
   async getProviderAccounts(): Promise<Readonly<Record<string, string>>> {
-    return (await this.callHttp('getProviderAccounts', ProviderAccountsSchema)).accounts;
+    return settle(Effect.map(this.http('getProviderAccounts', ProviderAccountsSchema), (answer) => answer.accounts));
   }
 
   async setProviderAccount(provider: string, account: string | null): Promise<Readonly<Record<string, string>>> {
-    return (await this.callHttp('setProviderAccount', ProviderAccountsSchema, [provider, account])).accounts;
+    return settle(Effect.map(this.http('setProviderAccount', ProviderAccountsSchema, [provider, account]), (answer) => answer.accounts));
   }
 
   async getEvolutionConfig(): Promise<EvolutionConfigView> {
-    return await this.callHttp('getEvolutionConfig', EvolutionConfigViewSchema);
+    return await settle(this.http('getEvolutionConfig', EvolutionConfigViewSchema));
   }
 
   async setEvolutionConfig(view: Partial<EvolutionConfigView>): Promise<EvolutionConfigView> {
-    return await this.callHttp('setEvolutionConfig', EvolutionConfigViewSchema, [decodeJsonValue({ value: view })]);
+    return await settle(this.http('setEvolutionConfig', EvolutionConfigViewSchema, [decodeJsonValue({ value: view })]));
   }
 
   async listModels(): Promise<AgentModelMenu> {
@@ -725,90 +690,85 @@ export class CloudAgentClient implements AgentClient {
     }
   }
 
-  private async ensureOpen(): Promise<void> {
-    if (this.closed) throw new Error('Cloud workspace client is closed.');
+  /** The open socket: opened first if it is not, by the one connection every asker meanwhile joins. */
+  private opened(): Effect.Effect<WebSocket, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      if (this.closed) return yield* new KinuError('unavailable', 'Cloud workspace client is closed.');
 
-    if (this.ws?.readyState === WebSocket.OPEN) return;
+      if (this.ws?.readyState !== WebSocket.OPEN) yield* this.connecting();
 
-    if (this.connectPromise) {
-      await this.connectPromise;
+      if (this.closed) return yield* new KinuError('unavailable', 'Cloud workspace client closed while connecting.');
+      const ws = this.ws;
 
-      if (this.closed) throw new Error('Cloud workspace client closed while connecting.');
+      if (ws?.readyState !== WebSocket.OPEN) return yield* new KinuError('unavailable', 'Cloud workspace connection is not open.');
 
-      return;
-    }
-
-    this.connectPromise = this.openSocket();
-
-    try {
-      await this.connectPromise;
-
-      if (this.closed) throw new Error('Cloud workspace client closed while connecting.');
-    } finally {
-      this.connectPromise = null;
-    }
+      return ws;
+    });
   }
 
-  private async openSocket(): Promise<void> {
-    if (this.closed) throw new Error('Cloud workspace client is closed.');
-    const { ticket } = await createCloudAgentConnectTicket(this.origin, this.token, this.cloudName);
+  private openSocket(): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const { ticket } = yield* attemptInItsWords('unavailable', () => createCloudAgentConnectTicket(this.origin, this.token, this.cloudName));
 
-    if (this.closed) throw new Error('Cloud workspace client closed while creating its connect ticket.');
+      if (this.closed) return yield* new KinuError('unavailable', 'Cloud workspace client closed while creating its connect ticket.');
 
-    // The actor segment under the workspace room, shared with the browser and the edge. There is no child
-    // Durable Object, so the SDK's facet hop answers not-found.
-    const room = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`;
+      // The actor segment under the workspace room, shared with the browser and the edge. There is no child
+      // Durable Object, so the SDK's facet hop answers not-found.
+      const room = `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`;
 
-    const actorPath = this.subagentName
-      ? `${room}/${hostedActorSocketPath(this.subagentName)}`
-      : room;
+      const actorPath = this.subagentName
+        ? `${room}/${hostedActorSocketPath(this.subagentName)}`
+        : room;
 
-    const url = new URL(actorPath, this.origin.replace(/\/+$/, ''));
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    url.searchParams.set('ticket', ticket);
+      const url = new URL(actorPath, this.origin.replace(/\/+$/, ''));
+      url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+      url.searchParams.set('ticket', ticket);
 
-    const ws = new WebSocket(url.toString());
-    this.ws = ws;
-    ws.addEventListener('message', (event) => this.handleMessage(event));
-    // One drop per socket generation: `error` then `close` would report it twice.
-    let dropped = false;
+      const ws = new WebSocket(url.toString());
+      this.ws = ws;
+      ws.addEventListener('message', (event) => this.handleMessage(event));
+      // One drop per socket generation: `error` then `close` would report it twice.
+      let dropped = false;
 
-    const onDrop = async (): Promise<void> => {
-      if (dropped) return;
-      dropped = true;
+      const onDrop = Effect.suspend(() => {
+        if (dropped) return Effect.void;
+        dropped = true;
 
-      if (this.ws === ws) this.ws = null;
-      this.failPendingRpcs(new Error('Cloud workspace connection closed.'));
-      await this.reacquireInFlightTurns();
-    };
+        if (this.ws === ws) this.ws = null;
+        this.failPendingRpcs(new KinuError('unavailable', 'Cloud workspace connection closed.'));
 
-    const droppedConnection = () => detach(Effect.promise(onDrop));
-    ws.addEventListener('close', droppedConnection);
-    ws.addEventListener('error', droppedConnection);
+        return this.reacquireInFlightTurns();
+      });
 
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), WEBSOCKET_OPEN_WAIT_MS);
+      const droppedConnection = () => detach(onDrop);
+      ws.addEventListener('close', droppedConnection);
+      ws.addEventListener('error', droppedConnection);
 
-      const finish = (outcome: () => void): void => {
-        clearTimeout(timeout);
-        outcome();
-      };
+      yield* attemptInItsWords('unavailable', () => new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new KinuError('timeout', 'Timed out connecting to cloud workspace.')), WEBSOCKET_OPEN_WAIT_MS);
 
-      ws.addEventListener('open', () => {
-        finish(resolve);
-      }, { once: true });
-      ws.addEventListener('error', () => {
-        finish(() => reject(new Error('Could not connect to cloud agent.')));
-      }, { once: true });
-      ws.addEventListener('close', () => {
-        finish(() => reject(new Error('Cloud workspace connection closed before it opened.')));
-      }, { once: true });
+        const finish = (outcome: () => void): void => {
+          clearTimeout(timeout);
+          outcome();
+        };
+
+        ws.addEventListener('open', () => {
+          finish(resolve);
+        }, { once: true });
+        ws.addEventListener('error', () => {
+          finish(() => reject(new KinuError('unavailable', 'Could not connect to cloud agent.')));
+        }, { once: true });
+        ws.addEventListener('close', () => {
+          finish(() => reject(new KinuError('unavailable', 'Cloud workspace connection closed before it opened.')));
+        }, { once: true });
+      }));
+
+      if (this.closed) {
+        ws.close();
+
+        return yield* new KinuError('unavailable', 'Cloud workspace client closed while connecting.');
+      }
     });
-
-    if (this.closed) {
-      ws.close();
-      throw new Error('Cloud workspace client closed while connecting.');
-    }
   }
 
   /** A broadcast that moved the executors is reported once the machines are re-read, so its hearer renders their links. */
@@ -819,15 +779,9 @@ export class CloudAgentClient implements AgentClient {
       return;
     }
 
-    const taskId = randomRequestId();
-
-    const task: Promise<void> = this.readMachines().then(() => {
+    this.waitUntil(this.readMachines().then(() => {
       this.emit({ type: 'broadcast', event: frame });
-    }).finally(() => {
-      if (this.launchedTasks.get(taskId) === task) this.launchedTasks.delete(taskId);
-    });
-
-    this.launchedTasks.set(taskId, task);
+    }));
   }
 
   private handleMessage(event: MessageEvent): void {
@@ -923,30 +877,35 @@ export class CloudAgentClient implements AgentClient {
    * The SDK's resume stream restates a turn from its first chunk for `useChat` to replace its message; a terminal cannot
    * unprint, so following it would need a chunk cursor of its own. A turn being asked stays within Stop's reach.
    */
-  private async reacquireInFlightTurns(): Promise<void> {
-    const turns = [...this.activeTurns].filter(([id]) => !this.reacquiring.has(id));
+  private reacquireInFlightTurns(): Effect.Effect<void> {
+    return Effect.suspend(() => {
+      const turns = [...this.activeTurns].filter(([id]) => !this.reacquiring.has(id));
 
-    for (const [id] of turns) this.reacquiring.add(id);
-    await Promise.allSettled(turns.map(([id, turn]) => this.reacquire(id, turn)));
+      for (const [id] of turns) this.reacquiring.add(id);
+
+      return Effect.asVoid(Effect.all(turns.map(([id, turn]) => this.reacquire(id, turn)), { concurrency: 'unbounded' }));
+    });
   }
 
-  private async reacquire(id: string, turn: CloudTurnStream): Promise<void> {
-    const [ended] = await Promise.allSettled([this.endOf(id)]);
+  private reacquire(id: string, turn: CloudTurnStream): Effect.Effect<void> {
+    return Effect.map(Effect.result(this.endOf(id)), (ended) => {
+      this.reacquiring.delete(id);
 
-    this.reacquiring.delete(id);
+      // A Stop or a close settled it meanwhile.
+      if (this.activeTurns.get(id) !== turn) return;
+      this.activeTurns.delete(id);
 
-    // A Stop or a close settled it meanwhile.
-    if (this.activeTurns.get(id) !== turn) return;
-    this.activeTurns.delete(id);
+      if (Result.isFailure(ended)) {
+        this.emit({ type: 'error', message: `Could not learn how this turn ended (${ended.failure.message}). Its answer, if any, is in the workspace transcript.` });
 
-    if (ended.status === 'rejected') {
-      this.emit({ type: 'error', message: `Could not learn how this turn ended (${renderThrownChain({ cause: ended.reason })}). Its answer, if any, is in the workspace transcript.` });
+        return turn.settle(true);
+      }
 
-      return turn.settle(true);
-    }
+      this.ended(turn, ended.success);
+    });
+  }
 
-    const { state, answer } = ended.value;
-
+  private ended(turn: CloudTurnStream, { state, answer }: SendEnd): void {
     if (state.status !== 'settled') {
       this.emit({ type: 'error', message: 'No turn took this message: it was handed back or refused before one read it.' });
 
@@ -962,23 +921,30 @@ export class CloudAgentClient implements AgentClient {
     turn.settle(true);
   }
 
-  private async endOf(id: string): Promise<SendEnd> {
-    const state = v.parse(SendStateSchema, await this.askAwaitSend(id));
-    const turnId = state.status === 'settled' && state.landed === 'turn' ? state.turnId : null;
+  private endOf(id: string): Effect.Effect<SendEnd, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const state = yield* this.askAwaitSend(id);
+      const turnId = state.status === 'settled' && state.landed === 'turn' ? state.turnId : null;
 
-    return { state, answer: turnId === null ? null : await recordedAnswer((request) => this.historyPage(request), turnId) };
+      if (turnId === null) return { state, answer: null };
+
+      return { state, answer: yield* attemptInItsWords('unavailable', () => recordedAnswer((request) => this.historyPage(request), turnId)) };
+    });
   }
 
-  /** Asked again on each new connection while connections drop. On one that held, a rejection is the workspace's
-   *  refusal, and asking again would be refused again. */
-  private async askAwaitSend(id: string): Promise<JsonValue> {
-    for (;;) {
-      await this.ensureOpen();
-      const asking = this.callRpc('awaitSend', [id]);
-      const [asked] = await Promise.allSettled([asking]);
+  /** Asked again on each new connection while connections drop. On one that held, a refusal is the workspace's,
+   *  and asking again would be refused again. */
+  private askAwaitSend(id: string): Effect.Effect<v.InferOutput<typeof SendStateSchema>, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      for (;;) {
+        yield* this.opened();
+        const asked = yield* Effect.result(this.rpcAs('awaitSend', [id], SendStateSchema));
 
-      if (asked.status === 'fulfilled' || this.ws?.readyState === WebSocket.OPEN) return asking;
-    }
+        if (Result.isSuccess(asked)) return asked.success;
+
+        if (this.ws?.readyState === WebSocket.OPEN) return yield* asked.failure;
+      }
+    });
   }
 }
 
