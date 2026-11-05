@@ -43,6 +43,12 @@ const ASK_AGAIN_TIMES = 12;
 
 const ASK_AGAIN_MS = 5_000;
 
+/** The platform's own words when the account has no room for another container, as Cloudflare answers a start. */
+const NO_ROOM = 'Account resource limit exceeded';
+
+/** What a box answers when the call ran into a container already gone: on a box the platform refused one, its refusal. */
+const NOT_RUNNING = 'cannot be called on a container that is not running';
+
 /** How often a box is read while a call to it is out: the reading a call fetch's own timeout ends is classified by. */
 const STALL_SAMPLE_MS = 30_000;
 
@@ -146,6 +152,15 @@ async function answeredWithin(work: Promise<unknown>, ms: number): Promise<boole
 }
 
 /** A call the box never answered because its disk stopped answering: the platform's, read from the box itself. */
+/** A contract the platform kept from running: it refused the box a container for want of the account's room. The message
+ *  leads with the devbox's own sentence for it (`#unready`, packages/devbox/src/devbox.ts), the platform's words in it,
+ *  which `deploy-report.ts` reads as the platform's refusal, not the build's. */
+class PlatformRefusal extends Error {
+  constructor(readonly path: string, readonly name: string, said: string) {
+    super(`the platform refused this box a container: ${NO_ROOM}, so ${path} on ${name} could not run; it answered ${said.slice(-300)}`);
+  }
+}
+
 class PlatformStall extends Error {
   constructor(readonly path: string, readonly name: string, readonly stall: DiskStall) {
     super(`${path} on ${name} was never answered: the container's disk ${stall.device} stopped answering reads (${String(stall.reads)} in flight), `
@@ -473,6 +488,9 @@ async function main(): Promise<void> {
     }
   };
 
+  /** Each box's last refusal of a container by the platform, when and in whose words. */
+  const refusals = new Map<string, { readonly at: number; readonly said: string }>();
+
   /** A box's processes, as the fixture reads them beside whatever the box is doing, or why they could not be read. */
   const processesOf = async (name: string): Promise<string> => {
     const [read] = await Promise.allSettled([(async () => {
@@ -483,7 +501,22 @@ async function main(): Promise<void> {
       return answer.processes ?? answer.error ?? 'no container is running';
     })()]);
 
-    return read?.status === 'fulfilled' ? read.value : `unread: ${String(read?.reason)}`;
+    const said = read?.status === 'fulfilled' ? read.value : `unread: ${String(read?.reason)}`;
+
+    if (said.includes(NO_ROOM)) refusals.set(name, { at: Date.now(), said });
+
+    return said;
+  };
+
+  /** The platform's refusal of a container to `name` since `since`, as a call or a reading of the box heard it, or one
+   *  the box says now: what a wait or a call that found no container ran into. */
+  const refusedSince = async (name: string, since: number): Promise<string | undefined> => {
+    const now = await processesOf(name);
+    const heard = refusals.get(name);
+
+    if (now.includes(NO_ROOM)) return now;
+
+    return heard !== undefined && heard.at >= since ? heard.said : undefined;
   };
 
   const call = async <Schema extends v.GenericSchema>(path: string, schema: Schema, body?: Record<string, string>, name = box): Promise<v.InferOutput<Schema>> => {
@@ -494,6 +527,8 @@ async function main(): Promise<void> {
     // A box the platform refused a container (a dropped connection, no room) arms its own startup and says to ask
     // again; a contract asks again, as an agent does, rather than read a platform refusal as the contract broken
     // (390ad4e4c's disk-chain: "Network connection lost." after /lose-snapshot).
+    const began = Date.now();
+
     for (let asked = 1; ; asked += 1) {
       const asking = fixtureFetch(bucket, url, { headers: { authorization: `Bearer ${identity}`, 'content-type': 'application/json' }, method: body === undefined ? 'GET' : 'POST', body: body === undefined ? undefined : JSON.stringify(body) });
       const settled = Promise.allSettled([asking]);
@@ -520,11 +555,18 @@ async function main(): Promise<void> {
       if (reply.ok) return v.parse(schema, value);
       const said = JSON.stringify(value);
 
+      if (said.includes(NO_ROOM)) refusals.set(name, { at: Date.now(), said });
+
       if (asked < ASK_AGAIN_TIMES && said.includes(ASK_AGAIN)) {
         process.stdout.write(`[${run}] ${path}: not ready, asking again: ${said.slice(-300)}\n`);
         await delay(ASK_AGAIN_MS);
         continue;
       }
+
+      if (said.includes(NO_ROOM)) throw new PlatformRefusal(path, name, said);
+      const refused = said.includes(NOT_RUNNING) ? await refusedSince(name, began) : undefined;
+
+      if (refused !== undefined) throw new PlatformRefusal(path, name, refused);
 
       throw new Error(`${path}: ${String(reply.status)} ${said.slice(-900)}`);
     }
@@ -565,12 +607,19 @@ async function main(): Promise<void> {
     };
   };
 
-  /** Asks again until `holds`, as a person watching would, up to RESURRECT_READS times. */
-  const waitFor = async (holds: () => boolean | Promise<boolean>, what: string) => {
+  /** Asks again until `holds`, as a person watching would, up to RESURRECT_READS times. A wait the platform's refusal of a
+   *  container to `name` ended says that refusal, not the wait. */
+  const waitFor = async (holds: () => boolean | Promise<boolean>, what: string, name = box) => {
+    const began = Date.now();
+
     for (let asked = 0; asked < RESURRECT_READS; asked++) {
       if (await holds()) return;
       await delay(RESURRECT_READ_MS);
     }
+
+    const refused = await refusedSince(name, began);
+
+    if (refused !== undefined) throw new PlatformRefusal(`waiting for ${what}`, name, refused);
 
     throw new Error(`waited ${String(RESURRECT_READS * RESURRECT_READ_MS / 1000)} s for ${what}`);
   };
@@ -1098,11 +1147,11 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
         const seen = `kinu-screen-${crypto.randomUUID().slice(0, 8)}`;
         const before = await openSession(name);
 
-        await waitFor(() => /[#$]\s*$/u.test(before.screen()), "the shell's prompt");
+        await waitFor(() => /[#$]\s*$/u.test(before.screen()), "the shell's prompt", name);
         before.type(`echo ${seen}\r`);
-        await waitFor(() => before.screen().includes(seen), 'the screen to show what the stop must keep');
+        await waitFor(() => before.screen().includes(seen), 'the screen to show what the stop must keep', name);
         before.type(`${RESURRECT_LINE}\r`);
-        await waitFor(ranOnce, 'the typed line to run once');
+        await waitFor(ranOnce, 'the typed line to run once', name);
         await shell(`rm -f ${RESURRECT_MARKER} ${RESURRECT_COUNT} && echo ${seen} > ${QUICK_RESTART_ROOT}`, name);
         before.close();
         requireEqual((await call('/stop', Commit, undefined, name)).kind, 'committed');
@@ -1121,7 +1170,7 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
           return rule > shown.indexOf(seen) && shown.includes(seen) && shown.slice(rule).split(`echo "it's`).length > 2;
         };
 
-        await waitFor(offered, 'the saved screen, the rule, and the line at the prompt');
+        await waitFor(offered, 'the saved screen, the rule, and the line at the prompt', name);
         const shownMs = Date.now() - stopped;
 
         await delay(RESURRECT_SETTLE_MS);
@@ -1129,7 +1178,7 @@ print('exact' if json.load(open('${BOX_CHROMIUM_POLICY}'))['CACertificates'] == 
 
         if (waiting !== '0') throw new Error(`before Enter the box held ${JSON.stringify(waiting)}: the offered line ran on its own`);
         after.type('\r');
-        await waitFor(ranOnce, 'the line to run on Enter');
+        await waitFor(ranOnce, 'the line to run on Enter', name);
         await delay(RESURRECT_SETTLE_MS);
         const ran = await files();
         after.close();

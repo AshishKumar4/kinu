@@ -2426,7 +2426,7 @@ export {
 } from './http/public-pages';
 
 export {
-  currentTakeIndex, takeChipLabel, cycleTakeIndex, hasComparableTakes,
+  currentTakeIndex, takeChipLabel, cycleTakeIndex, hasComparableTakes, describeTakePick,
 } from './read-models/alternate-takes';
 
 export {
@@ -2718,6 +2718,8 @@ export {
 } from './execution/codemode-node-shim';
 
 export { KINU_PROGRAM_MODULE, programPlace, type ProgramImport } from './execution/program-place';
+
+export { moduleSpecifiers, type ModuleSpecifier } from './utils/module-specifiers';
 
 export {
   type DeviceHubClient,

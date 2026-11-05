@@ -22,7 +22,7 @@ import { apiJson, DESKTOP, withLiveApp, type LiveApp } from './live-app-harness'
 import { CONSENT_CHOICE, startConsentingProvider } from './consenting-oauth';
 import { recordDeadEnds } from '../evals/src/browser';
 import { createWorkspace, listWorkspaces, LOOPBACK_IDENTITY } from '../evals/src/workspace-roster';
-import { CHAT_COMPOSER_LIVE, CHATS, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
+import { barDrawn, CHAT_COMPOSER_LIVE, CHATS, INSPECTOR_PANEL, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, countRpc, frameLedger, named, openInspector, PAGE_TABS, painted, pressSend, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter, until, waitOn, type ControlAttempt, type RpcCounter } from './browser-page';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import { registerScriptedModel, startScriptedModel } from './scripted-model';
 import { KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PHASED_FIRST_TURN_MISSION, PHASED_TURN_ANSWER, phasedFirstTurn, SILENT_TURN_MISSION, silentFirstTurn, PACED_TURN_ANSWER, ANSWERED_TURN_ASK, CLEARED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK, SLEPT_TURN_ASK, TOLD_BACK_ANSWER, TOLD_BACK_ASK, UNANSWERED_PROBE_TURN_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, laterReconnectTurn, toldBackTurn, unsentFirstTurn, DROPPED_FILE_ASK, DROPPED_FILE_ROW, droppedFileTurn, heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, type HeldCall, LOGO_WAITED_MISSION, MINUTE_LIMITED_ASK, MINUTE_WAITED_OUT, ProviderWaitProbe, providerWaitTurn, WAITED_TURN_ASK, PLAN_TASKS_CHORE, PLAN_TASKS_PLAN, PLAN_TASK_TITLES, planTasksProbe, STOPPED_ASK, STOPPED_ANSWER, HANDED_BACK_ASK, StopProbe, FOLLOW_UP_ASK, FOLLOW_UP_ANSWER, OPENING_ASK, OPENING_ANSWER, stopProbeTurn, SLATE_ID, SLATE_UI_ASK, SLATE_UI_FORGED, SLATE_UI_PAGES, SLATE_UI_SENT, SLATE_UI_CLICKED, slateUiTurn, PAGE_DATA, PAGE_DATA_ASK, pageDataTurn, SLATE_ASK_ID, SLATE_ASK_PROBE, SlateAskProbe, slateAskTurn } from './live-app-scripts';
@@ -373,6 +373,9 @@ async function measureControls(newPage: LiveApp['newPage'], origin: string): Pro
 
   const page = await openWorkspace(newPage, origin, workspace);
 
+  // The bar carries the column's own Show control: pressed before it is drawn, the one control found was the
+  // separator, which a click does not toggle (staging 7546c1229, 2026-11-04: opened at 0 px, then "Show inspector").
+  await barDrawn(page);
   const before = v.parse(LayoutProbeSchema, await page.evaluate(probeLayoutScript));
 
   // Opened first, from whatever state the product chose: a fresh workspace
@@ -498,7 +501,10 @@ async function measureWorkspaceViews(newPage: LiveApp['newPage'], origin: string
   })));
   await page.click(`a[href="${APP_ROUTES.workspaces}"]`);
   await until(page, 'the address to move to Workspaces', `location.pathname === ${JSON.stringify(APP_ROUTES.workspaces)}`);
-  await page.evaluate(() => new Promise((resolve) => { requestAnimationFrame(() => requestAnimationFrame(resolve)); }));
+  // The new page's render is a transition: it commits when it is done, which on a loaded box is many frames after the
+  // address moved (staging a9625a497, 2026-11-05: two frames read the overview still drawn, and a rerun passed). So the
+  // overview is waited out while the page's code is still held, and a page that kept it drawn waits out the row.
+  await until(page, 'the overview to leave while Workspaces\' code is still held', `!${OVERVIEW}`);
   const awayAt = v.parse(v.string(), await page.evaluate('location.pathname'));
   const awayOverview = v.parse(v.boolean(), await page.evaluate(OVERVIEW));
 

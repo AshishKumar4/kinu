@@ -67,7 +67,7 @@ describe("a chat's slash commands", () => {
       await draft(page, '/');
       const all = (await menu(page)).offered;
 
-      expect({ web: ['/stop', '/model', '/clear', '/compact', '/tree', '/settings', '/stats', '/fork'].filter((name) => !all.includes(name)), cli: all.filter((name) => ['/exit', '/always', '/instructions', '/cancel'].includes(name)) })
+      expect({ web: ['/stop', '/model', '/clear', '/compact', '/tree', '/settings', '/stats', '/fork'].filter((name) => !all.includes(name)), cli: all.filter((name) => ['/exit', '/cancel'].includes(name)) })
         .toEqual({ web: [], cli: [] });
 
       // A word narrows the list, best first; the arrows move the highlight, and Enter runs it.

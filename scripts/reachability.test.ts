@@ -184,6 +184,10 @@ describe('reachability gate, against the real tree', () => {
   const SOURCES = readSources();
   const ORCHESTRATOR = 'packages/cf-backend/src/orchestrator.ts';
 
+  /** The tree's files that name `word`, and `also`: the gate reads names as written, so only these can declare, call,
+   *  broadcast or read it, and a case about one name walks them alone (`gate:reachability` walks the whole tree). */
+  const naming = (word: string, also: readonly string[] = []) => new Map([...SOURCES].filter(([file, text]) => text.includes(word) || also.includes(file)));
+
   /** RPC → the one UI file that invokes it, verified live below. */
   const WIRES = {
     previewScaffoldLive: 'packages/cf-backend/src/components/surfaces/ScaffoldLineage.tsx',
@@ -196,19 +200,24 @@ describe('reachability gate, against the real tree', () => {
       'packages/cf-backend/src/hooks/use-workspace-reads.ts', 'packages/cf-backend/src/hooks/socket-frames.ts',
     ];
 
-    expect(findUnreadChannels(SOURCES).unread).toEqual([]);
+    const signal = naming('signal_card');
+    const unread = (sources: ReadonlyMap<string, string>) => findUnreadChannels(sources).unread.map((channel) => channel.name);
 
-    const cut = new Map(SOURCES);
+    expect(unread(signal)).not.toContain('signal_card');
+
+    const cut = new Map(signal);
 
     for (const file of hook) cut.delete(file);
-    expect(findUnreadChannels(cut).unread.map((channel) => channel.name)).toContain('signal_card');
+    expect(unread(cut)).toContain('signal_card');
   });
 
   test.each(Object.entries(WIRES))('cutting %s\u2019s only caller makes it unreachable', (rpc, wire) => {
     const key = `${ORCHESTRATOR}#OrchestratorAgent.${rpc}`;
-    expect(findUnreachable(SOURCES).unreachable.map(keyOf)).not.toContain(key);
+    const named = naming(rpc, [ORCHESTRATOR]);
 
-    const cut = new Map(SOURCES);
+    expect(findUnreachable(named).unreachable.map(keyOf)).not.toContain(key);
+
+    const cut = new Map(named);
     cut.delete(wire);
     expect(findUnreachable(cut).unreachable.map(keyOf)).toContain(key);
   });

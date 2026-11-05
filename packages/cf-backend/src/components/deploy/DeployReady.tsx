@@ -3,7 +3,7 @@
  * silently on arrival and again when the person comes back from a hand-off; only what needs them shows. The same screen
  * changes an existing Kinu: its Domain step, or mail at its domain.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import * as v from "valibot";
 import { tolerate } from "@kinu.run/core/obs";
 import { CpuIcon, EnvelopeSimpleIcon, MagnifyingGlassIcon } from "@phosphor-icons/react";
@@ -22,7 +22,8 @@ import {
 } from "@/components/deploy/DeployParts";
 import { DeployDomain, type PickedDomain } from "@/components/deploy/DeployDomain";
 import { ConnectorsBefore } from "@/components/deploy/DeployConnectors";
-import { useDeployRead, type Reading } from "@/components/deploy/use-deploy-read";
+import { readingOf, type Reading } from "@/components/deploy/deploy-reading";
+import { useAsyncResource, useReloadOnFocus } from "@/hooks/use-async-resource";
 import { readMailPreview, readPreflight, type DeployRefused } from "@/lib/deploy-page-api";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { Card } from "@/components/ui/Card";
@@ -80,9 +81,10 @@ function zoneOf(zones: readonly DeployZone[], host: string): DeployZone | undefi
 function MailChoice({ account, domain, host, onHost, onReady }: {
   account: string; domain: string; host: string; onHost: (host: string) => void; onReady: (ready: boolean) => void;
 }) {
-  const previewed = useDeployRead(`${account}/${host}`, async () => readMailPreview(account, host));
-  const conflict = previewed?.state === "read" ? previewed.answer.conflict : null;
-  const ready = previewed?.state === "read" && conflict === null;
+  const preview = useCallback(async () => readMailPreview(account, host), [account, host]);
+  const previewed = readingOf(useAsyncResource(preview, undefined, `${account}/${host}`).resource);
+  const conflict = previewed.state === "read" ? previewed.answer.conflict : null;
+  const ready = previewed.state === "read" && conflict === null;
   const sub = `mail.${domain}`;
   // Where the apex's mail goes, once it has moved Kinu's onto the subdomain: said beside the choice, and never moved again.
   const [moved, setMoved] = useState<string | null>(null);
@@ -100,9 +102,9 @@ function MailChoice({ account, domain, host, onHost, onReady }: {
     <div className="space-y-3" data-deploy-mail={host}>
       <RadioGroup label="Where mail goes" value={host === domain ? "apex" : "sub"} onChange={(at) => onHost(at === "apex" ? domain : sub)}
         options={[{ value: "apex", label: `At ${domain}, like ada@${domain}` }, { value: "sub", label: `At ${sub}, like ada@${sub}` }]} />
-      {previewed?.state === "reading" && <p className="inline-flex items-center gap-2 t-meta"><Loader size="sm" />Reading {host}…</p>}
-      {previewed?.state === "refused" && <p role="alert" className="t-public-body p-danger">{previewed.refusal.error}</p>}
-      {previewed?.state === "read" && conflict === null && <MailWrites preview={previewed.answer} />}
+      {previewed.state === "reading" && <p className="inline-flex items-center gap-2 t-meta"><Loader size="sm" />Reading {host}…</p>}
+      {previewed.state === "refused" && <p role="alert" className="t-public-body p-danger">{previewed.refusal.error}</p>}
+      {previewed.state === "read" && conflict === null && <MailWrites preview={previewed.answer} />}
       {moved !== null && host === sub && <p className="t-meta p-text-2">{domain} already gets mail at {moved}, so Kinu's mail uses {sub} and leaves yours as it is.</p>}
       {conflict !== null && <p role="alert" className="t-public-body p-danger">{host} already gets mail at {conflict.mx}. Kinu's mail can't go there without taking it over; choose the other, or leave mail off.</p>}
     </div>
@@ -124,10 +126,10 @@ function Checking() {
 }
 
 /** The account's checks, while they run or once they were refused; nothing once they are read. */
-function NotYet({ checked, actions }: { checked: Reading<DeployPreflight> | null; actions: ReadyActions }) {
-  if (checked?.state === "refused") return <Refused refusal={checked.refusal} actions={actions} />;
+function NotYet({ checked, actions }: { checked: Reading<DeployPreflight>; actions: ReadyActions }) {
+  if (checked.state === "refused") return <Refused refusal={checked.refusal} actions={actions} />;
 
-  return checked?.state === "read" ? null : <Checking />;
+  return checked.state === "read" ? null : <Checking />;
 }
 
 function workersAddress(preflight: DeployPreflight, name: string): string {
@@ -330,7 +332,8 @@ function ConnectorsStep({ account, name, choices, busy, onConnectGithub }: {
   account: string; name: string; choices: Choices; busy: boolean; onConnectGithub: ConnectGithubBefore;
 }) {
   if (name === "") return null;
-  const address = addressOf(choices.domain);
+  // One object while the pick stands: the connectors' read is keyed on it.
+  const address = useMemo(() => addressOf(choices.domain), [choices.domain]);
 
   return (
     <ConnectorsBefore account={account} name={name} address={address} busy={busy} onConnectGithub={() => {
@@ -416,14 +419,14 @@ function ForAccount({ session, actions, onDeploy, onConnectGithub, onBack }: {
   const [handedOff, setHandedOff] = useState<string | null>(null);
   // The credits a purchase was opened at: any change to them is the purchase landing.
   const [creditsAt, setCreditsAt] = useState<string | null>(null);
-  const checked = useDeployRead(account, async () => readPreflight(account), { onFocus: true, every: handedOff === null ? null : RECHECK_MS });
+  const checked = usePreflight(account, handedOff === null ? null : RECHECK_MS);
   const [choosingDomain, setChoosingDomain] = useState(false);
   const [choices, setChoices] = useState<Choices>(start.choices);
   const [mailReady, setMailReady] = useState(false);
   const onMail = useCallback((mail: string | null) => setChoices((held) => ({ ...held, mail })), []);
   const handOff = (need: string) => { setHandedOff(need); actions.onHandedOff(need); };
 
-  const preflight = checked?.state === "read" ? checked.answer : null;
+  const preflight = checked.state === "read" ? checked.answer : null;
   const name = preflight?.suggestedName ?? "";
   const kept = actions.refusal;
 
@@ -478,11 +481,22 @@ function ForAccount({ session, actions, onDeploy, onConnectGithub, onBack }: {
   );
 }
 
+/** The account's preflight: read again on coming back to the page, and every `every` while set (a hand-off is open). */
+function usePreflight(account: string, every: number | null = null): Reading<DeployPreflight> {
+  const load = useCallback(async () => readPreflight(account), [account]);
+  const revalidate = useCallback(() => every, [every]);
+  const { resource, reload } = useAsyncResource(load, revalidate, account);
+
+  useReloadOnFocus(reload);
+
+  return readingOf(resource);
+}
+
 // ── A change to an existing Kinu ───────────────────────────────────────────────────────────────────────────────────
 
 function MoveToDomain({ kinu, actions, onChange, onBack }: { kinu: DeployedKinu; actions: ReadyActions; onChange: (asked: ChangeAsked) => void; onBack: () => void }) {
-  const checked = useDeployRead(kinu.account, async () => readPreflight(kinu.account), { onFocus: true });
-  const zones = checked?.state === "read" ? checked.answer.zones : [];
+  const checked = usePreflight(kinu.account);
+  const zones = checked.state === "read" ? checked.answer.zones : [];
 
   return (
     <DeployShell dot={1} screen="domain" title="Move your Kinu to a domain" footer={<Button variant="ghost" size="sm" className="mr-auto" onClick={onBack}>Back</Button>}>
@@ -496,11 +510,11 @@ function MoveToDomain({ kinu, actions, onChange, onBack }: { kinu: DeployedKinu;
 }
 
 function AddMail({ kinu, actions, onChange, onBack }: { kinu: DeployedKinu; actions: ReadyActions; onChange: (asked: ChangeAsked) => void; onBack: () => void }) {
-  const checked = useDeployRead(kinu.account, async () => readPreflight(kinu.account), { onFocus: true });
+  const checked = usePreflight(kinu.account);
   const [chosen, setChosen] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const host = new URL(kinu.url).hostname;
-  const zone = checked?.state === "read" ? zoneOf(checked.answer.zones, host) : undefined;
+  const zone = checked.state === "read" ? zoneOf(checked.answer.zones, host) : undefined;
   const mailHost = chosen ?? zone?.name ?? null;
 
   return (
@@ -512,7 +526,7 @@ function AddMail({ kinu, actions, onChange, onBack }: { kinu: DeployedKinu; acti
         </>
       )}>
       <NotYet checked={checked} actions={actions} />
-      {checked?.state === "read" && (zone === undefined
+      {checked.state === "read" && (zone === undefined
         ? <p className="t-public-body">{host} is in no zone of this account Kinu can read, so mail can't be added here.</p>
         : <MailChoice account={kinu.account} domain={zone.name} host={mailHost ?? zone.name} onHost={setChosen} onReady={setReady} />)}
       {actions.refusal !== null && <div className="mt-4"><Refused refusal={actions.refusal} actions={actions} /></div>}

@@ -378,6 +378,9 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
   ], [state.signalCards, state.subagentEvents, drawnCardIds, liveSplices, agentId]);
 
   const threadMessages = useMemo(() => thread.entries.map(({ message }) => message), [thread.entries]);
+  // The newest comparison the thread shows, which `/takes` opens: the chip it opens is that turn's.
+  const latestTakes = useMemo(() => threadMessages.map((message) => takesByTurn[message.id]).filter(hasComparableTakes).at(-1), [threadMessages, takesByTurn]);
+  const [takesAsked, setTakesAsked] = useState<{ readonly id: string; readonly nonce: number } | null>(null);
   const placed = useMemo(() => placeEvents(threadMessages, looseEvents), [threadMessages, looseEvents]);
 
   // A turn being reverted, and what the revert said once done.
@@ -512,7 +515,7 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
                     onFeedback: onMessageFeedback,
                     feedback: feedbackByMessage[msg.id] ?? null,
                     onRevert: setRevertFor,
-                    takesChip: hasComparableTakes(takes) ? <TakesChip set={takes} onPick={onPickTake} /> : undefined,
+                    takesChip: hasComparableTakes(takes) ? <TakesChip set={takes} onPick={onPickTake} opened={takesAsked?.id === takes.id ? takesAsked.nonce : undefined} /> : undefined,
                     signalState: signalId === null ? undefined : cardStates.get(signalId),
                     onOpenChangeNote: openChangeNote,
                   };
@@ -544,6 +547,15 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
                   walkBack: setRevertFor,
                   rename: (name) => Effect.catchCause(Effect.asVoid(Effect.promise(async () => state.rpc("renameMainChat", [name]))),
                     (failed) => Effect.sync(() => { say(`Could not rename this chat: ${readFailureText({ cause: Cause.squash(failed) })}`); })),
+                  role: {
+                    current: async () => (await state.rpc("getAgentStatus", [])).roleId ?? null,
+                    choose: async (id) => (await state.rpc("setRole", [id])).role,
+                  },
+                  takes: {
+                    latest: latestTakes,
+                    open: (set) => { setTakesAsked((before) => ({ id: set.id, nonce: (before?.nonce ?? 0) + 1 })); },
+                    pick: (set, nodeId) => onPickTake(set.id, nodeId),
+                  },
                 }),
                 notices: [
                   ...SIDE_SOURCES.flatMap(({ source, label }) => {

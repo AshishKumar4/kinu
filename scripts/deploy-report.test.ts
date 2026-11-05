@@ -236,6 +236,26 @@ describe('a red that is a provider\'s refusal, not the build\'s (owner, 2026-10-
     });
   });
 
+  // Production 7f4c9cb96 and staging b1d13c214, 2026-11-05: the account had no room for another container.
+  test('a container the platform refused for the account\'s room is external, in a case\'s report or as the devbox tier\'s last error', () => {
+    const DESKTOP = 'Error: computer-desktop/screen-shown-to-the-model: the program\'s result carried 0 image(s), the first null: {"error":"computer.screenshot: '
+      + 'this devbox is not ready: the platform refused this box a container: Account resource limit exceeded. A startup is armed, so ask again."}';
+
+    const tier = (last: string) => `[dc1] /exec: not ready, asking again: {"error":"this devbox is not ready: the platform refused this box a container: Account resource limit exceeded."}\n`
+      + `$ bun scripts/devbox-container-tier.ts\nerror: ${last}\n      at main (scripts/devbox-container-tier.ts:1370:11)\n\nBun v1.4.3 (Linux x64)\nerror: script "gate:devbox-e2e" exited with code 1`;
+
+    const ROOM = "the platform refused a container: the account's resource limit (Cloudflare, Account resource limit exceeded)";
+
+    expect({
+      cases: externalCause(vitest([DESKTOP, GATEWAY])),
+      refused: externalCause(tier('the platform refused this box a container: Account resource limit exceeded, so /golden on box-1 could not run; it answered {}')),
+      // Asked again and then answered: the tier's red is its own, whatever it heard on the way.
+      contract: externalCause(tier('/contract?kind=processes: 500 {"error":"running /bin/sh: exec() cannot be called on a container that is not running."}')),
+      waited: externalCause(tier('waited 60 s for the shell\'s prompt')),
+      quoted: externalCause(tier('expected "the platform refused this box a container: Account resource limit exceeded" to be absent')),
+    }).toEqual({ cases: `${ROOM}; ${CREDITS}, in 2 failed test(s)`, refused: ROOM, contract: undefined, waited: undefined, quoted: undefined });
+  });
+
   test('a recorded red keeps its cause, and production takes the build only when every red is external', () => {
     const dir = scratchDir('deploy-report-external');
 

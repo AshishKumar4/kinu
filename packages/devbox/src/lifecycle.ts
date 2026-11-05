@@ -508,11 +508,18 @@ const PORT_TOKEN_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 
 export const PORT_TOKEN_LENGTH = 16;
 
+/** The bytes a symbol is drawn from: the whole multiples of the alphabet's size. A byte past them is drawn again, or the
+ *  first 256 mod 36 symbols would come up more often than the rest. */
+const PORT_TOKEN_BYTES = 256 - (256 % PORT_TOKEN_ALPHABET.length);
+
 export function generatePortToken(random: (n: number) => Uint8Array): string {
-  const bytes = random(PORT_TOKEN_LENGTH);
   let token = '';
 
-  for (const byte of bytes) token += PORT_TOKEN_ALPHABET[byte % PORT_TOKEN_ALPHABET.length];
+  while (token.length < PORT_TOKEN_LENGTH) {
+    for (const byte of random(PORT_TOKEN_LENGTH - token.length)) {
+      if (byte < PORT_TOKEN_BYTES) token += PORT_TOKEN_ALPHABET[byte % PORT_TOKEN_ALPHABET.length];
+    }
+  }
 
   return token;
 }
