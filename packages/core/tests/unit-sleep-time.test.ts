@@ -560,20 +560,21 @@ describe('an idle wake dreams first', () => {
     close();
   });
 
-  test('a note forgotten takes its fold with it: the same note written again is folded again', async () => {
+  test('a note forgotten takes its fold with it at the next fold: the same note written again is folded again', async () => {
     const { fold, memory, seen, window, close } = folding();
     const instant = new Date().toISOString();
 
     await appendMemoryNote(memory, 'The staging database runs pg-15', { date: instant });
     await fold().runTerminal();
     await memory.write(MEMORY_PATH, '');
+    await appendMemoryNote(memory, 'The staging database runs pg-16');
     window.read = 6;
     await fold().runTerminal();
     await appendMemoryNote(memory, 'The staging database runs pg-15', { date: instant });
     window.read = 9;
     await fold().runTerminal();
 
-    expect(seen).toEqual(['pg-15', 'pg-15']);
+    expect(seen).toEqual(['pg-15', 'pg-16', 'pg-15']);
     close();
   });
 

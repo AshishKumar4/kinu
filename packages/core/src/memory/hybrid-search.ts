@@ -211,35 +211,45 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, now }: 
   const byIdNote = new Map(noteHits.map((h) => [h.id, h]));
 
   return Effect.sync(() => {
-    const candidates = merged.map((m) => {
-      const l = byIdLex.get(m.id);
-      const f = byIdFact.get(m.id);
-      const s = byIdSem.get(m.id);
-      const n = byIdNote.get(m.id);
-      const scope = hitScope(f, n);
-      const writtenAt = f?.lastObservedAt ?? n?.at ?? l?.writtenAt ?? s?.writtenAt;
-      const kind = memoryKind(f, n);
-
-      const hit: HybridHit = {
-        id: m.id,
-        path: l?.path ?? s?.path ?? '',
-        startLine: l?.startLine ?? s?.startLine ?? 0,
-        endLine: l?.endLine ?? s?.endLine ?? 0,
-        snippet: l?.snippet ?? f?.snippet ?? n?.text ?? s?.text ?? '',
-        // Fused rank, kept at least 70% and down to it as the memory ages (mnemopi `core/beam/recall.ts`).
-        rrfScore: m.rrfScore * (0.7 + 0.3 * survival(kind, writtenAt === undefined ? null : now - writtenAt)),
-        sources: hitSources({ l, f, s, n }),
-        ...scope,
-        ...(f !== undefined && { factKey: f.key }),
-        lexicalScore: l?.score,
-        semanticScore: s?.score,
-      };
-
-      return hit;
-    });
+    const candidates = merged.map((m) => fusedHit(m, { l: byIdLex.get(m.id), f: byIdFact.get(m.id), s: byIdSem.get(m.id), n: byIdNote.get(m.id) }, now));
 
     return diverse(candidates.sort((a, b) => b.rrfScore - a.rrfScore), finalK);
   });
+}
+
+/** What each arm found of one fused id. */
+interface Found {
+  readonly l: LexicalHit | undefined;
+  readonly f: FactSearchHit | undefined;
+  readonly s: (VectorSearchHit & { readonly writtenAt?: number }) | undefined;
+  readonly n: AccountNoteHit | undefined;
+}
+
+function fusedHit(m: { readonly id: string; readonly rrfScore: number }, found: Found, now: number): HybridHit {
+  const { l, f, s, n } = found;
+
+  const hit: HybridHit = {
+    id: m.id,
+    path: l?.path ?? s?.path ?? '',
+    startLine: l?.startLine ?? s?.startLine ?? 0,
+    endLine: l?.endLine ?? s?.endLine ?? 0,
+    snippet: l?.snippet ?? f?.snippet ?? n?.text ?? s?.text ?? '',
+    rrfScore: m.rrfScore * kept(found, now),
+    sources: hitSources(found),
+    ...hitScope(f, n),
+    ...(f !== undefined && { factKey: f.key }),
+    lexicalScore: l?.score,
+    semanticScore: s?.score,
+  };
+
+  return hit;
+}
+
+/** The share of its fused rank a memory keeps: at least 70%, down to it as it ages (mnemopi `core/beam/recall.ts`). */
+function kept({ l, f, s, n }: Found, now: number): number {
+  const writtenAt = f?.lastObservedAt ?? n?.at ?? l?.writtenAt ?? s?.writtenAt;
+
+  return 0.7 + 0.3 * survival(memoryKind(f, n), writtenAt === undefined ? null : now - writtenAt);
 }
 
 /** What a recalled memory is, which decides how fast it ages. */

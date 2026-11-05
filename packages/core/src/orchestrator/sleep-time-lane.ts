@@ -26,7 +26,7 @@ const SETTLED_AT = 'settled';
 const CLOSED_AT = 'closed';
 
 /** Each note a pass folded into facts, by its stamp and text: a note is folded once, whenever it lands, and a note
- *  forgotten or rewritten takes its tombstone with it at the next pass. */
+ *  forgotten or rewritten takes its tombstone with it at the next pass that folds one. */
 const NOTE_FOLDED = 'sleep_time_note';
 
 /** The notes one pass folds, oldest first: a workspace with years of them drains over its passes. */
@@ -308,7 +308,8 @@ export class SleepTimeLane {
 
         for (const note of folded) recordEffectDone(this.deps.sql, this.deps.actor, { scope: NOTE_FOLDED, key: note });
 
-        if (kept !== null) retainEffectsDone(this.deps.sql, this.deps.actor, NOTE_FOLDED, kept.live);
+        // Pruned as tombstones are added, so a pass that folds nothing writes nothing (a turn's statement budget).
+        if (kept !== null && kept.keys.length > 0) retainEffectsDone(this.deps.sql, this.deps.actor, NOTE_FOLDED, kept.live);
 
         for (const [index, proposal] of proposals.entries()) {
           void this.deps.sql`INSERT INTO account_proposal_outbox (delivery, proposal_json)
