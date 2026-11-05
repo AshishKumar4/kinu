@@ -127,6 +127,16 @@ export function observe<A>(program: Effect.Effect<A, DevboxError>, observer: { r
 }
 
 /** A start from stopped its host refused (`Devbox.admitStart`): the door that asked fails in the host's words. */
+/** Ends the caller with `failure`, through the failure channel, as a promise-facing method of the box answers it. */
+export function refuse(refusal: DevboxError): never {
+  return settleSync(Effect.fail(refusal));
+}
+
+/** Ends the caller with what an operation threw, unchanged (`caught`), after the caller has answered for it. */
+export function rethrow(thrown: { readonly cause: unknown }): never {
+  return settleSync(Effect.die(thrown.cause));
+}
+
 export function refuseStart(reason: string): never {
   return settleSync(Effect.fail(new DevboxError('refused', reason)));
 }

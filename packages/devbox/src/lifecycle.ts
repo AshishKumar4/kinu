@@ -1,7 +1,7 @@
 /** Pure decisions: nothing here touches a container, a bucket or a clock. */
 
 import * as v from 'valibot';
-import { caught, devboxFailure, startOverrun } from './errors';
+import { caught, devboxFailure, refuse, rethrow, startOverrun } from './errors';
 
 import type { StoredValue } from './storage';
 
@@ -161,11 +161,11 @@ async function withContainerStartDeadline<T>(
   const budgetMs = budget.remainingMs();
   const raced = await raceAllowance(budgetMs, work, onOverrun, budget.clock);
 
-  if (raced.kind === 'late') throw startOverrun(label, budgetMs);
+  if (raced.kind === 'late') refuse(startOverrun(label, budgetMs));
 
   // A real failure is rethrown unwrapped so the attach's own error reaches the taxonomy
   // unchanged.
-  if (raced.kind === 'failed') throw raced.cause;
+  if (raced.kind === 'failed') rethrow(raced);
 
   return raced.value;
 }

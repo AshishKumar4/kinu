@@ -70,7 +70,7 @@ import {
 } from './lifecycle';
 import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, type ResourceScope } from './operation-lanes';
 import { SupervisedProcesses, type EndTold } from './supervised-processes';
-import { DevboxError, attempt, attemptSync, caught, hold, whenLost, refuseStart, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
+import { DevboxError, attempt, attemptSync, caught, hold, refuse, rethrow, whenLost, refuseStart, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
@@ -973,7 +973,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async #startNative(inputs: StartInputs, source: StartSource | undefined): Promise<void> {
-    if (this.#closed) throw new DevboxError("io", DESTROYED_START);
+    if (this.#closed) refuse(new DevboxError("io", DESTROYED_START));
     const container = this.#container();
     const generation = this.#generation;
     // No await separates teardown admission from the platform start. Native exec never starts one.
@@ -1327,7 +1327,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     );
     this.#invalidateGeneration();
     await this.#armStartup();
-    throw new DevboxError("io", 'this devbox is not ready: the restored container was replaced; a startup is armed');
+    refuse(new DevboxError("io", 'this devbox is not ready: the restored container was replaced; a startup is armed'));
   }
 
   /** The kernel's boot id, through the reader the process fences use: one identity per container. */
@@ -1453,7 +1453,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
           await this.#startContainer();
 
-          if (this.#restoration.phase === 'unattached') throw new DevboxError("io", this.#restoration.reason);
+          if (this.#restoration.phase === 'unattached') refuse(new DevboxError("io", this.#restoration.reason));
         });
       } finally {
         this.#trace('startup.callback.exit', { generation: this.#generation, ms: Date.now() - since, phase: this.#restoration.phase });
@@ -1629,7 +1629,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         const claim = await this.#claimRecovery();
 
         if (!claim.admit || !this.#owns(generation)) {
-          throw new DevboxError("io", 'attached-container repair could not claim recovery');
+          refuse(new DevboxError("io", 'attached-container repair could not claim recovery'));
         }
 
         const repaired = await caught(async () => {
@@ -1640,7 +1640,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         if ('cause' in repaired) {
           await this.#recover(generation, claim, repaired);
-          throw repaired.cause;
+          rethrow(repaired);
         }
       });
     });
@@ -1835,7 +1835,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     });
 
     if ('cause' in destroyed) {
-      if (!this.#owns(replacing)) throw destroyed.cause;
+      if (!this.#owns(replacing)) rethrow(destroyed);
       // A failed destroy leaves the abandoned work running, so keep refusing even though
       // `#invalidateGeneration` made the box look ready; attaching over it is the overlap.
       await this.#settle({
@@ -1844,7 +1844,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         // Terminal: the abandoned work still runs there. Only a caller asking by name may attach.
         retry: false,
       });
-      throw destroyed.cause;
+      rethrow(destroyed);
     }
 
     console.error(
@@ -1862,9 +1862,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
 
     if (this.ctx.container?.running !== true) return;
-    throw new DevboxError("io", `the container still reported itself running ${String(CONTAINER_STOP_ATTEMPTS)} probes `
+    refuse(new DevboxError("io", `the container still reported itself running ${String(CONTAINER_STOP_ATTEMPTS)} probes `
     + `after it acknowledged the stop (${String(CONTAINER_STOP_ATTEMPTS * CONTAINER_STOP_INTERVAL_MS)}ms); `
-    + 'refusing to treat the identity as gone', );
+    + 'refusing to treat the identity as gone'));
   }
 
   /** A port is exposed only once its listener answers; each failure is recorded and the phase continues. */
@@ -2132,7 +2132,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#trace('readiness.armed', { phase: this.#restoration.phase });
 
     if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
-      throw new DevboxError('refused', terminalRefusal(this.#restoration.reason));
+      refuse(new DevboxError('refused', terminalRefusal(this.#restoration.reason)));
     }
 
     return {
@@ -2165,7 +2165,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const container = this.ctx.container;
 
     if (readiness.kind === 'pending' || container?.running !== true) {
-      throw new DevboxError("io", readiness.kind === 'pending' ? readiness.reason : 'this devbox is not ready: its container stopped after it was admitted');
+      refuse(new DevboxError("io", readiness.kind === 'pending' ? readiness.reason : 'this devbox is not ready: its container stopped after it was admitted'));
     }
 
     // Every operation route and only callers pass here (maintenance uses `#rawExec` and
@@ -2464,7 +2464,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
             await this.#startContainer();
 
             if (this.#admission() === undefined) {
-              throw new DevboxError("io", `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`);
+              refuse(new DevboxError("io", `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`));
             }
           }
 
@@ -3100,7 +3100,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       case INCIDENT_CALLBACK: await this.devboxIncidents(); break;
       case GOLDEN_BUILD_CALLBACK: await this.devboxGolden(false); break;
       case GOLDEN_REFRESH_CALLBACK: await this.devboxGolden(true); break;
-      default: throw new DevboxError("io", `unknown devbox alarm: ${callback}`);
+      default: refuse(new DevboxError("io", `unknown devbox alarm: ${callback}`));
     }
   }
   /** An exec on a stopped container would start a blank one, and save its empty disk. */
@@ -3858,7 +3858,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const container = this.ctx.container;
 
     // A dev server runs no container (vite.config.ts), so a box there is refused once rather than retried.
-    if (container === undefined) throw new DevboxError('configuration', NO_CONTAINER);
+    if (container === undefined) refuse(new DevboxError('configuration', NO_CONTAINER));
 
     return container;
   }
@@ -3907,7 +3907,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     const ended = await caught(async () => Promise.all([sending, ending]));
 
-    if ('cause' in ended && container.running) throw ended.cause;
+    if ('cause' in ended && container.running) rethrow(ended);
 
     // The box ended this container itself: the next one is a start, not a replacement.
     await this.ctx.storage.delete(BOOT_ID_KEY);
@@ -4329,7 +4329,7 @@ async function admissionFailureOf(container: Container, signal: AbortSignal): Pr
 async function firstExec(container: Container, signal: AbortSignal): Promise<void> {
   const failed = await admissionFailureOf(container, signal);
 
-  if (failed !== undefined) throw failed.failure;
+  if (failed !== undefined) rethrow({ cause: failed.failure });
 }
 
 /** A locale that reads text as UTF-8; the C one the box starts in reads a byte past ASCII as an invalid sequence. */
