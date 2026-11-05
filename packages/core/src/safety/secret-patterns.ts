@@ -114,7 +114,9 @@ export const SECRET_PATTERNS: readonly SecretPattern[] = [
     // Fragments (8+ hex after a prefix) count. An ellipsis is benign only
     // directly after the prefix, i.e. prose naming the shape.
     id: 'kinu-token',
-    regex: /\bp(?:ta|tc|dt)_[0-9a-f]{8,}/g,
+    // A whole `pta_`/`ptc_` token is its id, then `_` and its secret (base36 or base64url): matched to its end, so a mask
+    // never leaves the secret behind the id.
+    regex: /\bp(?:ta|tc|dt)_[0-9a-f]{8,}(?:_[A-Za-z0-9_-]+)?/g,
     whole: /\bp(?:ta|tc|dt)_[0-9a-f]{32}_[A-Za-z0-9_-]{20,}/g,
     benign: /<your-|\bp(?:ta|tc|dt)_(?:\.\.\.|…)/,
     message: 'Kinu access/CLI/device token (rotate it: a printed-once value that reached a file is compromised)',
