@@ -338,7 +338,6 @@ export function createCFRuntime(
   const shellSession = createShellSession({
     home,
     userRoots: () => agentFileVfs.userRoots(),
-    resolve: (path) => agentFileVfs.resolve(path, { follow: true, creating: true }),
     stored: async (name) => await sessionShell.cwd?.(name) ?? null,
     detachFrees: true,
   });

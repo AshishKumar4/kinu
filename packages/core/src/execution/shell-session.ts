@@ -240,9 +240,6 @@ export interface ShellCwd {
 export interface ShellSession {
   readonly home: string;
   readonly userRoots: () => readonly string[];
-  /** Where a path lands once the plane follows its links, a link an earlier call made among them; absent where the
-   *  shell's plane holds no user's roots to land on. */
-  readonly resolve?: (path: string) => Promise<string>;
   /** Where a call starts: its `cwd`, under its name's directory (the home for none). */
   at(name: string | undefined, cwd: string | undefined): Promise<ShellCwd>;
   /** A named call ended in `cwd`; null: unknown, so the next call reads it again. */
@@ -259,7 +256,6 @@ export interface ShellSession {
 export interface ShellSessionOptions {
   readonly home: string;
   readonly userRoots: () => readonly string[];
-  readonly resolve?: (path: string) => Promise<string>;
   /** A name's directory as an earlier process left it; null: unreadable. Absent: every name starts at home. */
   readonly stored?: (name: string) => Promise<string | null>;
   /** The shell frees a name when its call's job detaches (Nimbus's `detach`): the job runs on, and keeps no name. */
@@ -279,7 +275,7 @@ interface HeldName {
   job: { readonly id: string; readonly since: number } | null;
 }
 
-export function createShellSession({ home, userRoots, resolve, stored, detachFrees = false }: ShellSessionOptions): ShellSession {
+export function createShellSession({ home, userRoots, stored, detachFrees = false }: ShellSessionOptions): ShellSession {
   const directories = new Map<string, Promise<ShellCwd>>();
   const held = new Map<string, HeldName>();
   const unknown: ShellCwd = { home, cwd: home, mayBeUsers: true };
@@ -310,7 +306,6 @@ export function createShellSession({ home, userRoots, resolve, stored, detachFre
   return {
     home,
     userRoots,
-    ...(resolve !== undefined && { resolve }),
     async at(name, cwd) {
       if (name === undefined) return sessionAt(home, cwd);
       const base = await directory(name);

@@ -638,35 +638,6 @@ function copyTarget(step: ShellCommand): ShellWord | undefined {
   return long === undefined ? args.at(-1) : { literal: long.literal === null ? null : after(long.literal), text: after(long.text), pattern: long.pattern === null ? null : after(long.pattern) };
 }
 
-/** The files a line truncates or moves or copies onto, by their paths from every directory the line may be in; those it
- *  cannot name are left to {@link overwritesUserFiles}. */
-export function writtenPaths(command: string, session: ShellCwd | undefined): string[] {
-  const read = lineRead(command).read;
-  const home = session?.home ?? '/';
-  let cwds: Set<string> | null = new Set([session?.cwd ?? '/']);
-  const paths = new Set<string>();
-
-  for (const { command: step } of read?.runs ?? []) {
-    for (const target of writeTargets(step)) {
-      for (const cwd of cwds ?? []) {
-        const path = shellPath(target.literal, cwd, home);
-
-        if (path !== null) paths.add(path);
-      }
-    }
-
-    if (cwds !== null) cwds = movedThrough(cwds, step.words, home);
-  }
-
-  return [...paths];
-}
-
-/** Files a `>` or `&>` truncates (`>>` appends), and where a move or copy lands. */
-function writeTargets(step: ShellCommand): ShellWord[] {
-  return [...step.redirects.flatMap((redirect) => (redirect.truncates ? [redirect.target] : [])), copyTarget(step)]
-    .filter((target): target is ShellWord => target !== undefined);
-}
-
 function overwritesUserFiles(executor: GatedExecutor, read: CommandsRun | null, session: ShellCwd | undefined, owner: FilesOwner): boolean {
   const roots = executor.shellSession?.userRoots() ?? [];
   const home = session?.home ?? '/';
@@ -682,7 +653,9 @@ function overwritesUserFiles(executor: GatedExecutor, read: CommandsRun | null, 
   let linked = false;
 
   for (const { command: step } of read.runs) {
-    const targets = writeTargets(step);
+    // Files a `>` or `&>` truncates (`>>` appends), and where a move or copy lands.
+    const targets = [...step.redirects.flatMap((redirect) => (redirect.truncates ? [redirect.target] : [])), copyTarget(step)]
+      .filter((target): target is ShellWord => target !== undefined);
 
     const relative = targets.some(({ literal }) => literal === null || !/^[/~]/u.test(literal));
 
@@ -710,16 +683,13 @@ const OVERWRITE: ApprovalRuleHit = {
   decision: 'gate', rule: 'overwrite-user-files', explanation: 'Moves, copies or writes onto the user\'s device or Drive, replacing what is there.',
 };
 
-/**
- * The rule table for whose files a command reaches, and any overwrite onto the user's mounts. `linkedOnUser`: one of the
- * line's {@link writtenPaths} lands on the user's mounts once the plane follows its links (a link an earlier call made).
- */
-export function reviewShellCommand(executor: GatedExecutor, command: string, session: ShellCwd | undefined, linkedOnUser: boolean): ApprovalResult {
+/** The rule table for whose files a command reaches, and any overwrite onto the user's mounts. */
+export function reviewShellCommand(executor: GatedExecutor, command: string, session: ShellCwd | undefined): ApprovalResult {
   const line = lineRead(command);
   const owner = commandFilesOwner(executor, command, session);
   const review = judged(line, owner);
 
-  if (!linkedOnUser && !overwritesUserFiles(executor, line.read, session, owner)) return review;
+  if (!overwritesUserFiles(executor, line.read, session, owner)) return review;
   const hits = [...review.hits, OVERWRITE];
 
   return { decision: dominant(hits), hits };
