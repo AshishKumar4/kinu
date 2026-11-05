@@ -346,7 +346,9 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
       const rows = ${PARKED_ROWS};
 
       if (rows.length === 2) {
-        window.flowStack = { rows, words: document.querySelector('${ATTENTION_CARD}')?.textContent ?? '' };
+        const card = document.querySelector('${ATTENTION_CARD}');
+
+        window.flowStack = { rows, card: card?.getAttribute('data-attention-card') ?? '', words: card?.textContent ?? '' };
 
         return true;
       }
@@ -355,12 +357,18 @@ export async function approvalsStackAtTheComposer(target: FlowTarget): Promise<A
 
       return false;
     })()`);
-    const { rows: stacked, words: openWords } = v.parse(v.object({ rows: v.tuple([v.string(), v.string()]), words: v.string() }), await page.evaluate('window.flowStack'));
+
+    const { rows: stacked, card, words: openWords } = v.parse(
+      v.object({ rows: v.tuple([v.string(), v.string()]), card: v.string(), words: v.string() }), await page.evaluate('window.flowStack'),
+    );
+
     const remaining = `${STACK_KEYS}.filter((key) => ${JSON.stringify(stacked)}.includes(key))`;
 
-    // The older unticked, the newer approved alone.
-    await untickOwnRow(page, stacked[0], stacked[1].slice('action:'.length));
-    await answerStackCard(page, stacked[0], 'Approve 1');
+    // The older unticked, the newer approved alone. The batch card goes by the key of whichever of its rows opened it
+    // (the newest, or the one a click behind chose), so it is found by the key it had, never by its first row's: on
+    // production 2026-11-05 (80d8a9cbe) a card behind was chosen by its older row, and a wait for the newer's waited out.
+    await untickOwnRow(page, card, stacked[1].slice('action:'.length));
+    await answerStackCard(page, card, 'Approve 1');
     // The batch card stands for both under one key until the answer lands, so the other is only alone once it ends.
     await until(page, "the flow's other card remains", `${PARKED_ROWS}.length < 2 && ${remaining}.length === 1`);
     const afterFirst = v.parse(v.array(v.string()), await page.evaluate(remaining));
