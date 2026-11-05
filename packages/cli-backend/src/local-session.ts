@@ -534,7 +534,7 @@ export class LocalAgentSession {
       directory: localActorDirectory(this.rt.actor).directory,
       installedBuild: null,
       answered: (turn) => new TurnReports(this.rt.storage.sql).answered(turn),
-      actorRuntimeFor: () => this.rt,
+      actorRuntimeFor: () => Effect.succeed(this.rt),
       parentRuntimeFor: () => this.rt,
       sessionFor: () => ({ read: () => this, turnInFlight: () => this.turnInFlight(), closed: () => this.closed() }),
       oneShot: this.oneShot,

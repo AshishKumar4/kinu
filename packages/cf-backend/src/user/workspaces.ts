@@ -3,7 +3,7 @@ import {
   objectNamed,
   autoTitleMayReplace, nameOriginOf, type NameOrigin, WORKSPACE_KEYED_ROWS, commitWorkspaceCapability, freshWorkspaceCapability, revokeWorkspaceCapability, workspaceCapabilityHash, type UserCaller, validateWorkspaceName, sanitizeWorkspaceLogoSvg, resolveWorkspaceTitle, WorkspaceOverviewSchema, type WorkspaceOverview, type RosterPage, type WorkspaceEntry, workspaceTitleProblem,
 } from '@kinu.run/core';
-import { confirmedDeletion, diagnostics, joining, KinuError, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
+import { attemptInItsWords, confirmedDeletion, diagnostics, flight, joining, KinuError, logged, settle, settleLogged, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
 import { ASSISTANT_CONFIG_KEY, rosterCounts, rosterPage, rosterRow, rosterSockets, sendRosterFrame, type RosterQuery } from './roster';
@@ -34,11 +34,9 @@ export type WorkspaceRegistration =
 
 /** Publish of something that is not an open reservation. A fork transfer treats it as a rollback
  * trigger, not a transport fault; crosses the DO RPC boundary as its message. */
-class WorkspaceReservationNotPendingError extends Error {
-  constructor(name: string, why: string) {
-    super(`Workspace "${name}" cannot be published: ${why}.`);
-    this.name = 'WorkspaceReservationNotPendingError';
-  }
+/** A publication of anything but an open reservation of that name and timestamp. */
+function reservationNotPending(name: string, why: string): KinuError {
+  return new KinuError('denied', `Workspace "${name}" cannot be published: ${why}.`);
 }
 
 export interface UserWorkspacesHost extends Pick<UserObjectHost, 'ctx' | 'env' | 'requireTier' | 'sqlx' | 'sessionStands'> {
@@ -71,41 +69,42 @@ export class UserWorkspaces {
 
   /** Provisioning in flight, per workspace. A DO does not serialize across an RPC await, so
    *  coalescing here keeps concurrent first-touches from installing tokens from different mints. */
-  private readonly provisioning = joining<string, void>();
+  /** One minting of a workspace's identity at a time, every asker joining it. */
+  private readonly provisioning = flight((workspaceName: string) => Effect.gen({ self: this }, function* () {
+    const { token, tokenHash } = yield* Effect.promise(() => freshWorkspaceCapability());
+
+    // Admits fork reservations, refuses rows mid-teardown and names absent from the registry.
+    if (!commitWorkspaceCapability(this.host.ctx.storage.sql, workspaceName, tokenHash)) {
+      return yield* new KinuError('unavailable', `Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
+    }
+
+    const workspace = objectNamed(this.host.env.OrchestratorAgent, workspaceName);
+    yield* attemptInItsWords('unavailable', () => workspace.installWorkspaceCapability(token));
+  }), { key: (workspaceName) => workspaceName });
 
   /**
    * Reconcile a workspace's identity; any mismatch with `presentedHash` is repaired by minting anew.
    * The only ungated method (it bootstraps identity), so it opens the analytics window itself.
    */
-  async ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
-    openAnalyticsWindow(this.host.env);
-    validateWorkspaceName(workspaceName);
+  ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      openAnalyticsWindow(this.host.env);
+      validateWorkspaceName(workspaceName);
 
-    if (!this.workspaceRegistered(workspaceName)) {
-      throw notInRegistry(`Workspace ${workspaceName} is not in your registry.`);
-    }
+      if (!this.workspaceRegistered(workspaceName)) return yield* notInRegistry(`Workspace ${workspaceName} is not in your registry.`);
 
-    return this.reconcileWorkspaceCapability(workspaceName, presentedHash);
+      yield* this.reconcileWorkspaceCapability(workspaceName, presentedHash);
+    }));
   }
 
   /**
    * Shared body for {@link ensureWorkspaceCapability} and {@link publishWorkspaceReservation}.
    * Admission is re-checked in the same synchronous turn as the write, so a delete during minting wins.
    */
-  private async reconcileWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
-    if (presentedHash && presentedHash === workspaceCapabilityHash(this.host.ctx.storage.sql, workspaceName)) return;
+  private reconcileWorkspaceCapability(workspaceName: string, presentedHash: string | null): Effect.Effect<void, KinuError> {
+    if (presentedHash && presentedHash === workspaceCapabilityHash(this.host.ctx.storage.sql, workspaceName)) return Effect.void;
 
-    return this.provisioning(workspaceName, async () => {
-      const { token, tokenHash } = await freshWorkspaceCapability();
-
-      // Admits fork reservations, refuses rows mid-teardown and names absent from the registry.
-      if (!commitWorkspaceCapability(this.host.ctx.storage.sql, workspaceName, tokenHash)) {
-        throw new KinuError('unavailable', `Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
-      }
-
-      const workspace = objectNamed(this.host.env.OrchestratorAgent, workspaceName);
-      await workspace.installWorkspaceCapability(token);
-    });
+    return this.provisioning(workspaceName);
   }
 
   /** Same predicate as `listWorkspaces`' `total`: pending reservations and teardowns don't count. */
@@ -118,13 +117,17 @@ export class UserWorkspaces {
 
   async listWorkspaces(caller: UserCaller, query?: RosterQuery): Promise<RosterPage> {
     const resolved = await this.host.requireTier(caller, 'workspaces.read');
+
     // This read is the retry for stale fork reservations nothing else frees; an unfinished teardown is its own job's.
-    await this.reclaimStaleForkReservations();
+    return settle(Effect.map(this.reclaimStaleForkReservations(), () => this.rosterFor(resolved.kind, query)));
+  }
+
+  private rosterFor(kind: string, query?: RosterQuery): RosterPage {
     this.host.nudgeUnreported();
     const page = rosterPage(this.host.ctx.storage.sql, query);
 
     // Never whom siblings share with.
-    return resolved.kind === 'owner_session' ? page : {
+    return kind === 'owner_session' ? page : {
       ...page, entries: page.entries.map((entry) => ({ ...entry, overview: entry.overview === null ? null : { ...entry.overview, shares: [] } })),
     };
   }
@@ -154,7 +157,7 @@ export class UserWorkspaces {
     validateWorkspaceName(name);
 
     if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only push its own overview.`);
+      return settle(Effect.fail(new KinuError('denied', `Workspace "${resolved.workspace}" may only push its own overview.`)));
     }
 
     const parsed = v.parse(WorkspaceOverviewSchema, overview);
@@ -193,12 +196,20 @@ export class UserWorkspaces {
   async registerWorkspace(
     caller: UserCaller, name: string, displayName?: string, from?: WorkspaceRegistrationSource,
   ): Promise<WorkspaceRegistration> {
-    const { purpose, nameOrigin } = from ?? {};
     await this.host.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
-    await this.requireNotDeleting(name);
+
     // The account's stores read where they live if stale, before the turn whose read and write must stay one.
-    await this.host.limits.refreshStorage();
+    return settle(Effect.andThen(this.requireNotDeleting(name), Effect.promise(async () => {
+      await this.host.limits.refreshStorage();
+
+      return this.registerNow(name, displayName, from);
+    })));
+  }
+
+  /** The registration's one synchronous turn, its read and its write, then the roster mark. */
+  private async registerNow(name: string, displayName?: string, from?: WorkspaceRegistrationSource): Promise<WorkspaceRegistration> {
+    const { purpose, nameOrigin } = from ?? {};
     const now = Date.now();
 
     const existing = this.host.sqlx<{
@@ -267,57 +278,67 @@ export class UserWorkspaces {
   async reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{ entry: WorkspaceEntry; reserved: boolean }> {
     await this.host.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
-    await this.requireNotDeleting(name);
-    await this.host.limits.refreshStorage();
 
-    const existing = this.host.sqlx<{
-      name: string;
-      display_name: string;
-      created_at: number;
-      last_visited: number;
-      create_pending: number;
-      fork_lease_expires_at: number | null;
-    }>(
-      `SELECT name, display_name, created_at, last_visited,
-              create_pending, fork_lease_expires_at
-       FROM user_workspaces WHERE name = ?`,
-      name,
-    )[0];
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.requireNotDeleting(name);
+      yield* Effect.promise(() => this.host.limits.refreshStorage());
 
-    const abandoned = existing !== undefined
-      && existing.create_pending === 1
-      && (existing.fork_lease_expires_at ?? 0) <= Date.now();
+      return yield* this.reserveNow(name, displayName);
+    }));
+  }
 
-    if (abandoned) await this.reclaimForkReservation(name);
+  private reserveNow(name: string, displayName?: string): Effect.Effect<{ entry: WorkspaceEntry; reserved: boolean }, KinuError> {
+    return Effect.gen({ self: this }, function* () {
 
-    if (existing && !abandoned) {
+      const existing = this.host.sqlx<{
+        name: string;
+        display_name: string;
+        created_at: number;
+        last_visited: number;
+        create_pending: number;
+        fork_lease_expires_at: number | null;
+      }>(
+        `SELECT name, display_name, created_at, last_visited,
+                create_pending, fork_lease_expires_at
+         FROM user_workspaces WHERE name = ?`,
+        name,
+      )[0];
+
+      const abandoned = existing !== undefined
+        && existing.create_pending === 1
+        && (existing.fork_lease_expires_at ?? 0) <= Date.now();
+
+      if (abandoned) yield* this.reclaimForkReservation(name);
+
+      if (existing && !abandoned) {
+        return {
+          entry: {
+            name: existing.name,
+            displayName: existing.display_name,
+            createdAt: existing.created_at,
+            lastVisited: existing.last_visited,
+          },
+          reserved: false,
+        };
+      }
+
+      // A fork's new workspace is a new one: asked as a create is (registerWorkspace).
+      this.host.limits.admitWorkspace();
+      const now = Date.now();
+      const explicit = displayName?.trim() ?? '';
+      const title = resolveWorkspaceTitle({ explicit, slug: name });
+      this.host.sqlx(
+        `INSERT INTO user_workspaces
+           (name, display_name, name_origin, created_at, last_visited, create_pending, fork_lease_expires_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?)`,
+        name, title, explicit !== '' ? 'user' : 'auto', now, now, now + FORK_RESERVATION_LEASE_MS,
+      );
+
       return {
-        entry: {
-          name: existing.name,
-          displayName: existing.display_name,
-          createdAt: existing.created_at,
-          lastVisited: existing.last_visited,
-        },
-        reserved: false,
+        entry: { name, displayName: title, createdAt: now, lastVisited: now },
+        reserved: true,
       };
-    }
-
-    // A fork's new workspace is a new one: asked as a create is (registerWorkspace).
-    this.host.limits.admitWorkspace();
-    const now = Date.now();
-    const explicit = displayName?.trim() ?? '';
-    const title = resolveWorkspaceTitle({ explicit, slug: name });
-    this.host.sqlx(
-      `INSERT INTO user_workspaces
-         (name, display_name, name_origin, created_at, last_visited, create_pending, fork_lease_expires_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?)`,
-      name, title, explicit !== '' ? 'user' : 'auto', now, now, now + FORK_RESERVATION_LEASE_MS,
-    );
-
-    return {
-      entry: { name, displayName: title, createdAt: now, lastVisited: now },
-      reserved: true,
-    };
+    });
   }
 
   /**
@@ -339,28 +360,26 @@ export class UserWorkspaces {
   }
 
   /** Tear down the target DO of a lapsed reservation, then drop the row; teardown is idempotent. */
-  private async reclaimForkReservation(name: string): Promise<void> {
+  private reclaimForkReservation(name: string): Effect.Effect<void, KinuError> {
     const ownerUserId = this.host.ctx.id.name ?? '';
 
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
       // Without the owner id the destroy cannot be authorized; the row keeps its lapsed lease
       // and the next attempt retries.
-      diagnostics.failure('workspace.fork_reservation_unowned', toKinuError({
-        doing: 'reclaiming a fork reservation whose transfer stopped',
-        cause: new Error('this user object has no user id to authorize the destroy with'),
-        otherwise: 'denied',
-      }), { workspace: name });
-      throw new KinuError('unavailable', `Workspace "${name}" holds an abandoned fork reservation that cannot be reclaimed.`);
+      diagnostics.failure('workspace.fork_reservation_unowned', new KinuError('denied',
+        'reclaiming a fork reservation whose transfer stopped: this user object has no user id to authorize the destroy with'), { workspace: name });
+
+      return Effect.fail(new KinuError('unavailable', `Workspace "${name}" holds an abandoned fork reservation that cannot be reclaimed.`));
     }
 
-    await this.tearDownWorkspace(name, ownerUserId);
+    return attemptInItsWords('io', () => this.tearDownWorkspace(name, ownerUserId));
   }
 
   /**
    * Reclaim lapsed reservations. Driven by the owner's reads, and the roster hides
    * `create_pending` rows.
    */
-  private async reclaimStaleForkReservations(): Promise<void> {
+  private reclaimStaleForkReservations(): Effect.Effect<void> {
     const stale = this.host.sqlx<{ name: string }>(
       `SELECT name FROM user_workspaces
        WHERE create_pending = 1 AND delete_pending = 0
@@ -368,17 +387,11 @@ export class UserWorkspaces {
       Date.now(),
     );
 
-    for (const row of stale) {
-      try {
-        await this.reclaimForkReservation(row.name);
-      } catch (err) {
-        diagnostics.failure('workspace.fork_reservation_reclaim_failed', toKinuError({
-          doing: 'reclaiming a fork reservation whose transfer stopped renewing it',
-          cause: err,
-          otherwise: 'io',
-        }), { workspace: row.name });
-      }
-    }
+    return Effect.forEach(stale, (row) => Effect.catch(this.reclaimForkReservation(row.name), (failure) => Effect.sync(() => {
+      diagnostics.failure('workspace.fork_reservation_reclaim_failed', toKinuError({
+        doing: 'reclaiming a fork reservation whose transfer stopped renewing it', cause: failure, otherwise: 'io',
+      }), { workspace: row.name });
+    })), { discard: true });
   }
 
   /** Commit a reservation; the only place `create_pending` is cleared. */
@@ -399,25 +412,22 @@ export class UserWorkspaces {
       name, createdAt,
     )[0]);
 
-    if (!reserved.success) {
-      throw new WorkspaceReservationNotPendingError(name, 'no reservation of that name is open under that timestamp');
-    }
+    if (!reserved.success) return settle(Effect.fail(reservationNotPending(name, 'no reservation of that name is open under that timestamp')));
 
-    if (reserved.output.create_pending === 0) {
-      throw new WorkspaceReservationNotPendingError(name, 'it is already published');
-    }
+    if (reserved.output.create_pending === 0) return settle(Effect.fail(reservationNotPending(name, 'it is already published')));
 
     // Install (cross-DO await) must precede the transaction: `transactionSync` commits when its
     // synchronous body returns. A failed install leaves the row unpublished and releasable.
-    await this.reconcileWorkspaceCapability(name, capabilityHash);
-    this.host.ctx.storage.transactionSync(() => {
-      this.host.ctx.storage.sql.exec(
-        `UPDATE user_workspaces SET create_pending = 0, fork_lease_expires_at = NULL
-         WHERE name = ? AND created_at = ? AND create_pending = 1`,
-        name, createdAt,
-      );
-    });
-    this.rosterChanged(name);
+    return settle(Effect.map(this.reconcileWorkspaceCapability(name, capabilityHash), () => {
+      this.host.ctx.storage.transactionSync(() => {
+        this.host.ctx.storage.sql.exec(
+          `UPDATE user_workspaces SET create_pending = 0, fork_lease_expires_at = NULL
+           WHERE name = ? AND created_at = ? AND create_pending = 1`,
+          name, createdAt,
+        );
+      });
+      this.rosterChanged(name);
+    }));
   }
 
   /** Drop only the exact row a failed fork reservation inserted; never contacts the target DO
@@ -484,7 +494,7 @@ export class UserWorkspaces {
     await this.host.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) return settle(Effect.fail(new KinuError('bad_input', 'invalid owner user id')));
 
     if (this.host.sqlx(`UPDATE user_workspaces SET delete_pending = 1 WHERE name = ? RETURNING name`, name).length === 0) return;
     this.releaseAssistant(name);
@@ -517,7 +527,7 @@ export class UserWorkspaces {
     await this.host.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
+    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) return settle(Effect.fail(new KinuError('bad_input', 'invalid owner user id')));
     await this.tearDownWorkspace(name, ownerUserId);
   }
 
@@ -602,35 +612,29 @@ export class UserWorkspaces {
    * runs again first, so a transient failure does not dead-end it until its job comes due; no other name's is touched,
    * since a sweep read before it waits could tear down one recreated meanwhile.
    */
-  private async requireNotDeleting(name: string): Promise<void> {
+  private requireNotDeleting(name: string): Effect.Effect<void, KinuError> {
     const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
 
-    // A teardown still running holds the name to its last step, past its row's removal; one that failed left it marked.
-    await Promise.allSettled([this.tearingDown.inFlight(name)]);
+    return Effect.gen({ self: this }, function* () {
+      // A teardown still running holds the name to its last step, past its row's removal; one that failed left it marked.
+      yield* Effect.promise(() => Promise.allSettled([this.tearingDown.inFlight(name)]));
 
-    if (this.host.sqlx(marked, name).length === 0) return;
-    const ownerUserId = this.host.ctx.id.name ?? '';
+      if (this.host.sqlx(marked, name).length === 0) return;
+      const ownerUserId = this.host.ctx.id.name ?? '';
 
-    if (/^[a-f0-9]{32}$/.test(ownerUserId)) {
-      try {
-        await this.tearDownWorkspace(name, ownerUserId);
-      } catch (err) {
-        diagnostics.failure('workspace.cleanup_retry_failed', toKinuError({
-          doing: 'finishing a workspace teardown a previous attempt left unfinished',
-          cause: err,
-          otherwise: 'io',
-        }), { workspace: name });
+      if (/^[a-f0-9]{32}$/.test(ownerUserId)) {
+        yield* logged('workspace.cleanup_retry_failed', {
+          doing: 'finishing a workspace teardown a previous attempt left unfinished', otherwise: 'io',
+        }, () => this.tearDownWorkspace(name, ownerUserId), { workspace: name });
+      } else {
+        diagnostics.failure('workspace.cleanup_unowned', new KinuError('denied',
+          'resuming a pending workspace teardown: this user object has no user id to authorize the destroy with'), { workspace: name });
       }
-    } else {
-      diagnostics.failure('workspace.cleanup_unowned', toKinuError({
-        doing: 'resuming a pending workspace teardown',
-        cause: new Error('this user object has no user id to authorize the destroy with'),
-        otherwise: 'denied',
-      }), { workspace: name });
-    }
 
-    if (this.host.sqlx(marked, name).length === 0) return;
-    throw new KinuError('unavailable', `Workspace "${name}" is still being deleted; its teardown has not finished.`);
+      if (this.host.sqlx(marked, name).length === 0) return;
+
+      return yield* new KinuError('unavailable', `Workspace "${name}" is still being deleted; its teardown has not finished.`);
+    });
   }
 
   /**

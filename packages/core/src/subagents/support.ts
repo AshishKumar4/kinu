@@ -337,22 +337,23 @@ export function admitSubagentReport(log: EventLog, input: {
   }));
 }
 
+/** A hirer's acts on its hires (core `hireLifecycle`), each failing as a typed refusal. */
 export interface SubagentRuntime {
-  spawn(input: SubagentSeed & { creationId: string }): Promise<ActorReference>;
-  cancelBirth(input: SubagentSeed & { creationId: string }): Promise<ActorReference>;
+  spawn(input: SubagentSeed & { creationId: string }): Effect.Effect<ActorReference, KinuError>;
+  cancelBirth(input: SubagentSeed & { creationId: string }): Effect.Effect<ActorReference, KinuError>;
   assign(name: string, input: {
     body: string;
     mode: WorkMode;
     deliverable?: string;
     inheritedContext?: SubagentInheritedContext;
     creationId?: string;
-  }): Promise<SubagentHandoff>;
-  status(name: string): Promise<SubagentLiveStatus>;
-  message(name: string, content: string, mode: WorkMode): Promise<SubagentHandoff>;
+  }): Effect.Effect<SubagentHandoff, KinuError>;
+  status(name: string): Effect.Effect<SubagentLiveStatus, KinuError>;
+  message(name: string, content: string, mode: WorkMode): Effect.Effect<SubagentHandoff, KinuError>;
   /** Called with `user` for an owner rename, which makes `planWorkspaceTitle`'s refusal durable. */
-  rename(name: string, displayName: string, nameOrigin: NameOrigin): Promise<void>;
+  rename(name: string, displayName: string, nameOrigin: NameOrigin): Effect.Effect<void, KinuError>;
   /** Without `interrupt`, retirement waits for the turn to settle. */
-  dismiss(name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference): Promise<SubagentDismissal>;
+  dismiss(name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference): Effect.Effect<SubagentDismissal, KinuError>;
 }
 
 /** Same default as `AgentConfigStore.getRoleSelection`. */
@@ -385,7 +386,7 @@ function statusView(
   if (roster.status === 'dismissed') return Effect.succeed({ roster, live: null });
 
   return Effect.catchCause(
-    Effect.map(Effect.promise(async () => runtime.status(roster.name)), (live): SubagentStatusView => ({ roster, live })),
+    Effect.map(runtime.status(roster.name), (live): SubagentStatusView => ({ roster, live })),
     (failed) => Effect.succeed<SubagentStatusView>({ roster, live: null, liveError: renderThrownChain({ cause: Cause.squash(failed) }) }),
   );
 }
@@ -549,7 +550,7 @@ export function createTeamToolDeps(deps: {
     // The child's own actor_config is the only naming authority.
     rename: (input) => settle(Effect.gen(function* () {
       const displayName = yield* requiredText(input.displayName, 'displayName');
-      yield* Effect.promise(() => deps.runtime.rename(input.name, displayName, 'user'));
+      yield* deps.runtime.rename(input.name, displayName, 'user');
       deps.rosterMoved();
 
       return {
@@ -584,7 +585,7 @@ export function createTeamToolDeps(deps: {
           if (deliverable) Object.assign(assignment, { deliverable });
 
           // No inherited context: later assignments add no new prefix.
-          const assigned = yield* Effect.promise(async () => deps.runtime.assign(input.name, assignment));
+          const assigned = yield* deps.runtime.assign(input.name, assignment);
           // Inside the rollback scope: this write compensates the transition, so its failure must restore `before` too.
           deps.roster.recordAssignmentEvent(input.name, assigned.eventId);
 
@@ -613,7 +614,7 @@ export function createTeamToolDeps(deps: {
         deps.roster.resumeAfterMessage(input.name);
 
         const handoff: SubagentHandoff = yield* Effect.catchCause(
-          Effect.promise(async () => deps.runtime.message(input.name, content, input.mode)),
+          deps.runtime.message(input.name, content, input.mode),
           rollback(before, deps.roster, 'subagent message'),
         );
 
@@ -645,11 +646,11 @@ export function createTeamToolDeps(deps: {
 
         if (keepHistory) {
           dismissal = yield* Effect.catchCause(
-            Effect.promise(async () => deps.runtime.dismiss(input.name, { keepHistory: true, interrupt: true }, reference)),
+            deps.runtime.dismiss(input.name, { keepHistory: true, interrupt: true }, reference),
             rollback(before, deps.roster, 'retained subagent dismissal'),
           );
         } else {
-          dismissal = yield* Effect.promise(async () => deps.runtime.dismiss(input.name, { keepHistory: false, interrupt: true }, reference));
+          dismissal = yield* deps.runtime.dismiss(input.name, { keepHistory: false, interrupt: true }, reference);
           deps.roster.removeActor(input.name, reference);
         }
 

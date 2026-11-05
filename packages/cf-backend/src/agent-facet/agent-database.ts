@@ -341,7 +341,7 @@ export class AgentDatabase {
       installedBuild: snapshot.installedBuild,
       workspace: snapshot.workspaceName,
       answered: (turn) => new TurnReports(this.sql).answered(turn),
-      runtimeFor: (bound) => this.runtime(bound, files),
+      runtimeFor: (bound) => Effect.sync(() => this.runtime(bound, files)),
       filesFor: async () => ({ vfs: files.agent(), artifactDirectory: snapshot.artifactDirectory }),
       scaffoldFor: async (bound) => ({ path: actorScaffoldPath(bound.record), vfs: files.state() }),
       loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent: null }),
