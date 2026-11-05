@@ -283,7 +283,7 @@ cliRoutes.post('/api/cli/workspaces/:name/connect-ticket', async (c) => {
   const cli = c.get('cli');
   const name = decodeURIComponent(rawParam(c, 'name'));
 
-  if (!(await cli.userDO.hasWorkspace(c.get('owner'), name))) return err(404, `Agent ${name} not found.`);
+  if (!(await cli.userDO.hasWorkspace(c.get('owner'), name))) return err(404, `Workspace ${name} is not in your registry.`);
 
   const issued = await cli.userDO.issueCliAgentConnectTicket(c.get('owner'), {
     userId: cli.userId,
@@ -763,6 +763,8 @@ case ":$PATH:" in
     profile=""
     shell_name="$(basename "\${SHELL:-}")"
     if [ "$shell_name" = "zsh" ]; then profile="$HOME/.zshrc";
+    # macOS terminals open login shells, which read .bash_profile and never .bashrc.
+    elif [ "$shell_name" = "bash" ] && [ "$(uname -s)" = "Darwin" ]; then profile="$HOME/.bash_profile";
     elif [ "$shell_name" = "bash" ]; then profile="$HOME/.bashrc";
     else profile="$HOME/.profile"; fi
     profile_line="export PATH=\\"$BIN_DIR:\\$PATH\\""
@@ -1135,6 +1137,10 @@ if [ "\${KINU_REFRESH_ONLY:-0}" = "1" ]; then
   [ -f "$CLI_DIR/cli.js" ] || die "No Kinu build is installed."
   exit 0
 fi
+
+# The deployment that served this launcher: the CLI's origin where neither KINU_ORIGIN nor a sign-in names one, so a
+# CLI installed from a deployment other than kinu.run signs in, updates and reports against that deployment.
+export KINU_LAUNCHER_ORIGIN="${origin}"
 
 # In the caller's directory, which is the session's project.
 exec "$KINU_BUN" "\${KINU_BUN_ISOLATED[@]}" run "$CLI_DIR/cli.js" "$@"

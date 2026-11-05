@@ -785,6 +785,8 @@ export { programEffectsOf, programEffect, type MemberImpacts, type ProgramEffect
 
 export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, type ToolOutcome } from './tools/outcome';
 
+export { toolErrorOf, type ToolError } from './tools/outcome';
+
 export { McpProtocolFailureSchema } from './tools/mcp-error';
 
 export {

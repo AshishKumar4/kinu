@@ -1,7 +1,7 @@
 /** One cloud turn's accumulated stream, as its live frames arrive. */
 import * as v from 'valibot';
 import {
-  JsonObjectSchema, parseJsonValue, STEP_CUT_CHUNK, StepCutDataSchema,
+  JsonObjectSchema, parseJsonValue, STEP_CUT_CHUNK, StepCutDataSchema, toolErrorOf,
   type JsonObject, type JsonValue, type ToolOutcome,
 } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
@@ -130,13 +130,10 @@ export class CloudTurnStream {
       case 'tool-output-error': {
         const toolCallId = jsonString(chunk.toolCallId, '');
 
-        const toolResult = type === 'tool-output-error'
-          ? jsonErrorMessage(chunk.errorText, 'tool error')
-          : stringifyToolOutput(chunk.output ?? null);
-
-        const outcome = type === 'tool-output-error'
-          ? { success: false, reason: null } satisfies ToolOutcome
-          : { success: true } satisfies ToolOutcome;
+        // A failed call's text carries its reason as the web reads it (`toolErrorText`): said as the reason, not as JSON.
+        const failed = type === 'tool-output-error' ? toolErrorOf(jsonErrorMessage(chunk.errorText, 'tool error')) : null;
+        const toolResult = failed === null ? stringifyToolOutput(chunk.output ?? null) : failed.error;
+        const outcome: ToolOutcome = failed === null ? { success: true } : failed.outcome;
 
         this.emit({
           type: 'tool-result', toolName: this.calls.nameOf(toolCallId) ?? 'tool', toolCallId, result: toolResult,

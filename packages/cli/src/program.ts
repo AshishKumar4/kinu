@@ -227,6 +227,8 @@ export function buildProgram(): Command {
     .helpGroup(RUNNING)
     .description('List a workspace\'s executors, or run a command in one')
     .option('--json', 'Print raw JSON')
+    // The command's own flags (`uname -a`) are its words, not this command's options.
+    .allowUnknownOption()
     .action(executorsCommand);
 
   program
@@ -448,7 +450,7 @@ const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
   ['chat', 'kinu chat jarvis'],
   ['acp', 'kinu acp jarvis'],
   ['exec', 'kinu exec -w jarvis --json "run the test suite and report failures"'],
-  ['executors', 'kinu executors jarvis'],
+  ['executors', 'kinu executors jarvis computer uname -a'],
   ['stop', 'kinu stop jarvis'],
   ['model', 'kinu model jarvis anthropic/claude-sonnet-4-7'],
   ['effort', 'kinu effort jarvis high'],

@@ -35,7 +35,7 @@ import {
   validateWorkspaceId,
   type AgentMode,
 } from './config';
-import { createCloudAgent, type CreateCloudAgentInput } from './cloud-api';
+import { createCloudAgent, listCloudAgents, type CreateCloudAgentInput } from './cloud-api';
 import { authCommand } from './commands/auth';
 import { ensureLocalDaemonRunning } from './commands/daemon';
 
@@ -65,6 +65,8 @@ export interface CreatedCliAgent {
   purpose: string;
   model?: string;
   cloudName?: string;
+  /** A cloud workspace of that name was already this account's: nothing was created, and it is as it was. */
+  existed?: boolean;
   dbPath?: string;
   cwd?: string;
   workspaceId?: string;
@@ -116,7 +118,10 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   if (input.mode === 'cloud') {
     return settle(Effect.gen(function* () {
       const auth = yield* resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
-      const agent = yield* Effect.promise(() => createCloudAgent(auth.origin, auth.token, cloudCreateInput(input, purpose)));
+      const asked = cloudCreateInput(input, purpose);
+      // The create answers an existing name with that workspace, unchanged (retries stay idempotent): said so, not as made.
+      const existed = asked.name !== undefined && (yield* Effect.promise(() => listCloudAgents(auth.origin, auth.token))).some((held) => held.name === asked.name);
+      const agent = yield* Effect.promise(() => createCloudAgent(auth.origin, auth.token, asked));
 
       yield* Effect.promise(() => upsertAgentConfig({
         name: agent.name,
@@ -125,7 +130,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
         cloudName: agent.name,
       }));
 
-      return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name } satisfies CreatedCliAgent;
+      return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name, ...(existed && { existed }) } satisfies CreatedCliAgent;
     }));
   }
 

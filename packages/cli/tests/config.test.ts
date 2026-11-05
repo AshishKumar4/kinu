@@ -84,6 +84,33 @@ describe("CLI config safety", () => {
     }
   });
 
+  test("a CLI its own deployment's launcher runs talks to that deployment, not kinu.run", async () => {
+    const seen: string[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        seen.push(new URL(request.url).pathname);
+
+        return Response.json({ user: { id: "u-ci", email: "ci@example.com" } });
+      },
+    });
+
+    try {
+      const { KINU_ORIGIN: _ambient, ...inherited } = process.env;
+
+      const env: NodeJS.ProcessEnv = {
+        ...inherited, KINU_HOME: scratchDir("cli-launcher-origin"), KINU_LAUNCHER_ORIGIN: `http://127.0.0.1:${String(server.port)}`, KINU_TOKEN: "pta_ci", NO_COLOR: "1",
+      };
+
+      const proc = await runToExit([process.execPath, "packages/cli/bin/cli.ts", "whoami"], { cwd: resolve(__dirname, "../../.."), env });
+
+      expect({ exitCode: proc.exitCode, seen }).toEqual({ exitCode: 0, seen: ["/api/cli/me"] });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("kinu auth lists the account's CLI sessions and revokes one or all of them; a bare revoke or another origin ends none", async () => {
     const hash = "a".repeat(64);
     const seen: string[] = [];

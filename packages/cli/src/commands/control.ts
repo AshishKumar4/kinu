@@ -15,6 +15,7 @@ import { readDefaultTier } from '../profiles';
 import {
   callAgentRpc,
   CancelJobSchema,
+  CloudAgentStatusSchema,
   CloudBackgroundJobSchema,
   CloudToolDescriptionsSchema,
   CloudTriggerListSchema,
@@ -112,8 +113,39 @@ export function modelCommand(name: string, spec: string | undefined, opts: Contr
       return;
     }
 
-    console.log(`${DIM('model')} ${stored ?? `${readDefaultTier()?.model ?? 'none named'} (the default tier's)`}`);
+    const fallback = stored === null ? (yield* defaultTierOf(target)).model : null;
+
+    console.log(`${DIM('model')} ${stored ?? `${fallback ?? 'none named'} (the default tier's)`}`);
   }));
+}
+
+/** A cancel that stopped nothing (no running job by that id) says so, and the command fails. */
+function saidCancelled(job: string, ok: boolean): void {
+  if (ok) {
+    console.log(`${OK('cancelled')} ${job}`);
+
+    return;
+  }
+
+  console.log(`${WARN('nothing cancelled')} ${job} is not a running job`);
+  process.exitCode = 1;
+}
+
+/** What the default tier runs the workspace on: a cloud workspace's as it says itself (its account's tier), a local
+ *  one's as this machine's profile reads it. */
+function defaultTierOf(target: AgentTarget): Effect.Effect<{ readonly model: string | null; readonly effort: ReasoningEffort | null }> {
+  if (target.mode !== 'cloud') {
+    const tier = readDefaultTier();
+
+    return Effect.succeed({ model: tier?.model ?? null, effort: tier?.reasoningEffort ?? null });
+  }
+
+  const auth = requireAuthConfig();
+
+  return Effect.map(
+    Effect.promise(() => callAgentRpc({ origin: auth.origin, token: auth.token, name: target.cloudName, method: 'getAgentStatus', schema: CloudAgentStatusSchema })),
+    (status) => ({ model: status.model ?? null, effort: status.reasoningEffort ?? null }),
+  );
 }
 
 /** The model a cloud workspace pins, or null where it runs the default tier's. */
@@ -164,9 +196,10 @@ export async function effortCommand(name: string, level: string | undefined): Pr
     return;
   }
 
-  const shown = result.effort ?? readDefaultTier()?.reasoningEffort ?? 'medium';
+  return settle(Effect.gen(function* () {
+    const shown = result.effort ?? (yield* defaultTierOf(target)).effort ?? 'medium';
+    const runsAs = yield* runsAsOnItsModel(target, shown);
 
-  return settle(Effect.map(runsAsOnItsModel(target, shown), (runsAs) => {
     console.log(`${DIM('reasoning effort')} ${shown}${result.effort === null ? ' (the default tier\'s)' : ''}${runsAs}`);
   }));
 }
@@ -180,9 +213,9 @@ function runsAsOnItsModel(target: AgentTarget, effort: ReasoningEffort): Effect.
       ? (yield* Effect.promise(() => readLocalWorkspacePins(target.localName))).model
       : yield* Effect.promise(() => storedCloudModel(auth, target.cloudName));
 
-    const model = pinned ?? readDefaultTier()?.model;
+    const model = pinned ?? (yield* defaultTierOf(target)).model;
 
-    if (model === undefined) return '';
+    if (model === null) return '';
 
     const catalog = auth === null
       ? yield* loadModelCatalog(() => createConfiguredLocalModelResolver().resolver.listModels())
@@ -438,7 +471,7 @@ export function jobsCommand(name: string, action: string | undefined, id: string
         }));
 
         present({ id: job, ...cancelled }, opts, () =>
-          console.log(`${OK('cancelled')} ${cancelled.ok ? job : `${job} (not running)`}`));
+          saidCancelled(job, cancelled.ok));
 
         return;
       }
@@ -461,7 +494,7 @@ export function jobsCommand(name: string, action: string | undefined, id: string
       const job = yield* required(id, 'job id');
       const cancelled = yield* Effect.promise(() => cancelLocalJob(target.localName, job, liveDaemonPid()));
       present({ id: job, ...cancelled }, opts, () =>
-        console.log(`${OK('cancelled')} ${cancelled.ok ? job : `${job} (not running)`}`));
+        saidCancelled(job, cancelled.ok));
 
       return;
     }

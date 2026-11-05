@@ -10,7 +10,7 @@ import * as v from "valibot";
 import { describe, expect, test } from "bun:test";
 import {
   initWorkspaceSchema, MEMORY_PATH, openWorkspaceMainActor,
-  type SpendSource, type Usage,
+  type JsonValue, type SpendSource, type Usage,
 } from "@kinu.run/core";
 import { createWorkspace } from "@kinu.run/core/workspace-birth";
 import { makeWorkspaceSchemaSql } from "@kinu.run/cli-backend";
@@ -205,6 +205,13 @@ describe("CLI inspection commands", () => {
     expect(existsSync(join(invokedFrom, "marker.txt"))).toBe(false);
     expect(readFileSync(join(placed, "marker.txt"), "utf8")).toBe("addressed\n");
 
+    // A command's own flags are its own, and its failure ends this command with its exit and its words once.
+    const flagged = await runToExit([process.execPath, cliBin, "executors", "localtest", "workspace", "ls", "-a", "no-such-entry"], {
+      cwd: invokedFrom, env: { ...process.env, KINU_HOME: home },
+    });
+
+    expect({ exitCode: flagged.exitCode, stdout: flagged.stdout, said: flagged.stderr.split("no-such-entry").length - 1 }).toEqual({ exitCode: 2, stdout: "", said: 1 });
+
     // Without its ref the workspace has no folder, and the command runs nowhere.
     writeFileSync(join(home, "config.json"), JSON.stringify({ agents: {} }));
     const folderless = await run("pwd");
@@ -318,6 +325,21 @@ describe("CLI inspection commands", () => {
     expect(readFileSync(join(home, "cli.log"), "utf-8")).toContain("models.listing_slow");
   });
 
+  test("cancelling a job id that names no running job in a cloud workspace cancels nothing and fails", async () => {
+    const home = scratchDir("cli-cancel-none");
+    const server = Bun.serve({ port: 0, fetch: () => Response.json({ result: { ok: false } }) });
+
+    try {
+      const run = await runCli(["jobs", "cloudtest", "cancel", "no-such-job"], { home, env: {
+        KINU_TOKEN: "ptc_test", KINU_ORIGIN: `http://localhost:${server.port}`,
+      } });
+
+      expect(run.exitCode).toBe(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   // `jobs` and `triggers` read opts.json, so commander must accept `--json`.
   test("jobs and triggers accept --json like every sibling inspector", async () => {
     const home = scratchDir("cli-json");
@@ -399,6 +421,43 @@ describe("CLI inspection commands", () => {
     const out = printed.stdout;
     expect(out).toContain("$0.0340");
     expect(out).toContain("The dollar total is a floor: 1 measured call carried no models.dev rate");
+  });
+});
+
+/** A cloud workspace on its account's default tier: what the workspace says it runs, not this machine's profile. */
+describe("kinu model and kinu effort on an unpinned cloud workspace", () => {
+  test("name the model and effort the workspace's default tier runs it on, with no profile on this machine", async () => {
+    const home = scratchDir("cli-cloud-tier");
+
+    const answers = new Map<string, JsonValue>([
+      ["getStoredModelSpec", { spec: null }],
+      ["getReasoningEffort", { effort: null }],
+      ["getAgentStatus", {
+        name: "cloudtest", purpose: "p", createdAt: 1, scaffoldVersion: 0, searchNodeCount: 0, messageCount: 0,
+        model: "workers-ai/@cf/vendor/tier-model", reasoningEffort: "low",
+      }],
+    ]);
+
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        if (!new URL(request.url).pathname.endsWith("/rpc")) return new Response("no", { status: 404 });
+        const { method } = v.parse(v.object({ method: v.string() }), await request.json());
+
+        return Response.json({ result: answers.get(method) ?? null });
+      },
+    });
+
+    try {
+      const env = { KINU_TOKEN: "ptc_test", KINU_ORIGIN: `http://localhost:${server.port}` };
+      const model = await runCli(["model", "cloudtest"], { home, env });
+      const effort = await runCli(["effort", "cloudtest"], { home, env });
+
+      expect([model.exitCode, model.stdout.includes("workers-ai/@cf/vendor/tier-model (the default tier's)")]).toEqual([0, true]);
+      expect([effort.exitCode, effort.stdout.includes("low (the default tier's)")]).toEqual([0, true]);
+    } finally {
+      await server.stop(true);
+    }
   });
 });
 

@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Data, Effect } from 'effect';
 import * as v from 'valibot';
-import { KinuError, renderThrownChain, classifyErrorCode, settle } from '../obs/index';
+import { KinuError, renderThrownChain, classifyErrorCode, settle, tolerate } from '../obs/index';
 import { FileRefusalError } from '../types/file-edits';
 import { BindingFailureSchema, ToolFailureValueSchema, ToolOutcomeSchema, type BindingFailure, type ToolOutcome } from '../types/tool-outcome';
-import { JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { McpToolError } from './mcp-error';
 import { EffectLog, withMemberEffects, type ProgramEffectsRecord } from '../execution/call-effects';
 import type { ExecCallContext } from '../execution/signal';
@@ -34,6 +34,27 @@ export function toolErrorText(input: Parameters<typeof renderThrownChain>[0]): s
   const { value } = toolErrorOutput(input);
 
   return v.is(v.string(), value) ? value : JSON.stringify(value);
+}
+
+const ToolErrorJsonSchema = v.object({
+  reason: ToolFailureValueSchema.entries.reason.wrapped, error: v.string(), execution: v.optional(v.object({ exitCode: v.number() })),
+});
+
+/** A failed tool call as a reader shows it. */
+export interface ToolError {
+  readonly error: string;
+  readonly outcome: Extract<ToolOutcome, { success: false }>;
+}
+
+/** {@link toolErrorText} read back, as a terminal shows it: the failure's own words and its outcome. Text that is no
+ *  such object is the failure's words as they stand, with no reason. */
+export function toolErrorOf(text: string): ToolError {
+  const parsed = v.safeParse(ToolErrorJsonSchema, tolerate(() => parseJsonValue(text), 'malformed-input'));
+
+  if (!parsed.success) return { error: text, outcome: { success: false, reason: null } };
+  const { reason, error, execution } = parsed.output;
+
+  return { error, outcome: { success: false, reason, ...(execution !== undefined && { execution }) } };
 }
 
 /** RPC keeps an error's name and own fields, not its class (`codeByName`): a program's failure crosses the facet hop

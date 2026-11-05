@@ -17,6 +17,7 @@ describe('a cloud create names the workspace only when the owner did', () => {
       import { createCliAgent } from './packages/cli/src/agent-create.ts';
       const sent = [];
       globalThis.fetch = async (input, init) => {
+        if (init?.method !== 'POST') return Response.json([]);
         const body = JSON.parse(String(init?.body));
         sent.push({ url: String(input), body });
 
@@ -35,6 +36,30 @@ describe('a cloud create names the workspace only when the owner did', () => {
       { url: 'https://kinu.test/api/cli/workspaces', body: { purpose: 'Build a benchmark for Rust web frameworks', model: 'openai/gpt-5-mini' } },
       { url: 'https://kinu.test/api/cli/workspaces', body: { purpose: 'Manage my calendar', name: 'jarvis', displayName: 'jarvis' } },
     ]);
+  });
+});
+
+describe('a cloud create of a name the account already holds', () => {
+  test('answers with that workspace, unchanged, and says it already existed', async () => {
+    const home = scratchDir('create-cloud-existing');
+
+    const result = await runToExit(['bun', '-e', `
+      import { createCliAgent } from './packages/cli/src/agent-create.ts';
+      globalThis.fetch = async (input, init) => {
+        const jarvis = { name: 'jarvis', displayName: 'jarvis', createdAt: 1, lastVisited: 1 };
+
+        return Response.json(init?.method === 'POST' ? jarvis : [jarvis]);
+      };
+      const made = await createCliAgent({ name: 'fresh', purpose: 'p', mode: 'cloud' });
+      const held = await createCliAgent({ name: 'jarvis', purpose: 'p', mode: 'cloud' });
+      console.log(JSON.stringify([made.existed ?? false, held.existed ?? false]));
+    `], {
+      cwd: join(import.meta.dir, '../../..'),
+      env: { ...process.env, HOME: home, KINU_HOME: home, KINU_TOKEN: 'ptc_test_fixture_token_not_real', KINU_ORIGIN: 'https://kinu.test' },
+    });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual([false, true]);
   });
 });
 
