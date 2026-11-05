@@ -8,7 +8,6 @@
     "packages/cf-backend/src/orchestrator.ts#catch": 2,
     "packages/cf-backend/src/orchestrator.ts#result-literal": 1,
     "packages/cf-backend/src/orchestrator.ts#throw": 6,
-    "packages/cf-backend/src/run-events-routes.ts#catch": 1,
     "packages/cf-backend/src/user/credentials.ts#catch": 4,
     "packages/cf-backend/src/user/credentials.ts#throw": 7,
     "packages/cf-backend/src/user/sessions.ts#catch": 1,
