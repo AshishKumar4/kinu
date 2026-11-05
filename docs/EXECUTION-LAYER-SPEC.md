@@ -179,7 +179,7 @@ files, POSIX shell, code execution, processes, and ports. `shell`,
 `file`, and codemode share a read-before-write ledger and approval policy.
 Actors share files and processes but each keeps its own `shellId` across
 reconstruction. The key is `agent:<name>` for the main actor
-(`ActorAgent.shellId()`, `cf-backend/src/actor-agent.ts`) and
+(`OrchestratorAgent.shellId()`, `cf-backend/src/orchestrator.ts`) and
 `subagent:<storage-key>` or `run:<storage-key>` for every hosted logical
 actor (`hostedActorPlacement(record)`, `cf-backend/src/actor-hosting.ts`, one
 function for every kind). It is keyed on the immutable storage key, not the

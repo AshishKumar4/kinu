@@ -1152,7 +1152,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   async exercise(): Promise<ExerciseResult> {
     // Capture after warmup, before every turn: each DO constructor replaces the sink on first
-    // stub use (actor-agent.ts:1453-1462); nothing reinstalls after (install.ts:309).
+    // stub use (orchestrator.ts); nothing reinstalls after (install.ts:309).
     const recording = createWorkspaceRecording();
 
     const capture = (): (() => void) => setDiagnosticsSink(

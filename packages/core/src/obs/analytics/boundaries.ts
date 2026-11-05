@@ -101,7 +101,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     id: 'turn.settled',
     family: 'turn',
     event: 'turn.settled',
-    site: 'packages/cf-backend/src/actor-agent.ts',
+    site: 'packages/cf-backend/src/orchestrator.ts',
     mechanism: 'writer',
     emitter: 'recordTurnRow',
     means: 'A turn ended, completed or not: its duration, steps, tool calls, the '
@@ -111,7 +111,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     id: 'turn.first_token',
     family: 'turn',
     event: 'turn.first_token',
-    site: 'packages/cf-backend/src/actor-agent.ts',
+    site: 'packages/cf-backend/src/orchestrator.ts',
     mechanism: 'writer',
     emitter: 'recordTtftRow',
     means: 'Time to first token, measured from the turn\'s own start to the first '
@@ -122,7 +122,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     id: 'tool.settled',
     family: 'turn',
     event: 'tool.settled',
-    site: 'packages/cf-backend/src/actor-agent.ts',
+    site: 'packages/cf-backend/src/orchestrator.ts',
     mechanism: 'writer',
     emitter: 'recordToolRow',
     means: 'One tool call finished. Name, whether it failed, and how long it took '
@@ -132,7 +132,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     id: 'model.call',
     family: 'turn',
     event: 'model.call',
-    site: 'packages/cf-backend/src/actor-agent.ts',
+    site: 'packages/cf-backend/src/orchestrator.ts',
     mechanism: 'writer',
     emitter: 'recordModelRow',
     means: 'One model request outside the turn loop as well as inside it: a '
@@ -175,7 +175,7 @@ const FLEET_BOUNDARIES: readonly FleetBoundary[] = [
     id: 'wake.unfinished_arms',
     family: 'lifecycle',
     event: 'wake.unfinished_arms',
-    site: 'packages/cf-backend/src/actor-agent.ts',
+    site: 'packages/cf-backend/src/orchestrator.ts',
     mechanism: 'diagnostics',
     emitter: 'event',
     means: 'A wake pass found work it could not finish and re-armed itself: one row per streak or '

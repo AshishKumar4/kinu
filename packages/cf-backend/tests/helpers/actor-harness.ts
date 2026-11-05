@@ -1885,7 +1885,7 @@ export function makeEnv(
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
 
-  // SAFETY: the ActorAgent dependency contract only reads the constructed
+  // SAFETY: the OrchestratorAgent dependency contract only reads the constructed
   // LOADER, UserDO, and gateway bindings in this harness; each
   // unsupported operation throws if schema composition begins invoking it.
   return env as Env;

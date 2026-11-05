@@ -1753,7 +1753,7 @@
     "CHECK ((origin = 'system') = (parent_actor_id IS NULL))",
     "CHECK (origin IN ('system','agent') OR lifetime = (CASE origin WHEN 'user' THEN 'durable' ELSE 'task' END))"
   ],
-  "workspace_capability@packages/cf-backend/src/actor-agent.ts": [
+  "workspace_capability@packages/cf-backend/src/orchestrator.ts": [
     "id INTEGER PRIMARY KEY CHECK (id = 1)",
     "token TEXT NOT NULL"
   ],
