@@ -73,7 +73,7 @@ const NO_MESSAGES: readonly UIMessage[] = [];
 const NO_AMENDED: ReadonlyMap<string, UIMessage> = new Map();
 
 /** `rows` with each stamped one drawn as stamped; the same array when none is. */
-function amendRows(rows: readonly UIMessage[], amended: ReadonlyMap<string, UIMessage>): readonly UIMessage[] {
+function amendRows(rows: readonly UIMessage[], amended: ReadonlyMap<string, UIMessage> = NO_AMENDED): readonly UIMessage[] {
   return amended.size === 0 || !rows.some((row) => amended.has(row.id)) ? rows : rows.map((row) => amended.get(row.id) ?? row);
 }
 
@@ -106,7 +106,7 @@ function liveGap(segments: readonly HistorySegment[], total: number | undefined,
 }
 
 export function useChatThread({
-  rpc, live: frame, seeded, seedEdge = null, steerRuns = NO_STEER_RUNS, actor, total, amended = NO_AMENDED,
+  rpc, live: frame, seeded, seedEdge = null, steerRuns = NO_STEER_RUNS, actor, total, amended,
 }: ChatThreadInput): ChatThread {
   const [slide, setSlide] = useState<Slide>(() => ({ live: frame, slid: NO_MESSAGES, gaps: 0 }));
   const current = slideWindow(slide, frame);
