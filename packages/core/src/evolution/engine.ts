@@ -50,9 +50,6 @@ import {
 } from './ratings';
 import type { DecisionPort } from '../providers/decision-model';
 import {
-  bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
-} from '../experience/imports';
-import {
   initCompletedTurnTable, completedTurnRanWith, createCompletedTurnStore, type CompletedTurnStore,
   MAX_TURN_REVIEWS_PER_OPEN,
   type DeferredReviewDrain, type RefusedTurnReview, type EnqueueOutcome,
@@ -333,8 +330,6 @@ export class EvolutionEngine {
 
     if (!graded) turn.feedback = feedbackOf(rating.score);
 
-    await this.settleImports(turn.turnId, rating.score);
-
     if (isHighRating(rating.score) && turn.toolCalls.length > 0 && this.agentConfig.getCrafting()) {
       // The key travels into the body so the marker lands beside the writes.
       const patternKey = gradedKey === null ? null : `${gradedKey}:pattern`;
@@ -483,39 +478,6 @@ export class EvolutionEngine {
       ...completedTurnRanWith(this.rt.storage.sql, this.rt.actor, messageId),
     });
 
-  }
-
-  /**
-     * The only path by which another workspace's imported experience joins this one,
-     * settled by a graded turn's verdict. An ungraded turn settles nothing.
-     */
-  private async settleImports(turnId: string | undefined, score: number): Promise<void> {
-    const feedback = feedbackOf(score);
-
-    if (!turnId || feedback === null) return;
-    const verdict = feedback === 'positive' ? 'accepted' : 'rejected';
-    // Not caught: a wide catch would also absorb a failed adoption and leave the
-    // import staged forever.
-    bindPendingImports(this.rt.storage.sql, this.rt.actor, turnId);
-
-    const settled = await settleImportsForTurn(this.rt, turnId, verdict);
-
-    if (settled.corroborated.length === 0 && settled.discarded.length === 0) return;
-
-    const describe = (rows: ImportedExperienceRow[]) =>
-      rows.map((r) => `${r.payload.kind} "${r.key}" from ${r.sourceWorkspace}`).join(', ');
-
-    this.emit({
-      type: 'experience_import',
-      message: settled.corroborated.length > 0
-        ? `Adopted imported experience after a turn rated ${score.toFixed(1)}/5: ${describe(settled.corroborated)}`
-        : `Discarded imported experience after a turn rated ${score.toFixed(1)}/5: ${describe(settled.discarded)}`,
-      data: {
-        score,
-        corroborated: settled.corroborated.map((r) => r.libraryId),
-        discarded: settled.discarded.map((r) => r.libraryId),
-      },
-    });
   }
 
   /** Called by AgentOrchestrator when a session window closes: the lifetime cadence and the changelog digest. */

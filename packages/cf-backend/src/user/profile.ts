@@ -1,5 +1,5 @@
 import {
-  createExperienceLibrary, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, validateProfileCatalog, type ExperienceEntry, type ExperienceKind, type ProfileCatalog, type ProfileCatalogEnvelope, type PublishableCandidate, type JsonValue, decodeJsonValue, PROFILE_CATALOG_CONFIG_KEY, CapabilityDeniedError, type UserCaller, type WorkspaceOverview, displayNameProblem, type UserProfile,
+  createExperienceLibrary, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, validateProfileCatalog, type ExperienceEntry, type ExperienceKind, type ProfileCatalog, type ProfileCatalogEnvelope, type JsonValue, decodeJsonValue, PROFILE_CATALOG_CONFIG_KEY, CapabilityDeniedError, type UserCaller, type WorkspaceOverview, displayNameProblem, type UserProfile,
 } from '@kinu.run/core';
 import { authoredRefusal, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { Effect, Result } from 'effect';
@@ -132,19 +132,6 @@ export class UserProfileStore {
     return createExperienceLibrary(this.host.ctx.storage.sql);
   }
 
-  /**
-   * Source workspace comes from the proven caller, never the argument; owner sessions cannot publish.
-   */
-  async publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
-    const resolved = await this.host.requireTier(caller, 'experience.write');
-
-    if (resolved.kind !== 'workspace') {
-      return settle(Effect.fail(new KinuError('denied', 'Only a workspace can publish experience; it publishes under its own name.')));
-    }
-
-    return this.experienceLibrary().publish(candidate, resolved.workspace);
-  }
-
   /** Excludes the calling workspace's own entries. */
   async searchExperience(
     caller: UserCaller,
@@ -156,12 +143,6 @@ export class UserProfileStore {
     if (resolved.kind === 'workspace') searchOptions.excludeWorkspace = resolved.workspace;
 
     return this.experienceLibrary().search(searchOptions);
-  }
-
-  async getExperienceEntry(caller: UserCaller, id: string): Promise<ExperienceEntry | null> {
-    await this.host.requireTier(caller, 'experience.read');
-
-    return this.experienceLibrary().get(id);
   }
 
   /** A key of the account's plain config: the owner's, and never the profile catalog, which has its typed CAS route. */

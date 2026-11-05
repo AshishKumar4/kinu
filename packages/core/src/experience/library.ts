@@ -1,16 +1,11 @@
 // Owner-scoped experience library (no cross-owner path); entries deliberately outlive their source workspace.
 
-import { Effect } from 'effect';
-import { settleSync } from '../obs/effect';
-import { nanoid } from '../utils/nanoid';
 import { ftsPhrases } from '@kinu.run/agent-utils/memory';
 import {
   EXPERIENCE_KINDS,
-  experienceSearchText,
   parseExperiencePayload,
   type ExperienceEntry,
   type ExperienceKind,
-  type PublishableCandidate,
 } from './types';
 import type { SqlExec } from '../types/primitives';
 import { sqlCheckList } from '../utils/sql';
@@ -73,10 +68,7 @@ export interface ExperienceSearchOptions {
 }
 
 export interface ExperienceLibraryStore {
-  /** Replaces by (workspace, kind, key). */
-  publish(candidate: PublishableCandidate, sourceWorkspace: string): ExperienceEntry;
   search(options?: ExperienceSearchOptions): ExperienceEntry[];
-  get(id: string): ExperienceEntry | null;
 }
 
 const DEFAULT_SEARCH_LIMIT = 10;
@@ -114,40 +106,6 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
     sql.exec(query, ...bindings).toArray().map((row) => v.parse(LibraryRowSchema, row));
 
   return {
-    publish(candidate, sourceWorkspace) {
-      return settleSync(Effect.gen(function* () {
-        const id = `exp-${nanoid()}`;
-        const publishedAt = Date.now();
-        // ON CONFLICT keeps the original id so importers' provenance references stay valid.
-        sql.exec(
-          `INSERT INTO experience_library
-             (id, kind, source_workspace, key, title, payload_json, evidence, search_text, published_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(source_workspace, kind, key) DO UPDATE SET
-             title        = excluded.title,
-             payload_json = excluded.payload_json,
-             evidence     = excluded.evidence,
-             search_text  = excluded.search_text,
-             published_at = excluded.published_at`,
-          id, candidate.payload.kind, sourceWorkspace, candidate.key, candidate.title,
-          JSON.stringify(candidate.payload), candidate.evidence,
-          experienceSearchText(candidate), publishedAt,
-        );
-
-        const stored = rows(
-          `SELECT * FROM experience_library
-            WHERE source_workspace = ? AND kind = ? AND key = ? LIMIT 1`,
-          sourceWorkspace, candidate.payload.kind, candidate.key,
-        )[0];
-
-        const entry = stored ? toEntry(stored) : null;
-
-        if (!entry) return yield* Effect.die(new Error('experience entry did not survive publication'));
-
-        return entry;
-      }));
-    },
-
     search(options: ExperienceSearchOptions = {}) {
       const limit = Math.max(1, options.limit ?? DEFAULT_SEARCH_LIMIT);
       const match = options.query ? ftsPhrases(options.query).join(' OR ') || null : null;
@@ -173,12 +131,6 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
           );
 
       return found.map(toEntry).filter((e): e is ExperienceEntry => e !== null);
-    },
-
-    get(id) {
-      const row = rows(`SELECT * FROM experience_library WHERE id = ? LIMIT 1`, id)[0];
-
-      return row ? toEntry(row) : null;
     },
   };
 }

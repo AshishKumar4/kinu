@@ -410,13 +410,10 @@ export {
   createExperienceLibrary,
   EXPERIENCE_KINDS,
   initExperienceLibraryTables,
-  initImportedExperienceTable,
-  listImportedExperience,
   type ExperienceEntry,
   type ExperienceKind,
   type ExperienceLibraryStore,
   type ExperienceSearchOptions,
-  type PublishableCandidate,
 } from './experience/index';
 
 // Chat engine

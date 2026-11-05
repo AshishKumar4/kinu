@@ -17,7 +17,7 @@ export interface CompletedSession {
 }
 
 export interface EvolutionEvent {
-  type: 'reflection' | 'craft_discovered' | 'scaffold_proposed' | 'consolidation' | 'turn_complete' | 'changelog_digest' | 'experience_import' | 'advisor_note';
+  type: 'reflection' | 'craft_discovered' | 'scaffold_proposed' | 'consolidation' | 'turn_complete' | 'changelog_digest' | 'advisor_note';
   message: string;
   data?: unknown;
 }
