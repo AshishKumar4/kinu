@@ -9,6 +9,7 @@ import { type Awaitable, type VFS, type VfsCred, type VfsDirentType, type VfsRem
 
 import type { CheckpointFiles } from '../types/primitives';
 import { Cause, Effect, Exit, Result } from 'effect';
+import * as v from 'valibot';
 import type { FilesOwner } from '../safety/command-review';
 import type { ExecutorStatus } from '../execution/types';
 import { attempt, hold, KinuError, renderThrownChain, settle, settleSync, toKinuError, tolerateAsync } from '../obs/index';
@@ -107,10 +108,10 @@ export async function readBoundedWithVfsOps(
 	if (native) return native.call(files, path, 0, limit);
 
 	if (size === null || size > limit) {
-		throw new VfsError('EPERM',
+		return settle(Effect.fail(new VfsError('EPERM',
 			`this file plane has no ranged read, so ${size === null ? 'a file of unknown size' : `${String(size)} bytes`}`
 			+ ` cannot be previewed within ${String(limit)}: download it instead`,
-			path,);
+			path)));
 	}
 
 	return files.readFile(path);
@@ -148,15 +149,12 @@ export async function listWithVfsOps(files: VFS, dir: string, asks: (child: stri
 	return Promise.all(entries.map(async ({ name, type, stat }) => {
 		const child = dir === '/' ? `/${name}` : `${dir}/${name}`;
 
-		if (stat === undefined && !asks(child)) return { name, type, stat: null };
+		if (stat !== undefined) return { name, type, stat };
 
-		try {
-			return { name, type, stat: stat ?? await files.stat(child) };
-		} catch (cause) {
-			// The plane's own code, never prose matching.
-			if (isVfsError(cause) && cause.code === 'ENOENT') return { name, type, stat: null };
-			throw cause;
-		}
+		if (!asks(child)) return { name, type, stat: null };
+
+		// The plane's own code, never prose matching: a child gone between the listing and its stat has no stat.
+		return { name, type, stat: await tolerateAsync(async () => files.stat(child), 'enoent') ?? null };
 	}));
 }
 
@@ -203,13 +201,13 @@ function partial(removal: VfsRemoval | void, spelled: (path: string) => string):
  * `path` removed whole, or refused naming what went and what stayed. Nimbus's rm -r keeps what it cannot remove and
  * goes on (core 0.19, GNU's walk), so a caller that means all of it says so here.
  */
-function refusePartialRemoval(path: string, kept: PartialRemoval | null): void {
-	if (kept !== null) throw new VfsError(isVfsError(kept.failed.cause) ? kept.failed.cause.code : 'EIO', partialTreeRemovalMessage(path, kept), path);
+function refusePartialRemoval(path: string, kept: PartialRemoval | null): Effect.Effect<void, VfsError> {
+	return kept === null ? Effect.void : Effect.fail(new VfsError(isVfsError(kept.failed.cause) ? kept.failed.cause.code : 'EIO', partialTreeRemovalMessage(path, kept), path));
 }
 
 /** A synchronous plane's rm -r of `path`, all of it or refused ({@link refusePartialRemoval}). */
 export function removeWhole(files: { removeRecursive(path: string): VfsRemoval | void }, path: string): void {
-	refusePartialRemoval(path, partial(files.removeRecursive(path), (at) => at));
+	return settleSync(refusePartialRemoval(path, partial(files.removeRecursive(path), (at) => at)));
 }
 
 /** Shared by the composite plane's throw and the file manager's error value. */
@@ -307,17 +305,14 @@ function mountOnto(composite: CompositeVFS, mounts: readonly VfsMount[]): void {
 	}
 }
 
+/** A mount table's names: each one path segment, none twice. */
+const MountNamesSchema = v.pipe(
+	v.array(v.pipe(v.string(), v.check((name) => name.length > 0 && name !== '.' && name !== '..' && !name.includes('/'), (issue) => `'${String(issue.input)}' is not a usable VFS mount name`))),
+	v.check((names) => new Set(names).size === names.length, (issue) => `duplicate VFS mount name among ${issue.input.join(', ')}`),
+);
+
 function checkedMounts(mounts: readonly VfsMount[]): readonly VfsMount[] {
-	const names = new Set<string>();
-
-	for (const mount of mounts) {
-		if (mount.name.length === 0 || mount.name === '.' || mount.name === '..' || mount.name.includes('/')) {
-			throw new Error(`'${mount.name}' is not a usable VFS mount name`);
-		}
-
-		if (names.has(mount.name)) throw new Error(`duplicate VFS mount name '${mount.name}'`);
-		names.add(mount.name);
-	}
+	v.parse(MountNamesSchema, mounts.map((mount) => mount.name));
 
 	return mounts;
 }
@@ -508,7 +503,7 @@ export function withMountTable(base: VFS | MountedNamespace, mounts: readonly Vf
 				return await settle(Effect.fail(syscallError('EBUSY', 'rm', at, { detail: 'a mount point is at or under it' })));
 			}
 
-			refusePartialRemoval(at, await removeTree(files, at));
+			return settle(refusePartialRemoval(at, await removeTree(files, at)));
 		},
 		async resolve(path, options) {
 			const target = await on(path);

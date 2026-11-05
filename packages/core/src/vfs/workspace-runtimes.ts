@@ -5,7 +5,8 @@
  */
 
 import * as v from 'valibot';
-import { KinuError, refusalOf, renderCauseChain, toKinuError, type Refusal } from '../obs/index';
+import { attempt, hold, KinuError, refusalOf, renderCauseChain, toKinuError, type Refusal } from '../obs/index';
+import { Cause, Exit } from 'effect';
 import type { JsonValue } from '../utils/json';
 
 /**
@@ -67,23 +68,22 @@ const NimbusRuntimeCatalogSchema = v.union([
 
 /** Bins a hosted session box can put on PATH: installed bins plus available runtime names. */
 export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefined>): Promise<ReadonlySet<string> | { readonly unreadable: KinuError }> {
-  try {
-    const parsed = v.safeParse(NimbusRuntimeCatalogSchema, await list());
+  const read = await hold(attempt({ doing: 'reading the session box runtime catalog', otherwise: 'io' }, list));
 
-    if (!parsed.success) return new Set();
+  // Distinct from a catalog that parsed and named no bins.
+  if (Exit.isFailure(read)) return { unreadable: toKinuError({ doing: 'reading the session box runtime catalog', cause: Cause.squash(read.cause), otherwise: 'io' }) };
+  const parsed = v.safeParse(NimbusRuntimeCatalogSchema, read.value);
 
-    const rows = Array.isArray(parsed.output) ? parsed.output : parsed.output.installed;
-    const names = new Set<string>();
+  if (!parsed.success) return new Set();
 
-    for (const runtime of rows) for (const bin of runtime.bins) names.add(bin);
+  const rows = Array.isArray(parsed.output) ? parsed.output : parsed.output.installed;
+  const names = new Set<string>();
 
-    if (!Array.isArray(parsed.output)) {
-      for (const available of parsed.output.available) names.add(available.name);
-    }
+  for (const runtime of rows) for (const bin of runtime.bins) names.add(bin);
 
-    return names;
-  } catch (cause) {
-    // Distinct from a catalog that parsed and named no bins.
-    return { unreadable: toKinuError({ doing: 'reading the session box runtime catalog', cause, otherwise: 'io' }) };
+  if (!Array.isArray(parsed.output)) {
+    for (const available of parsed.output.available) names.add(available.name);
   }
+
+  return names;
 }
