@@ -25,7 +25,7 @@ export function contextNumberOf(event: BroadcastEvent): ContextNumber | null {
   return type === 'context_fill' && contextTokens !== undefined ? { tokens: contextTokens, window: contextWindow } : null;
 }
 
-export function recordedContext(status: AgentClientStatus | null): ContextNumber | null {
+function recordedContext(status: AgentClientStatus | null): ContextNumber | null {
   const fill = status?.context ?? null;
 
   return fill === null ? null : { tokens: fill.tokens, window: fill.window ?? undefined };
