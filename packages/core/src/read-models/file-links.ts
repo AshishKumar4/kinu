@@ -2,6 +2,7 @@
 import { cloudPlanes, findPlaneReferences, isWholeReference, referencedPath, referencePrefixes, type PathPlanes } from '../vfs/resolve';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { APP_ROUTES } from './app-routes';
+import { inlineLinks, splitCodeSpans } from './markdown-scan';
 
 export interface FileLinks {
   /** The prefixes a reference may start with ({@link referencePrefixes}); any other scheme is prose. */
@@ -48,10 +49,6 @@ export function cloudFileLinks(origin: string, workspace: string, machines: read
 /** Fenced code stays as written; inline code that is exactly a reference becomes a link around it. */
 const FENCE = /^ {0,3}(`{3,}|~{3,})/u;
 
-const INLINE_CODE = /(`[^`\n]*`)/u;
-
-const LINK = /\[[^\]\n]*\]\(([^)\s]*)\)/gu;
-
 /** `markdown` with each reference to `links.roots` written as a link to its target. */
 export function linkFileReferences(markdown: string, links: FileLinks): string {
   let fence: string | null = null;
@@ -71,12 +68,13 @@ export function linkFileReferences(markdown: string, links: FileLinks): string {
       return line;
     }
 
-    return line.split(INLINE_CODE).map((part, i) => (i % 2 === 1 ? codeLink(part, links) : proseLinks(part, links))).join('');
+    return splitCodeSpans(line).map((part, i) => (i % 2 === 1 ? codeLink(part, links) : proseLinks(part, links))).join('');
   }).join('\n');
 }
 
 function codeLink(code: string, links: FileLinks): string {
-  const inner = code.slice(1, -1);
+  const fence = code.length - code.replace(/^`+/u, '').length;
+  const inner = code.slice(fence, -fence).trim();
   const href = isWholeReference(inner, links.roots) ? links.href(inner) : null;
 
   return href === null ? code : `[${code}](${href})`;
@@ -87,12 +85,13 @@ function proseLinks(prose: string, links: FileLinks): string {
   let out = '';
   let from = 0;
 
-  for (const link of prose.matchAll(LINK)) {
-    out += bareLinks(prose.slice(from, link.index), links);
-    const target = link[1] ?? '';
+  for (const link of inlineLinks(prose)) {
+    out += bareLinks(prose.slice(from, link.start), links);
+    const target = link.destination;
     const href = isWholeReference(target, links.roots) ? links.href(target) : null;
-    out += href === null ? link[0] : `${link[0].slice(0, link[0].length - target.length - 1)}${href})`;
-    from = link.index + link[0].length;
+    const destinationEnd = link.destinationStart + target.length;
+    out += href === null ? prose.slice(link.start, link.end) : `${prose.slice(link.start, link.destinationStart)}${href}${prose.slice(destinationEnd, link.end)}`;
+    from = link.end;
   }
 
   return out + bareLinks(prose.slice(from), links);

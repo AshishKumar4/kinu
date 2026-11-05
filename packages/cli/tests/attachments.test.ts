@@ -100,6 +100,21 @@ describe('resolvePromptAttachments', () => {
     expect(mention.attached.map(({ path }) => path)).toEqual([img]);
   });
 
+  // CODE-8 #14: a terminal's drag-and-drop quotes an apostrophe the shell's way, or escapes spaces with no quotes at all.
+  test('a dropped path is read as the whole shell word it is: a quoted apostrophe, or escaped spaces with no quotes', async () => {
+    const dir = makeDir();
+    const quoted = join(dir, "it's here.png");
+    const escaped = join(dir, 'my "best" shot.png');
+    writeFileSync(quoted, PNG_BYTES);
+    writeFileSync(escaped, PNG_BYTES);
+
+    const shellQuoted = `'${quoted.replaceAll("'", "'\\''")}'`;
+    const shellEscaped = escaped.replaceAll(' ', '\\ ').replaceAll('"', '\\"');
+    const result = await resolvePromptAttachments(`compare ${shellQuoted} with ${shellEscaped}`, { limitBytes: CAP, cwd: dir });
+
+    expect(result.attached.map(({ path }) => path)).toEqual([quoted, escaped]);
+  });
+
   test('relative @mentions resolve against the provided cwd', async () => {
     const dir = makeDir();
     mkdirSync(join(dir, 'assets'));

@@ -9,7 +9,7 @@ import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.
 import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbus-sh/worker/workspace-host';
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import {
-  ephemeralSlateAddress, escapeHtml, parseSlateProject, SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_MODULES, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
+  ephemeralSlateAddress, escapeHtml, moduleSpecifiers, parseSlateProject, SLATE_DRIVEN_MEMBERS, SLATE_METHOD_NAME_SOURCE, SLATE_PAGE_MODULES, SLATE_PAGE_PREAMBLE, slateTitle, type SlateProcess, type SlateProject, slateAuthority,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu.run/core/obs';
 import { confinedTo, SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
@@ -463,37 +463,26 @@ const StartedResult = v.object({ ok: v.literal(false), error: v.string() });
 
 const StartedSurface = v.object({ ok: v.literal(true), methods: v.array(v.string()) });
 
-const SPECIFIERS = Object.keys(SERVER_MODULE_PATHS).join('|').replaceAll('/', '\\/');
-
-const STATIC_SPECIFIER = new RegExp(`^(\\s*(?:import|export)\\s[^'"]*?\\bfrom\\s*|import\\s*)(["'])(${SPECIFIERS})\\2`, 'gm');
-
-const DYNAMIC_SPECIFIER = new RegExp(`\\bimport\\(\\s*(["'])(${SPECIFIERS})\\1\\s*\\)`, 'g');
-
 function isMappedSpecifier(specifier: string): specifier is keyof typeof SERVER_MODULE_PATHS {
-  return specifier in SERVER_MODULE_PATHS;
+  return Object.hasOwn(SERVER_MODULE_PATHS, specifier);
 }
 
-/** Anchored to statement position so a quoted `kinu:slate` in authored data is never rewritten. A capture the map
- *  cannot answer means the patterns and map drifted apart; it fails rather than guess a path. */
+/** Each import, re-export and literal `import()` of a module the map names, pointed at its file in the slate's runtime.
+ *  Read as a module, so a quoted `kinu:slate` in authored data or a comment is never rewritten. */
 function rewriteModuleSpecifiers(source: string): Effect.Effect<string, KinuError> {
-  const unmapped: string[] = [];
+  const sites = moduleSpecifiers(source);
 
-  const mapped = (specifier: string): string => {
-    if (isMappedSpecifier(specifier)) return SERVER_MODULE_PATHS[specifier];
-    unmapped.push(specifier);
+  if (sites === null) return Effect.fail(new KinuError('bad_input', 'the compiled slate server does not parse as a module'));
+  let rewritten = '';
+  let from = 0;
 
-    return specifier;
-  };
+  for (const site of sites) {
+    if (!isMappedSpecifier(site.specifier)) continue;
+    rewritten += `${source.slice(from, site.start)}${JSON.stringify(SERVER_MODULE_PATHS[site.specifier])}`;
+    from = site.end;
+  }
 
-  const rewritten = source
-    .replace(STATIC_SPECIFIER, (_match, head: string, quote: string, specifier: string) => `${head}${quote}${mapped(specifier)}${quote}`)
-    .replace(DYNAMIC_SPECIFIER, (_match, quote: string, specifier: string) => `import(${quote}${mapped(specifier)}${quote})`);
-
-  const [missing] = unmapped;
-
-  return missing === undefined
-    ? Effect.succeed(rewritten)
-    : Effect.fail(new KinuError('unsupported', `Slate bundle imports ${missing}, which the module map does not name`));
+  return Effect.succeed(rewritten + source.slice(from));
 }
 
 /** Where a boot compiles: its bundler, the authored root, and the runtime directory its generated entries go in. */
