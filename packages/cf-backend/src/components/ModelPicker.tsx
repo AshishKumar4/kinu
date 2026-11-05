@@ -417,6 +417,8 @@ function ModelPickerItem({ model, unavailable, tests }: {
   return (
     <Combobox.Item value={model}>
       <span className="flex w-full min-w-0 items-center gap-2">
+        {/* A slot of one width whether or not the provider has a mark, so every label starts at one edge. */}
+        <span className="flex w-[13px] shrink-0 justify-center"><ProviderIcon provider={model.provider} /></span>
         <span className={`min-w-0 flex-1 truncate ${unavailable === undefined ? "" : "p-text-3"}`}>{model.label}</span>
         <span className="flex shrink-0 items-center gap-1">
           {unavailable !== undefined && (

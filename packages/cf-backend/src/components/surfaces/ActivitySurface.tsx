@@ -2,14 +2,14 @@
  * Provider-reported figures are labelled `API`; unsourced figures render as an em dash and a reason, never zero.
  * The dollar column (`priceCall`) is a floor when a rate is missing, so it is dimmed and last.
  */
-import { useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   GaugeIcon, CurrencyDollarIcon, LightningIcon, WarningCircleIcon,
   ClockCounterClockwiseIcon,
 } from "@phosphor-icons/react";
 import { Loader } from "@/components/ui/Loader";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { useAsyncResource, lastValue } from "@/hooks/use-async-resource";
+import { useAsyncResource, useReloadWhenMoved, lastValue } from "@/hooks/use-async-resource";
 import { fmtTokens, fmtUsd, fmtPct, quotaWindowText, timeAgo, countOf } from "@kinu.run/core";
 import type { ActivitySnapshot, CacheHitStats } from "@kinu.run/core";
 import { SPEND_SOURCE_DETAIL, SPEND_SOURCE_LABEL, usageTotal } from "@kinu.run/core";
@@ -21,10 +21,6 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
 import { Badge } from "@/components/ui/Badge";
 import { ShareBar, StackedBar as Stacked, Swatch, type ShareTone } from "@/components/ui/Meter";
-
-const STREAMING_POLL_MS = 1500;
-
-const IDLE_POLL_MS = 10_000;
 
 /** One brass ramp, not five hues: one quantity split by origin. */
 const PLANE_LABEL = {
@@ -44,13 +40,24 @@ const planeFill = (plane: ContextPlane): string =>
 export interface ActivitySurfaceProps {
   rpc: WorkspaceRpc;
   isStreaming: boolean;
+  /** Moves with each context the agent's room says it measured: each recorded step, each admitted request. */
+  measured: number;
 }
 
-export function ActivitySurface({ rpc, isStreaming }: ActivitySurfaceProps) {
+/** Read again as the room says a step was measured, and once more as a turn ends, for what it settled. Never polled. */
+export function ActivitySurface({ rpc, isStreaming, measured }: ActivitySurfaceProps) {
   const load = useCallback(() => rpc("getActivitySnapshot", []), [rpc]);
-  const revalidate = useCallback(() => (isStreaming ? STREAMING_POLL_MS : IDLE_POLL_MS), [isStreaming]);
-  const { resource, reload } = useAsyncResource(load, revalidate);
+  const { resource, reload } = useAsyncResource(load);
   const snap = lastValue(resource);
+  const [turnsEnded, setTurnsEnded] = useState(0);
+  const streamed = useRef(isStreaming);
+
+  useEffect(() => {
+    if (streamed.current && !isStreaming) setTurnsEnded((ended) => ended + 1);
+    streamed.current = isStreaming;
+  }, [isStreaming]);
+
+  useReloadWhenMoved(measured + turnsEnded, reload);
 
   if (snap === null) {
     return resource.status === "error"
@@ -160,7 +167,7 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
         <p className="t-meta p-text-3 mt-1">Context window unknown.</p>
       )}
 
-      {step !== null && <Breakdown context={step.context} />}
+      {step !== null && <Breakdown context={step.context} tokens={fill.tokens} />}
     </section>
   );
 }
@@ -172,7 +179,8 @@ function windowTone(share: number): ShareTone {
   return share >= 0.7 ? "warning" : "accent";
 }
 
-function Breakdown({ context }: { context: ContextComposition | null }) {
+/** The provider's token count for the step, split across the composed planes by the share of the prompt each holds. */
+function Breakdown({ context, tokens }: { context: ContextComposition | null; tokens: number }) {
   if (context === null) {
     return (
       <div className="mt-4">
@@ -184,14 +192,15 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
   }
 
   const { planes, measuredChars, span } = breakdownView(context);
+  const share = (chars: number): number => shareOfMeasured(chars, measuredChars) ?? 0;
 
   return (
     <div className="mt-4">
       <div className="flex items-baseline gap-2 mb-2">
-        <h4 className="t-title p-text-2">Composed content</h4>
-        <Source kind="local" />
+        <h4 className="t-title p-text-2">Where the tokens went</h4>
+        <Source kind="API" />
         <span className="t-meta ml-auto p-text-3">
-          {measuredChars.toLocaleString()} exact chars
+          {tokens.toLocaleString()} tokens
         </span>
       </div>
 
@@ -200,13 +209,14 @@ function Breakdown({ context }: { context: ContextComposition | null }) {
       <table className="w-full mt-3 border-collapse">
         <tbody>
           {planes.map((plane) => (
-            <PlaneRows key={plane.plane} plane={plane} measuredChars={measuredChars} />
+            <PlaneRows key={plane.plane} plane={plane} share={share} tokens={tokens} />
           ))}
         </tbody>
       </table>
 
       <p className="t-meta p-text-3 mt-3 pt-2 border-t p-border">
-        These rows count characters in the prompt content Kinu composed.
+        The provider counts tokens for the whole request, not per part, so each row gets the provider&apos;s count
+        multiplied by that part&apos;s share of the prompt text Kinu sent.
       </p>
     </div>
   );
@@ -219,7 +229,7 @@ function StackedBar(
     <div>
       <Stacked parts={planes.map((row) => ({
         key: row.plane, share: row.chars / span, fill: planeFill(row.plane),
-        title: `${PLANE_LABEL[row.plane]}: ${row.chars.toLocaleString()} composed characters`,
+        title: `${PLANE_LABEL[row.plane]}: ${fmtPct(row.chars / span, 1)} of the prompt`,
       }))} />
       <div className="flex flex-wrap gap-x-3 gap-y-1 mt-2">
         {planes.map((row) => (
@@ -238,7 +248,7 @@ const labelCell = "w-full max-w-0 pr-2";
 
 const countCell = "text-right whitespace-nowrap pl-3";
 
-function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredChars: number }) {
+function PlaneRows({ plane, share, tokens }: { plane: BreakdownPlane; share: (chars: number) => number; tokens: number }) {
   return (
     <>
       <tr className="border-t p-border">
@@ -248,9 +258,9 @@ function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredCh
             <span className="t-item p-text truncate">{PLANE_LABEL[plane.plane]}</span>
           </span>
         </td>
-        <td className={`py-1 ${countCell}`}><Num className="t-body p-text">{plane.chars.toLocaleString()} ch</Num></td>
+        <td className={`py-1 ${countCell}`}><Num className="t-body p-text" title={`${plane.chars.toLocaleString()} characters`}>≈{fmtTokens(Math.round(tokens * share(plane.chars)))}</Num></td>
         <td className={`py-1 ${countCell}`}>
-          <Num className="t-body p-text-2">{fmtPct(shareOfMeasured(plane.chars, measuredChars), 1)}</Num>
+          <Num className="t-body p-text-2">{fmtPct(share(plane.chars), 1)}</Num>
         </td>
       </tr>
       {plane.rows.map((row: BreakdownRow) => (
@@ -261,9 +271,9 @@ function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredCh
               {row.items > 1 && <span className="p-text-3"> ×{row.items}</span>}
             </span>
           </td>
-          <td className={`py-px ${countCell}`}><Num className="t-body p-text-3">{row.chars.toLocaleString()} ch</Num></td>
+          <td className={`py-px ${countCell}`}><Num className="t-body p-text-3" title={`${row.chars.toLocaleString()} characters`}>≈{fmtTokens(Math.round(tokens * share(row.chars)))}</Num></td>
           <td className={`py-px ${countCell}`}>
-            <Num className="t-body p-text-3">{fmtPct(shareOfMeasured(row.chars, measuredChars), 1)}</Num>
+            <Num className="t-body p-text-3">{fmtPct(share(row.chars), 1)}</Num>
           </td>
         </tr>
       ))}

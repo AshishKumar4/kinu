@@ -609,6 +609,7 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
             slateReloads={state.slateReloads}
             changesMoved={state.changesMoved}
             readMoves={state.readMoves}
+            contextMeasures={state.contextMeasures}
             tabPresence={state.tabPresence}
             presencePending={state.tabPresence === undefined}
             rpc={state.rpc}
