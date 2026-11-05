@@ -5,7 +5,7 @@
  * is here, so a rule the two backends once held apart is held once (InternalFish #12, 2026-10-20).
  */
 import { Effect } from 'effect';
-import { KinuError, settle } from '../obs/index';
+import { KinuError } from '../obs/index';
 import { EventLog, type PublishResult } from '../events/hub/log';
 import type { SqlExec } from '../types/primitives';
 import type { WorkMode } from '../types/turn';
@@ -39,21 +39,21 @@ export interface HireLifecyclePorts<Seat extends SeatedHire = SeatedHire> {
   /** Its rows: the hirer's delegation depth walks `retained` (an `ActorHost`'s `describe` is the same read). */
   readonly directory: Pick<WorkspaceActorDirectory, 'apply' | 'storagePath' | 'retained' | 'list'>;
   /** A hire just registered, written by `seed` (its name, role and tier) before anything runs it. */
-  readonly born: (reference: ActorReference, name: string, seed: (config: AgentConfigStore) => void) => Promise<void>;
+  readonly born: (reference: ActorReference, name: string, seed: (config: AgentConfigStore) => void) => Effect.Effect<void, KinuError>;
   /** Runs `body` as the hire `reference` names. */
-  readonly asHire: <Result>(reference: ActorReference, name: string, body: (hire: Seat) => Promise<Result>) => Promise<Result>;
+  readonly asHire: <Result>(reference: ActorReference, name: string, body: (hire: Seat) => Effect.Effect<Result, KinuError>) => Effect.Effect<Result, KinuError>;
   /** What `admit` writes and the delivery it owes the hire, committed as one, and its turn woken to take it. */
-  readonly deliver: (hire: Seat, admit: () => OwedAdmission<PublishResult>) => Promise<PublishResult>;
+  readonly deliver: (hire: Seat, admit: () => OwedAdmission<PublishResult>) => Effect.Effect<PublishResult, KinuError>;
   /** Who assigns the hire its work, as its chat shows it. */
   readonly hirerName: (hire: Seat) => string;
   /** The hire's title moved: whatever lists it reads it again. */
   readonly announce: (hire: Seat) => void;
   /** Stops the running jobs of one actor, and says which it could not confirm stopped. */
-  readonly retireJobs: (actorId: string) => Promise<JobRetirement>;
+  readonly retireJobs: (actorId: string) => Effect.Effect<JobRetirement, KinuError>;
   /** The roster of the actor that hired `hirer`'s child. */
   readonly roster: (hirer: ActorReference) => SubagentRosterStore;
   /** Retires an actor under `parent`, ending what this backend holds of it. */
-  readonly retire: (parent: ActorReference, retirement: ActorRetirement) => Promise<void>;
+  readonly retire: (parent: ActorReference, retirement: ActorRetirement) => Effect.Effect<void, KinuError>;
 }
 
 /** Work a hire is given: its brief or a later message. */
@@ -81,7 +81,7 @@ function retirementFor(reference: ActorReference, name: string, keepHistory: boo
 export function admitHireWork<Seat extends SeatedHire>(ports: HireLifecyclePorts<Seat>, reference: ActorReference, name: string, work: HireWork) {
   return refusal(work.creationId !== undefined && work.creationId !== ports.directory.retained(reference.actorId)?.creationId,
     () => new KinuError('denied', 'The birth assignment belongs to a different actor creation.'))
-    .pipe(Effect.andThen(Effect.promise(() => ports.asHire(reference, name, async (hire) => {
+    .pipe(Effect.andThen(ports.asHire(reference, name, (hire) => Effect.gen(function* () {
       const busy = hire.turnInFlight();
       const log = new EventLog(hire.exec, hire.handle);
       const brief = log.query({ variant: 'subagent_task', limit: 1 }).length === 0;
@@ -93,13 +93,13 @@ export function admitHireWork<Seat extends SeatedHire>(ports: HireLifecyclePorts
 
       if (work.creationId !== undefined) admission.creationId = work.creationId;
 
-      const admitted = await ports.deliver(hire, () => {
+      const admitted = yield* ports.deliver(hire, () => {
         const result = admitSubagentTask(log, admission);
 
         return { value: result, delivery: result.admitted ? assignmentDelivery(log, { id: result.id, body: work.body.trim(), mode: work.mode, from: ports.hirerName(hire) }) : null };
       });
 
-      if (admitted.admitted && brief && (await titleActorFromMessage(hire.handle, work.body)).changed) ports.announce(hire);
+      if (admitted.admitted && brief && (yield* Effect.promise(() => titleActorFromMessage(hire.handle, work.body))).changed) ports.announce(hire);
 
       return describeSubagentHandoff({ admission: admitted, turnInFlight: busy, live: readSubagentLiveStatus(hire.exec, hire.handle) });
     }))));
@@ -109,21 +109,23 @@ export function admitHireWork<Seat extends SeatedHire>(ports: HireLifecyclePorts
 interface SubtreePorts {
   readonly directory: Pick<WorkspaceActorDirectory, 'list' | 'retained'>;
   roster(hirer: ActorReference): Pick<SubagentRosterStore, 'get' | 'dismiss' | 'applyReport'>;
-  retire(owner: ActorReference, retirement: ActorRetirement): Promise<void>;
+  retire(owner: ActorReference, retirement: ActorRetirement): Effect.Effect<void, KinuError>;
 }
 
 /** Each hire below `below`, its row dismissed on its hirer's roster and retired under it: a dismissal's subtree, and a
  *  stopped task agent's. */
-async function retireHireSubtree(ports: SubtreePorts, below: ActorReference, keepHistory: boolean): Promise<void> {
-  for (const descendant of subagentDescendants(ports.directory.list(), below.actorId)) {
-    const hirer = ports.directory.retained(descendant.parentActorId ?? '');
+function retireHireSubtree(ports: SubtreePorts, below: ActorReference, keepHistory: boolean): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    for (const descendant of subagentDescendants(ports.directory.list(), below.actorId)) {
+      const hirer = ports.directory.retained(descendant.parentActorId ?? '');
 
-    if (hirer === null) continue;
-    const roster = ports.roster(actorReferenceOf(hirer));
+      if (hirer === null) continue;
+      const roster = ports.roster(actorReferenceOf(hirer));
 
-    if (roster.get(descendant.name)?.status !== 'dismissed') roster.dismiss(descendant.name, Date.now());
-    await ports.retire(actorReferenceOf(hirer), retirementFor(actorReferenceOf(descendant), descendant.name, keepHistory, true));
-  }
+      if (roster.get(descendant.name)?.status !== 'dismissed') roster.dismiss(descendant.name, Date.now());
+      yield* ports.retire(actorReferenceOf(hirer), retirementFor(actorReferenceOf(descendant), descendant.name, keepHistory, true));
+    }
+  });
 }
 
 /**
@@ -132,29 +134,31 @@ async function retireHireSubtree(ports: SubtreePorts, below: ActorReference, kee
  * agent is then retired as a stopped dismissal that keeps its history, its hires before it. A host supplies how it
  * cancels and cuts off; the rest is here, once.
  */
-export async function stopAgentsBelow(actorId: string, ports: SubtreePorts & {
+export function stopAgentsBelow(actorId: string, ports: SubtreePorts & {
   cancelOwed(actor: WorkspaceActor): void;
   /** Cuts off its running turn and what it holds open; whether a turn was running, which then reports its own end. */
   stopTurn(actor: WorkspaceActor): Promise<boolean>;
-}): Promise<void> {
-  for (const actor of stoppedBelow(ports.directory.list(), actorId)) {
-    ports.cancelOwed(actor);
+}): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    for (const actor of stoppedBelow(ports.directory.list(), actorId)) {
+      ports.cancelOwed(actor);
 
-    if (await ports.stopTurn(actor)) continue;
-    const hirer = ports.directory.retained(actor.parentActorId ?? '');
+      if (yield* Effect.promise(() => ports.stopTurn(actor))) continue;
+      const hirer = ports.directory.retained(actor.parentActorId ?? '');
 
-    if (hirer === null) continue;
-    const roster = ports.roster(actorReferenceOf(hirer));
+      if (hirer === null) continue;
+      const roster = ports.roster(actorReferenceOf(hirer));
 
-    if (roster.get(actor.name)?.status !== 'working') continue;
-    roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
+      if (roster.get(actor.name)?.status !== 'working') continue;
+      roster.applyReport(actor.name, 'blocked', 'turn_end', Date.now());
 
-    if (actor.lifetime !== TEMPORARY_LIFETIME) continue;
-    const reference = actorReferenceOf(actor);
+      if (actor.lifetime !== TEMPORARY_LIFETIME) continue;
+      const reference = actorReferenceOf(actor);
 
-    await retireHireSubtree(ports, reference, true);
-    await ports.retire(actorReferenceOf(hirer), retirementFor(reference, actor.name, true, true));
-  }
+      yield* retireHireSubtree(ports, reference, true);
+      yield* ports.retire(actorReferenceOf(hirer), retirementFor(reference, actor.name, true, true));
+    }
+  });
 }
 
 /** The one hire lifecycle over `ports`. */
@@ -176,44 +180,44 @@ export function hireLifecycle<Seat extends SeatedHire>(ports: HireLifecyclePorts
       .pipe(Effect.andThen(refusal(entry.state !== 'active', () => new KinuError('missing', 'The hire is retired.'))), Effect.as(entry.reference));
   });
 
-  const asHire = <Result>(name: string, body: (hire: Seat) => Promise<Result>): Effect.Effect<Result, KinuError> =>
-    Effect.flatMap(resolve(name), (reference) => Effect.promise(() => ports.asHire(reference, name, body)));
+  const asHire = <Result>(name: string, body: (hire: Seat) => Effect.Effect<Result, KinuError>): Effect.Effect<Result, KinuError> =>
+    Effect.flatMap(resolve(name), (reference) => ports.asHire(reference, name, body));
 
   return {
-    spawn: (input) => settle(Effect.gen(function* () {
+    spawn: (input) => Effect.gen(function* () {
       const budget = delegationBudgetOf((actorId) => ports.directory.retained(actorId), ports.parent().record);
 
       yield* refusal(delegationExhausted(budget), () => new KinuError('denied', delegationDepthRefusal(budget).error));
       const reference = inDirectory('register', input);
 
       // The child's own config rows only; the parent's roster row is core's (`createTeamToolDeps`), one writer per fact.
-      yield* Effect.promise(() => ports.born(reference, input.name, (config) => {
+      yield* ports.born(reference, input.name, (config) => {
         config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
         config.setRoleSelection(input.role);
         config.setAssignedTier(input.tier ?? null);
-      }));
+      });
 
       return reference;
-    })),
+    }),
     // Its row cancelled, then retired and destroyed as every retirement is: a cancelled hire leaves no row or storage.
-    cancelBirth: (input) => settle(Effect.gen(function* () {
+    cancelBirth: (input) => Effect.gen(function* () {
       const reference = inDirectory('cancelCreation', input);
 
-      yield* Effect.promise(() => ports.retire(ports.parent().reference, { reference, name: input.name, destroy: true, interrupt: true }));
+      yield* ports.retire(ports.parent().reference, { reference, name: input.name, destroy: true, interrupt: true });
 
       return reference;
-    })),
-    assign: (name, input) => settle(Effect.flatMap(resolve(name), (reference) => admitHireWork(ports, reference, name, { kind: 'task', ...input }))),
-    status: (name) => settle(asHire(name, async (hire) => readSubagentLiveStatus(hire.exec, hire.handle))),
-    message: (name, content, mode) => settle(Effect.flatMap(resolve(name), (reference) => admitHireWork(ports, reference, name, { kind: 'message', body: content, mode }))),
-    rename: (name, displayName, nameOrigin) => settle(asHire(name, async (hire) => { hire.handle.config.setDisplayNameOrigin(displayName, nameOrigin); })),
+    }),
+    assign: (name, input) => Effect.flatMap(resolve(name), (reference) => admitHireWork(ports, reference, name, { kind: 'task', ...input })),
+    status: (name) => asHire(name, (hire) => Effect.sync(() => readSubagentLiveStatus(hire.exec, hire.handle))),
+    message: (name, content, mode) => Effect.flatMap(resolve(name), (reference) => admitHireWork(ports, reference, name, { kind: 'message', body: content, mode })),
+    rename: (name, displayName, nameOrigin) => asHire(name, (hire) => Effect.sync(() => { hire.handle.config.setDisplayNameOrigin(displayName, nameOrigin); })),
     /** Its subtree's jobs stop first, or none retires; then its hires, then it. Wipe removes rows and home; archive keeps them. */
-    dismiss: (name, { keepHistory, interrupt }, reference) => settle(Effect.gen(function* () {
+    dismiss: (name, { keepHistory, interrupt }, reference) => Effect.gen(function* () {
       const stoppedJobs: string[] = [];
       const refused: string[] = [];
 
       for (const actorId of [...subagentDescendants(ports.directory.list(), reference.actorId).map((record) => record.actorId), reference.actorId]) {
-        const retirement = yield* Effect.promise(() => ports.retireJobs(actorId));
+        const retirement = yield* ports.retireJobs(actorId);
 
         stoppedJobs.push(...retirement.stopped);
         refused.push(...retirement.refused);
@@ -221,10 +225,10 @@ export function hireLifecycle<Seat extends SeatedHire>(ports: HireLifecyclePorts
 
       yield* refusal(refused.length > 0, () => new KinuError('unavailable',
         `${name} keeps running: nothing confirmed its job(s) ${refused.join(', ')} stopped${stoppedJobs.length === 0 ? '' : `; ${stoppedJobs.join(', ')} stopped`}.`));
-      yield* Effect.promise(() => retireHireSubtree(ports, reference, keepHistory));
-      yield* Effect.promise(() => ports.retire(ports.parent().reference, retirementFor(reference, name, keepHistory, interrupt)));
+      yield* retireHireSubtree(ports, reference, keepHistory);
+      yield* ports.retire(ports.parent().reference, retirementFor(reference, name, keepHistory, interrupt));
 
       return { stoppedJobs };
-    })),
+    }),
   };
 }

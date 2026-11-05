@@ -201,7 +201,7 @@ export class SessionHistory {
       const transcript = this.transcript(sessionId);
       const entry = transcript.read(entryId);
 
-      if (entry === null) throw new KinuError('missing', 'conversation entry does not exist');
+      if (entry === null) return yield* Effect.fail(new KinuError('missing', 'conversation entry does not exist'));
       const base = baseOf(transcript, entry);
       const selected = this.context.current();
 
@@ -466,18 +466,18 @@ export class SessionHistory {
 
   landInput(input: LandedInput): void {
     const { prepared, reference, assertOwner } = input;
-    this.dependencies.transactionSync(() => {
+    this.dependencies.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       assertOwner();
       const existing = this.admittedInput(reference.messageId);
 
       if (existing === null) {
-        if (prepared === null) throw new KinuError('missing', 'landed input was not prepared');
+        if (prepared === null) return yield* Effect.fail(new KinuError('missing', 'landed input was not prepared'));
         this.messages.insert(prepared, 'input', { ingressId: reference.messageId });
       }
 
       const selected = this.activateInput(reference, input.turnId, assertOwner);
       input.publish?.(selected);
-    });
+    })));
   }
   activateInput(reference: MessageReference, turnId: string, assertOwner: () => void): ContextSelection {
     return this.context.commit(null, { cause: 'input', turnId, assertEpoch: () => Effect.sync(assertOwner), mutate: entries => {
@@ -492,18 +492,20 @@ export class SessionHistory {
     readonly turnId: string | null; readonly ingressId?: string;
     readonly assertOwner: () => void;
   }): Promise<MessageReference> {
-    const selected = this.context.current();
-    const prepared = await this.messages.prepare(input.message, input.id);
-    let reference: MessageReference | null = null;
-    this.context.commit(selected, { cause: input.origin, turnId: input.turnId, assertEpoch: () => Effect.sync(input.assertOwner), mutate: entries => {
-      reference = this.messages.insert(prepared, input.origin, input.ingressId === undefined ? {} : { ingressId: input.ingressId });
+    return settle(Effect.gen({ self: this }, function* () {
+      const selected = this.context.current();
+      const prepared = yield* Effect.promise(() => this.messages.prepare(input.message, input.id));
+      let reference: MessageReference | null = null;
+      this.context.commit(selected, { cause: input.origin, turnId: input.turnId, assertEpoch: () => Effect.sync(input.assertOwner), mutate: entries => {
+        reference = this.messages.insert(prepared, input.origin, input.ingressId === undefined ? {} : { ingressId: input.ingressId });
 
-      return [...entries, { ...reference, entryId: input.id, position: entries.length }];
-    } });
+        return [...entries, { ...reference, entryId: input.id, position: entries.length }];
+      } });
 
-    if (reference === null) throw new KinuError('io', 'message publication did not return its identity');
+      if (reference === null) return yield* Effect.fail(new KinuError('io', 'message publication did not return its identity'));
 
-    return reference;
+      return reference;
+    }));
   }
 
   epochCurrent(turnId: string, epoch: number): boolean {

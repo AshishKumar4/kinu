@@ -79,7 +79,7 @@ export interface SeatHostDeps<R extends AgentRuntime = AgentRuntime> {
   readonly directory: WorkspaceActorDirectory;
   readonly installedBuild: string | null;
   readonly workspace?: string;
-  runtimeFor(bound: BoundActor, seat: ActorSeat): R | Promise<R>;
+  runtimeFor(bound: BoundActor, seat: ActorSeat): Effect.Effect<R, KinuError>;
   filesFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<SessionFilePlane>;
   /** Program bytes may live on a state plane distinct from session payloads and tools. */
   scaffoldFor(bound: Pick<BoundActor, 'reference' | 'record' | 'handle'>): Promise<VersionedScaffoldSource>;
@@ -293,7 +293,7 @@ export function createSeatHost<A extends SeatedActor<R>, R extends AgentRuntime>
 
   const build = (reference: ActorReference, seat: ActorSeat): Effect.Effect<{ actor: A; fence: ReleaseFence }, KinuError> => Effect.gen(function* () {
     const { bound, fence } = yield* bind(reference);
-    const runtime = yield* Effect.promise(async () => deps.runtimeFor(bound, seat));
+    const runtime = yield* deps.runtimeFor(bound, seat);
 
     const seated = Effect.gen(function* () {
       // Children need handle identity so release revokes every statement. The root's runtime

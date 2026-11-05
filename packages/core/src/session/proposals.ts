@@ -97,13 +97,15 @@ export class SessionProposals {
   }
 
   previewAt(id: string, selection: ContextSelection): readonly ContextEntry[] {
-    const proposal = this.inspect(id);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const proposal = this.inspect(id);
 
-    if (proposal === null || proposal.metadata.context_id !== selection.contextId || proposal.metadata.base_revision > selection.revision) {
-      throw new KinuError('missing', 'context proposal does not belong to this revision');
-    }
+      if (proposal === null || proposal.metadata.context_id !== selection.contextId || proposal.metadata.base_revision > selection.revision) {
+        return yield* Effect.fail(new KinuError('missing', 'context proposal does not belong to this revision'));
+      }
 
-    return this.compose(id, this.context.entries(selection));
+      return this.compose(id, this.context.entries(selection));
+    }));
   }
 
   apply(id: string, assertEpoch: () => Effect.Effect<void, KinuError>, validate: (entries: readonly ContextEntry[]) => StagedContextDeferral | null, turnId: string | null = null): ContextSelection | null {
@@ -113,7 +115,7 @@ export class SessionProposals {
       const proposal = this.requirePending(id);
       const selected = this.context.selected();
 
-      if (selected === null || selected.contextId !== proposal.context_id) throw new KinuError('denied', 'proposal belongs to another selected context');
+      if (selected === null || selected.contextId !== proposal.context_id) return yield* Effect.fail(new KinuError('denied', 'proposal belongs to another selected context'));
       const next = this.compose(id, this.context.entries(selected));
       const refusal = validate(next);
       const actorId = this.actor.actorId;

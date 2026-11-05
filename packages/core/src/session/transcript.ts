@@ -5,7 +5,9 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { PromptFile } from '../types/backend-host';
 import type { SqlExecutor } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
+import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
 import { encodeModelMessage } from './message-codec';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, payloadReference, type SessionPayload } from './payload';
@@ -336,17 +338,19 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   }
 
   async page(request: PositionPageRequest = {}): Promise<Page<ConversationProjection, PositionCursor>> {
-    const page = this.pageIds(request);
-    const items: ConversationProjection[] = [];
+    return settle(Effect.gen({ self: this }, function* () {
+      const page = this.pageIds(request);
+      const items: ConversationProjection[] = [];
 
-    for (const row of page.items) {
-      const projected = await this.project(row.id);
+      for (const row of page.items) {
+        const projected = yield* Effect.promise(() => this.project(row.id));
 
-      if (projected === null) throw new KinuError('missing', 'conversation entry disappeared');
-      items.push(projected);
-    }
+        if (projected === null) return yield* Effect.fail(new KinuError('missing', 'conversation entry disappeared'));
+        items.push(projected);
+      }
 
-    return { ...page, items };
+      return { ...page, items };
+    }));
   }
 
 

@@ -1,9 +1,10 @@
 import type { ModelMessage } from 'ai';
+import { Effect } from 'effect';
 import type { WorkMode } from '../types/turn';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, settle, settleSync, toKinuError } from '../obs/index';
 import { RUN_END_REASONS } from './turn-lifecycle';
 import { initSessionContextTables } from '../session/schema';
 import { initSessionTranscriptTables } from '../session/transcript-schema';
@@ -194,13 +195,13 @@ export class ActorClaimStore {
       metadata: { program: { ...input.program }, workMode: input.workMode, ...(input.installedBuild !== undefined && { installedBuild: input.installedBuild }) },
     });
 
-    const claim = this.transactionSync(() => {
+    const claim = this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       const now = this.guard(input.turnId, epoch);
 
-      if (now.epoch !== epoch || !now.open || now.phase !== 'preparing') throw new KinuError('denied', 'claim changed during admission preparation');
+      if (now.epoch !== epoch || !now.open || now.phase !== 'preparing') return yield* Effect.fail(new KinuError('denied', 'claim changed during admission preparation'));
 
       if (now.selected?.contextId !== input.context.contextId || now.selected.revision !== input.context.revision) {
-        throw new KinuError('denied', 'working selection changed during admission preparation');
+        return yield* Effect.fail(new KinuError('denied', 'working selection changed during admission preparation'));
       }
 
       const admitted: ActorTurnClaim = Object.freeze({ actorId: this.actorId, runId: input.runId, turnId: input.turnId, epoch,
@@ -212,7 +213,7 @@ export class ActorClaimStore {
       this.history.requests.record(admission);
 
       return admitted;
-    });
+    })));
 
     // Seal messages left open under a superseded epoch only after this admission holds the turn.
     await this.history.sealAbandoned();
@@ -230,22 +231,22 @@ export class ActorClaimStore {
       epoch: claim.epoch, revision: latest + 1, step: input.index, source, messages: input.messages,
       metadata: { program: { ...claim.program }, workMode: claim.workMode, ...(input.cache !== undefined && { cache: { ...input.cache } }) } });
 
-    const consumed = this.transactionSync(() => {
+    const consumed = this.transactionSync(() => settleSync(Effect.gen({ self: this }, function* () {
       const now = this.guard(claim.turnId, claim.epoch);
 
       assertLiveIn(now, claim);
 
-      if (now.revision !== latest) throw new KinuError('denied', 'another request consumed this claim during preparation');
+      if (now.revision !== latest) return yield* Effect.fail(new KinuError('denied', 'another request consumed this claim during preparation'));
 
       if (now.selected?.contextId !== source.contextId || now.selected.revision !== source.revision) {
-        throw new KinuError('denied', 'working selection changed during request preparation');
+        return yield* Effect.fail(new KinuError('denied', 'working selection changed during request preparation'));
       }
 
       this.history.requests.recordPrepared(prepared);
       this.markCut(claim, 'provider');
 
       return { requestId: prepared.request.id, revision: prepared.request.revision };
-    });
+    })));
 
     this.history.requests.remember(prepared);
 
@@ -522,14 +523,16 @@ export type ClaimRecovery =
 
 export async function verifyClaimedProgram(claim: StoredActorClaim, readVersionedSource: (version: number) => Promise<string | null>, digestOf: (source: string) => string,
   context: ContextRevision | null): Promise<ClaimRecovery> {
-  const { program } = claim;
+  return settle(Effect.gen(function* () {
+    const { program } = claim;
 
-  // A claim never bound to its program (still `preparing`) admitted no request either.
-  if (context === null || program === null) throw new KinuError('missing', 'claimed request evidence is missing');
+    // A claim never bound to its program (still `preparing`) admitted no request either.
+    if (context === null || program === null) return yield* Effect.fail(new KinuError('missing', 'claimed request evidence is missing'));
 
-  if (program.kind === 'builtin') return { kind: program.build === null ? 'build_unknown' : 'verified', claim };
-  const source = await readVersionedSource(program.version);
-  const found = source === null ? null : digestOf(source);
+    if (program.kind === 'builtin') return { kind: program.build === null ? 'build_unknown' : 'verified', claim };
+    const source = yield* Effect.promise(() => readVersionedSource(program.version));
+    const found = source === null ? null : digestOf(source);
 
-  return found === null || found !== program.digest ? { kind: 'source_changed', claim, found } : { kind: 'verified', claim };
+    return found === null || found !== program.digest ? { kind: 'source_changed', claim, found } : { kind: 'verified', claim };
+  }));
 }

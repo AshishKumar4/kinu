@@ -197,10 +197,10 @@ export class LocalAgentClient implements AgentClient {
     const refusal = await this.deps.host.takeDriver(this.agentName);
 
     if (refusal) {
-      throw new KinuError(
+      return settle(Effect.fail(new KinuError(
         refusal.refused.reason,
         `${refusal.refused.error}. Close that session, or continue the conversation there.`,
-      );
+      )));
     }
   }
 
@@ -270,11 +270,11 @@ export class LocalAgentClient implements AgentClient {
 
   /** A fresh transcript artifact takes the entries recorded after the walk-back. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
-    if (this.awaiting.size > 0) throw new Error('Cannot fork while a turn is running.');
+    if (this.awaiting.size > 0) return settle(Effect.fail(new KinuError('denied', 'Cannot fork while a turn is running.')));
     const rows = await this.history();
     const pivotRow = rows[findForkPivot(rows, point)];
 
-    if (pivotRow === undefined) throw new Error('Could not locate that message in the durable conversation.');
+    if (pivotRow === undefined) return settle(Effect.fail(new KinuError('missing', 'Could not locate that message in the durable conversation.')));
     // A walk-back leaves files as they are: the agent is told what its rewound turns left.
     await this.session.revertConversation(pivotRow.id, { chatOnly: true });
     this.activeCliSession = createCliSession(this.agentName, {

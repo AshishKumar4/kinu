@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-11-05",
   "files": 3962,
-  "functions": 104699,
+  "functions": 104693,
   "ceiling": 87,
   "line": 25,
   "inventory": [
@@ -28,6 +28,10 @@
     {
       "key": "scripts/bench-pilot.ts#validatePilotReport",
       "complexity": 41
+    },
+    {
+      "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
+      "complexity": 40
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
@@ -259,10 +263,6 @@
     },
     {
       "key": "packages/compaction/src/extension.ts#compactionExtension>transformContext",
-      "complexity": 26
-    },
-    {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
       "complexity": 26
     },
     {
