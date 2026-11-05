@@ -4420,7 +4420,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         // What its turn logged that no tool call took rides its end, written after its room heard it.
         if (activity.length > 0) this.agentActivity(actorId, activity);
       },
-      answerAmended: async (window) => { this.chatRooms.hostedRoom(actorId)?.answerAmended(window); },
+      answerAmended: async (message) => { this.chatRooms.hostedRoom(actorId)?.answerAmended(message); },
       // The turn's report, owed once its answer committed: decided here, where its hirer's roster is, and relayed. What it
       // told so far is the agent's own, kept where the turn ran. An agent with no hirer owes none.
       turnReport: async (turn, ended, relay) => {

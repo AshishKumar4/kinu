@@ -1,6 +1,6 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** An agent's own SQLite, under the core stores; its roster rows are copies the workspace sends on each call. */
-import type { ModelMessage } from 'ai';
+import type { ModelMessage, UIMessage } from 'ai';
 import {
   CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks, historyTurnPairs, conversationTurnPair, type ConversationTurnPair,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
@@ -505,6 +505,19 @@ export class AgentDatabase {
   /** What a tab is sent of this chat as it connects or a turn ends: its newest page. */
   async seed(): Promise<ChatWindow> {
     return await chatSeed(this.readable().transcript, this.mediaUrl());
+  }
+
+  /** One row of this chat as its pages draw it, by id, wherever it sits; null for an id it does not hold. */
+  async drawnMessage(messageId: string): Promise<UIMessage | null> {
+    return await this.readable().transcript.drawnMessage(messageId, this.mediaUrl());
+  }
+
+  /** The row that asked for the answer `messageId` names, drawn; null for none. */
+  async drawnOpener(messageId: string): Promise<UIMessage | null> {
+    const { transcript } = this.readable();
+    const opener = transcript.openerOf(messageId);
+
+    return opener === null ? null : await transcript.drawnMessage(opener.id, this.mediaUrl());
   }
 
   /** The image a page of this chat named, when an entry of this chat carries it. */

@@ -1015,6 +1015,27 @@ describe("a chat's pages", () => {
     w.db.close();
   });
 
+  test('an answer older than the window is drawn by its id, with the words that asked for it', async () => {
+    const w = workspace();
+    const { history, transcript } = chatStore(w);
+
+    for (let index = 0; index < CHAT_SEED_ROWS + 10; index += 1) {
+      await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: `ask-${String(index)}`, origin: 'input', message: { role: 'user', content: `ask ${String(index)}` } });
+      await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: `answer-${String(index)}`, origin: 'output', message: { role: 'assistant', content: `answer ${String(index)}` } });
+    }
+
+    const seed = await chatSeed(transcript, JSON.stringify);
+    const answer = await transcript.drawnMessage('answer-0', JSON.stringify);
+
+    expect({
+      inWindow: seed.messages.some((message) => message.id === 'answer-0'),
+      drawn: answer?.parts.flatMap((part) => (part.type === 'text' ? [part.text] : [])),
+      opener: transcript.openerOf('answer-0')?.id,
+      unknown: await transcript.drawnMessage('no-such-row', JSON.stringify),
+    }).toEqual({ inWindow: false, drawn: ['answer 0'], opener: 'ask-0', unknown: null });
+    w.db.close();
+  });
+
   test('a window that reaches the chat\'s start says there is nothing older to read', async () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
