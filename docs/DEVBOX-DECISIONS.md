@@ -5502,6 +5502,21 @@ the rest, nothing ran on the owner's box but its heartbeat, so setting the recov
 configuration for 30 s is unmeasured: no outbound call from it reached the workspace object, which answered other calls
 meanwhile.
 
+D120. A start whose pin changes a package moves only the files apt reads, and runs the full install's apt over them
+(2026-11-04, ledger 1024-h follow-up; amends D110's whole install for a package change). D110 left a package change to
+the whole tarball because a changed .deb installed by itself would move what the full install's apt leaves alone. The
+one re-pin since was one (11-02, ripgrep added: "the pin changes 3 package files"), and every box a pin behind installed
+the whole tarball: production 12.3 to 29.9 s of its 25 s start (6 boxes), staging 14.5 to 23.1 s (4). Running that same
+apt over the repository needs only the files it reads: the full install removes the repository after it, so a start
+places the delta's files, brings back the repository's index and its `wanted` list whether they changed or not, asks
+apt (`apt-get -s install`) what it would unpack, fetches each such .deb the delta lacks by the pin's sha256 for it, and
+runs the full install's own `apt-get install`; the box is marked as a full install marks it from the first file placed
+to the stamp, so a start cut short installs whole. The container tier's `tools` contract takes a box whose pin lacked
+ripgrep and whose xdotool was removed by hand, with the tarball out of reach: the start fetched 4 files (1.9 MB: the
+index, the list, ripgrep's .deb and xdotool's unchanged one), apt set up 2 packages in 425 ms, 851 ms in all, and both
+tools ran after (armada, kinu-devbox-contracts-lanes, 2026-11-04T22:48:44Z; red before the list came back: apt read no
+`wanted` and installed nothing).
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

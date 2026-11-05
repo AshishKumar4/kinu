@@ -91,13 +91,14 @@ export function SidebarFooter({ initiallyOpen = false }: { initiallyOpen?: boole
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
 
-  useCloseOnOutsideClick(open, ref, close);
+  const outside = useCloseOnOutsideClick(open, ref, close);
 
   useEffect(() => {
     if (!open) return undefined;
 
+    // Its own Escape only: one a dialog the menu opened takes is the dialog's.
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" || !(event.target instanceof Node) || ref.current?.contains(event.target) !== true) return;
       setOpen(false);
       ref.current?.querySelector<HTMLButtonElement>("[data-account-menu]")?.focus();
     };
@@ -110,7 +111,7 @@ export function SidebarFooter({ initiallyOpen = false }: { initiallyOpen?: boole
   const name = profile?.displayName ?? profile?.email ?? "";
 
   return (
-    <div ref={ref} className="relative flex items-center gap-1 border-t p-border px-2 py-2" data-sidebar-footer>
+    <div ref={ref} {...outside} className="relative flex items-center gap-1 border-t p-border px-2 py-2" data-sidebar-footer>
       <Pressable onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" data-account-menu
         selected={open} className="flex min-w-0 flex-1 items-center gap-2 py-1 pl-1 pr-2">
         <Avatar name={name === "" ? "?" : name} size={24} />

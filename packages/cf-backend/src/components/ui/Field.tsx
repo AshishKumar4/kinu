@@ -7,6 +7,12 @@ import { Input } from "@cloudflare/kumo/primitives/input";
 
 export type FieldSize = "md" | "sm";
 
+/** An IME's own keystroke: the Enter that picks a candidate, the Escape that drops one. WebKit ends the composition
+ *  first, so there only keyCode 229 marks it. */
+export function composing(event: KeyboardEvent): boolean {
+  return event.isComposing || event.keyCode === 229;
+}
+
 /** `inline` puts a small control on the label's row at desktop width. */
 export function Field({ label, hint, error = null, inline = false, children }: {
   label: ReactNode;

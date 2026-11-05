@@ -3,7 +3,7 @@
  * surfaces beside it, and the settings it runs by. Each opens what the page already offers for it.
  */
 import { Cause, Effect } from "effect";
-import { APP_ROUTES, COMPACTED, slashCommand, type CompactOutcome, type ConversationMessage, type SurfaceKind } from "@kinu.run/core";
+import { APP_ROUTES, COMPACTED, slashCommand, type CompactOutcome, type ConversationMessage, type SurfaceKind, workspaceRoute } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import type { ComposerCommand } from "@/components/SlashMenu";
 import { settingsPath } from "@/components/SettingsRail";
@@ -28,7 +28,7 @@ export interface WorkspaceCommandHandles {
 }
 
 export function workspaceCommands(at: WorkspaceCommandHandles): ComposerCommand[] {
-  const settings = `/workspace/${at.workspace}/settings`;
+  const settings = workspaceRoute(at.workspace, "settings");
 
   const go = (path: string) => () => at.go(path);
 

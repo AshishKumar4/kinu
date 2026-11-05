@@ -17,6 +17,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Pressable } from "@/components/ui/Pressable";
 import { CopyField } from "@/components/ui/CopyField";
 import { useProviderWindow } from "@/hooks/use-provider-window";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { CopyAddressHint, SignInOpen, SignInPaste, SignInRisk, SignInStep, SignInSteps } from "@/components/account/SubscriptionSignIn";
 
 /** How often a waiting sign-in is read. */
@@ -205,40 +206,33 @@ function SignInHere({ onDone, onFailed, account }: { onDone: (first: boolean) =>
   const [started, setStarted] = useState<{ authorizeUrl: string; redirectUri: string } | null>(null);
   const [opened, setOpened] = useState(false);
   const [pasted, setPasted] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
+  const step = useLabelledStep();
+  const { error: problem, clear } = step;
 
   const begin = useCallback(() => {
     signInWindow.close();
     setStarted(null);
     setOpened(false);
     setPasted("");
-    setProblem(null);
+    clear();
     detach(attempt({ doing: "starting the ChatGPT sign-in", otherwise: "io" }, () => startChatGptPaste(account)).pipe(
       Effect.map(setStarted),
       Effect.catch(onFailed),
     ));
-  }, [onFailed, account, signInWindow]);
+  }, [onFailed, account, signInWindow, clear]);
 
   useEffect(begin, [begin]);
   // Leaving the card leaves nothing to paste the address into.
   useEffect(() => () => signInWindow.close(), [signInWindow]);
 
-  const finish = useCallback(() => {
-    setBusy(true);
-    setProblem(null);
-    detach(Effect.tryPromise({ try: () => finishChatGptPaste(pasted.trim()), catch: (cause) => cause }).pipe(
-      Effect.map((answer) => {
-        if (answer.outcome === "signed_in") {
-          signInWindow.close();
-          onDone(true);
-        } else setProblem(PASTE_OUTCOME[answer.outcome]);
-      }),
-      // The address refused says what was wrong with it, under the field it was pasted into.
-      Effect.catch((cause) => Effect.sync(() => { setProblem(renderThrownChain({ cause })); })),
-      Effect.ensuring(Effect.sync(() => setBusy(false))),
-    ));
-  }, [pasted, onDone, signInWindow]);
+  // The address refused says what was wrong with it, under the field it was pasted into.
+  const finish = (): void => step.run("finish", () => Effect.gen(function* () {
+    const answer = yield* Effect.promise(() => finishChatGptPaste(pasted.trim()));
+
+    if (answer.outcome !== "signed_in") return yield* Effect.fail(PASTE_OUTCOME[answer.outcome]);
+    signInWindow.close();
+    onDone(true);
+  }));
 
   if (started === null) return <p className="t-meta flex items-center gap-2 p-text-3" data-chatgpt-way="here"><Loader size="sm" /> Preparing the sign-in…</p>;
 
@@ -257,7 +251,7 @@ function SignInHere({ onDone, onFailed, account }: { onDone: (first: boolean) =>
               <p className="t-body p-text-2">The address starts with <span className="t-mono p-text">{landing}</span>.</p>
               <CopyAddressHint />
               <SignInPaste label="The address you copied" placeholder={`${started.redirectUri}?code=…`} value={pasted} onChange={setPasted}
-                onSubmit={finish} busy={busy} problem={problem} action="Finish" />
+                onSubmit={finish} busy={step.busy !== null} problem={problem} action="Finish" />
             </>
           )}
         </SignInStep>

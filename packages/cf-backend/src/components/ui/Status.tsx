@@ -3,21 +3,23 @@
  * the accent, pulsing; `success` is done or healthy; `warning` needs a look. Accent and green stay apart where motion is
  * reduced and the pulse stops.
  */
+import { Dot } from "./Dot";
+
 export type StatusTone = "success" | "live" | "accent" | "warning" | "danger" | "info" | "neutral";
 
-const TONE = {
-  success: { dot: "p-dot-success", ink: "p-success" },
-  live: { dot: "p-dot-accent p-dot-pulse", ink: "p-accent-fg" },
-  accent: { dot: "p-dot-accent", ink: "p-accent-fg" },
-  warning: { dot: "p-dot-warning", ink: "p-warning" },
-  danger: { dot: "p-dot-danger", ink: "p-danger" },
-  info: { dot: "p-dot-info", ink: "p-info" },
-  neutral: { dot: "p-dot-neutral", ink: "p-text-3" },
-} satisfies Record<StatusTone, { dot: string; ink: string }>;
+const INK = {
+  success: "p-success",
+  live: "p-accent-fg",
+  accent: "p-accent-fg",
+  warning: "p-warning",
+  danger: "p-danger",
+  info: "p-info",
+  neutral: "p-text-3",
+} satisfies Record<StatusTone, string>;
 
 /** A tone's ink, for a word or an icon that says the state without the dot. */
 export function toneInk(tone: StatusTone): string {
-  return TONE[tone].ink;
+  return INK[tone];
 }
 
 export function Status({ tone, children, hooks }: {
@@ -27,16 +29,11 @@ export function Status({ tone, children, hooks }: {
   hooks?: Readonly<Record<`data-${string}`, string>>;
 }) {
   return (
-    <span className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap t-status ${TONE[tone].ink}`} {...hooks}>
-      <span aria-hidden="true" className={`size-1.5 shrink-0 rounded-[var(--r-pill)] ${TONE[tone].dot}`} />
+    <span className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap t-status ${INK[tone]}`} {...hooks}>
+      <Dot tone={tone} />
       {children}
     </span>
   );
-}
-
-/** The dot alone, for a row that already names its state; `title` says it on hover. */
-export function StatusDot({ tone, title, className = "" }: { tone: StatusTone; title?: string; className?: string }) {
-  return <span aria-hidden={title === undefined} title={title} className={`size-1.5 shrink-0 rounded-[var(--r-pill)] ${TONE[tone].dot} ${className}`} />;
 }
 
 export type StatePillTone = "done" | "live" | "quiet";

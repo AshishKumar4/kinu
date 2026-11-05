@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useLocation } from "react-router-dom";
 import type { PanelAgent } from "@kinu.run/core";
+import { workspaceRoute } from "@kinu.run/core";
 
 /** What a chat's tab, and its row in the sidebar, offer: a rename, and a delete, which for Main clears it instead. */
 export interface ChatActions {
@@ -58,7 +59,7 @@ export function AgentsNavProvider({ children }: { readonly children: ReactNode }
   }, []);
 
   const { pathname } = useLocation();
-  const inside = drilled !== null && (pathname === `/workspace/${drilled}` || pathname.startsWith(`/workspace/${drilled}/`));
+  const inside = drilled !== null && (pathname === workspaceRoute(drilled) || pathname.startsWith(`${workspaceRoute(drilled)}/`));
 
   const value = useMemo(
     () => ({ drilled: inside ? drilled : null, panel, entries, trigger, enter, back, publish }),

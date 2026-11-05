@@ -6,7 +6,6 @@ import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { findPlaneReferences, isWholeReference, linkProse, MAX_LINES_PER_FILE, promoteSlateLinks, slateLinkId, type ChangelogEntry, type DiffLine, type MarkdownNode } from "@kinu.run/core";
 import { blockServer, ephemeralSlateId, slateUiSegments, type EphemeralSlateAddress, type JsonValue, type SlateUiSegment } from "@kinu.run/core";
-import { KinuMark } from "@/components/ui/KinuLogo";
 import { InlineSlate } from "@/components/slates/InlineSlate";
 import { DrawnSlate } from "@/components/slates/DrawnSlate";
 import { SlateInlineContext } from "@/components/slates/context";
@@ -15,6 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { InlineAction } from "@/components/ui/InlineAction";
 import { CopyText } from "@/components/ui/CopyButton";
 import { Surface } from "@/components/ui/Surface";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 const DIFF_LINE: Record<DiffLine["kind"], { tone: string; mark: string }> = {
   add: { tone: "p-badge-success px-3", mark: "+" },
@@ -223,21 +223,6 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
   );
 });
 
-export function EmptyState({ icon, title, hint, children }: {
-  icon?: ReactNode; title: string; hint?: ReactNode; children?: ReactNode;
-}) {
-  return (
-    <div className="flex flex-col items-center justify-center py-16 text-center" data-empty>
-      <div className={`mb-3 ${icon ? "p-text-3 opacity-60" : "p-accent opacity-55"}`}>
-        {icon ?? <KinuMark size={30} />}
-      </div>
-      <p className="t-label p-text-2">{title}</p>
-      {hint && <p className="t-meta p-text-3 mt-2 max-w-xs">{hint}</p>}
-      {children}
-    </div>
-  );
-}
-
 export function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <Surface look="well" className="border p-border px-2 py-1">
@@ -273,14 +258,14 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
 
   // Read once on mount, write only on toggle: mirroring state would persist defaults as if chosen.
   const [open, setOpen] = useState(() => {
-    const stored = localStorage.getItem(key);
+    const stored = readStored(key);
 
     return stored === null ? defaultOpen : stored === "1";
   });
 
   const toggle = () => {
     setOpen((prev) => {
-      localStorage.setItem(key, prev ? "0" : "1");
+      writeStored(key, prev ? "0" : "1");
 
       return !prev;
     });
@@ -291,7 +276,7 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
       <Pressable className="group/section flex items-center gap-2 py-1" onClick={toggle} aria-expanded={open}>
         <CaretRightIcon
           size={12}
-          className={`shrink-0 p-text-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+          className={`shrink-0 p-fold-turn p-text-3${open ? " rotate-90" : ""}`}
         />
         {icon}
         <span className="t-label" data-section-title>{title}</span>

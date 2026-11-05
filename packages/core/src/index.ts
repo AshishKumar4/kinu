@@ -1597,6 +1597,9 @@ export {
   accountOf,
   baseCredentialKey,
   isAccountName,
+  openAICompatKey,
+  openAICompatNameOf,
+  splitAccount,
   storedAccounts,
 } from './credentials/accounts';
 
@@ -2208,7 +2211,7 @@ export {
 
 export type { PendingAction, PendingActionKind, PersonAsks } from './read-models/pending-actions';
 
-export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
+export { buildWorkspaceOverview, rosterBucket, rosterComesBefore, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
 export { ownerIsAway, watchFrame, type AlertWatch, type OwnerAlert } from './read-models/owner-alerts';
 
@@ -2305,7 +2308,9 @@ export {
   agentRoleSwitch, changeRoleAsOwner,
 } from './profiles';
 
-export { clockTime, fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
+export { createStore, type Store } from './utils/store';
+
+export { calendarDay, clockTime, countOf, fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
 export { ownedStream, relayedAnswer } from './utils/relayed-answer';
 
@@ -2669,6 +2674,7 @@ export {
 
 export {
   APP_ROUTES,
+  agentRoute,
   cloudflareConnectPath,
   googleConnectPath,
   CONNECT_CHANNEL,
@@ -2680,6 +2686,7 @@ export {
   type ReportedRoute,
   routeTemplateOf,
   sanitizeReturnTo,
+  workspaceRoute,
 } from './read-models/app-routes';
 
 export {

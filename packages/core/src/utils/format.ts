@@ -28,6 +28,11 @@ export function fmtPct(rate: number | null, digits = 0): string {
 	return rate === null ? "-" : `${(rate * 100).toFixed(digits)}%`;
 }
 
+/** A count and its noun, singular at one: `countOf(3, "file")` is "3 files"; `many` where adding an s is wrong. */
+export function countOf(n: number, one: string, many = `${one}s`): string {
+	return `${String(n)} ${n === 1 ? one : many}`;
+}
+
 /** The one relative-time wording the app uses. Kept out of `shared.tsx` to avoid loading the markdown renderer. */
 export function timeAgo(at: number): string {
 	const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
@@ -57,6 +62,11 @@ export function shortAge(at: number): string | null {
 	if (s < 31_536_000) return `${Math.floor(s / 2_592_000)}mo`;
 
 	return `${Math.floor(s / 31_536_000)}y`;
+}
+
+/** A calendar day in the reader's own words ("Nov 4", or "4 November" with the month `long`). */
+export function calendarDay(at: number | Date, month: "short" | "long" = "short"): string {
+	return new Date(at).toLocaleDateString(undefined, { month, day: "numeric" });
 }
 
 const CLOCK = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });

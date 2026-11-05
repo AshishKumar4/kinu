@@ -7,11 +7,12 @@ import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { CaretDownIcon, CaretRightIcon, TrashIcon } from "@phosphor-icons/react";
 import { positionWords } from "@kinu.run/core";
-import { Card, Field } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { Segmented } from "@/components/ui/Segmented";
 import { Switch } from "@/components/ui/Switch";
-import { useConfirmation, useLabelledStep } from "@/components/ui/ConfirmDialog";
+import { useConfirmation } from "@/components/ui/ConfirmDialog";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import {
@@ -22,7 +23,7 @@ import {
   type ChosenWorkspace, type SecretDraft,
 } from "@/components/secrets/SecretRows";
 import { Pressable } from "@/components/ui/Pressable";
-import { TextArea, TextInput } from "@/components/ui/Field";
+import { TextArea, TextInput, Field } from "@/components/ui/Field";
 import { Group } from "@/components/ui/Group";
 import { Chip } from "@/components/ui/Chip";
 

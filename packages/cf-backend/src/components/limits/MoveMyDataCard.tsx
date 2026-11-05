@@ -13,10 +13,11 @@ import { zipWholeDrive } from "@/lib/drive-api";
 import { downloadWorkspaceArchive, saveBlob } from "@/lib/workspace-archive";
 import { useWorkspaceRpc } from "@/hooks/use-chat-owner";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
 import { Group } from "@/components/ui/Group";
 import { ProgressBar } from "@/components/ui/Meter";
 import { RunYourOwn } from "./limit-words";
+import { countOf } from "@kinu.run/core";
 
 /** Every workspace of the account, walked page by page. */
 function everyWorkspace(): Effect.Effect<readonly { readonly name: string; readonly displayName: string }[]> {
@@ -148,7 +149,7 @@ function MoveMyDataCard() {
             <ProgressBar value={moving.read} max={moving.of} label="Downloading your Drive" />
           </div>
         )}
-        {moving.phase === "done" && <p className="t-meta p-text-2" role="status">Downloaded {moving.workspaces} workspaces and your Drive in {moving.zips} zip{moving.zips === 1 ? "" : "s"}.</p>}
+        {moving.phase === "done" && <p className="t-meta p-text-2" role="status">Downloaded {moving.workspaces} workspaces and your Drive in {countOf(moving.zips, "zip")}.</p>}
         {moving.phase === "failed" && <p className="t-meta p-danger" role="alert">The download stopped. {moving.why}</p>}
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="primary" size="sm" icon={<DownloadSimpleIcon size={12} />} disabled={busy} onClick={() => detach(start())}>Download everything</Button>

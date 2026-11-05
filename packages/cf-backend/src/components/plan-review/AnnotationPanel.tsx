@@ -197,5 +197,5 @@ export const AnnotationPanel = ({
 
   if (!isMobile) return panel;
 
-  return <Drawer onClose={() => onClose?.()}>{panel}</Drawer>;
+  return <Drawer label={title} onClose={() => onClose?.()}>{panel}</Drawer>;
 };

@@ -2,6 +2,7 @@
  * Inspector column layout machine (no React, no DOM); effects live in `cf-backend/src/hooks/use-inspector-layout.ts`.
  * Commits are classified by input mark, never by comparing layouts: only marked commits persist.
  */
+import { readStored } from './stored';
 
 export const INSPECTOR_DEFAULT_PX = 340;
 
@@ -53,7 +54,7 @@ export function newInspectorGroup(state: InspectorState): InspectorState {
 export interface StoredInspectorLayout { readonly width: number | null; readonly choice: boolean | null }
 
 function readInspectorWidth(account: string): number | null {
-  const raw = localStorage.getItem(`kinu.inspector.${account}`);
+  const raw = readStored(`kinu.inspector.${account}`);
   const width = raw === null ? NaN : Number(raw);
 
   return Number.isFinite(width) ? Math.max(INSPECTOR_MIN_PX, Math.round(width)) : null;
@@ -63,7 +64,7 @@ function readInspectorWidth(account: string): number | null {
 function readInspectorChoice(account: string, workspace: string | undefined): boolean | null {
   const raw = workspace === undefined
     ? null
-    : localStorage.getItem(`kinu.inspector.open.${account}.${workspace}`);
+    : readStored(`kinu.inspector.open.${account}.${workspace}`);
 
   if (raw === "1") return true;
 

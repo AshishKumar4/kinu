@@ -1,7 +1,6 @@
 /** Controlled by the caller, which decides when "changed" is saved. */
 import { DISPLAY_NAME_MAX } from "@kinu.run/core";
-import { Field } from "@/components/ui/form";
-import { TextInput } from "@/components/ui/Field";
+import { TextInput, Field } from "@/components/ui/Field";
 
 export function DisplayNameField({ value, onChange, saving, bare = false }: {
   value: string;

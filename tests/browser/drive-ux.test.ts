@@ -500,10 +500,17 @@ describe('the Drive', () => {
         await pressNew(page, 'data-drive-new-folder');
         await page.waitForSelector('[role="dialog"] input');
 
+        // As an IME sends it: inside its composition, or (WebKit) just after the composition ends, as keyCode 229.
         const escape = (mark: 'composing' | 'webkit' | 'plain') => page.$eval('[role="dialog"] input', (input, m) => {
-          input.dispatchEvent(new KeyboardEvent('keydown', {
+          const key = () => input.dispatchEvent(new KeyboardEvent('keydown', {
             key: 'Escape', bubbles: true, cancelable: true, isComposing: m === 'composing', keyCode: m === 'webkit' ? 229 : 27,
           }));
+
+          const composition = (type: string) => input.dispatchEvent(new CompositionEvent(type, { bubbles: true }));
+
+          if (m === 'plain') key();
+          else if (m === 'composing') { composition('compositionstart'); key(); composition('compositionend'); }
+          else { composition('compositionstart'); composition('compositionend'); key(); }
         }, mark);
 
         for (const mark of ['composing', 'webkit'] as const) {

@@ -3,9 +3,9 @@
 import { useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChatsCircleIcon, GearIcon, PencilSimpleIcon, PlusIcon, UsersThreeIcon, XIcon } from "@phosphor-icons/react";
-import { WORKSPACE_TITLE_MAX, type PanelAgent } from "@kinu.run/core";
+import { WORKSPACE_TITLE_MAX, type PanelAgent, workspaceRoute } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
-import { composing } from "@/components/ui/form";
+import { composing } from "@/components/ui/Field";
 import { TabOutline, useTabOutline } from "@/components/ui/TabOutline";
 import { ChatMascot, WorkspaceLogo } from "@/components/ui/Marks";
 import { useMascotOf } from "@/hooks/use-chat-mascot";
@@ -162,7 +162,7 @@ export function WorkspaceBarActions({ workspace, working, view, inspector, onAge
           <Count count={working} tone="bar" data-working-agents={working} />
         )}
       </IconControl>
-      <IconLink place="bar" to={`/workspace/${workspace}/settings`} aria-current={view === "settings" ? "page" : undefined} aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></IconLink>
+      <IconLink place="bar" to={workspaceRoute(workspace, "settings")} aria-current={view === "settings" ? "page" : undefined} aria-label="Workspace settings" title="Workspace settings"><GearIcon size={16} /></IconLink>
       {view === undefined && inspector && <InspectorToggle control={inspector} />}
     </>
   );

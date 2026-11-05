@@ -19,6 +19,7 @@ import { navActive, PRIMARY_NAV } from "./nav";
 import { NavRow, NavRowButton } from "@/components/ui/NavRow";
 import { Surface } from "@/components/ui/Surface";
 import { Pressable } from "@/components/ui/Pressable";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 const RAIL_KEY = "kinu:rail-open";
 
@@ -27,24 +28,29 @@ const LANE_ENTER_CLS = "p-sidebar-lane";
 
 /** `folded` while a view fills the workspace area: the rail folds for it, and is as the reader keeps it after. */
 export function SidebarRail({ folded }: { folded: boolean }) {
-  const [railOpen, setRailOpen] = useState(() => localStorage.getItem(RAIL_KEY) !== "0");
+  // A view that fills the area folds the rail, and its end brings back the reader's kept choice; a press opens it over
+  // the view till then.
+  const [railOpen, setRailOpen] = useState(() => !folded && readStored(RAIL_KEY) !== "0");
+  const [foldedFor, setFoldedFor] = useState(folded);
+
+  if (foldedFor !== folded) {
+    setFoldedFor(folded);
+    setRailOpen(!folded && readStored(RAIL_KEY) !== "0");
+  }
+
   const { pathname } = useLocation();
   const profile = lastValue(useAccount().profile);
 
   const setOpen = (open: boolean) => {
-    localStorage.setItem(RAIL_KEY, open ? "1" : "0");
+    writeStored(RAIL_KEY, open ? "1" : "0");
     setRailOpen(open);
   };
 
   const { entries } = useAgentsNav();
 
   useEffect(() => {
-    setRailOpen(!folded && localStorage.getItem(RAIL_KEY) !== "0");
-  }, [folded]);
-
-  useEffect(() => {
     if (entries === 0) return;
-    localStorage.setItem(RAIL_KEY, "1");
+    writeStored(RAIL_KEY, "1");
     setRailOpen(true);
   }, [entries]);
 
@@ -101,10 +107,10 @@ function RailAccount({ name }: { name: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const close = useCallback(() => setOpen(false), []);
 
-  useCloseOnOutsideClick(open, ref, close);
+  const outside = useCloseOnOutsideClick(open, ref, close);
 
   return (
-    <div ref={ref} className="relative">
+    <div ref={ref} {...outside} className="relative">
       <Pressable onClick={() => setOpen((shown) => !shown)} aria-expanded={open} aria-haspopup="menu" aria-label="Account menu" title="Account" data-account-menu
         className="flex size-9 items-center justify-center">
         <Avatar name={name} size={24} />

@@ -116,6 +116,12 @@ export function rosterBucket(activity: WorkspaceOverview['activity'] | null, dec
   return activity === 'working' ? 'working' : 'idle';
 }
 
+/** The roster's one order, newest visit first and then by name, which the account's roster query reads its pages in
+ *  (`ORDER BY w.last_visited DESC, w.name ASC`, code units as SQLite's binary collation compares them). */
+export function rosterComesBefore(entry: { readonly lastVisited: number; readonly name: string }, other: { readonly lastVisited: number; readonly name: string }): boolean {
+  return entry.lastVisited > other.lastVisited || (entry.lastVisited === other.lastVisited && entry.name < other.name);
+}
+
 export function rosterMatches(entry: { readonly name: string; readonly displayName: string }, query: string): boolean {
   const needle = query.trim().toLowerCase();
 

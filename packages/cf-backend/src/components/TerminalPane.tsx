@@ -9,6 +9,7 @@ import * as v from 'valibot';
 import "@xterm/xterm/css/xterm.css";
 import { readFailureText, terminalPalette, type TerminalPalette } from "@kinu.run/core";
 import { renderThrownChain, showing, tolerate, detach, hold } from "@kinu.run/core/obs";
+import { posted, respond } from "@/lib/http";
 import { useTheme, type Theme } from "@/hooks/use-theme";
 import {
   BUSY, LINE_MODE_LABEL, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
@@ -114,8 +115,8 @@ export function TerminalPane({ workspace, executor, outputs, onExecute, leading,
 /** What a pane's caller puts in its bar, and where the bar sits. */
 interface FrameParts { readonly leading: ReactNode; readonly barOnGround?: boolean; readonly trailing?: ReactNode }
 
-
-
+/** A step in flight that a later one or an unmount supersedes, compared by identity; its run is held where a callback
+ *  that must return at once (xterm's) cannot await it. */
 interface TerminalOperation {
   promise: Promise<Exit.Exit<void>> | null;
 }
@@ -204,7 +205,6 @@ function PtyTerminal({ workspace, executor, session, device: machine, frame }: {
   const termRef = useRef<Terminal | null>(null);
   const [connection, reconnect] = useState(0);
   const copyOperation = useRef<TerminalOperation | null>(null);
-  const keepaliveOperations = useRef(new Map<string, TerminalOperation>());
   const [state, setState] = useState<PtyState>("connecting");
   const [failure, setFailure] = useState<string | null>(null);
 
@@ -278,10 +278,7 @@ function PtyTerminal({ workspace, executor, session, device: machine, frame }: {
       socket, subscriptions: [inputFrames(term, socket), windowFrames(term, socket), binary], disposeChrome, copyOperation, termRef,
     });
 
-    return () => {
-      keepaliveOperations.current.clear();
-      release();
-    };
+    return release;
   }, [workspace, executor, device, connection, sessionQuery]);
 
   useTerminalPalette(termRef, hostRef, theme);
@@ -289,58 +286,31 @@ function PtyTerminal({ workspace, executor, session, device: machine, frame }: {
   useEffect(() => {
     if (device || state !== "connected") return;
 
-    const beat = setInterval(() => {
-      const keepaliveKey = crypto.randomUUID();
-      const owner: TerminalOperation = { promise: null };
-      // Several keepalives may be outstanding at once; each owns its own map entry.
-      keepaliveOperations.current.set(keepaliveKey, owner);
-      owner.promise = hold(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-        const response = yield* Effect.promise(() => fetch(
-          `/api/workspaces/${encodeURIComponent(workspace)}/terminal/keepalive`
-          + `?executor=${encodeURIComponent(executor)}`,
-          { method: "POST", credentials: "same-origin" },
-        ));
+    let live = true;
 
-        // Shown, not fatal: the reason (container gone, attach failed) arrives here before the socket reports it.
-        if (keepaliveOperations.current.get(keepaliveKey) === owner && !response.ok) {
-          setFailure(`the computer refused the terminal's keepalive (${response.status})`);
-        }
-      }), (failed) => Effect.sync(() => {
-        if (keepaliveOperations.current.get(keepaliveKey) === owner) {
-          setFailure(readFailureText({ cause: Cause.squash(failed) }));
-        }
-      })), Effect.sync(() => {
-        if (keepaliveOperations.current.get(keepaliveKey) === owner) {
-          keepaliveOperations.current.delete(keepaliveKey);
-        }
-      })));
-    }, KEEPALIVE_MS);
+    // Several keepalives may be outstanding at once; none speaks once the beat stops.
+    const beat = setInterval(() => detach(Effect.catchCause(Effect.gen(function* () {
+      const response = yield* respond(`/api/workspaces/${encodeURIComponent(workspace)}/terminal/keepalive?executor=${encodeURIComponent(executor)}`, { method: "POST" });
+
+      // Shown, not fatal: the reason (container gone, attach failed) arrives here before the socket reports it.
+      if (live && !response.ok) setFailure(`the computer refused the terminal's keepalive (${response.status})`);
+    }), (failed) => Effect.sync(() => {
+      if (live) setFailure(readFailureText({ cause: Cause.squash(failed) }));
+    }))), KEEPALIVE_MS);
 
     return () => {
+      live = false;
       clearInterval(beat);
-      keepaliveOperations.current.clear();
     };
   }, [device, state, workspace, executor]);
 
   // An exited shell leaves a dead PTY handed to every later attach, so restart must be reachable from the pane.
-  const restart = async () => {
+  const restart = () => Effect.gen(function* () {
     setFailure(null);
-
-    const response = await fetch(
-      `/api/workspaces/${encodeURIComponent(workspace)}/terminal/reset`
-      + `?executor=${encodeURIComponent(executor)}${sessionQuery}`,
-      { method: "POST", credentials: "same-origin" },
-    );
-
-    if (!response.ok) {
-      setFailure(readFailureText({ cause: await response.text() }));
-
-      return;
-    }
-
+    yield* posted(`/api/workspaces/${encodeURIComponent(workspace)}/terminal/reset?executor=${encodeURIComponent(executor)}${sessionQuery}`, undefined);
     termRef.current?.reset();
     reconnect(value => value + 1);
-  };
+  });
 
   // Job control is unavailable on the container's PTY: its shell is not a session leader, so ⌃C reaches only
   // full-screen programs.
@@ -349,9 +319,7 @@ function PtyTerminal({ workspace, executor, session, device: machine, frame }: {
     : { note: "⇧⌃C copies", title: "⌃C reaches a full-screen program. Suspend, fg and bg do not work here." };
 
   const restartShell = device ? null : (
-    <IconControl place="bar" className="shrink-0" aria-label="Restart the shell" title="Restart the shell: a new one, for after a shell exits" onClick={() => detach(Effect.catchCause(Effect.gen(function* () {
-        yield* Effect.promise(async () => restart());
-      }), showing(setFailure)))}>
+    <IconControl place="bar" className="shrink-0" aria-label="Restart the shell" title="Restart the shell: a new one, for after a shell exits" onClick={() => detach(Effect.catchCause(restart(), showing(setFailure)))}>
       <ArrowCounterClockwiseIcon size={14} />
     </IconControl>
   );

@@ -2,20 +2,22 @@
  * Exploration: every run's search tree in one list and one canvas. A run can fill both
  * `search_nodes` and `head_journal`, so rows report `hasSearchTree` and `hasNodeTranscripts`.
  */
-import { useState, useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
+import { ClampedText } from "@/components/ui/ClampedText";
 import {
-  GitForkIcon, TreeStructureIcon, ArrowsOutIcon, ArrowLeftIcon, CaretRightIcon, CaretDownIcon,
+  GitForkIcon, TreeStructureIcon, ArrowsOutIcon, ArrowLeftIcon, CaretRightIcon,
   XIcon,
 } from "@phosphor-icons/react";
-import { shownHeadStatus } from "@kinu.run/core";
+import { shownHeadStatus, countOf } from "@kinu.run/core";
 import type { ForkRunParams, ForkRunSummary, HeadRunView } from "@kinu.run/core";
 import { SwarmTree, naturalCanvasHeight } from "@/components/swarm-tree";
 import { NodeTranscript, statusTone } from "@/components/NodeTranscript";
-import { StatusDot, type StatusTone } from "@/components/ui/Status";
+import { Dot } from "@/components/ui/Dot";
+import type { StatusTone } from "@/components/ui/Status";
 import type { HeadDeltas } from "@kinu.run/core";
 import { cleanNodeLabel, type ExplorerSelection } from "@kinu.run/core/swarm-view";
 import { explorationForkTree, type MctsRow } from "@kinu.run/core";
@@ -26,7 +28,8 @@ import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { useElementSize } from "@/hooks/use-element-size";
-import { EmptyState, formatScore } from "./shared";
+import { formatScore } from "./shared";
+import { Empty } from "@/components/ui/Empty";
 import { timeAgo } from "@kinu.run/core";
 import {
   forkParamRows, FORK_REVALIDATE_MS, judgeEnsembleLabel,
@@ -35,7 +38,6 @@ import {
 import { fanInVertices, formatEvidenceValue, nodeRationales, runLiveness, runRefusal, swarmAxisRows, swarmResolutionOf, type RunLevel, type RunLiveness, type RunRefusal, type SwarmAxis, type SwarmResolution } from "@kinu.run/core/swarm-view";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Pressable } from "@/components/ui/Pressable";
-import { Dot } from "@/components/ui/Dot";
 import { Surface } from "@/components/ui/Surface";
 
 export interface ExplorationSurfaceProps {
@@ -76,7 +78,7 @@ export function ExplorationSurface({
   }
 
   if (runs.length === 0) {
-    return <EmptyState icon={<GitForkIcon size={28} />} title="No swarms" />;
+    return <Empty icon={GitForkIcon} title="No swarms" />;
   }
 
   // Focus the newest fork on arrival only; later polls must not move the focus.
@@ -179,7 +181,7 @@ function ForkRunRow(
 ) {
   return (
     <Pressable selected={selected} className="flex items-start gap-2 px-2 py-1" onClick={onSelect} aria-current={selected ? "true" : undefined} data-fork-run={run.id}>
-      <StatusDot className="mt-1" tone={RUN_TONE[run.status]} />
+      <Dot className="mt-1" tone={RUN_TONE[run.status]} />
       <div className="min-w-0 flex-1">
         <div className="t-body p-text truncate" title={run.task}>
           {run.name}
@@ -315,7 +317,7 @@ function RunDetailView({
   return (
     <Surface look="panel" className="h-full min-h-0 flex flex-col overflow-hidden">
       <div className="shrink-0 flex items-start gap-2 border-b p-border px-3 py-2">
-        <StatusDot className="mt-2" tone={RUN_TONE[run.status]} />
+        <Dot className="mt-2" tone={RUN_TONE[run.status]} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2 min-w-0">
             <span className="t-item p-text truncate" title={run.task}>{run.name}</span>
@@ -323,7 +325,7 @@ function RunDetailView({
               <span className="t-meta t-mono p-text-3 shrink-0">· {runKind(resolution)}</span>
             )}
           </div>
-          <RunObjective task={run.task} />
+          <ClampedText text={run.task} />
           <div className="t-meta mt-px p-text-3 tabular-nums">
             {/* The tally is in the liveness panel; the header carries outcome and winner only. */}
             {runStateLine(run, null, refusal)}
@@ -347,28 +349,6 @@ function RunDetailView({
             headActivity={headActivity} headDeltas={headDeltas} nodeCount={journal?.heads.length ?? run.branches}
             onBack={() => onOpenBranch(null)} onOpenBranch={onOpenBranch} />}
     </Surface>
-  );
-}
-
-/** Matches `NodeTranscript`'s clamp: same kind of text in the same column. */
-const OBJECTIVE_CLAMP = 240;
-
-function RunObjective({ task }: { task: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const long = task.length > OBJECTIVE_CLAMP;
-
-  return (
-    <>
-      <div className={`t-body p-text-2 break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
-        {task}
-      </div>
-      {long && (
-        <Button variant="ghost" size="sm" className="mt-px" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}>
-          {expanded ? <CaretDownIcon size={9} /> : <CaretRightIcon size={9} />}
-          {expanded ? "collapse" : "expand"}
-        </Button>
-      )}
-    </>
   );
 }
 
@@ -449,7 +429,7 @@ function RunNodeList({ journal, tree, activity, onOpen }: {
   if (nodes.length === 0) {
     return (
       <div className="min-h-0 flex-1 flex items-center justify-center p-4">
-        <EmptyState icon={<TreeStructureIcon size={24} />} title="No nodes yet" />
+        <Empty icon={TreeStructureIcon} title="No nodes yet" />
       </div>
     );
   }
@@ -490,8 +470,8 @@ function RunNodeRow({ node, score, moving, onOpen }: {
 
   return (
     <Pressable className="flex items-start gap-2 px-2 py-1" onClick={onOpen} data-run-node={node.id}>
-      <StatusDot className="mt-1" tone={statusTone(shownHeadStatus(node.status, node.errorMessage))}
-        {...(moving && { title: "Working now" })} />
+      <Dot className="mt-1" tone={statusTone(shownHeadStatus(node.status, node.errorMessage))}
+        {...(moving && { label: "Working now" })} />
       <div className="min-w-0 flex-1">
         <div className="t-body p-text-2 truncate" title={node.task}>
           {cleanNodeLabel(node.task, node.id)}
@@ -691,7 +671,7 @@ function SwarmResolutionBody(
 
   if (resolution?.kind === "preset") {
     caps = resolution.depth === 1
-      ? `flat · ${resolution.branches} ${resolution.branches === 1 ? "branch" : "branches"}`
+      ? `flat · ${countOf(resolution.branches, "branch", "branches")}`
       : `depth ${resolution.depth} · branches ${resolution.branches}`;
   }
 

@@ -4,7 +4,7 @@ What's live on [kinu.run](https://kinu.run), what's coming next, and what I'm bu
 
 ## Live now
 
-Since 2026-10-24, up to build `95904a2d6` (2026-11-04):
+Since 2026-10-24, up to build `3198b7c25` (2026-11-04):
 
 - **Claude sign-in opens claude.ai on the first click.**
 - **A quiet indicator for background work.** A pill over the composer counts the helpers and jobs running, and its list puts what's waiting on you first.
@@ -14,6 +14,8 @@ Since 2026-10-24, up to build `95904a2d6` (2026-11-04):
 - **An agent no longer resets mid-turn on a long conversation,** and a Stop pressed as a turn starts ends it cleanly.
 - **The terminal stays dark,** and says why when it can't connect, with a Reconnect.
 - **Plans lead with their outcome** and show their pictures and drawn pages.
+- **Every chat preview copies, opens beside the chat, or opens in a tab,** and folds in the chat while it's open beside it.
+- **A download that breaks off fails,** never saves a short or empty file.
 
 The release of 2026-10-24 (build `8e8bb8c7a`):
 
@@ -31,13 +33,12 @@ The release of 2026-10-24 (build `8e8bb8c7a`):
 
 - **Workspaces placed where every model provider answers.** Anthropic refuses some regions, Hong Kong among them.
 - **Computers start fast after a tools update.** An update moves only the files that changed.
-- **Every chat preview copies, opens beside the chat, or opens in a tab,** and folds in the chat while it's open beside it.
 - **Connectors as an optional step before Deploy** when you run your own Kinu.
 - **Google Workspace** (Gmail, Drive, Calendar and more) through one sign-in, waiting on Google's app setup.
 
 ## Known limits
 
-- **A workspace created in Hong Kong can't use Claude.** Anthropic refuses that region. Create a new workspace until the placement fix ships.
+- **A workspace created in Hong Kong before October 24 can't use Claude.** Anthropic refuses that region, and a workspace stays where it was made. A new workspace is placed where every provider answers. From Hong Kong, testing a key in Settings and AI in your pages are still refused.
 - **Workspace programs can't use TLS with a custom identity check** (for example mysql2 with SSL). Run those on the computer, where raw TCP with TLS works. Waiting on [Nimbus](https://github.com/AshishKumar4/kinu/issues/60).
 - **The workspace shell resolves paths by their text, while the file tools follow links.** Waiting on [Nimbus](https://github.com/AshishKumar4/kinu/issues/56).
 

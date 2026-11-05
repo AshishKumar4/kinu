@@ -9,7 +9,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { PaletteIcon, XIcon } from "@phosphor-icons/react";
 import { Effect } from "effect";
 import * as v from "valibot";
-import { detach } from "@kinu.run/core/obs";
+import { detach, detachPromise } from "@kinu.run/core/obs";
 import { APP_ROUTES, DEFAULT_THEME, modeFor, PREFERS_LIGHT, THEME_NAMES, type ThemeName } from "@kinu.run/core";
 import { setMode, wearTheme, type ThemeMode } from "@/hooks/use-theme";
 import { CHAT_FACES, CHAT_FACE_NAMES, FACE_SCOPES, installChatFaces, type ChatFaceName, type FaceScope } from "@/gallery-chat-fonts";
@@ -221,7 +221,7 @@ export function DesignBar() {
         <Section title="Go to">
           <div className="flex flex-wrap gap-1">
             {ELSEWHERE.map(([label, path]) => (
-              <button key={path} type="button" onClick={() => detach(Effect.promise(async () => navigate(path)))} className="rounded-md border p-border px-2 py-1 text-xs p-text-2 hover:p-text">{label}</button>
+              <button key={path} type="button" onClick={() => detachPromise(() => navigate(path))} className="rounded-md border p-border px-2 py-1 text-xs p-text-2 hover:p-text">{label}</button>
             ))}
           </div>
         </Section>

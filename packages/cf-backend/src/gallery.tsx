@@ -2,6 +2,7 @@
  * Design-system gallery: the real components over mock data, so signed-in surfaces can be screenshotted without auth.
  * Served by gallery.vite.config.ts; `?frame=` selects a frame (full list: the dispatch in `mount()`). /api/user/* GETs are stubbed in-page.
  */
+import { TextInput } from "@/components/ui/Field";
 import type { SessionRecord, TerminalSession } from "@kinu.run/devbox";
 import { Effect, Result } from 'effect';
 import { StrictMode, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -65,11 +66,12 @@ import { SlateFrame } from "@/components/slates/SlateFrame";
 import { SlateInlineContext } from "@/components/slates/context";
 import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { CacheBlock, LogBlock } from "@/components/surfaces/ActivitySurface";
-import { ConversationStartBoundary, HistoryBoundary, EmptyState, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
+import { ConversationStartBoundary, HistoryBoundary, MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
+import { Empty } from "@/components/ui/Empty";
+import { Notice } from "@/components/ui/Notice";
 import { QualityView } from "@/components/surfaces/evolution-panels";
 import { Modal } from "@/components/ui/Modal";
 import { ComputerPreviewFrame, SecretPasteFrame, secretsFixture } from "@/gallery-secrets";
-import { inputCls } from "@/components/ui/form";
 import { FeedbackButton } from "@/components/FeedbackButton";
 import { admitReviewAnnotations, FEEDBACK_ENDPOINT, reviewFeedbackText } from "@kinu.run/core";
 import { CLIENT_ERROR_ENDPOINT } from "@kinu.run/core";
@@ -4912,16 +4914,16 @@ function Controls() {
         <span className="size-1.5 rounded-full p-dot-accent" title="unseen" />
       </div>
       <div className="space-y-2">
-        <div className="p-notice-success t-meta rounded-md px-3 py-2">Deployed to staging — 14 tests green.</div>
-        <div className="p-notice-warning t-meta rounded-md px-3 py-2">The device runtime is not provisioned yet.</div>
-        <div className="p-notice-danger t-meta rounded-md px-3 py-2">Could not remove: workspace has a live turn.</div>
-        <div className="p-notice-info t-meta rounded-md px-3 py-2">Evolution changelog has 3 unseen entries.</div>
+        <Notice tone="success">Deployed to staging — 14 tests green.</Notice>
+        <Notice tone="warning">The device runtime is not provisioned yet.</Notice>
+        <Notice tone="danger">Could not remove: workspace has a live turn.</Notice>
+        <Notice tone="info">Evolution changelog has 3 unseen entries.</Notice>
       </div>
       <div className="max-w-md space-y-2">
         <input className="w-full px-3 py-1.5 border p-border p-card t-body t-mono" placeholder="raw input (fork modal style)" />
         <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 t-body p-text placeholder:p-text-3 transition-all" placeholder="mission textarea (home page style)" />
       </div>
-      <EmptyState icon={<BrainIcon size={32} />} title="No exploration trees yet" hint="Exploration trees appear when the agent runs agents.swarm with a depth to investigate subproblems." />
+      <Empty icon={BrainIcon} title="No exploration trees yet">Exploration trees appear when the agent runs agents.swarm with a depth to investigate subproblems.</Empty>
     </div>
   );
 }
@@ -6136,7 +6138,7 @@ function BlueprintFrame() {
 
   return (
     <Routes>
-      <Route path="/shared/blueprint/:id" element={<BlueprintPage fixture={BLUEPRINT_VIEW} viewer={signedOut ? null : "me@example.com"} workspaces={STOCK_ROSTER.entries} />} />
+      <Route path="/shared/blueprint/:id" element={<BlueprintPage fixture={BLUEPRINT_VIEW} viewer={signedOut ? null : "me@example.com"} />} />
     </Routes>
   );
 }
@@ -7470,11 +7472,10 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
         </p>
         <label className="block max-w-sm space-y-1.5">
           <span className="text-xs p-text-2">Anthropic API key</span>
-          <input
+          <TextInput
             data-secret-input
             type="password"
             defaultValue="gallery-placeholder-not-a-key"
-            className={inputCls}
           />
         </label>
         <div className="max-w-sm space-y-1.5">
@@ -7835,21 +7836,22 @@ async function updatesFrame(): Promise<{ node: React.ReactNode; entries: string[
   const { default: UpdatesPage } = await import("@/pages/UpdatesPage");
   const running = new URLSearchParams(location.search).get("state") === "running";
 
+  STUB.set("/api/updates", {
+    current: { version: "0.3.9+aa11bb2", sha: "aa11bb2", builtAt: "2026-09-10T08:00:00.000Z" },
+    available: { version: "0.4.0+cc33dd4", sha: "cc33dd4", builtAt: "2026-09-17T10:00:00.000Z" },
+    channelOrigin: "https://kinu.run",
+    upToDate: false,
+    installable: true,
+    reason: "",
+  });
+  // An idle deployment's ledger is empty.
+  STUB.set("/api/updates/run", v.parse(JsonObjectSchema, running ? GALLERY_UPDATE_RUN : { ...GALLERY_UPDATE_RUN, state: "done", steps: [] }));
+
   return {
     entries: ["/updates"],
     node: (
       <div className="h-screen overflow-auto p-bg p-text">
-        <UpdatesPage
-          fixture={{
-            current: { version: "0.3.9+aa11bb2", sha: "aa11bb2", builtAt: "2026-09-10T08:00:00.000Z" },
-            available: { version: "0.4.0+cc33dd4", sha: "cc33dd4", builtAt: "2026-09-17T10:00:00.000Z" },
-            channelOrigin: "https://kinu.run",
-            upToDate: false,
-            installable: true,
-            reason: "",
-          }}
-          {...(running ? { fixtureRun: GALLERY_UPDATE_RUN } : {})}
-        />
+        <UpdatesPage />
       </div>
     ),
   };

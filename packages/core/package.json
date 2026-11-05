@@ -25,7 +25,8 @@
     "./web/hero-art": "./src/web/hero-art.ts",
     "./web/hero-canvas": "./src/web/hero-canvas.ts",
     "./web/inspector-layout": "./src/web/inspector-layout.ts",
-    "./web/picture-src": "./src/web/picture-src.ts"
+    "./web/picture-src": "./src/web/picture-src.ts",
+    "./web/stored": "./src/web/stored.ts"
   },
   "dependencies": {
     "@agent-core/core": "workspace:*",

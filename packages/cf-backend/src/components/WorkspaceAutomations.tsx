@@ -10,10 +10,12 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
 import { Modal } from "@/components/ui/Modal";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
-import { StatusDot, type StatusTone } from "@/components/ui/Status";
+import { Dot } from "@/components/ui/Dot";
+import type { StatusTone } from "@/components/ui/Status";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import * as v from "valibot";
-import { showing, detach } from '@kinu.run/core/obs';
+import { chainOf } from '@kinu.run/core/obs';
+import { useLabelledStep } from '@/hooks/use-labelled-step';
 import { dailyTimeOf } from "@kinu.run/core";
 import type { WorkspaceAnswer, WorkspaceRpc } from "@/lib/workspace-rpc";
 import { TextInput } from "@/components/ui/Field";
@@ -92,22 +94,17 @@ export function WorkspaceAutomations({ rpc, workspace }: { rpc: WorkspaceRpc; wo
 /** An active trigger is healthy; a paused one needs a look. */
 const TRIGGER_TONE: ReadonlyMap<string, StatusTone> = new Map([["active", "success"], ["paused", "warning"]]);
 
-/** The delivery URL carries a signed route capability; a URL built here would 404. */
 /** A daily schedule's time, kept as typed until it is sent; a refusal says why beside it. */
 function DailyTime({ rpc, trigger, at, onMoved }: { rpc: WorkspaceRpc; trigger: TriggerRow; at: string; onMoved: () => void }) {
-  const [failure, setFailure] = useState<string | null>(null);
+  const { error: failure, run } = useLabelledStep(onMoved);
 
-  const move = (next: string) => (next === "" || next === at ? Effect.void : Effect.catchCause(Effect.gen(function* () {
-    setFailure(null);
-    yield* Effect.promise(() => rpc("retimeDailySchedule", [trigger.id, next]));
-    onMoved();
-  }), showing(setFailure)));
+  const move = (next: string): void => { if (next !== "" && next !== at) run("move", () => rpc("retimeDailySchedule", [trigger.id, next])); };
 
   return (
     <span className="flex shrink-0 items-center gap-2" data-schedule-time={trigger.id}>
       <span className="p-text-3">each day at</span>
       <TextInput size="sm" type="time" className="t-mono w-28" defaultValue={at} aria-label="Time of day" disabled={trigger.state === "revoked"}
-        onBlur={(event) => detach(move(event.target.value))} onKeyDown={(event) => detach(event.key === "Enter" ? move(event.currentTarget.value) : Effect.void)} />
+        onBlur={(event) => move(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") move(event.currentTarget.value); }} />
       {failure !== null && <span className="p-danger" role="alert">{failure}</span>}
     </span>
   );
@@ -131,7 +128,7 @@ function TriggerLine({ trigger, onRevoke, rpc, onMoved }: {
 
   return (
     <div className="t-meta flex items-center gap-2 py-1">
-      <StatusDot tone={TRIGGER_TONE.get(trigger.state) ?? "neutral"} />
+      <Dot tone={TRIGGER_TONE.get(trigger.state) ?? "neutral"} />
       <span className="t-item truncate max-w-40" title={label}>{label}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
       {daily !== null && <DailyTime rpc={rpc} trigger={trigger} at={daily} onMoved={onMoved} />}
@@ -252,39 +249,25 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
   const [authMode, setAuthMode] = useState<"hmac" | "bearer" | "mtls">("hmac");
   const [secret, setSecret] = useState("");
   const [contentType, setContentType] = useState("application/json");
-  const [submitting, setSubmitting] = useState(false);
   const [stepUp, setStepUp] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep();
+  const submitting = busy !== null;
+  // A step-up refusal is its own notice, not a failure in words.
+  const err = stepUp ? null : error;
 
-  const submit = useCallback(() => detach(Effect.gen(function* () {
-    if (!label.trim()) {
-      setErr("Give the webhook a label.");
+  const submit = (): void => run("create", () => Effect.gen(function* () {
+    setStepUp(false);
 
-      return;
-    }
-
-    setSubmitting(true); setErr(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      // Blank means the server mints and stores the secret.
-      const r = yield* Effect.promise(async () => createDurableWebhook(agentName, {
-        label: label.trim(),
-        auth_mode: authMode,
-        secret: authMode === "mtls" ? undefined : (secret.trim() || undefined),
-        accepted_content_type: contentType.trim() || "application/json",
-      }));
-
-      onCreated(r);
-    }), showing((msg) => {
-      if (msg.includes("step-up")) {
-        setStepUp(true);
-      } else {
-        setErr(msg);
-      }
-    })), Effect.sync(() => {
-      setSubmitting(false);
+    // Blank means the server mints and stores the secret.
+    const r = yield* Effect.promise(async () => createDurableWebhook(agentName, {
+      label: label.trim(),
+      auth_mode: authMode,
+      secret: authMode === "mtls" ? undefined : (secret.trim() || undefined),
+      accepted_content_type: contentType.trim() || "application/json",
     }));
-  })), [agentName, label, authMode, secret, contentType, onCreated]);
+
+    onCreated(r);
+  }).pipe(Effect.tapCause((failed) => Effect.sync(() => { if (chainOf(failed).includes("step-up")) setStepUp(true); }))));
 
   return (
     <Modal
@@ -294,8 +277,8 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
       busy={submitting}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button>
-        <Button variant="primary" size="sm" onClick={submit} disabled={submitting || !label.trim()}>
-          {submitting ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create"}
+        <Button variant="primary" size="sm" onClick={submit} busy={submitting} disabled={!label.trim()}>
+          {submitting ? "Creating…" : "Create"}
         </Button>
       </>}
     >

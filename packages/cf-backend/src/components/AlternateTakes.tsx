@@ -1,5 +1,5 @@
 import { Effect } from 'effect';
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import {
@@ -15,11 +15,11 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { TranscriptBody, useNodeTranscript } from "@/components/NodeTranscript";
 import { NO_HEAD_DELTAS, type HeadDeltas } from "@kinu.run/core";
 import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "@kinu.run/core";
-import { showing, detach } from "@kinu.run/core/obs";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
 import { Surface } from "@/components/ui/Surface";
 import { Pressable } from "@/components/ui/Pressable";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;
@@ -49,8 +49,7 @@ function TakesComparison({ set, onPick, onClose }: {
   onClose: () => void;
 }) {
   const [index, setIndex] = useState(() => currentTakeIndex(set));
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const { busy, error: err, run } = useLabelledStep();
   const [notice, setNotice] = useState<string | null>(null);
   const count = set.candidates.length;
   const candidate = set.candidates[Math.min(index, count - 1)];
@@ -61,34 +60,15 @@ function TakesComparison({ set, onPick, onClose }: {
     setIndex((i) => cycleTakeIndex(i, delta, count));
   }, [count]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft") step(-1);
-      else if (e.key === "ArrowRight") step(1);
-    };
-
-    document.addEventListener("keydown", onKey);
-
-    return () => document.removeEventListener("keydown", onKey);
-  }, [step]);
-
-  const useTake = useCallback(() => detach(Effect.gen(function* () {
-    if (busy || isCurrent) return;
-    setBusy(true);
-    setErr(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+  const useTake = (): void => {
+    if (isCurrent) return;
+    run("pick", () => Effect.gen(function* () {
       const result = yield* Effect.promise(async () => onPick(set.id, candidate.nodeId));
 
-      if (result.continuationQueued) {
-        setNotice("Saved. The agent continues with this take.");
-      } else {
-        onClose();
-      }
-    }), showing(setErr)), Effect.sync(() => {
-      setBusy(false);
+      if (result.continuationQueued) setNotice("Saved. The agent continues with this take.");
+      else onClose();
     }));
-  })), [busy, candidate.nodeId, isCurrent, onClose, onPick, set.id]);
+  };
 
   const pickWord = isCurrent ? "Current answer" : "Use this take";
 
@@ -97,11 +77,15 @@ function TakesComparison({ set, onPick, onClose }: {
       title="Alternate takes"
       icon={<GitBranchIcon size={18} className="p-accent-fg" />}
       onClose={onClose}
-      maxWidthClass="max-w-xl"
+      onKeyDown={(event) => {
+        if (event.key === "ArrowLeft") step(-1);
+        else if (event.key === "ArrowRight") step(1);
+      }}
+      width="md"
       footer={<>
-        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Keep current</Button>
-        <Button variant="primary" size="sm" onClick={useTake} disabled={busy || isCurrent}>
-          {busy ? <><Loader size="sm" /><span className="ml-1">Recording…</span></> : pickWord}
+        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy !== null}>Keep current</Button>
+        <Button variant="primary" size="sm" onClick={useTake} busy={busy !== null} disabled={isCurrent}>
+          {busy !== null ? "Recording…" : pickWord}
         </Button>
       </>}
     >

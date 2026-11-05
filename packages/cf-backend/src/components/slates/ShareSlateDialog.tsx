@@ -27,7 +27,7 @@ export function ShareSlateDialog({ workspace, slate, title, rpc, onClose, onList
   const [busy, setBusy] = useState(false);
 
   return (
-    <Modal title={`Share ${title}`} icon={<ShareNetworkIcon size={18} className="p-accent-fg" />} onClose={onClose} busy={busy} maxWidthClass="max-w-[520px]">
+    <Modal title={`Share ${title}`} icon={<ShareNetworkIcon size={18} className="p-accent-fg" />} onClose={onClose} busy={busy} width="md">
       {mode === "live"
         ? <LiveShareForm workspace={workspace} slate={slate} rpc={rpc} onClose={onClose} onBusy={setBusy} onListingPending={onListingPending} fixture={fixture?.live} />
         : <BlueprintShareForm workspace={workspace} slate={slate} rpc={rpc} onClose={onClose} onBusy={setBusy} onListingPending={onListingPending} fixture={fixture?.blueprint} />}

@@ -1,6 +1,4 @@
-import { Effect } from 'effect';
-import * as v from 'valibot';
-import { settleLogged, detach } from '@kinu.run/core/obs';
+import { settleLogged, detachPromise } from '@kinu.run/core/obs';
 import React, { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import DOMPurify from 'dompurify';
 import katex from 'katex';
@@ -36,7 +34,7 @@ const annotationId = (): string => crypto.randomUUID();
 
 /** A value as one line of text: a list joined by commas, a map as `key: value` pairs. */
 const frontmatterText = (value: FrontmatterValue): string => {
-  if (v.is(v.string(), value)) return value;
+  if (typeof value === "string") return value;
 
   if (Array.isArray(value)) return value.map(frontmatterText).join(', ');
 
@@ -341,9 +339,9 @@ const PlanAnnotationToolbar = ({
       role="toolbar"
       aria-label="Annotate selection"
     >
-      <Button variant="ghost" size="sm" onClick={() => detach(Effect.promise(async () => settleLogged('plan_review.copy_failed', { doing: 'copying the selected text', otherwise: 'io' }, async () => {
+      <Button variant="ghost" size="sm" onClick={() => detachPromise(() => settleLogged('plan_review.copy_failed', { doing: 'copying the selected text', otherwise: 'io' }, async () => {
           setCopied(await copyTextToClipboard(selectionText));
-        })))}>
+        }))}>
         {copied ? 'Copied' : 'Copy'}
       </Button>
       <Button variant="danger" size="sm" onClick={onDelete}>

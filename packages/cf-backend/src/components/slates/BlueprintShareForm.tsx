@@ -216,8 +216,8 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
       </div>
       <div className="flex justify-end gap-2 border-t p-border pt-4">
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <Button variant="primary" size="sm"  onClick={() => publish()} disabled={busy || version === null || inspection === null} data-blueprint-publish>
-          {busy ? <><Loader size="sm" /><span className="ml-1">Publishing…</span></> : "Publish"}
+        <Button variant="primary" size="sm" onClick={() => publish()} busy={busy} disabled={version === null || inspection === null} data-blueprint-publish>
+          {busy ? "Publishing…" : "Publish"}
         </Button>
       </div>
     </>

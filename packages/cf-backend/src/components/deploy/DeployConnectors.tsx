@@ -7,13 +7,13 @@ import { Effect } from "effect";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, MCP_PRESETS } from "@kinu.run/core";
 import { GOOGLE_SETUP, googleRedirect, type DeployedKinu } from "@kinu.run/core/deploy";
-import { detach } from "@kinu.run/core/obs";
 import { Button } from "@/components/ui/Button";
 import { BrandMark, PRESET_MARK, type BrandName } from "@/components/ui/BrandMark";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { IconTile } from "@/components/ui/IconTile";
 import { TextInput } from "@/components/ui/Field";
 import { setGoogleClient } from "@/lib/deploy-page-api";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 /** GitHub's return to the page once it made a Kinu's app: the app, for the Kinu named, or GitHub's or Cloudflare's words. */
 export type GithubReturn = { readonly made: string; readonly kinu: string } | { readonly error: string };
@@ -79,20 +79,14 @@ function Step({ n, children }: { n: number; children: ReactNode }) {
 function GoogleClientSteps({ kinu, onSaved, onCancel }: { kinu: DeployedKinu; onSaved: () => void; onCancel: () => void }) {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [refused, setRefused] = useState<string | null>(null);
+  const { busy, error: refused, run } = useLabelledStep(onSaved);
   const redirect = googleRedirect(kinu.url);
 
-  const save = () => Effect.gen(function* () {
-    setSaving(true);
-    setRefused(null);
+  const save = (): void => run("save", () => Effect.gen(function* () {
     const heard = yield* Effect.promise(async () => setGoogleClient(kinu.account, kinu.name, { clientId, clientSecret }));
 
-    setSaving(false);
-
-    if ("refusal" in heard) setRefused(heard.refusal.error);
-    else onSaved();
-  });
+    if ("refusal" in heard) return yield* Effect.fail(heard.refusal.error);
+  }));
 
   return (
     <div className="space-y-4" data-deploy-google-steps>
@@ -124,7 +118,7 @@ function GoogleClientSteps({ kinu, onSaved, onCancel }: { kinu: DeployedKinu; on
       {refused !== null && <p role="alert" className="t-meta p-danger">{refused}</p>}
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
-        <Button size="sm" disabled={saving || clientId.trim() === "" || clientSecret.trim() === ""} onClick={() => detach(save())}>Save</Button>
+        <Button size="sm" busy={busy !== null} disabled={clientId.trim() === "" || clientSecret.trim() === ""} onClick={save}>Save</Button>
       </div>
     </div>
   );
@@ -132,19 +126,18 @@ function GoogleClientSteps({ kinu, onSaved, onCancel }: { kinu: DeployedKinu; on
 
 function GoogleConnector({ kinu, onChanged }: { kinu: DeployedKinu; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
-  const [refused, setRefused] = useState<string | null>(null);
+  const { busy, error: refused, run } = useLabelledStep(onChanged);
 
   if (kinu.connectors.google) {
-    const composio = () => Effect.gen(function* () {
+    const composio = (): void => run("composio", () => Effect.gen(function* () {
       const heard = yield* Effect.promise(async () => setGoogleClient(kinu.account, kinu.name, null));
 
-      if ("refusal" in heard) setRefused(heard.refusal.error);
-      else onChanged();
-    });
+      if ("refusal" in heard) return yield* Effect.fail(heard.refusal.error);
+    }));
 
     return (
       <Connector id="google" brand="google" title="Google" copy="Connected through your own Google app."
-        action={<Button size="sm" variant="ghost" onClick={() => detach(composio())}>Use Composio instead</Button>}>
+        action={<Button size="sm" variant="ghost" onClick={composio} busy={busy !== null}>Use Composio instead</Button>}>
         {refused !== null && <p role="alert" className="t-meta p-danger">{refused}</p>}
       </Connector>
     );

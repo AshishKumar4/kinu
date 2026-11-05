@@ -1,43 +1,34 @@
 /** The confirm field applies `confirmsAccountDelete`, the same rule as the route. No rate limit by design; the typed phrase is the gate. */
-import { Effect } from "effect";
-import { startTransition, useState } from "react";
-import { Loader } from "@/components/ui/Loader";
+import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { WarningIcon } from "@phosphor-icons/react";
 import { confirmsAccountDelete } from "@kinu.run/core";
-import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { deleteAccount } from "@/lib/user-api";
-import { Card, Field, composing } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
-import { TextInput } from "@/components/ui/Field";
+import { TextInput, Field, composing } from "@/components/ui/Field";
+import { Notice } from "@/components/ui/Notice";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 export function DeleteAccountCard({ email }: { email: string }) {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const step = useLabelledStep();
+  const busy = step.busy !== null;
 
   const confirmed = confirmsAccountDelete(confirm, email);
 
-  const run = async () => {
-    setBusy(true);
-    setError(null);
-
-    try {
-      await deleteAccount(confirm);
-      // /logout clears the cookie; the next sign-in builds a fresh object.
-      window.location.assign('/logout?return_to=/');
-    } catch (cause) {
-      setError(renderThrownChain({ cause }));
-      setBusy(false);
-    }
-  };
+  // /logout clears the cookie; the next sign-in builds a fresh object.
+  const run = (): void => step.run("delete", async () => {
+    await deleteAccount(confirm);
+    window.location.assign('/logout?return_to=/');
+  });
 
   const close = () => {
     if (busy) return;
     setOpen(false);
     setConfirm('');
-    setError(null);
+    step.clear();
   };
 
   return (
@@ -51,16 +42,16 @@ export function DeleteAccountCard({ email }: { email: string }) {
           footer={
             <>
               <Button variant="ghost" size="sm" onClick={close} disabled={busy}>Cancel</Button>
-              <Button variant="destructive" size="sm" disabled={!confirmed || busy} onClick={(...args: Parameters<typeof run>) => detach(Effect.promise(async () => run(...args)))}>
-                {busy ? <Loader size="sm" /> : null} Delete everything
+              <Button variant="destructive" size="sm" disabled={!confirmed} busy={busy} onClick={run}>
+                Delete everything
               </Button>
             </>
           }
         >
           <Field label="Type your email to confirm">
-            <TextInput autoFocus autoComplete="off" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !composing(e.nativeEvent) && confirmed && !busy) startTransition(run); }} aria-label="Confirm your email" />
+            <TextInput autoFocus autoComplete="off" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !composing(e.nativeEvent) && confirmed) run(); }} aria-label="Confirm your email" />
           </Field>
-          {error && <p className="t-meta p-danger">{error}</p>}
+          {step.error !== null && <Notice tone="danger">{step.error}</Notice>}
         </Modal>
       )}
     </Card>

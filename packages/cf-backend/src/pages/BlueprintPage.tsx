@@ -3,7 +3,6 @@
  * A secret-shaped scan hit is reported by location, never content.
  */
 import { FRAME_PAGE, PageHeader } from "@/components/ui/PageHeader";
-import { type WorkspaceEntry } from '@kinu.run/core';
 import { Button } from "@/components/ui/Button";
 import { showing, detach } from "@kinu.run/core/obs";
 import { Effect } from "effect";
@@ -88,10 +87,9 @@ function BlueprintBody({ view }: { view: BlueprintView }) {
   );
 }
 
-export default function BlueprintPage({ fixture, viewer, workspaces }: {
+export default function BlueprintPage({ fixture, viewer }: {
   fixture?: BlueprintView;
   viewer?: string | null;
-  workspaces?: readonly WorkspaceEntry[];
 } = {}) {
   const { id = "" } = useParams();
   const [view, setView] = useState<BlueprintView | null>(fixture ?? null);
@@ -125,7 +123,7 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
   };
 
   return (
-    <Surface look="page" className="min-h-screen p-text">
+    <Surface look="page" className="min-h-dvh p-text">
       <header className="flex h-14 items-center justify-between border-b p-border px-5">
         <a href="/" aria-label="Kinu home" className="flex items-center"><KinuLogo /></a>
         <span className="t-meta p-text-3">Shared blueprint</span>
@@ -153,7 +151,7 @@ export default function BlueprintPage({ fixture, viewer, workspaces }: {
         </div>
       </main>
       {/* Outside the shell: no sidebar lists the new workspace, so it is only registered. */}
-      {forking && view !== null && <ForkDialog blueprint={view.id} title={view.title} onClose={() => setForking(false)} workspaces={workspaces}
+      {forking && view !== null && <ForkDialog blueprint={view.id} title={view.title} onClose={() => setForking(false)}
         create={(mission) => registerWorkspace(undefined, mission.trim())} />}
     </Surface>
   );
