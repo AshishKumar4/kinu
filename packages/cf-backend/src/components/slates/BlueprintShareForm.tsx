@@ -36,16 +36,9 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending }: {
-  workspace: string;
-  slate: string;
-  rpc: WorkspaceRpc;
-  onClose: () => void;
-  /** The dialog owns the busy state so its backdrop stops dismissing mid-write. */
-  onBusy: (busy: boolean) => void;
-  onListingPending?: () => void;
-}) {
-  // The slate's versions, newest last, and its shares still standing: the copy's choices and who has it.
+/** What the copy is made from: the slate's versions (newest chosen unless the owner picks), its shares still standing,
+ *  and the inspection of exactly the bytes that would ship, read again on every choice. */
+function useCopyReads(rpc: WorkspaceRpc, slate: string) {
   const loadSlate = useCallback(async () => {
     let page = answered(await rpc("slate", [{ op: "history", id: slate }]), HistorySchema);
     const ids = page.versions.map((entry) => entry.id);
@@ -76,11 +69,25 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
 
   const inspected = useAsyncResource(inspect);
   const inspection = lastValue(inspected.resource);
+  const failed = [read.resource, inspected.resource].find((each) => each.status === "error");
+
+  return { versions, version, setVersion, include, setInclude, shares, setRevoked, inspection, readErr: failed?.status === "error" ? failed.message : null };
+}
+
+export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending }: {
+  workspace: string;
+  slate: string;
+  rpc: WorkspaceRpc;
+  onClose: () => void;
+  /** The dialog owns the busy state so its backdrop stops dismissing mid-write. */
+  onBusy: (busy: boolean) => void;
+  onListingPending?: () => void;
+}) {
+  const { versions, version, setVersion, include, setInclude, shares, setRevoked, inspection, readErr } = useCopyReads(rpc, slate);
   const [emails, setEmails] = useState("");
   const [busy, setBusyState] = useState(false);
   const [stepErr, setErr] = useState<string | null>(null);
-  const readErr = read.resource.status === "error" ? read.resource.message : null;
-  const err = stepErr ?? readErr ?? (inspected.resource.status === "error" ? inspected.resource.message : null);
+  const err = stepErr ?? readErr;
   const [published, setPublished] = useState<Published | null>(null);
   const setBusy = useCallback((next: boolean) => { setBusyState(next); onBusy(next); }, [onBusy]);
 
