@@ -85,14 +85,36 @@ function UsesYours({ needs }: { needs: readonly RoomService[] }) {
   );
 }
 
-export default function GallerySlatePage() {
-  const { workspace = "", slate = "" } = useParams();
-  const [search] = useSearchParams();
-  const signedIn = useGallerySignedIn();
+/** The slate's star as the reader sees it: their own press over the count the page was read with, for this slate only. */
+function useStar(workspace: string, slate: string, listing: GalleryListing | null) {
+  const shownSlate = `${workspace}/${slate}`;
+  const [pressed, setPressed] = useState<{ slate: string; on: boolean; count: number } | null>(null);
+  const listed = listing === null ? null : { on: listing.starred, count: listing.stars };
+  const star = pressed?.slate === shownSlate ? pressed : listed;
+  const [starFailure, setStarFailure] = useState<string | null>(null);
+
+  // Drawn at once, and put back if the Gallery refuses it.
+  const toggleStar = useCallback(() => {
+    if (star === null) return;
+    const before = star;
+    const on = !before.on;
+
+    setPressed({ slate: shownSlate, on, count: before.count + (on ? 1 : -1) });
+    setStarFailure(null);
+    detach(Effect.catchCause(Effect.promise(() => starListing({ workspace, slate, on })), showing((chain) => {
+      setPressed({ slate: shownSlate, ...before });
+      setStarFailure(chain);
+    })));
+  }, [star, workspace, slate, shownSlate]);
+
+  return { star, starFailure, toggleStar };
+}
+
+/** The slate's page, then more apps of its category from Explore once the page says which: never itself. */
+function useSlatePage(workspace: string, slate: string) {
   const loadPage = useCallback(() => readGallerySlate(workspace, slate), [workspace, slate]);
   const page = useAsyncResource(loadPage);
   const read = lastValue(page.resource);
-  // More apps of its category from Explore, once the slate's own page says which: never itself.
   const category = read?.listing.category;
 
   const loadLike = useCallback(async (): Promise<readonly ExploreItem[]> => {
@@ -109,32 +131,23 @@ export default function GallerySlatePage() {
   if (likeRead.resource.status === "error") failure = likeRead.resource.message;
 
   if (page.resource.status === "error") failure = page.resource.message;
-  // The reader's own press, over the count the page was read with: for this slate only.
-  const shownSlate = `${workspace}/${slate}`;
-  const [pressed, setPressed] = useState<{ slate: string; on: boolean; count: number } | null>(null);
-  const listed = read === null ? null : { on: read.listing.starred, count: read.listing.stars };
-  const star = pressed?.slate === shownSlate ? pressed : listed;
-  const [starFailure, setStarFailure] = useState<string | null>(null);
+
+  return { read, like, failure, retry: () => { page.reload(); likeRead.reload(); } };
+}
+
+export default function GallerySlatePage() {
+  const { workspace = "", slate = "" } = useParams();
+  const [search] = useSearchParams();
+  const signedIn = useGallerySignedIn();
+  const { read, like, failure, retry } = useSlatePage(workspace, slate);
+  const { star, starFailure, toggleStar } = useStar(workspace, slate, read?.listing ?? null);
   // Back from signing in to fork: the picker is open.
   const [dialog, setDialog] = useState<"fork" | "report" | null>(signedIn && search.has("fork") ? "fork" : null);
   const [reported, setReported] = useState(false);
 
-  // Drawn at once, and put back if the Gallery refuses it.
-  const toggleStar = useCallback(() => {
-    if (star === null) return;
-    const before = star;
-    const on = !before.on;
-
-    setPressed({ slate: shownSlate, on, count: before.count + (on ? 1 : -1) });
-    setStarFailure(null);
-    detach(Effect.catchCause(Effect.promise(() => starListing({ workspace, slate, on })), showing((chain) => {
-      setPressed({ slate: shownSlate, ...before });
-      setStarFailure(chain);
-    })));
-  }, [star, workspace, slate, shownSlate]);
 
   if (failure !== null) {
-    return <div className={FRAME_PAGE}><LoadFailure what="this slate" message={failure} onRetry={() => { page.reload(); likeRead.reload(); }} /></div>;
+    return <div className={FRAME_PAGE}><LoadFailure what="this slate" message={failure} onRetry={retry} /></div>;
   }
 
   if (read === null || star === null) return <div className="flex h-full items-center justify-center"><Loader size="base" /></div>;

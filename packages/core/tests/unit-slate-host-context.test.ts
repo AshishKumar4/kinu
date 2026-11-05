@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import {
-  readSlateFrameMessage, SLATE_INLINE_HEIGHT_LIMIT, slateFrameSrc, slateLinkId,
+  readSlateFrameMessage, slateFrameSrc, slateLinkId,
   SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE,
 } from '../src/slates/host-context';
 import { parseSlateProject } from '../src/slates/project';
@@ -19,7 +19,7 @@ test('a slate is sized by what it holds: package.json declares no inline height'
   expect(() => parseSlateProject({ main: 'server.js', slate: { inline: { height: 240 } } })).toThrow('slate.inline');
 });
 
-test('readSlateFrameMessage checks the frame, the origin and the envelope, and holds the height to the limit', () => {
+test('readSlateFrameMessage checks the frame, the origin and the envelope, and holds a runaway height', () => {
   const channel = new MessageChannel();
   const data = { kinu: SLATE_SIZE_CHANGED_MESSAGE, height: 200 };
 
@@ -30,7 +30,8 @@ test('readSlateFrameMessage checks the frame, the origin and the envelope, and h
   expect(readSlateFrameMessage(event({ source: channel.port2, origin: 'https://p.example.test', data }), channel.port1, 'https://p.example.test')).toBeNull();
   expect(readSlateFrameMessage(event({ source: channel.port1, origin: 'https://evil.example.test', data }), channel.port1, 'https://p.example.test')).toBeNull();
   expect(readSlateFrameMessage(event({ source: channel.port1, origin: 'https://p.example.test', data: { kinu: 'other', height: 1 } }), channel.port1, 'https://p.example.test')).toBeNull();
-  expect(readSlateFrameMessage(event({ source: channel.port1, origin: 'https://p.example.test', data: { ...data, height: SLATE_INLINE_HEIGHT_LIMIT * 2 } }), channel.port1, 'https://p.example.test')?.height).toBe(SLATE_INLINE_HEIGHT_LIMIT);
+  // A page that grows with its frame says a height without end; the chat holds it to a page's worth.
+  expect(readSlateFrameMessage(event({ source: channel.port1, origin: 'https://p.example.test', data: { ...data, height: 1e9 } }), channel.port1, 'https://p.example.test')?.height).toBeLessThan(1e9);
 });
 
 test('slateFrameSrc embeds a schema-checked context and refuses a malformed one', () => {

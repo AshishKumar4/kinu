@@ -60,7 +60,7 @@ export function TerminalCloseBoundary({ close, onRetry }: {
   );
 }
 
-export function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: string; path: string; rpc: WorkspaceRpc; ids: AgentLinkIds; input: boolean }) {
+function NestedAgentColumn({ workspace, path, rpc, ids, input }: { workspace: string; path: string; rpc: WorkspaceRpc; ids: AgentLinkIds; input: boolean }) {
   const load = useCallback(() => nestedAgent((request) => rpc("inspectSubagent", [request]), path, ids), [rpc, path, ids]);
   const { resource, reload } = useAsyncResource(load, undefined, `${path}|${ids.actor ?? ""}|${ids.parent ?? ""}`);
 
@@ -80,7 +80,7 @@ export function NestedAgentColumn({ workspace, path, rpc, ids, input }: { worksp
   );
 }
 
-export function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
+function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
   main: ReturnType<typeof useKinu>;
   ownerPath: string | null;
   runId: string;
@@ -169,7 +169,7 @@ export function AgentChatColumn({ workspace, subName, subagents, rpc, ids, input
 
 /** One subagent's chat over its own facet socket; Work Surface and Timeline stay on
  *  the parent socket. The facet exposes no fork/feedback/takes/restore. */
-export function SubagentChatColumn({
+function SubagentChatColumn({
   workspace, subName, title, input,
 }: {
   workspace: string;

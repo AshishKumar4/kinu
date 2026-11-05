@@ -44,7 +44,7 @@ export function useAgentsPanel({ listed, live, workspace = "", node, subName, wo
 
 /** Main's mark follows this page's own socket for working, so the bar and the composer's Stop never disagree; a
  *  question for the person outranks either. */
-export function mainActivity(listed: PanelAgent["activity"], live: boolean): PanelAgent["activity"] {
+function mainActivity(listed: PanelAgent["activity"], live: boolean): PanelAgent["activity"] {
   if (listed === "waiting") return listed;
 
   if (live) return "working";
@@ -52,13 +52,13 @@ export function mainActivity(listed: PanelAgent["activity"], live: boolean): Pan
   return listed === "working" ? "idle" : listed;
 }
 
-export function shownPanelAgent(agents: readonly PanelAgent[], node: string | null, subName: string | undefined): PanelAgent | undefined {
+function shownPanelAgent(agents: readonly PanelAgent[], node: string | null, subName: string | undefined): PanelAgent | undefined {
   if (node !== null) return agents.find((agent) => agent.key === node);
 
   return agents.find((agent) => agent.open.kind === "chat" && agent.open.path === (subName ?? null));
 }
 
-export function agentPagePath(workspace: string, { open }: PanelAgent): string {
+function agentPagePath(workspace: string, { open }: PanelAgent): string {
   if (open.kind === "chat") return open.path === null ? workspaceRoute(workspace) : agentRoute(workspace, open.path);
   const owner = open.owner === null ? "" : `&owner=${encodeURIComponent(open.owner)}`;
 

@@ -52,6 +52,9 @@ describe('slate sharing surfaces', () => {
           const blueprint = await freshPage(gallery, 'blueprint', theme, viewport);
 
           try {
+            // The blueprint is read, as the page reads it, before its words are there.
+            await blueprint.waitForFunction(() => document.body.innerText.includes('Fork into Kinu'));
+
             const text = await blueprint.evaluate(() => document.body.innerText);
             expect(text).toContain('Issue triage');
             expect(await blueprint.$('[role="alert"]')).not.toBeNull();
@@ -68,6 +71,8 @@ describe('slate sharing surfaces', () => {
 
           try {
             // A visitor's one action signs in and comes back here.
+            await visitor.waitForFunction(() => document.body.innerText.includes('Fork into Kinu'));
+
             const action = await visitor.evaluate(() => {
               const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.includes('Fork into Kinu'));
 
@@ -85,6 +90,7 @@ describe('slate sharing surfaces', () => {
 
           try {
             // Who can open it and Share, the choices said in one line: the safe defaults, each changed only when asked to.
+            await live.waitForSelector('[data-share-summary]');
             expect(await live.$eval(`${SHARE_ACCESS_OPTION}[aria-checked="true"]`, (element) => element.getAttribute('data-share-access-option'))).toBe('users');
             expect(await live.$eval('[data-share-summary]', (element) => element.textContent ?? '')).toContain("Runs on each person's own access · Can be forked");
             expect(await live.$$('[data-share-mode], [data-share-fork], [data-share-start], [data-share-limits]')).toHaveLength(0);
@@ -202,6 +208,7 @@ describe('slate sharing surfaces', () => {
           const first = await freshPage(gallery, 'sharedialog-first', theme, viewport);
 
           try {
+            await first.waitForSelector('[data-share-summary]');
             expect(await first.$eval('[data-share-summary]', (element) => element.textContent ?? '')).toContain("Runs on each person's own access · Shows what it holds now · Can be forked");
             await first.click(SHARE_OPTIONS);
             expect(await first.$eval('[data-share-start][aria-checked="true"]', (element) => element.getAttribute('data-share-start'))).toBe('as-is');
@@ -239,6 +246,9 @@ describe('slate sharing surfaces', () => {
           const dialog = await freshPage(gallery, 'sharedialog-blueprint', theme, viewport);
 
           try {
+            // The version's inspection is read before it says what the copy connects.
+            await dialog.waitForSelector('[data-blueprint-connect]');
+
             const text = await dialog.$eval('[role="dialog"]', (element) => element.textContent ?? '');
             expect(text).toContain('Publish');
             // The forker connects their own of what the slate reaches.
@@ -273,6 +283,7 @@ describe('slate sharing surfaces', () => {
       const page = await freshPage(gallery, 'sharedialog', 'light', 'mobile');
 
       try {
+        await page.waitForSelector('[data-live-share="live-board-1"] [data-live-share-review]');
         await page.click('[data-live-share="live-board-1"] [data-live-share-review]');
         await page.waitForSelector('[data-share-approve-reach]');
         await page.click('[data-share-approve-reach]');

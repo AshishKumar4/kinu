@@ -45,7 +45,7 @@ export const SLATE_BRIDGE_MESSAGE = 'bridge';
 
 export const SLATE_QUERY_PARAM = 'kinu';
 
-export const SlateFrameMessageSchema = v.strictObject({
+const SlateFrameMessageSchema = v.strictObject({
   kinu: v.literal(SLATE_SIZE_CHANGED_MESSAGE),
   height: v.number(),
 });
@@ -56,7 +56,7 @@ export type SlateFrameMessage = v.InferOutput<typeof SlateFrameMessageSchema>;
  * An in-chat slate is as tall as its document, like the rest of the answer. This bounds only a page sized to its own
  * frame plus a margin, which would otherwise grow on every round of measuring.
  */
-export const SLATE_INLINE_HEIGHT_LIMIT = 8000;
+const SLATE_INLINE_HEIGHT_LIMIT = 8000;
 
 /** The slate's message, accepted only from its own window (identity check on `event.source`) and only when it parses as
  *  the envelope; null otherwise. Its height is held to `SLATE_INLINE_HEIGHT_LIMIT`. */
