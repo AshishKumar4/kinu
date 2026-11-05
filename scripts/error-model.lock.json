@@ -203,8 +203,7 @@
     "packages/core/src/vfs/workspace-runtimes.ts#catch": 1,
     "packages/devbox/src/devbox.ts#catch": 3,
     "packages/devbox/src/devbox.ts#throw": 15,
-    "packages/devbox/src/lifecycle.ts#promise-rejection": 1,
-    "packages/devbox/src/lifecycle.ts#throw": 3,
+    "packages/devbox/src/lifecycle.ts#throw": 2,
     "packages/test-utils/src/llm.ts#throw": 1,
     "packages/test-utils/src/runtime.ts#throw": 1
   }
