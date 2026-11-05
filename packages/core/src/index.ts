@@ -768,9 +768,9 @@ export {
 
 export { createTasksCodemodeProvider, type RoleSwitch } from './tools/tasks-operations';
 
-export { createAiCodemodeProvider, type AiAnswer, type AiDeps, type AiRunInput } from './tools/ai-operations';
+export { createAiCodemodeProvider, type AiDeps } from './tools/ai-operations';
 
-export { AI } from './operations/ai';
+export { AI, type AiAnswer, type AiRunInput } from './operations/ai';
 
 export { TASKS } from './operations/tasks';
 

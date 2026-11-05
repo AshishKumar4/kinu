@@ -12,7 +12,7 @@ import { JsonValueSchema } from '../utils/json';
 import type { SlateRoute } from './surface';
 import type { SlateSurfaceValue } from './rpc';
 import { AI } from '../operations/ai';
-import type { AiAnswer, AiRunInput } from '../tools/ai-operations';
+import type { AiAnswer, AiRunInput } from '../operations/ai';
 import type { ActorOrigin } from '../identity/workspace-actors';
 
 export type SlateAiRoute = Extract<SlateRoute, { kind: 'ai' }>;

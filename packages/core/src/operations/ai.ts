@@ -20,3 +20,7 @@ export const AI = {
     output: v.strictObject({ text: v.string(), model: v.string(), tier: v.string(), usage: UsageSchema }),
   }),
 } as const;
+
+export type AiRunInput = v.InferOutput<typeof AI.run.input>;
+
+export type AiAnswer = v.InferOutput<typeof AI.run.output>;

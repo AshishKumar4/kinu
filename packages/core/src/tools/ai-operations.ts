@@ -1,14 +1,9 @@
 /** `ai.*` for programs: the model call a slate's `ai.run` makes, answered by the actor's own account. */
-import type * as v from 'valibot';
 import type { CodemodeProvider } from '../types/codemode';
 import { attemptInItsWords } from '../obs/index';
 import { serve, type Served } from '../operations/operation';
 import { codemodeNamespace } from './operation-surfaces';
-import { AI } from '../operations/ai';
-
-export type AiRunInput = v.InferOutput<typeof AI.run.input>;
-
-export type AiAnswer = v.InferOutput<typeof AI.run.output>;
+import { AI, type AiAnswer, type AiRunInput } from '../operations/ai';
 
 /** Where an actor's program asks a model: its backend resolves the tier and files the spend as the actor's own. */
 export interface AiDeps {
