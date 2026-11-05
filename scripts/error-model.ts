@@ -1027,41 +1027,95 @@ function mechanismOf(node: SyntaxNode): Mechanism | undefined {
   return undefined;
 }
 
-/** The class a `new` expression constructs, by name. */
-function constructed(expression: SyntaxNode['raw'] | null | undefined): string | undefined {
-  return expression?.type === 'NewExpression' && expression.callee.type === 'Identifier' ? expression.callee.name : undefined;
+/** What a file binds, read once: each import's local name and the class it names, how often each name is bound or
+ *  assigned, and its top-level makers (a sync const arrow or function whose whole body is `new <Imported>(…)`). */
+interface Bindings {
+  readonly imported: ReadonlyMap<string, string>;
+  readonly bound: ReadonlyMap<string, number>;
+  readonly makers: ReadonlyMap<string, string>;
 }
 
-/** Whether a `throw` throws `name`: `throw new Name(…)`, or `throw make(…)` where `make` is a same-file function or arrow
- *  whose body is `new Name(…)`. */
+const BINDINGS = new WeakMap<SyntaxNode, Bindings>();
+
+function bindingsOf(program: SyntaxNode): Bindings {
+  const known = BINDINGS.get(program);
+
+  if (known !== undefined) return known;
+  const imported = new Map<string, string>();
+  const bound = new Map<string, number>();
+  const bind = (name: string): void => { bound.set(name, (bound.get(name) ?? 0) + 1); };
+
+  const makes = (body: SyntaxNode['raw'] | null | undefined): string | undefined =>
+    body?.type === 'NewExpression' && body.callee.type === 'Identifier' ? body.callee.name : undefined;
+
+  const makers = new Map<string, string>();
+
+  walk(program, ({ raw }) => {
+    if (raw.type === 'ImportSpecifier') {
+      bind(raw.local.name);
+
+      if (raw.imported.type === 'Identifier') imported.set(raw.local.name, raw.imported.name);
+    }
+
+    if (raw.type === 'ImportDefaultSpecifier' || raw.type === 'ImportNamespaceSpecifier') bind(raw.local.name);
+
+    if (raw.type === 'ClassDeclaration' && raw.id !== null) bind(raw.id.name);
+
+    if (raw.type === 'VariableDeclarator' && raw.id.type === 'Identifier') bind(raw.id.name);
+
+    if ((raw.type === 'FunctionDeclaration' || raw.type === 'FunctionExpression') && raw.id !== null && raw.id !== undefined) bind(raw.id.name);
+
+    if (raw.type === 'FunctionDeclaration' || raw.type === 'FunctionExpression' || raw.type === 'ArrowFunctionExpression') {
+      for (const param of raw.params) if (param.type === 'Identifier') bind(param.name);
+    }
+
+    if (raw.type === 'CatchClause' && raw.param?.type === 'Identifier') bind(raw.param.name);
+
+    if (raw.type === 'AssignmentExpression' && raw.left.type === 'Identifier') bind(raw.left.name);
+  });
+
+  for (const { raw } of program.children) {
+    if (raw.type === 'VariableDeclaration' && raw.kind === 'const') {
+      for (const declarator of raw.declarations) {
+        const { id, init } = declarator;
+        const made = init?.type === 'ArrowFunctionExpression' && !init.async && init.body.type !== 'BlockStatement' ? makes(init.body) : undefined;
+
+        if (id.type === 'Identifier' && made !== undefined) makers.set(id.name, made);
+      }
+    }
+
+    if (raw.type === 'FunctionDeclaration' && !raw.async && !raw.generator && raw.id !== null && raw.body?.body.length === 1) {
+      const [only] = raw.body.body;
+      const made = only?.type === 'ReturnStatement' ? makes(only.argument) : undefined;
+
+      if (made !== undefined) makers.set(raw.id.name, made);
+    }
+  }
+
+  const facts = { imported, bound, makers };
+
+  BINDINGS.set(program, facts);
+
+  return facts;
+}
+
+/** Whether a `throw` throws the imported class `name`: `throw new Name(…)`, or `throw make(…)` for a top-level maker
+ *  of it. Every name it rests on is bound once in the file, so no parameter, local or reassignment can stand in. */
 function throwsClass(node: SyntaxNode, name: string): boolean {
   const thrown = node.raw.type === 'ThrowStatement' ? node.raw.argument : null;
-
-  if (constructed(thrown) === name) return true;
-
-  if (thrown?.type !== 'CallExpression' || thrown.callee.type !== 'Identifier') return false;
-  const helper = thrown.callee.name;
   let program: SyntaxNode = node;
 
   while (program.parent !== undefined) program = program.parent;
-  let made = false;
+  const { imported, bound, makers } = bindingsOf(program);
+  const once = (local: string): boolean => bound.get(local) === 1;
+  const isClass = (local: string | undefined): boolean => local !== undefined && imported.get(local) === name && once(local);
 
-  walk(program, (candidate) => {
-    const { raw } = candidate;
+  if (thrown?.type === 'NewExpression' && thrown.callee.type === 'Identifier') return isClass(thrown.callee.name);
 
-    if (raw.type === 'VariableDeclarator' && raw.id.type === 'Identifier' && raw.id.name === helper
-      && raw.init?.type === 'ArrowFunctionExpression' && raw.init.body.type !== 'BlockStatement') {
-      made ||= constructed(raw.init.body) === name;
-    }
+  if (thrown?.type !== 'CallExpression' || thrown.callee.type !== 'Identifier') return false;
+  const maker = thrown.callee.name;
 
-    if (raw.type === 'FunctionDeclaration' && raw.id?.name === helper && raw.body.body.length === 1) {
-      const [only] = raw.body.body;
-
-      made ||= only?.type === 'ReturnStatement' && constructed(only.argument) === name;
-    }
-  });
-
-  return made;
+  return once(maker) && isClass(makers.get(maker));
 }
 
 function isDeclared(file: string, mechanism: Mechanism, node: SyntaxNode): boolean {

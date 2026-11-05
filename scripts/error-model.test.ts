@@ -41,6 +41,9 @@ const lockOf = (counts: Readonly<Record<string, number>>): ErrorModelLock => ({ 
 
 const measured = (text: string, extra: readonly (readonly [string, string])[] = []) => measure(new Map([[FILE, text], ...extra]));
 
+/** One file's keys, measured beside the legacy fixture. */
+const keysOf = (file: string, body: string) => measured(LEGACY, [[file, body]]).filter(({ key }) => key.startsWith(file));
+
 const BASELINE = lockOf(Object.fromEntries(measured(LEGACY).map(({ key, value }) => [key, value])));
 
 test('each mechanism is counted where it appears, and not where the target model spells the same word', () => {
@@ -109,27 +112,36 @@ test('the boundary file grows in the mechanisms it declares and in no other', ()
   const boundary = 'packages/core/src/obs/effect.ts';
   const outcome = 'packages/core/src/tools/outcome.ts';
   const body = 'export const w = { ok: true, success: false }; export function f(): never { throw new Error("x"); }\n';
-  const keysOf = (file: string) => measured(LEGACY, [[file, body]]).filter(({ key }) => key.startsWith(file));
 
-  expect(keysOf(boundary)).toEqual([]);
-  expect(keysOf(outcome)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
+  expect(keysOf(boundary, body)).toEqual([]);
+  expect(keysOf(outcome, body)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
 });
 
 test('a VFS implementation\'s VfsError throw is its declared channel; any other throw there is still counted', () => {
   const plane = 'packages/core/src/vfs/context-plane.ts';
+  const header = 'import { VfsError } from \'@nimbus-sh/core/vfs/vfs-error.js\';\n';
 
-  const vfsErrors = 'const absent = (path: string): Error => new VfsError(\'ENOENT\', \'gone\', path);\n'
-    + 'export const files = { async stat(path: string) { throw absent(path); }, async mkdir(path: string) { throw new VfsError(\'EACCES\', \'no\', path); } };\n';
+  const vfsErrors = header + 'const absent = (path: string): Error => new VfsError(\'ENOENT\', \'gone\', path);\n'
+    + 'function readOnly(path: string): Error { return new VfsError(\'EACCES\', \'no\', path); }\n'
+    + 'export const files = { async stat(p: string) { throw absent(p); }, async unlink(p: string) { throw readOnly(p); }, '
+    + 'async mkdir(p: string) { throw new VfsError(\'EACCES\', \'no\', p); } };\n';
 
-  const others = 'export function check(x: number) { if (x < 0) throw new KinuError(\'bad_input\', \'x\'); throw new Error(\'y\'); }\n';
-  const keysOf = (body: string) => measured(LEGACY, [[plane, body]]).filter(({ key }) => key.startsWith(plane));
+  const counted = (body: string) => keysOf(plane, body)[0]?.value ?? 0;
 
-  expect(keysOf(vfsErrors)).toEqual([]);
-  expect(keysOf(vfsErrors + others)).toEqual([{ key: `${plane}#throw`, value: 2 }]);
+  expect(counted(vfsErrors)).toBe(0);
+  expect(counted(`${vfsErrors}export function check(x: number) { if (x < 0) throw new KinuError('bad_input', 'x'); throw new Error('y'); }\n`)).toBe(2);
+
+  // Only a sync maker of the imported class, bound once, stands for it.
+  for (const stand of [
+    'const absent = async () => new VfsError(\'ENOENT\', \'gone\'); export function f() { throw absent(); }',
+    'function* absent() { return new VfsError(\'ENOENT\', \'gone\'); } export function f() { throw absent(); }',
+    'let absent = () => new VfsError(\'ENOENT\', \'gone\'); absent = () => new Error(\'x\'); export function f() { throw absent(); }',
+    'const absent = () => new VfsError(\'ENOENT\', \'gone\'); export function f(absent: () => Error) { throw absent(); }',
+    'export function f(VfsError: ErrorConstructor) { throw new VfsError(\'bad\'); }',
+  ]) expect(counted(header + stand)).toBe(1);
 
   // The same VfsError throws in a file that declares no VFS implementation stay legacy.
-  expect(measured(LEGACY, [['packages/core/src/vfs/other.ts', vfsErrors]]).filter(({ key }) => key.startsWith('packages/core/src/vfs/other.ts')))
-    .toEqual([{ key: 'packages/core/src/vfs/other.ts#throw', value: 2 }]);
+  expect(keysOf('packages/core/src/vfs/other.ts', vfsErrors)).toEqual([{ key: 'packages/core/src/vfs/other.ts#throw', value: 3 }]);
 });
 
 test.each([
