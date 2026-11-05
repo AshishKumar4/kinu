@@ -4,7 +4,7 @@
  * Before a Kinu is deployed (`ConnectorsBefore`), its apps are made for the address it will have and held until its
  * deploy binds them.
  */
-import { useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react";
 import { APP_ROUTES, MCP_PRESETS } from "@kinu.run/core";
@@ -16,7 +16,8 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { IconTile } from "@/components/ui/IconTile";
 import { TextInput } from "@/components/ui/Field";
 import { readConnectorsBefore, setGoogleClient, type DeployHeard } from "@/lib/deploy-page-api";
-import { useDeployRead } from "@/components/deploy/use-deploy-read";
+import { readingOf } from "@/components/deploy/deploy-reading";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 /** GitHub's return to the page once it made a Kinu's app: the app, for the Kinu named (`before` it is deployed, held for
@@ -197,8 +198,9 @@ export function ConnectorsBefore({ account, name, address, busy, onConnectGithub
   const [changed, setChanged] = useState(0);
   const [googleOpen, setGoogleOpen] = useState(false);
   const [refused, setRefused] = useState<string | null>(null);
-  const read = useDeployRead(`${account}/${name}/${JSON.stringify(address)}/${String(changed)}`, async () => readConnectorsBefore(account, name, address));
-  const held = read?.state === "read" ? read.answer : null;
+  const load = useCallback(async () => readConnectorsBefore(account, name, address), [account, name, address]);
+  const read = readingOf(useAsyncResource(load, undefined, `${account}/${name}/${JSON.stringify(address)}/${String(changed)}`).resource);
+  const held = read.state === "read" ? read.answer : null;
   const later = "Its address is made by the deploy, so connect it once Kinu is live.";
 
   const composio = () => Effect.gen(function* () {
