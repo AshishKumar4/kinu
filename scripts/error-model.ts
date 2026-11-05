@@ -44,6 +44,8 @@ interface Declaration {
   readonly reason: string;
   /** Only sites inside these named functions, methods, types or interfaces; absent, the whole file. */
   readonly within?: readonly string[];
+  /** Only a `throw` of a Nimbus VFS error made at the throw ({@link throwsVfsError}). */
+  readonly vfsErrors?: true;
 }
 
 /** The declarations by file; a file may hold several, each for its own mechanisms and names. */
@@ -59,6 +61,12 @@ const OUTSIDE_PROVIDER = 'a hook read outside its provider: a render-time progra
 
 /** Files whose mechanisms are the target model's boundary, not a legacy site. */
 export const DECLARED = byFile([
+  // AGENTS.md: "the file plane alone fails with its VfsError (a POSIX code callers switch on with isVfsError)". A Nimbus
+  // `VFS` a mount serves throws it by that package's contract; any other throw in these files is still legacy.
+  ...['packages/core/src/vfs/context-plane.ts'].map(file => [file, {
+    mechanisms: ['throw'], vfsErrors: true,
+    reason: 'a Nimbus VFS implementation\'s errno failure, the file plane\'s declared channel',
+  }] as const),
   ...Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, {
     mechanisms: MECHANISMS, reason: `${surface.type}'s one runner rethrows its typed failure or a defect`,
   }] as const),
@@ -1019,9 +1027,38 @@ function mechanismOf(node: SyntaxNode): Mechanism | undefined {
   return undefined;
 }
 
+/** Nimbus's VFS errors, by the module that makes them: its class and its syscall-error factory. */
+const VFS_ERROR_MODULE = '@nimbus-sh/core/vfs/vfs-error.js';
+
+const VFS_ERROR_MAKERS: ReadonlySet<string> = new Set(['VfsError', 'syscallError']);
+
+/** The local names a file imports Nimbus's VFS error makers under. */
+function vfsErrorBindings(program: SyntaxNode): ReadonlySet<string> {
+  return new Set(program.children.flatMap(({ raw }) => raw.type !== 'ImportDeclaration' || raw.source.value !== VFS_ERROR_MODULE ? [] : raw.specifiers
+    .flatMap((specifier) => specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && VFS_ERROR_MAKERS.has(specifier.imported.name)
+      ? [specifier.local.name]
+      : [])));
+}
+
+/** Whether a `throw` throws a Nimbus VFS error made at the throw: `new VfsError(…)` or `syscallError(…)`, the callee the
+ *  name the file imports it under. */
+function throwsVfsError(node: SyntaxNode): boolean {
+  const thrown = node.raw.type === 'ThrowStatement' ? node.raw.argument : null;
+  const callee = thrown?.type === 'NewExpression' || thrown?.type === 'CallExpression' ? thrown.callee : null;
+
+  if (callee?.type !== 'Identifier') return false;
+  let program: SyntaxNode = node;
+
+  while (program.parent !== undefined) program = program.parent;
+
+  return vfsErrorBindings(program).has(callee.name);
+}
+
 function isDeclared(file: string, mechanism: Mechanism, node: SyntaxNode): boolean {
   return (DECLARED.get(file) ?? []).some((declaration) => {
     if (!declaration.mechanisms.includes(mechanism)) return false;
+
+    if (declaration.vfsErrors === true && !throwsVfsError(node)) return false;
 
     if (declaration.within === undefined) return true;
 
@@ -1236,8 +1273,8 @@ if (import.meta.main) {
     console.log(`  stale: ${key} locked at ${String(was)}, now ${String(now)}; \`bun scripts/error-model.ts --lock\` lowers it`);
   }
 
-  for (const [file, { mechanisms, reason, within }] of [...DECLARED].flatMap(([path, all]) => all.map((one) => [path, one] as const))) {
-    console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}): ${reason}`);
+  for (const [file, { mechanisms, reason, within, vfsErrors }] of [...DECLARED].flatMap(([path, all]) => all.map((one) => [path, one] as const))) {
+    console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}${vfsErrors === true ? ' of Nimbus VFS errors' : ''}): ${reason}`);
   }
 
   const { bridges, flights, routes, held, react, findings } = bridgeSites(sources);

@@ -57,9 +57,10 @@ const encoder = new TextEncoder();
 
 const token = (value: JsonValue): string => `context:${bytesToBase64(encoder.encode(JSON.stringify(value)))}`;
 
-const absent = (path: string): Error => new VfsError('ENOENT', 'no such context path', path);
+// Made at each throw (`new VfsError(…)`): the file plane's declared channel, read so by gate:error-model.
+const ABSENT = 'no such context path';
 
-const readOnly = (path: string): Error => new VfsError('EACCES', 'context evidence is immutable; edit working.jsonl instead', path);
+const READ_ONLY = 'context evidence is immutable; edit working.jsonl instead';
 
 function contextRevision(revision: VfsRevision): v.InferOutput<typeof RevisionSchema> {
   if (!v.is(v.string(), revision) || !revision.startsWith('context:')) throw new KinuError('bad_input', 'invalid context revision');
@@ -247,7 +248,7 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
   const located = (path: string): Target => {
     const resolved = target(path);
 
-    if (resolved === null) throw absent(path);
+    if (resolved === null) throw new VfsError('ENOENT', ABSENT, path);
 
     return resolved;
   };
@@ -421,7 +422,7 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
   const file = (path: string): Document => {
     const source = document(located(path), path);
 
-    if (source === null) throw absent(path);
+    if (source === null) throw new VfsError('ENOENT', ABSENT, path);
 
     return source;
   };
@@ -429,7 +430,7 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
   const write = async (path: string, data: string | Uint8Array, expected?: VfsRevision): Promise<{ ok: true; revision: VfsRevision } | { ok: false; revision: VfsRevision }> => {
     const resolved = located(path);
 
-    if (resolved.segments.length !== 1 || resolved.segments[0] !== 'working.jsonl') throw readOnly(path);
+    if (resolved.segments.length !== 1 || resolved.segments[0] !== 'working.jsonl') throw new VfsError('EACCES', READ_ONLY, path);
     const current = working(resolved);
     const observed = expected === undefined ? current : atRevision(resolved, expected);
     const observedRevision = contextRevision(observed.header.version);
@@ -534,7 +535,7 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
     async readFileAtRevision(path, revision, range) {
       const resolved = located(path);
 
-      if (resolved.segments.length !== 1 || resolved.segments[0] !== 'working.jsonl') throw readOnly(path);
+      if (resolved.segments.length !== 1 || resolved.segments[0] !== 'working.jsonl') throw new VfsError('EACCES', READ_ONLY, path);
       const view = atRevision(resolved, revision);
       const source = workingDocument(view);
 
@@ -550,7 +551,7 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
     async readdir(path) {
       const found = resolve(path);
 
-      if (found === null) throw absent(path);
+      if (found === null) throw new VfsError('ENOENT', ABSENT, path);
 
       if (found.kind === 'file') throw new VfsError('ENOTDIR', 'context path is a file', path);
 
@@ -573,8 +574,8 @@ export function localContextTree(stores: () => ActorContextStores, editor: Conte
     },
     async writeFile(path, data) { await write(path, data); },
     async writeFileIfRevision(path, data, expectedRevision) { return write(path, data, expectedRevision); },
-    async unlink(path) { throw readOnly(path); },
-    async mkdir(path) { throw readOnly(path); },
+    async unlink(path) { throw new VfsError('EACCES', READ_ONLY, path); },
+    async mkdir(path) { throw new VfsError('EACCES', READ_ONLY, path); },
   };
 
   return files;
@@ -651,7 +652,7 @@ function valueOf<T>(answer: () => Promise<ContextAnswer<T>>): Effect.Effect<T> {
 export type ContextTreeOpener = <T>(call: (tree: ContextTreeRemote) => Promise<ContextAnswer<T>>) => Promise<ContextAnswer<T>>;
 
 export function remoteContextTree(remote: ContextTreeOpener): ContextTree {
-  const refused = (path: string): Effect.Effect<never> => valueOf(async () => ({ failure: contextFailure(readOnly(path)) }));
+  const refused = (path: string): Effect.Effect<never> => valueOf(async () => ({ failure: contextFailure(new VfsError('EACCES', READ_ONLY, path)) }));
 
   return {
     readFile: (path) => settle(valueOf(() => remote((tree) => tree.readFile(path)))),
