@@ -1,8 +1,8 @@
-import { Effect } from 'effect';
+import { Effect, Exit } from 'effect';
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { spawnKinuScript } from '../self-spawn';
-import { renderThrownChain, tolerate, settle, settleSync, type KinuError } from '@kinu.run/core/obs';
+import { chainOf, hold, tolerate, settle, settleSync, type KinuError } from '@kinu.run/core/obs';
 import type { SessionEvent } from '@kinu.run/core';
 import { writeSecretFile, type LocalAgentHost } from '@kinu.run/cli-backend';
 import { AGENT_HOME, ensureAgentHome, listLocalRefsAllProjects } from '../config';
@@ -266,12 +266,10 @@ async function runDaemonLoop(): Promise<void> {
 
       // Every placed local agent in every project; the start directory decides nothing.
       for (const ref of listLocalRefsAllProjects()) {
-        try {
-          const result = await host.tick(ref.name, now);
-          nextAt = soonest(nextAt, result.nextAt);
-        } catch (error) {
-          log(`${ref.name}: ${renderThrownChain({ cause: error })}`);
-        }
+        const ticked = await hold(Effect.promise(() => host.tick(ref.name, now)));
+
+        if (Exit.isSuccess(ticked)) nextAt = soonest(nextAt, ticked.value.nextAt);
+        else log(`${ref.name}: ${chainOf(ticked.cause)}`);
       }
 
       const delay = nextAt === null

@@ -3,8 +3,9 @@
 import { COMPACTED, conversationMarkdown, fmtUsd, lastAnswer, limitLines, MAIN_ACCOUNT, slashCommand, specWithoutAccount, usageTotal, type SlashCommandInfo } from '@kinu.run/core';
 import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, offeredReasoningEfforts, formatPlanWithLineNumbers, planHandoffShortfall, planTitle, type PlanReview, type RefinementListing, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type AskingAgent, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus } from './agent-client';
-import type { InstructionSourceRow } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import type { AgentModelMenu, InstructionSourceRow } from '@kinu.run/core';
+import { attemptInItsWords, chainOf, hold } from '@kinu.run/core/obs';
+import { Exit } from 'effect';
 import { loadActiveProfile, updateDefaultAccount } from './default-model';
 import { readAllAccountUsage } from './account-usage';
 import { effortRunsAs, plural, renderAccountSpendLines, renderSearchTreeLines } from './display';
@@ -708,6 +709,18 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
   return entry.run({ client, command, arg: rest.join(' ').trim(), rest });
 }
 
+/** The levels `model`'s catalog entry offers, and how `current` runs on it. */
+function effortLevels(model: string, current: ReasoningEffort, models: AgentModelMenu['models']) {
+  const listed = specWithoutAccount(model);
+  const declared = models.find((entry) => entry.spec === listed)?.reasoningEfforts;
+
+  const levels = declared === undefined
+    ? `${REASONING_EFFORTS.join(', ')} (the catalog does not say which ${model} accepts)`
+    : offeredReasoningEfforts(declared, current).join(', ') || 'none; the model takes no effort setting';
+
+  return { levels, runs: effortRunsAs(current, declared) };
+}
+
 async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcome> {
   if (!arg) {
     const [stored, spec, tier] = await Promise.all([
@@ -719,19 +732,11 @@ async function effortCommand({ client, arg }: SlashContext): Promise<SlashOutcom
     const current = stored ?? tier.reasoningEffort ?? 'medium';
     const model = spec ?? tier.model;
     // Levels come from the model's catalog entry (#9); unreadable falls back to the whole vocabulary.
-    let levels: string;
-    let runs = '';
+    const catalog = await hold(attemptInItsWords('unavailable', () => client.listModels()));
 
-    try {
-      const listed = specWithoutAccount(model);
-      const declared = (await client.listModels()).models.find((entry) => entry.spec === listed)?.reasoningEfforts;
-      runs = effortRunsAs(current, declared);
-      levels = declared === undefined
-        ? `${REASONING_EFFORTS.join(', ')} (the catalog does not say which ${model} accepts)`
-        : offeredReasoningEfforts(declared, current).join(', ') || 'none; the model takes no effort setting';
-    } catch (cause) {
-      levels = `${REASONING_EFFORTS.join(', ')} (catalog unavailable: ${renderThrownChain({ cause })})`;
-    }
+    const { levels, runs } = Exit.isSuccess(catalog)
+      ? effortLevels(model, current, catalog.value.models)
+      : { levels: `${REASONING_EFFORTS.join(', ')} (catalog unavailable: ${chainOf(catalog.cause)})`, runs: '' };
 
     return {
       kind: 'text',

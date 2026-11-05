@@ -10,8 +10,9 @@ import type {
   DeviceConsentSurface,
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { waitForAnswer } from '@kinu.run/core';
+import { chainOf, diagnostics, hold, toKinuError } from '@kinu.run/core/obs';
+import { untilAnswered } from '@kinu.run/core';
+import { Effect } from 'effect';
 import { literalText } from '@kinu.run/core/tui';
 
 const CONSENT_POLL_MS = 750;
@@ -30,7 +31,7 @@ interface ConsentWatchOptions {
 export interface ConsentWatcher {
   stop(): void;
   /** Settles once the loop has ended after `stop`. */
-  done: Promise<void>;
+  done: Promise<unknown>;
 }
 
 export function watchDeviceConsents(
@@ -40,53 +41,40 @@ export function watchDeviceConsents(
   const abort = new AbortController();
   const handled = new Set<string>();
 
-  const tick = async () => {
-    try {
-      const pending = await consents.listPending();
+  const tick = Effect.gen(function* () {
+    const pending = yield* Effect.promise(() => consents.listPending());
 
-      if (abort.signal.aborted) return;
+    if (abort.signal.aborted) return;
 
-      // Ids that left the pending list never reappear; forgetting them keeps the set bounded.
-      const live = new Set(pending.map((item) => item.consentId));
+    // Ids that left the pending list never reappear; forgetting them keeps the set bounded.
+    const live = new Set(pending.map((item) => item.consentId));
 
-      for (const id of handled) if (!live.has(id)) handled.delete(id);
+    for (const id of handled) if (!live.has(id)) handled.delete(id);
 
-      const consent = pending.find((item) => !handled.has(item.consentId));
+    const consent = pending.find((item) => !handled.has(item.consentId));
 
-      if (!consent) return;
+    if (!consent) return;
 
-      const outcome = await opts.present(consent, abort.signal);
-      handled.add(consent.consentId);
+    const outcome = yield* Effect.promise(() => opts.present(consent, abort.signal));
+    handled.add(consent.consentId);
 
-      if (outcome === 'cancelled' || outcome === null) return;
-      const result = await consents.resolve(consent.consentId, outcome);
+    if (outcome === 'cancelled' || outcome === null) return;
+    const result = yield* Effect.promise(() => consents.resolve(consent.consentId, outcome));
 
-      if (abort.signal.aborted) return;
+    if (abort.signal.aborted) return;
 
-      if (result.ok) opts.note('resolved', decisionFeedback(outcome));
-      else opts.note('stale', 'That request is no longer waiting for an answer.');
-    } catch (err) {
-      if (!abort.signal.aborted) {
-        opts.note('error', renderThrownChain({ cause: err }));
-      }
-    }
-  };
+    if (result.ok) opts.note('resolved', decisionFeedback(outcome));
+    else opts.note('stale', 'That request is no longer waiting for an answer.');
+  }).pipe(Effect.catchCause((failed) => Effect.sync(() => {
+    if (!abort.signal.aborted) opts.note('error', chainOf(failed));
+  })));
 
   // Runs until `stop`; a failure past the tick's own reporting ends the loop and is recorded, never an unhandled rejection.
-  const done = (async () => {
-    try {
-      await waitForAnswer(async () => {
-        await tick();
-
-        return undefined;
-      }, { intervalMs: CONSENT_POLL_MS, signal: abort.signal });
-    } catch (cause) {
-      diagnostics.failure(
-        'consent.poll_failed',
-        toKinuError({ doing: 'polling pending device consents', cause, otherwise: 'io' }),
-      );
-    }
-  })();
+  const done = hold(untilAnswered(Effect.as(tick, undefined), { intervalMs: CONSENT_POLL_MS, signal: abort.signal }).pipe(
+    Effect.catchDefect((cause) => Effect.sync(() => {
+      diagnostics.failure('consent.poll_failed', toKinuError({ doing: 'polling pending device consents', cause, otherwise: 'io' }));
+    })),
+  ));
 
   return {
     stop() {

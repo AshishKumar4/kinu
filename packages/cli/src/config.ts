@@ -64,13 +64,18 @@ export function defaultVirtualWorkspaceId(cwd = process.cwd()): string {
 }
 
 export function agentDir(name: string): string {
-  validateAgentName(name);
-
-  return join(AGENT_HOME, name);
+  return settleSync(Effect.as(identifier(name, 'Agent name'), join(AGENT_HOME, name)));
 }
 
 export function agentDbPath(name: string): string {
   return join(agentDir(name), 'agent.db');
+}
+
+/** The database of a workspace that exists here; a missing one is refused with how to make it. */
+export function existingAgentDbPath(name: string): string {
+  const dbPath = agentDbPath(name);
+
+  return settleSync(existsSync(dbPath) ? Effect.succeed(dbPath) : Effect.fail(missingWorkspace(name)));
 }
 
 export interface LocalAgentRef {
@@ -183,14 +188,19 @@ export function placeLocalWorkspace(input: { name: string; cwd: string; workspac
   }));
 }
 
-export class MissingLocalWorkspaceError extends Error {
-  readonly hint: string;
+/** The local workspace `input` names, when none of that name exists here; null when one does, or when it names a cloud
+ *  one, which `resolveLocalAgent` refuses in its own words. */
+export function missingLocalWorkspace(input: string): string | null {
+  const ref = resolveAgentRef(input);
 
-  constructor(workspaceName: string) {
-    super(`Workspace "${workspaceName}" not found.`);
-    this.name = 'MissingLocalWorkspaceError';
-    this.hint = `Create it with: kinu create ${workspaceName}`;
-  }
+  if (ref && ref.mode !== 'local') return null;
+  const name = ref === null ? input : ref.localName;
+
+  return existsSync(agentDbPath(name)) ? null : name;
+}
+
+function missingWorkspace(name: string): KinuError {
+  return new KinuError('missing', `Workspace "${name}" not found. Create it with: kinu create ${name}`);
 }
 
 /** The one local resolution: a workspace works in the folder its ref records, and one without a folder is refused. */
@@ -203,7 +213,7 @@ export function resolveLocalAgent(input: string): LocalAgentRef {
 
   const name = ref === null ? input : ref.localName;
 
-  if (!existsSync(agentDbPath(name))) throw new MissingLocalWorkspaceError(name);
+  if (!existsSync(agentDbPath(name))) return settleSync(Effect.fail(missingWorkspace(name)));
   const placed = ref ? placedRef(ref) : null;
 
   if (!ref || !placed) {
@@ -265,15 +275,19 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
 /** The session a command sends with. A `--origin` naming another deployment is refused, never sent the token: a token
  *  goes to the deployment it belongs to alone. */
 export function requireAuthConfig(opts: { origin?: string } = {}): LocalCloudSession {
-  const session = resolveCloudSession() ?? storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)');
+  const resolved = resolveCloudSession();
 
-  if (opts.origin === undefined || new URL(resolveCloudOrigin(opts)).origin === new URL(session.origin).origin) return session;
+  return settleSync(Effect.gen(function* () {
+    const session = resolved ?? (yield* storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)'));
 
-  return settleSync(Effect.fail(new KinuError('bad_input', `Signed in to ${session.origin}, not ${opts.origin}: sign in there first with kinu auth --origin ${opts.origin}`)));
+    if (opts.origin === undefined || new URL(resolveCloudOrigin(opts)).origin === new URL(session.origin).origin) return session;
+
+    return yield* new KinuError('bad_input', `Signed in to ${session.origin}, not ${opts.origin}: sign in there first with kinu auth --origin ${opts.origin}`);
+  }));
 }
 
 export function requireStoredAuthConfig(): LocalCloudSession {
-  return storedAuthConfig('No interactive CLI session found. Run: kinu auth');
+  return settleSync(storedAuthConfig('No interactive CLI session found. Run: kinu auth'));
 }
 
 /** The deployment a stored sign-in was made at (`kinu auth` saves it), which alone may receive its token. */
@@ -282,21 +296,19 @@ export function storedSessionOrigin(config: KinuConfig): string {
 }
 
 /** The stored session, refused where `KINU_ORIGIN` names another deployment: its token goes to its own alone. */
-function storedAuthConfig(missingTokenMessage: string): LocalCloudSession {
-  const config = loadConfigFile();
+function storedAuthConfig(missingTokenMessage: string): Effect.Effect<LocalCloudSession, KinuError> {
+  return Effect.suspend(() => {
+    const config = loadConfigFile();
 
-  if (!config.accessToken) throw new Error(missingTokenMessage);
-
-  return storedSession(config, config.accessToken);
+    return config.accessToken ? storedSession(config, config.accessToken) : Effect.fail(new KinuError('denied', missingTokenMessage));
+  });
 }
 
-function storedSession(config: KinuConfig, token: string): LocalCloudSession {
+function storedSession(config: KinuConfig, token: string): Effect.Effect<LocalCloudSession, KinuError> {
   const origin = storedSessionOrigin(config);
   const refusal = storedSessionRefusal(config, origin);
 
-  if (refusal !== null) throw new Error(refusal);
-
-  return { origin, token };
+  return refusal === null ? Effect.succeed({ origin, token }) : Effect.fail(new KinuError('denied', refusal));
 }
 
 /** Why the stored session cannot be used here: it expired, or `KINU_ORIGIN` names another deployment; null when it can. */
@@ -324,7 +336,9 @@ export function resolveCloudSession(): LocalCloudSession | null {
   if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
   const config = loadConfigFile();
 
-  return config.accessToken && !sessionExpired(config) ? storedSession(config, config.accessToken) : null;
+  if (!config.accessToken || sessionExpired(config)) return null;
+
+  return settleSync(storedSession(config, config.accessToken));
 }
 
 export function resolveAgentRef(input: string): KinuAgentConfig | null {
@@ -341,28 +355,29 @@ type AgentConfigWrite = (
   | Omit<Extract<KinuAgentConfig, { mode: 'cloud' }>, 'createdAt' | 'updatedAt'>
 ) & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>;
 
-export async function upsertAgentConfig(agent: AgentConfigWrite): Promise<KinuAgentConfig> {
-  validateAgentName(agent.name);
+export function upsertAgentConfig(agent: AgentConfigWrite): Promise<KinuAgentConfig> {
+  return settle(Effect.gen(function* () {
+    yield* Effect.all([
+      identifier(agent.name, 'Agent name'),
+      ...(agent.localName ? [identifier(agent.localName, 'Agent name')] : []),
+      ...(agent.cloudName ? [identifier(agent.cloudName, 'Agent name')] : []),
+      ...(agent.workspaceId ? [identifier(agent.workspaceId, 'Workspace id')] : []),
+    ]);
+    const now = new Date().toISOString();
+    let saved!: KinuAgentConfig;
+    yield* Effect.promise(() => updateConfigFile((config) => {
+      const existing = config.agents?.[agent.name];
+      saved = v.parse(KinuAgentConfigSchema, {
+        ...existing,
+        ...agent,
+        createdAt: agent.createdAt ?? existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+      config.agents = { ...config.agents, [agent.name]: saved };
+    }));
 
-  if (agent.localName) validateAgentName(agent.localName);
-
-  if (agent.cloudName) validateAgentName(agent.cloudName);
-
-  if (agent.workspaceId) validateWorkspaceId(agent.workspaceId);
-  const now = new Date().toISOString();
-  let saved!: KinuAgentConfig;
-  await updateConfigFile((config) => {
-    const existing = config.agents?.[agent.name];
-    saved = v.parse(KinuAgentConfigSchema, {
-      ...existing,
-      ...agent,
-      createdAt: agent.createdAt ?? existing?.createdAt ?? now,
-      updatedAt: now,
-    });
-    config.agents = { ...config.agents, [agent.name]: saved };
-  });
-
-  return saved;
+    return saved;
+  }));
 }
 
 export async function removeCloudAgentConfig(cloudName: string): Promise<boolean> {
@@ -382,18 +397,14 @@ export async function removeCloudAgentConfig(cloudName: string): Promise<boolean
   return removed;
 }
 
-function validateIdentifier(value: string, noun: string): void {
-  if (!KINU_IDENTIFIER_RE.test(value)) {
-    throw new Error(`${noun} must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.`);
-  }
-}
-
-function validateAgentName(name: string): void {
-  validateIdentifier(name, 'Agent name');
+function identifier(value: string, noun: string): Effect.Effect<void, KinuError> {
+  return KINU_IDENTIFIER_RE.test(value)
+    ? Effect.void
+    : Effect.fail(new KinuError('bad_input', `${noun} must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.`));
 }
 
 export function validateWorkspaceId(workspaceId: string): void {
-  validateIdentifier(workspaceId, 'Workspace id');
+  return settleSync(identifier(workspaceId, 'Workspace id'));
 }
 
 /** This machine's model choice: the spec a bare id or no choice means, and an endpoint the process was given. */
