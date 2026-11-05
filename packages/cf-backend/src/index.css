@@ -1248,7 +1248,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   transition: color var(--dur-state) ease-out;
 }
 .p-attention-behind:hover { color: var(--c-text); }
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .p-attention-card { padding: 9px 11px; }
 }
 
@@ -1512,7 +1512,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   color: var(--c-text-2);
   transform: translateY(-50%);
 }
-@media (max-width: 640px) {
+@media (max-width: 639px) {
   .p-shot-grid { grid-template-columns: minmax(0, 1fr); }
   .p-lightbox-stage { padding: 4px 8px 24px; }
   .p-lightbox-step { display: none; }
@@ -1730,11 +1730,11 @@ body { background: var(--c-bg); color: var(--c-text); }
   padding-inline: 2.5rem;
 }
 
-@media (max-width: 64rem) {
+@media (max-width: 1023px) {
   .landing-shell { padding-inline: 1.5rem; }
 }
 
-@media (max-width: 40rem) {
+@media (max-width: 639px) {
   .landing-shell { padding-inline: 1.25rem; }
 }
 

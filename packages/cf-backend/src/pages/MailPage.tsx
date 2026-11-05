@@ -17,7 +17,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { lastValue, useAsyncResource, type AsyncResource } from "@/hooks/use-async-resource";
 import { useAccount } from "@/hooks/use-account";
-import { useMediaQuery } from "@/hooks/use-media-query";
+import { WIDE_QUERY, useMediaQuery } from "@/hooks/use-media-query";
 import { createMailAddress, listMailThreads, readMailBoxes, type MailBoxes } from "@/lib/mail-api";
 import { MailAddressField, useMailUsername } from "@/components/mail/MailAddressField";
 import { TextInput } from "@/components/ui/Field";
@@ -117,7 +117,7 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   const [composing, setComposing] = useState(false);
   const [installing, setInstalling] = useState(false);
   const navigation = useLabelledStep();
-  const roomy = useMediaQuery("(min-width: 1024px)");
+  const roomy = useMediaQuery(WIDE_QUERY);
   const waiting = view === "important" && account.boxes.find((box) => box.kind === "person")?.workspace === null;
 
   // Router navigations transition; a controlled text input cannot wait for them.

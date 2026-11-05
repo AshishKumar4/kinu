@@ -29,7 +29,7 @@ import { DialogFace } from "@/components/ui/Modal";
 import { Notice } from "@/components/ui/Notice";
 import { Popover } from "@/components/ui/Popover";
 import { Pressable } from "@/components/ui/Pressable";
-import { Row, ROW_ACTION, RowTile } from "@/components/ui/Row";
+import { Row, RowAction, RowTile } from "@/components/ui/Row";
 import { SaveBar } from "@/components/ui/SaveBar";
 import { Segmented } from "@/components/ui/Segmented";
 import { Select } from "@/components/ui/Select";
@@ -474,7 +474,7 @@ function Rows() {
           <Row tile={<BrandMark brand="github" size={18} />} title="GitHub" meta="Issues, pull requests and code" status={<Status tone="success">Connected</Status>}
             action={<Menu name="GitHub" items={[{ label: "Docs", icon: <ArrowSquareOutIcon size={16} />, onSelect: () => undefined }, { label: "Remove", icon: <TrashIcon size={16} />, onSelect: () => undefined, danger: true, apart: true }]} />} attributes={{}} />
           <Row tile={<BrandMark brand="google" size={18} />} title="Google" meta="Gmail, Calendar, Drive, contacts"
-            action={<button type="button" aria-label="Connect Google" className={ROW_ACTION}><PlusIcon size={16} /></button>} attributes={{}} />
+            action={<RowAction aria-label="Connect Google"><PlusIcon size={16} /></RowAction>} attributes={{}} />
           <Row tile={<RowTile icon={DesktopTowerIcon} />} title="Workstation" meta="workstation · linux · nvidia0" status={<Status tone="success">Connected</Status>}
             control={<><span className="t-item p-text-2">Sandbox</span><Switch on onChange={() => undefined} label="Sandbox on Workstation" /></>}
             action={<Menu name="Workstation" items={[{ label: "Rename", icon: <PencilSimpleIcon size={16} />, onSelect: () => undefined }]} />}

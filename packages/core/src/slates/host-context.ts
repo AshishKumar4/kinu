@@ -50,19 +50,25 @@ export const SlateFrameMessageSchema = v.strictObject({
   height: v.number(),
 });
 
+export type SlateFrameMessage = v.InferOutput<typeof SlateFrameMessageSchema>;
+
 /**
  * An in-chat slate is as tall as its document, like the rest of the answer. This bounds only a page sized to its own
  * frame plus a margin, which would otherwise grow on every round of measuring.
  */
 export const SLATE_INLINE_HEIGHT_LIMIT = 8000;
 
-/** Accepted only from the slate's own window (identity check on `event.source`) and when it parses as the envelope. */
-export function isSlateFrameMessage(
+/** The slate's message, accepted only from its own window (identity check on `event.source`) and only when it parses as
+ *  the envelope; null otherwise. Its height is held to `SLATE_INLINE_HEIGHT_LIMIT`. */
+export function readSlateFrameMessage(
   event: { readonly source: unknown; readonly origin: string; readonly data: unknown },
   source: Window | MessagePort | null | undefined,
   origin: string,
-): boolean {
-  return event.source === source && event.origin === origin && v.safeParse(SlateFrameMessageSchema, event.data).success;
+): SlateFrameMessage | null {
+  if (event.source !== source || event.origin !== origin) return null;
+  const parsed = v.safeParse(SlateFrameMessageSchema, event.data);
+
+  return parsed.success ? { ...parsed.output, height: Math.min(parsed.output.height, SLATE_INLINE_HEIGHT_LIMIT) } : null;
 }
 
 export function buildSlateHostContext(input: {

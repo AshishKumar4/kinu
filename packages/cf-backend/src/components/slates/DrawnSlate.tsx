@@ -8,14 +8,14 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { newMessagePortRpcSession, RpcTarget } from "capnweb";
 import * as v from "valibot";
 import {
-  drawnPageDocument, drawnStreamDocument, DRAWN_SANDBOX, isSlateFrameMessage, SLATE_BRIDGE_MESSAGE, SLATE_DRAW_MESSAGE,
-  SLATE_INLINE_HEIGHT_LIMIT, SLATE_PAGE_MODULES_PATH, SlateFrameMessageSchema, slatePushes, type DrawnPageLook, type JsonValue,
+  drawnPageDocument, drawnStreamDocument, DRAWN_SANDBOX, SLATE_BRIDGE_MESSAGE, SLATE_DRAW_MESSAGE,
+  SLATE_PAGE_MODULES_PATH, slatePushes, type DrawnPageLook, type JsonValue,
   type SlateCallResult,
 } from "@kinu.run/core";
 import { useTheme } from "@/hooks/use-theme";
 import { Effect } from "effect";
 import { detach, diagnostics, KinuError, renderThrownChain, settle } from "@kinu.run/core/obs";
-import { knownHeight, readThemeTokens, rememberHeight, SlateCard } from "./InlineSlate";
+import { knownHeight, readThemeTokens, SlateCard, useToldHeights } from "./InlineSlate";
 
 /** An opaque origin, as a sandboxed `srcdoc` frame's messages name theirs. */
 const OPAQUE_ORIGIN = "null";
@@ -209,19 +209,7 @@ function closeRefused(end: RefusedEnd | null): void {
 function useToldHeight(frame: RefObject<HTMLIFrameElement | null>, id: string): number | null {
   const [height, setHeight] = useState<number | null>(null);
 
-  useEffect(() => {
-    const onMessage = (event: MessageEvent): void => {
-      if (!isSlateFrameMessage(event, frame.current?.contentWindow ?? null, OPAQUE_ORIGIN)) return;
-      const told = Math.min(v.parse(SlateFrameMessageSchema, event.data).height, SLATE_INLINE_HEIGHT_LIMIT);
-
-      rememberHeight(id, told);
-      setHeight(told);
-    };
-
-    window.addEventListener("message", onMessage);
-
-    return () => window.removeEventListener("message", onMessage);
-  }, [frame, id]);
+  useToldHeights(frame, OPAQUE_ORIGIN, id, setHeight);
 
   return height;
 }

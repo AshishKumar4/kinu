@@ -4,9 +4,9 @@ import { CaretRightIcon, CheckIcon, PushPinIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
 import type { SlateCallResult } from "@kinu.run/core";
 import {
-  buildSlateHostContext, isPreviewUrl, isSlateFrameMessage, PREVIEW_SANDBOX, slateFrameSrc,
-  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_THEME_TOKENS,
-  SlateFrameMessageSchema, SLATE_UI_ATTRIBUTE, type SlateHostContext,
+  buildSlateHostContext, isPreviewUrl, readSlateFrameMessage, PREVIEW_SANDBOX, slateFrameSrc,
+  SLATE_HOST_CONTEXT_MESSAGE, SLATE_THEME_TOKENS,
+  SLATE_UI_ATTRIBUTE, type SlateHostContext,
 } from "@kinu.run/core";
 import { useElementSize } from "@/hooks/use-element-size";
 import { useTheme } from "@/hooks/use-theme";
@@ -46,9 +46,24 @@ const SavedSlateSchema = v.object({ id: v.string(), title: v.string() });
 /** Each slate's last height in the chat, so a card drawn again opens at its size and nothing below it moves. */
 const KNOWN_HEIGHTS = new Map<string, number>();
 
-/** A height an answer's page told, kept for whatever draws it next: the page drawn here, or its served frame. */
-export function rememberHeight(id: string, height: number): void {
-  KNOWN_HEIGHTS.set(id, height);
+/** Hears the heights `frame`'s page tells from `origin` (none while it is null), and keeps each for whatever draws the
+ *  slate `id` next: the page drawn here, or its served frame. */
+export function useToldHeights(frame: RefObject<HTMLIFrameElement | null>, origin: string | null, id: string, told: (height: number) => void): void {
+  useEffect(() => {
+    if (origin === null) return;
+
+    const onMessage = (event: MessageEvent): void => {
+      const message = readSlateFrameMessage(event, frame.current?.contentWindow ?? null, origin);
+
+      if (message === null) return;
+      KNOWN_HEIGHTS.set(id, message.height);
+      told(message.height);
+    };
+
+    window.addEventListener("message", onMessage);
+
+    return () => window.removeEventListener("message", onMessage);
+  }, [frame, origin, id, told]);
 }
 
 export function knownHeight(id: string): number | undefined {
@@ -242,20 +257,9 @@ function useInlineHeight({ id, inline, sized, frame, previewOrigin, loaded, draw
     setLate(false);
   }, [drawn]);
 
-  useEffect(() => {
-    if (!inline || previewOrigin === null) return;
+  const hear = useCallback((next: number) => setSaid((was) => (was.height === next ? was : { height: next, times: was.times + 1 })), []);
 
-    const onMessage = (event: MessageEvent): void => {
-      if (!isSlateFrameMessage(event, frame.current?.contentWindow ?? null, previewOrigin)) return;
-      const next = Math.min(v.parse(SlateFrameMessageSchema, event.data).height, SLATE_INLINE_HEIGHT_LIMIT);
-      KNOWN_HEIGHTS.set(id, next);
-      setSaid((was) => (was.height === next ? was : { height: next, times: was.times + 1 }));
-    };
-
-    window.addEventListener('message', onMessage);
-
-    return () => window.removeEventListener('message', onMessage);
-  }, [inline, previewOrigin, id, frame]);
+  useToldHeights(frame, inline ? previewOrigin : null, id, hear);
 
   useEffect(() => {
     if (!waiting || !loaded) return;

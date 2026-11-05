@@ -1,4 +1,4 @@
-import { useMediaQuery } from '@/hooks/use-media-query';
+import { WIDE_QUERY, useMediaQuery } from '@/hooks/use-media-query';
 import type { ArtPalette, KeepOut, Rgb } from '@kinu.run/core/web/art';
 
 function cssRgb(name: string): Rgb {
@@ -77,10 +77,8 @@ function push(ring: number[], value: number): void {
 }
 
 /** Tailwind `lg`: below it the hero copy stacks (LandingHero.tsx) and the tree would cross the paragraph. */
-const WIDE_HERO_QUERY = '(min-width: 64rem)';
-
 export function useWideHero(): boolean {
-  return useMediaQuery(WIDE_HERO_QUERY);
+  return useMediaQuery(WIDE_QUERY);
 }
 
 export interface FrameTimes {
