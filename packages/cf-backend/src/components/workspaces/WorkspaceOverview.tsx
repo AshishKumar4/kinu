@@ -14,6 +14,7 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
 import { Pressable } from "@/components/ui/Pressable";
 import { ProgressBar } from "@/components/ui/Meter";
+import { countOf, agentRoute, workspaceRoute } from "@kinu.run/core";
 
 type Lane = "todo" | "doing" | "waiting" | "done";
 
@@ -73,8 +74,8 @@ function summaryOf(agents: readonly PanelAgent[], cards: readonly Card[]): strin
   const done = cards.filter((card) => card.lane === "done").length;
 
   return [
-    `${chats} ${chats === 1 ? "chat" : "chats"}`,
-    working > 0 ? `${working} ${working === 1 ? "agent" : "agents"} working` : "nothing running",
+    countOf(chats, "chat"),
+    working > 0 ? `${countOf(working, "agent")} working` : "nothing running",
     ...(waiting > 0 ? [`${waiting} waiting on you`] : []),
     cards.length === 0 ? "no tasks yet" : `${done} of ${cards.length} tasks done`,
   ].join(" · ");
@@ -101,7 +102,7 @@ export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, plan
     <Page fill icon={<WorkspaceLogo title={title} logo={logo} size={20} />} title={title} data-workspace-overview>
       <p className="t-body p-text-3" data-overview-summary>
         {work === null ? "Reading the workspace…" : summaryOf(agents, cards)}
-        {lineage && <> · forked from <Link to={`/workspace/${lineage.sourceWorkspaceName}`} className="p-accent-fg hover:underline">its parent</Link></>}
+        {lineage && <> · forked from <Link to={workspaceRoute(lineage.sourceWorkspaceName)} className="p-accent-fg hover:underline">its parent</Link></>}
       </p>
 
       <section aria-labelledby="overview-github" className="flex flex-col gap-3">
@@ -156,7 +157,7 @@ function TaskCard({ card, workspace, open }: { card: Card; workspace: string; op
   }
 
   const path = card.owner.path;
-  const to = path === null || path.length === 0 ? `/workspace/${workspace}` : `/workspace/${workspace}/agents/${path.map(encodeURIComponent).join("/")}`;
+  const to = path === null || path.length === 0 ? workspaceRoute(workspace) : agentRoute(workspace, path.join("/"));
 
   return <Link to={to} data-task-card className={CARD_CLASS}><TaskBody card={card} /></Link>;
 }

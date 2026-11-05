@@ -1,12 +1,14 @@
 /** Only the conversation is always revertible; workspace and sandbox files have no snapshot store. File restore is offered only when the device checkpoint store answers. */
-import { Cause, Effect } from 'effect';
-import { startTransition, useCallback, useEffect, useState } from "react";
+import { Effect } from 'effect';
+import { useCallback, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { ClockCounterClockwiseIcon } from "@phosphor-icons/react";
-import { Loader } from "@/components/ui/Loader";
-import { deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan } from "@kinu.run/core";
-import { renderThrownChain, showing, detach, settle } from "@kinu.run/core/obs";
+import { deviceHistoryNote, summarizeRestorePlan, type FileCheckpointEntry, type FileRestoreChange, type FileRestorePlan, countOf } from "@kinu.run/core";
+import { showing } from "@kinu.run/core/obs";
 import { Modal } from "@/components/ui/Modal";
+import { Notice } from "@/components/ui/Notice";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Surface } from "@/components/ui/Surface";
 
@@ -24,95 +26,51 @@ function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }
   /** The plan is handed over, not applied: overwriting device files needs its own confirm. */
   onRestorePlan: (plan: DeviceRestorePlan) => void;
 }) {
-  const [checkpoints, setCheckpoints] = useState<readonly FileCheckpointEntry[]>([]);
-  const [historyNote, setHistoryNote] = useState<string | null>(null);
-  const [checked, setChecked] = useState(false);
-  const [deviceFailure, setDeviceFailure] = useState<string | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let current = true;
-
-    startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      // Keyed on the turn in the store: retention is per directory but the limit is global, so a filtered window loses checkpoints.
-      const listing = yield* Effect.promise(async () => rpc("listFileCheckpoints", [200, messageId]));
-
-      if (current) {
-        setCheckpoints(listing.availability.available ? listing.entries : []);
-        setHistoryNote(deviceHistoryNote(listing));
-      }
-    }), showing((chain) => {
-      if (current) setDeviceFailure(chain);
-    })), Effect.sync(() => {
-      if (current) setChecked(true);
-    }))));
-
-    return () => { current = false; };
-  }, [messageId, rpc]);
+  // Keyed on the turn in the store: retention is per directory but the limit is global, so a filtered window loses checkpoints.
+  const load = useCallback(() => rpc("listFileCheckpoints", [200, messageId]), [rpc, messageId]);
+  const { resource } = useAsyncResource(load);
+  const listing = lastValue(resource);
+  const checkpoints = listing?.availability.available === true ? listing.entries : [];
+  const historyNote = listing === null ? null : deviceHistoryNote(listing);
+  const deviceFailure = resource.status === "error" ? resource.message : null;
+  const { busy, error, run } = useLabelledStep(onClose);
 
   // `chatOnly`: the computer keeps what the rewound turns did, and the agent is told of it (REWIND-0924).
-  const revert = useCallback((chatOnly: boolean): Promise<string | null> => settle(Effect.gen(function* () {
-    setBusy(true);
+  const revertConversation = (): void => run("conversation", () => Effect.gen(function* () {
+    yield* Effect.promise(async () => rpc("revertConversation", [messageId, { chatOnly: true }]));
+    onReverted();
+  }));
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => rpc("revertConversation", [messageId, { chatOnly }]));
-      onReverted();
+  // A failure reading the plans keeps the dialog open on it: the conversation is already reverted.
+  const revertWithFiles = (): void => run("files", () => Effect.gen(function* () {
+    yield* Effect.promise(async () => rpc("revertConversation", [messageId, { chatOnly: false }]));
+    onReverted();
+    const plans: FileRestorePlan[] = [];
 
-      return null;
-    }), (failed) => Effect.sync(() => renderThrownChain({ cause: Cause.squash(failed) }))), Effect.sync(() => {
-      setBusy(false);
-    }));
-  })), [messageId, rpc, onReverted]);
-
-  const revertConversation = useCallback(async () => {
-    const reverted = await revert(true);
-    setFailure(reverted);
-
-    if (reverted === null) onClose();
-  }, [revert, onClose]);
-
-  const revertWithFiles = useCallback(() => detach(Effect.gen(function* () {
-    const reverted = yield* Effect.promise(async () => revert(false));
-    setFailure(reverted);
-
-    if (reverted !== null) return;
-    setBusy(true);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const plans: FileRestorePlan[] = [];
-
-      for (const entry of checkpoints) plans.push(yield* Effect.promise(async () => rpc("planFileRestore", [entry.dir, entry.id])));
-      onRestorePlan({ entries: [...checkpoints], dirs: plans.map((plan) => plan.dir), files: plans.flatMap((plan) => plan.files) });
-      onClose();
-    }), showing((chain) => {
-      // The conversation is already reverted: stay open reporting the file outcome.
-      setFailure(chain);
-    })), Effect.sync(() => {
-      setBusy(false);
-    }));
-  })), [revert, checkpoints, rpc, onRestorePlan, onClose]);
+    for (const entry of checkpoints) plans.push(yield* Effect.promise(async () => rpc("planFileRestore", [entry.dir, entry.id])));
+    onRestorePlan({ entries: [...checkpoints], dirs: plans.map((plan) => plan.dir), files: plans.flatMap((plan) => plan.files) });
+  }));
 
   return (
     <Modal
       title="Revert the conversation to before this message?"
       icon={<ClockCounterClockwiseIcon size={18} className="p-warning" />}
       onClose={onClose}
-      busy={busy}
+      busy={busy !== null}
       footer={<>
-        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
+        <Button size="sm" variant="ghost" onClick={onClose} disabled={busy !== null}>Cancel</Button>
         {checkpoints.length > 0 && (
-          <Button size="sm" variant="secondary" onClick={revertWithFiles} disabled={busy}
+          <Button size="sm" variant="secondary" onClick={revertWithFiles} disabled={busy !== null} busy={busy === "files"}
             data-revert-action="conversation-and-device-files">
             Revert conversation and device files
           </Button>
         )}
-        <Button variant="primary" size="md" onClick={(...args: Parameters<typeof revertConversation>) => detach(Effect.promise(async () => revertConversation(...args)))} disabled={busy} data-revert-action="conversation">
+        <Button variant="primary" size="md" onClick={revertConversation} disabled={busy !== null} busy={busy === "conversation"} data-revert-action="conversation">
           Revert conversation
         </Button>
       </>}
     >
-      <div className="space-y-2" data-revert-dialog={checked ? "ready" : "checking"}>
+      <div className="space-y-2" data-revert-dialog={resource.status === "loading" ? "checking" : "ready"}>
         <p className="t-meta p-text-2">
           The messages from here on are removed from the conversation. Files in the workspace, its computer
           and your devices stay as they are.
@@ -123,7 +81,7 @@ function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestorePlan }
             Your devices' file history could not be read: {deviceFailure}
           </p>
         )}
-        {failure && <p className="t-meta p-danger">{failure}</p>}
+        {error !== null && <Notice tone="danger">{error}</Notice>}
       </div>
     </Modal>
   );
@@ -141,31 +99,24 @@ export function TurnRevert({ messageId, rpc, onClose, onReverted, onNotice }: {
   onNotice: (notice: string) => void;
 }) {
   const [plan, setPlan] = useState<DeviceRestorePlan | null>(null);
-  const [restoring, setRestoring] = useState(false);
+  const { busy, run } = useLabelledStep();
 
-  const restore = useCallback(() => detach(Effect.gen(function* () {
+  // Said either way through `onNotice`, so the step itself keeps no failure.
+  const restore = (): void => run("restore", () => Effect.catchCause(Effect.gen(function* () {
     if (!plan) return;
-    setRestoring(true);
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      for (const entry of plan.entries) {
-        yield* Effect.promise(async () => rpc('restoreFileCheckpoint', [entry.dir, entry.id]));
-      }
-
-      onNotice(`Restored ${String(plan.files.length)} ${plan.files.length === 1 ? "file" : "files"}. Run restore again to undo it.`);
-      setPlan(null);
-    }), showing((chain) => {
-      onNotice(`Restore failed: ${chain}`);
-      setPlan(null);
-    })), Effect.sync(() => {
-      setRestoring(false);
-    }));
-  })), [plan, rpc, onNotice]);
+    for (const entry of plan.entries) yield* Effect.promise(async () => rpc("restoreFileCheckpoint", [entry.dir, entry.id]));
+    onNotice(`Restored ${countOf(plan.files.length, "file")}. Run restore again to undo it.`);
+    setPlan(null);
+  }), showing((chain) => {
+    onNotice(`Restore failed: ${chain}`);
+    setPlan(null);
+  })));
 
   return (
     <>
       {messageId !== null && <RevertTurnDialog messageId={messageId} rpc={rpc} onClose={onClose} onReverted={onReverted} onRestorePlan={setPlan} />}
-      {plan && <RestoreFilesModal plan={plan} busy={restoring} onCancel={() => setPlan(null)} onConfirm={restore} />}
+      {plan && <RestoreFilesModal plan={plan} busy={busy !== null} onCancel={() => setPlan(null)} onConfirm={restore} />}
     </>
   );
 }
@@ -199,8 +150,8 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <Button variant="primary" size="md" onClick={onConfirm} disabled={busy}>
-          {busy ? <><Loader size="sm" /><span className="ml-1">Restoring…</span></> : `Restore ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`}
+        <Button variant="primary" size="md" onClick={onConfirm} busy={busy}>
+          {busy ? "Restoring…" : `Restore ${countOf(plan.files.length, "file")}`}
         </Button>
       </>}
     >

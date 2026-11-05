@@ -1,11 +1,11 @@
-import { Effect } from "effect";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import * as v from "valibot";
-import { detach, showing } from "@kinu.run/core/obs";
+import { detachPromise } from "@kinu.run/core/obs";
 import type { FileUIPart } from "ai";
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, agentRoute } from "@kinu.run/core";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { PromptCard } from "./PromptCard";
 import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 
@@ -27,10 +27,10 @@ function useCarried<S extends v.GenericSchema>(schema: S, ready: boolean, take: 
 
     if (!ready || !parsed.success || taken.current === state) return;
     taken.current = state;
-    detach(Effect.promise(async () => {
+    detachPromise(async () => {
       await navigate(location.pathname, { replace: true, state: null });
       take(parsed.output);
-    }));
+    });
   }, [schema, ready, state, take, navigate, location.pathname]);
 }
 
@@ -53,22 +53,19 @@ export function NewChatView({ workspace, title, createChat }: {
   const navigate = useNavigate();
   const files = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
   const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep();
 
-  const start = useCallback(() => detach(Effect.gen(function* () {
+  const start = (): void => {
     const opening = text.trim();
 
     if (opening === "" && files.parts.length === 0) return;
-    setBusy(true);
-    setError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const created = yield* Effect.promise(async () => createChat(opening));
+    run("start", async () => {
+      const created = await createChat(opening);
       const state: Opening = { opening, attachments: [...files.parts] };
-      yield* Effect.promise(async () => navigate(`/workspace/${workspace}/agents/${encodeURIComponent(created.name)}`, { state }));
-    }), showing(setError)), Effect.sync(() => setBusy(false)));
-  })), [text, files.parts, createChat, navigate, workspace]);
+
+      await navigate(agentRoute(workspace, created.name), { state });
+    });
+  };
 
   // The opening is the chat's first message: a pasted secret is offered to Secrets before the chat is made with it.
   const secretGuard = usePastedSecretGuard({ draft: text, setDraft: setText, workspace });
@@ -81,7 +78,7 @@ export function NewChatView({ workspace, title, createChat }: {
         </h1>
         <PromptCard id="new-chat-opening" label="New chat" placeholder="Ask a question, plan a change, or hand over a task…"
           action="Start chat" value={text} onChange={setText} onSubmit={secretGuard.guarded("start", start)} notice={secretGuard.offer}
-          busy={busy} error={error ?? files.refusal}
+          busy={busy !== null} error={error ?? files.refusal}
           attachments={{ parts: files.parts, onAdd: files.add, onRemove: files.remove }} />
       </div>
     </div>

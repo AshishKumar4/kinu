@@ -20,6 +20,7 @@ import {
   type InspectorAccount, type InspectorEffects, type InspectorState, type InspectorTarget,
   type StoredInspectorLayout,
 } from "@kinu.run/core/web/inspector-layout";
+import { readStored, writeStored } from "@kinu.run/core/web/stored";
 
 const CHAT_PANEL_ID = "chat";
 
@@ -101,7 +102,7 @@ export function useInspectorLayout(input: {
   // `null` means only "not resolved yet"; a session resolved to no account is still decided.
   // The cached email lets first paint use this person's width before the profile read returns.
   const [account, setAccount] = useState<InspectorAccount | null>(() => {
-    const cached = keyed ? localStorage.getItem("kinu.inspector.account") : null;
+    const cached = keyed ? readStored("kinu.inspector.account") : null;
 
     return cached === null ? null : { kind: "known", email: cached };
   });
@@ -124,7 +125,7 @@ export function useInspectorLayout(input: {
       ? { kind: resolvedKind === "unreadable" ? "unreadable" : "none" }
       : { kind: "known", email: resolvedEmail };
 
-    if (resolved.kind === "known") localStorage.setItem("kinu.inspector.account", resolved.email);
+    if (resolved.kind === "known") writeStored("kinu.inspector.account", resolved.email);
 
     // Keep the cached object when unchanged so the decision effect does not re-run.
     setAccount((prev) => (
@@ -163,9 +164,9 @@ export function useInspectorLayout(input: {
 
   const persist = useCallback((target: InspectorTarget) => {
     if (account?.kind !== "known" || !widePanels) return;
-    localStorage.setItem(`kinu.inspector.${account.email}`, String(target.widthPx));
+    writeStored(`kinu.inspector.${account.email}`, String(target.widthPx));
 
-    if (workspace !== undefined) localStorage.setItem(`kinu.inspector.open.${account.email}.${workspace}`, target.collapsed ? "0" : "1");
+    if (workspace !== undefined) writeStored(`kinu.inspector.open.${account.email}.${workspace}`, target.collapsed ? "0" : "1");
   }, [account, workspace, widePanels]);
 
   // Imperative writes mark no input, so their commits land in the adopt branch.

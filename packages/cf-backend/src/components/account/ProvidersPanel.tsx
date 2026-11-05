@@ -14,12 +14,11 @@ import {
   listAvailableModels, listProviderCatalog, getProfileCatalog, updateProfileCatalog,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
-  
   type CloudflareGatewayStatus, type CloudflareAccountStatus,
 } from "@/lib/user-api";
-import type { ProfileCatalogEnvelope } from '@kinu.run/core';
 import { Notice } from '@/components/ui/Notice';
-import { Card, Choice, Field } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
+import { Select } from "@/components/ui/Select";
 import { useConfirmation } from "@/components/ui/ConfirmDialog";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
@@ -28,12 +27,12 @@ import { SignInOpen, SignInPaste, SignInRisk, SignInStep, SignInSteps } from "@/
 import { useProviderWindow } from "@/hooks/use-provider-window";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { Status } from '@/components/ui/Status';
-import { showing, detach } from '@kinu.run/core/obs';
+import { useLabelledStep } from '@/hooks/use-labelled-step';
 import {
-  CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, revokingProviderOf, storedAccounts, type CredentialSummary, type ProviderCatalogEntry,
+  CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, openAICompatKey, openAICompatNameOf, revokingProviderOf, storedAccounts, type CredentialSummary, type ProfileCatalogEnvelope, type ProviderCatalogEntry,
 } from '@kinu.run/core';
 import { Group } from "@/components/ui/Group";
-import { TextInput } from "@/components/ui/Field";
+import { TextInput, Field } from "@/components/ui/Field";
 import { Combobox } from "@/components/ui/Select";
 
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
@@ -263,7 +262,9 @@ function storedEntries(creds: readonly CredentialSummary[], catalog: readonly Pr
       return account === MAIN_ACCOUNT ? [] : [{ key, provider: key.split('.')[0] ?? '', name: `${subscription}${suffix}`, method: 'Subscription sign-in' }];
     }
 
-    if (key.startsWith('openai-compat.')) return [{ key, provider: 'openai', name: key.slice('openai-compat.'.length), method: 'OpenAI-compatible' }];
+    const endpoint = openAICompatNameOf(key);
+
+    if (endpoint !== null) return [{ key, provider: 'openai', name: endpoint, method: 'OpenAI-compatible' }];
     const provider = catalogProviderOfKey(key);
 
     if (provider === null) return [];
@@ -331,22 +332,16 @@ function CloudflareAccountSection({ status, onChanged }: {
   status: CloudflareAccountStatus | null;
   onChanged: () => void;
 }) {
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep(onChanged);
+  const saving = busy !== null;
 
   if (!status?.connected || status.accounts.length < 2) return null;
 
-  const choose = (id: string) => Effect.gen(function* () {
-    if (!id) return;
-    setSaving(true);
-    setError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => selectCloudflareAccount(id)); onChanged(); }), showing(setError)), Effect.sync(() => { setSaving(false); }));
-  });
+  const choose = (id: string): void => { if (id) run('choose', () => selectCloudflareAccount(id)); };
 
   return (
     <Field label="Workers AI account">
-      <Choice label="Workers AI account"
+      <Select label="Workers AI account"
         className="sm:max-w-sm"
         value={status.selectedId ?? ''}
         disabled={saving}
@@ -354,7 +349,7 @@ function CloudflareAccountSection({ status, onChanged }: {
           ...(status.selectedId === null ? [{ value: '', label: '(no account selected)' }] : []),
           ...status.accounts.map((account) => ({ value: account.id, label: account.name })),
         ]}
-        onChange={(id) => detach(choose(id))} />
+        onChange={choose} />
       {error && <p className="t-meta p-danger">{error}</p>}
     </Field>
   );
@@ -364,17 +359,12 @@ function CloudflareGatewaySection({ status, onChanged }: {
   status: CloudflareGatewayStatus | null;
   onChanged: () => void;
 }) {
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep(onChanged);
+  const saving = busy !== null;
 
   if (!status?.connected) return null;
 
-  const choose = (id: string) => Effect.gen(function* () {
-    setSaving(true);
-    setError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => selectCloudflareGateway(id || null)); onChanged(); }), showing(setError)), Effect.sync(() => { setSaving(false); }));
-  });
+  const choose = (id: string): void => run('choose', () => selectCloudflareGateway(id || null));
 
   // Signing in again is the account read's to offer (`signInExpired`); a listing that failed is retried.
   if (status.error) {
@@ -399,12 +389,12 @@ function CloudflareGatewaySection({ status, onChanged }: {
           <span className="font-mono p-text">{status.selectedId}</span>
         </div>
       ) : (
-        <Choice label="AI Gateway"
+        <Select label="AI Gateway"
           className="sm:max-w-sm"
           value={status.selectedId ?? ''}
           disabled={saving}
           options={[{ value: '', label: '(no gateway selected)' }, ...status.gateways.map((gw) => ({ value: gw.id, label: gw.id }))]}
-          onChange={(id) => detach(choose(id))} />
+          onChange={choose} />
       )}
       {error && <p className="t-meta p-danger">{error}</p>}
     </Field>
@@ -422,15 +412,9 @@ function ClaudeConnect({ onChanged, account }: { onChanged: () => void; account?
   const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
   const [opened, setOpened] = useState(false);
   const [code, setCode] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const run = (step: Effect.Effect<void>) => Effect.suspend(() => {
-    setBusy(true);
-    setError(null);
-
-    return Effect.ensuring(Effect.catchCause(step, showing(setError)), Effect.sync(() => setBusy(false)));
-  });
+  const step = useLabelledStep();
+  const busy = step.busy !== null;
+  const { error } = step;
 
   // One click (the owner, 2026-10-24): the popup opens at the click, before the await a blocker would count against it,
   // and goes to Claude once the sign-in's address is had. A popup refused, or closed before then, leaves step 1's link; a
@@ -438,7 +422,7 @@ function ClaudeConnect({ onChanged, account }: { onChanged: () => void; account?
   const start = () => {
     signInWindow.reserve();
 
-    return run(Effect.gen(function* () {
+    step.run('start', () => Effect.gen(function* () {
       const { url } = yield* Effect.promise(() => startClaudeSignIn(account));
 
       setAuthorizeUrl(url);
@@ -449,20 +433,19 @@ function ClaudeConnect({ onChanged, account }: { onChanged: () => void; account?
 
   useEffect(() => () => signInWindow.close(), [signInWindow]);
 
-  const finish = () => run(Effect.gen(function* () {
+  const finish = (): void => step.run('finish', () => Effect.gen(function* () {
     const result = yield* Effect.promise(() => finishClaudeSignIn(code.trim()));
 
-    if (result.connected) {
-      signInWindow.close();
-      onChanged();
-    } else setError(result.error ?? 'Claude did not connect.');
+    if (!result.connected) return yield* Effect.fail(result.error ?? 'Claude did not connect.');
+    signInWindow.close();
+    onChanged();
   }));
 
   if (authorizeUrl === null) {
     return (
       <div className="space-y-3" data-claude-connect="start">
         <SignInRisk>Anthropic&apos;s terms limit plan use to its own apps, so connecting is at your own risk.</SignInRisk>
-        <Button variant="primary" size="md" onClick={() => detach(start())} disabled={busy}>Sign in with Claude</Button>
+        <Button variant="primary" size="md" onClick={start} busy={busy}>Sign in with Claude</Button>
         {error && <p role="alert" className="t-meta p-danger">{error}</p>}
       </div>
     );
@@ -478,13 +461,13 @@ function ClaudeConnect({ onChanged, account }: { onChanged: () => void; account?
         <SignInStep n={3} state={opened ? 'now' : 'next'} title="Paste it here">
           {opened && (
             <SignInPaste label="The code Claude showed" placeholder="Code#state" value={code} onChange={setCode}
-              onSubmit={() => detach(finish())} busy={busy} problem={error} action="Connect" />
+              onSubmit={finish} busy={busy} problem={error} action="Connect" />
           )}
         </SignInStep>
       </SignInSteps>
       <div className="flex flex-wrap items-center gap-3">
-        <Button variant="ghost" size="sm" onClick={() => { setAuthorizeUrl(null); setError(null); }} disabled={busy}>Cancel</Button>
-        {opened && <Button variant="ghost" size="sm" onClick={() => detach(start())} disabled={busy}>Start again</Button>}
+        <Button variant="ghost" size="sm" onClick={() => { setAuthorizeUrl(null); step.clear(); }} disabled={busy}>Cancel</Button>
+        {opened && <Button variant="ghost" size="sm" onClick={start} disabled={busy}>Start again</Button>}
       </div>
     </div>
   );
@@ -506,35 +489,29 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
   const [compatName, setCompatName] = useState('');
   const [compatBaseURL, setCompatBaseURL] = useState('');
   const [compatWindow, setCompatWindow] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep(onChanged);
+  const saving = busy !== null;
   const named = accountName.trim().toLowerCase();
   const compat = selected?.id === COMPAT_ENTRY.id;
   // Blank is unknown and leaves the field out; anything else must be a whole number of tokens.
   const contextWindow = compatWindow.trim() === '' ? undefined : Number(compatWindow.trim());
   const windowValid = contextWindow === undefined || (Number.isInteger(contextWindow) && contextWindow >= 1);
 
-  const save = () => Effect.gen(function* () {
+  const save = (): void => {
     if (!selected || !apiKey.trim()) return;
-    setSaving(true);
-    setError(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+    run('save', async () => {
       if (compat) {
-        yield* Effect.promise(async () => setCredential(`openai-compat.${compatName.trim()}`, {
+        await setCredential(openAICompatKey(compatName.trim()), {
           kind: 'openai-compat', baseURL: compatBaseURL.trim(), apiKey: apiKey.trim(), ...(contextWindow !== undefined && { contextWindow }),
-        }));
+        });
       } else {
-        yield* Effect.promise(async () => setCredential(named === '' ? selected.credKey : accountCredentialKey(selected.credKey, named), { kind: 'bearer', token: apiKey.trim() }));
+        await setCredential(named === '' ? selected.credKey : accountCredentialKey(selected.credKey, named), { kind: 'bearer', token: apiKey.trim() });
       }
 
       setSelected(null);
       setApiKey(''); setAccountName(''); setCompatName(''); setCompatBaseURL(''); setCompatWindow('');
-      onChanged();
-    }), showing(setError)), Effect.sync(() => {
-      setSaving(false);
-    }));
-  });
+    });
+  };
 
   const target = selected === null || compat ? null : formKey(selected.credKey, named);
   const saveWord = creds.some((c) => c.key === target) ? 'Replace' : 'Save';
@@ -567,8 +544,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
       {selected && (
         <form className="flex flex-wrap gap-2 [&>input]:h-9" onSubmit={(event) => {
           event.preventDefault();
-
-          detach(save());
+          save();
         }}>
           {compat ? (
             <>
@@ -583,7 +559,7 @@ function ApiKeyConnect({ creds, catalog, onChanged }: {
             <TextInput className="max-w-44" value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="account (blank: main)" aria-label="Account name" />
           )}
           <TextInput className="min-w-0 flex-1" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder={saveWord === 'Replace' ? '••••••• (stored, paste to replace)' : `${selected.name} API key`} aria-label="API key" />
-          <Button type="submit" disabled={saving || !ready}>{saving ? '...' : saveWord}</Button>
+          <Button type="submit" busy={saving} disabled={!ready}>{saveWord}</Button>
         </form>
       )}
       {compat && !windowValid && <p className="t-meta mb-1 p-danger">The context window is a whole number of tokens, or blank.</p>}
@@ -611,7 +587,8 @@ async function forgetDefaultAccount(key: string): Promise<void> {
 /** Per multi-account provider: the account an unnamed model runs on. */
 function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: readonly ProviderCatalogEntry[] }) {
   const profile = useAsyncResource(getProfileCatalog);
-  const [saving, setSaving] = useState(false);
+  const { busy, error, run } = useLabelledStep(profile.reload);
+  const saving = busy !== null;
 
   const subscriptions = [...SUBSCRIPTION_NAMES].map(([credKey, name]) => ({ credKey, name }));
 
@@ -624,16 +601,9 @@ function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: 
 
   if (held.length === 0) return null;
 
-  const choose = (envelope: ProfileCatalogEnvelope, provider: string, account: string) => Effect.gen(function* () {
-    setSaving(true);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => updateProfileCatalog({ ...envelope.catalog, accounts: { ...envelope.catalog.accounts, [provider]: account } }, envelope.version));
-      profile.reload();
-    }), showing(alert)), Effect.sync(() => {
-      setSaving(false);
-    }));
-  });
+  const choose = (envelope: ProfileCatalogEnvelope, provider: string, account: string): void => run('choose', () => (
+    updateProfileCatalog({ ...envelope.catalog, accounts: { ...envelope.catalog.accounts, [provider]: account } }, envelope.version)
+  ));
 
   return (
     <Field label="Default account">
@@ -643,11 +613,11 @@ function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: 
             {held.map(({ name, provider, accounts }) => (
               <div key={provider} className="flex items-center gap-3">
                 <span className="t-body p-text w-32 shrink-0 truncate">{name}</span>
-                <Choice
+                <Select
                   label={`${name} default account`}
                   value={envelope.catalog.accounts?.[provider] ?? (accounts.includes(MAIN_ACCOUNT) ? MAIN_ACCOUNT : '')}
                   options={accounts.map((account) => ({ value: account, label: account }))}
-                  onChange={(account) => detach(choose(envelope, provider, account))}
+                  onChange={(account) => choose(envelope, provider, account)}
                   disabled={saving}
                   size="sm"
                 />
@@ -656,6 +626,7 @@ function DefaultAccounts({ keys, catalog }: { keys: readonly string[]; catalog: 
           </div>
         )}
       </CardSlot>
+      {error !== null && <p className="t-meta p-danger">{error}</p>}
     </Field>
   );
 }

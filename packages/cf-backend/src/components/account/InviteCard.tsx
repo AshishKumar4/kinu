@@ -1,32 +1,28 @@
 import { useState } from "react";
-import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { Effect } from "effect";
-import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
+import { attempt } from "@kinu.run/core/obs";
 import { builtinAuthStatus, createBuiltinLink, listBuiltinAccounts } from "@/lib/user-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import { Card, Field } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { Group } from "@/components/ui/Group";
-import { TextInput } from "@/components/ui/Field";
+import { TextInput, Field } from "@/components/ui/Field";
 import { CopyField } from "@/components/ui/CopyField";
+import { Notice } from "@/components/ui/Notice";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 export function InviteCard() {
   const status = useAsyncResource(builtinAuthStatus);
   const [email, setEmail] = useState("");
   const [invite, setInvite] = useState<{ url: string; email: string; expiresAt: number; reset: boolean } | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const step = useLabelledStep();
+  const busy = step.busy !== null;
 
-  const create = (reset: boolean, address: string) => Effect.sync(() => { setBusy(true); setError(null); }).pipe(
-    Effect.andThen(attempt(
-      { doing: reset ? "creating a reset link" : "creating an invite link", otherwise: "io" },
-      () => createBuiltinLink(reset ? "resets" : "invites", address),
-    )),
-    Effect.map((link) => { setInvite({ ...link, reset }); }),
-    Effect.catch((failure) => Effect.sync(() => { setError(renderThrownChain({ cause: failure.cause ?? failure })); })),
-    Effect.ensuring(Effect.sync(() => { setBusy(false); })),
-  );
+  const create = (reset: boolean, address: string): void => step.run(reset ? "reset" : "invite", () => Effect.map(attempt(
+    { doing: reset ? "creating a reset link" : "creating an invite link", otherwise: "io" },
+    () => createBuiltinLink(reset ? "resets" : "invites", address),
+  ), (link) => { setInvite({ ...link, reset }); }));
 
   const { resource } = status;
 
@@ -42,8 +38,8 @@ export function InviteCard() {
       <Field label="Invite by email" hint="The link signs up this address only, once, within 7 days.">
         <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); }}>
           <TextInput className="min-w-0 flex-1" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" aria-label="Email to invite" autoComplete="off" />
-          <Button type="submit" variant="secondary" size="sm" disabled={busy || email.trim() === ""} onClick={() => detach(create(false, email.trim()))}>
-            {busy ? <Loader size="sm" /> : null} Create invite link
+          <Button type="submit" variant="secondary" size="sm" disabled={email.trim() === ""} busy={step.busy === "invite"} onClick={() => create(false, email.trim())}>
+            Create invite link
           </Button>
         </form>
       </Field>
@@ -55,8 +51,8 @@ export function InviteCard() {
           {invite.reset ? "Reset link" : "Invite"} for {invite.email}, until {new Date(invite.expiresAt).toLocaleString()}.
         </p>
       )}
-      <Accounts busy={busy} onReset={(address) => detach(create(true, address))} />
-      {error && <p role="alert" className="t-meta mt-2 p-danger">{error}</p>}
+      <Accounts busy={busy} onReset={(address) => create(true, address)} />
+      {step.error !== null && <Notice tone="danger" className="mt-2">{step.error}</Notice>}
     </Card>
   );
 }

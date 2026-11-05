@@ -1,10 +1,12 @@
-/** Text rides the viewer RPC; images, PDFs and saves (PUT) ride the raw-bytes route. */
-import { useCallback, useEffect, useState } from "react";
+/** Text rides the viewer RPC; images, PDFs and saves (PUT) ride the raw-bytes route. Keyed by its path by its caller, so
+ *  a draft, a failure and the source toggle are one file's. */
+import { useCallback, useState } from "react";
+import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import {
   CheckIcon, DownloadSimpleIcon, FileIcon, PencilSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { attemptInItsWords } from "@kinu.run/core/obs";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { MarkdownContent, CodeBlock } from "./shared";
 import {
@@ -14,6 +16,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
 import { TextArea } from "@/components/ui/Field";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 export function FileViewer({ path, read, revision, rawHref, downloadHref, onSaved, onClose }: {
   path: string;
@@ -29,8 +32,8 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   const name = path.slice(path.lastIndexOf("/") + 1);
   const kind = viewerKindOf(path);
   const [draft, setDraft] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const { busy, error: saveError, run, clear } = useLabelledStep();
+  const saving = busy !== null;
   const [conflict, setConflict] = useState(false);
   const [asSource, setAsSource] = useState(false);
 
@@ -51,36 +54,24 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
   if (resource.status === "ready") file = resource.value;
   else if (resource.status === "error") file = { error: resource.message };
 
-  useEffect(() => {
-    setDraft(null);
-    setSaveError(null);
-    setConflict(false);
-    setAsSource(false);
-  }, [path]);
-
-  const save = useCallback(async (text: string) => {
+  const save = (text: string): void => {
     if (file?.revision === undefined) return;
-    setSaving(true);
-    setSaveError(null);
-    setConflict(false);
+    const base = file.revision;
 
-    try {
-      await putFileBytes(rawHref, text, file.revision);
-      setDraft(null);
-      reload();
-      onSaved?.();
-    } catch (error) {
-      if (error instanceof FileWriteConflict) {
-        setConflict(true);
-        // Keep `draft`: a peer won the CAS, not this editor's text.
+    setConflict(false);
+    run("save", () => attemptInItsWords("io", () => putFileBytes(rawHref, text, base)).pipe(
+      Effect.map(() => {
+        setDraft(null);
         reload();
-      } else {
-        setSaveError(renderThrownChain({ cause: error }));
-      }
-    } finally {
-      setSaving(false);
-    }
-  }, [file?.revision, onSaved, rawHref, reload]);
+        onSaved?.();
+      }),
+      // Keeps `draft`: a peer won the compare-and-swap, not this editor's text.
+      Effect.catchIf((failed) => failed.cause instanceof FileWriteConflict, () => Effect.sync(() => {
+        setConflict(true);
+        reload();
+      })),
+    ));
+  };
 
   const content = file?.content ?? "";
   const editable = kind === "text" && fileTextEditable(file);
@@ -101,10 +92,10 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
             )
           ) : (
             <>
-              <Button variant="ghost" size="sm" data-files-save disabled={saving} onClick={() => void save(draft)} title={`Save ${name}`}>
+              <Button variant="ghost" size="sm" data-files-save disabled={saving} onClick={() => save(draft)} title={`Save ${name}`}>
                 <CheckIcon size={12} />{saving ? "Saving…" : "Save"}
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => { setDraft(null); setSaveError(null); }}>Cancel</Button>
+              <Button variant="ghost" size="sm" onClick={() => { setDraft(null); clear(); }}>Cancel</Button>
             </>
           )}
           <a data-files-download href={downloadHref} download={name} className="t-control flex items-center gap-1 p-text-2 hover:p-text p-1" title={`Download ${name}`}>

@@ -1,8 +1,10 @@
 import { useCallback, useState, type ReactNode } from "react";
 import { Effect } from "effect";
-import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
+import { attempt } from "@kinu.run/core/obs";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
-import { Card, Choice, Field } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
+import { Select } from "@/components/ui/Select";
+import { Field } from "@/components/ui/Field";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { getAccountComputerSize, setAccountComputerSize } from "../lib/user-api";
@@ -12,9 +14,7 @@ import { useComputerSizeCap } from "@/components/limits/limit-words";
 import type { ComputerSizeState } from "../computer-size";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Button } from "@/components/ui/Button";
-
-const shownIn = (show: (message: string) => void) => (failure: { readonly cause?: unknown }) =>
-  Effect.sync(() => { show(renderThrownChain({ cause: failure.cause ?? failure })); });
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 export interface ComputerSizeControl {
   readonly state: ComputerSizeState | null;
@@ -25,7 +25,7 @@ export interface ComputerSizeControl {
   readonly restartingTo: string | null;
   /** A refused start, a failure, or a size waiting for the next start: said under the head. */
   readonly notice: ReactNode;
-  readonly choose: (value: BoxSize | typeof ACCOUNT_DEFAULT) => Effect.Effect<void>;
+  readonly choose: (value: BoxSize | typeof ACCOUNT_DEFAULT) => void;
 }
 
 const startPending = (pending: "resize" | "start" | "stop" | null) => (pending === "resize" ? null : pending);
@@ -38,31 +38,28 @@ const startPending = (pending: "resize" | "start" | "stop" | null) => (pending =
 export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSizeControl {
   const load = useCallback(() => (enabled ? rpc("getComputerSize", []) : Promise.resolve(null)), [rpc, enabled]);
   const { resource, set } = useAsyncResource(load);
-  const [pending, setPending] = useState<"resize" | "start" | "stop" | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  const { busy: pending, error: failure, run } = useLabelledStep<"resize" | "start" | "stop">();
   const [choosing, setChoosing] = useState<BoxSize | null>(null);
   const state = lastValue(resource);
   const cap = useComputerSizeCap();
   const offerRefusal = useLimitRefusal();
 
-  const act = (action: "resize" | "start" | "stop", doing: string, change: () => Promise<ComputerSizeState | null>) => {
-    setPending(action);
-    setFailure(null);
-
+  const act = (action: "resize" | "start" | "stop", doing: string, change: () => Promise<ComputerSizeState | null>): void => run(action, () => {
     const call = (read: () => Promise<ComputerSizeState | null>) => attempt({ doing, otherwise: "io" }, read).pipe(
       Effect.map((next) => { if (next !== null) set(next); }),
     );
 
     return (action === "resize" ? call(() => rpc("getComputerSize", [])).pipe(Effect.andThen(call(change))) : call(change)).pipe(
       // One of the account's limits refusing the start is that limit's dialog; anything else is said under the head.
-      Effect.catch((failed) => (offerRefusal({ cause: failed.cause ?? failed }) ? Effect.void : shownIn(setFailure)(failed))),
-      Effect.ensuring(Effect.sync(() => { setPending(null); setChoosing(null); })),
+      Effect.catch((failed) => (offerRefusal({ cause: failed.cause ?? failed }) ? Effect.void : Effect.fail(failed))),
+      Effect.ensuring(Effect.sync(() => { setChoosing(null); })),
     );
-  };
+  });
 
-  const choose = (value: BoxSize | typeof ACCOUNT_DEFAULT) => Effect.sync(() => {
+  const choose = (value: BoxSize | typeof ACCOUNT_DEFAULT): void => {
     setChoosing(value === ACCOUNT_DEFAULT ? state?.account ?? DEFAULT_BOX_SIZE : value);
-  }).pipe(Effect.andThen(act("resize", "resizing the computer", () => rpc("resizeComputer", [value === ACCOUNT_DEFAULT ? null : value]))));
+    act("resize", "resizing the computer", () => rpc("resizeComputer", [value === ACCOUNT_DEFAULT ? null : value]));
+  };
 
   // A stopped computer only records the choice; a running one restarts at it.
   const restarting = pending === "resize" && state?.running !== null;
@@ -73,14 +70,14 @@ export function useComputerSize(rpc: WorkspaceRpc, enabled: boolean): ComputerSi
       {state.startRefused !== null && (
         <div data-env-start-refused className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-1">
           <span className="t-meta p-danger">{startRefusedNote(state.startRefused)}</span>
-          <Button size="sm" data-env-start-again onClick={() => detach(act("start", "starting the computer", () => rpc("startComputer", [])))}
+          <Button size="sm" data-env-start-again onClick={() => act("start", "starting the computer", () => rpc("startComputer", []))}
             disabled={pending !== null} busy={pending === "start"}>Start again</Button>
         </div>
       )}
       {state.stalled !== null && (
         <div data-env-stalled className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-1">
           <span className="t-meta p-danger">{stalledNote(state.stalled)}</span>
-          <Button size="sm" data-env-stop-stalled onClick={() => detach(act("stop", "stopping the computer", () => rpc("stopStalledComputer", [])))}
+          <Button size="sm" data-env-stop-stalled onClick={() => act("stop", "stopping the computer", () => rpc("stopStalledComputer", []))}
             disabled={pending !== null} busy={pending === "stop"}>Stop</Button>
         </div>
       )}
@@ -106,14 +103,14 @@ export function ComputerSize({ state: size }: { state: ComputerSizeControl }) {
 
   return (
     <div data-env-size title="A running computer restarts at the new size: files stay, services start again, open terminals start fresh.">
-      <Choice
+      <Select
         label="Computer size"
         size="sm"
         className="!w-auto min-w-0"
         value={state.chosen ?? ACCOUNT_DEFAULT}
         options={workspaceSizeOptions(state.account)}
         shown={(value) => BOX_SIZES[value === ACCOUNT_DEFAULT ? state.account ?? DEFAULT_BOX_SIZE : value].label}
-        onChange={(value) => detach(size.choose(value))}
+        onChange={size.choose}
         disabled={size.pending !== null}
       />
     </div>
@@ -123,30 +120,24 @@ export function ComputerSize({ state: size }: { state: ComputerSizeControl }) {
 export function ComputerSizeSettings() {
   const { resource, reload, set } = useAsyncResource(getAccountComputerSize);
   const cap = useComputerSizeCap();
-  const [failure, setFailure] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const { busy, error: failure, run } = useLabelledStep();
+  const saving = busy !== null;
 
-  const choose = (size: BoxSize) => {
-    setSaving(true);
-    setFailure(null);
-
-    return attempt({ doing: "saving the default computer size", otherwise: "io" }, () => setAccountComputerSize(size)).pipe(
-      Effect.map(() => { set(size); }),
-      Effect.catch(shownIn(setFailure)),
-      Effect.ensuring(Effect.sync(() => { setSaving(false); })),
-    );
-  };
+  const choose = (size: BoxSize): void => run("save", () => Effect.map(
+    attempt({ doing: "saving the default computer size", otherwise: "io" }, () => setAccountComputerSize(size)),
+    () => { set(size); },
+  ));
 
   return (
     <Card title="Size">
       <CardSlot resource={resource} what="the computer size" onRetry={reload}>
         {(account) => (
           <Field label="Default size" hint={failure ?? (saving ? "Saving…" : cappedSizeNote(account ?? DEFAULT_BOX_SIZE, cap) ?? "Applies the next time a computer starts.")}>
-            <Choice
+            <Select
               label="Default computer size"
               value={account ?? DEFAULT_BOX_SIZE}
               options={BOX_SIZE_ORDER.map((size) => ({ value: size, label: computerSizeText(size) }))}
-              onChange={(value) => detach(choose(value))}
+              onChange={choose}
               disabled={saving}
             />
           </Field>

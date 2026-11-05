@@ -36,11 +36,6 @@ import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size'
 
 export type UserProfile = NonNullable<v.InferOutput<typeof AccountProfileSchema>>;
 
-
-
-
-
-
 export type RosterFilterBucket = Exclude<RosterBucket, 'unreported'>;
 
 export interface RosterQuery {
@@ -49,11 +44,6 @@ export interface RosterQuery {
   readonly bucket?: RosterFilterBucket;
   readonly q?: string;
 }
-
-
-
-
-
 
 const OkSchema = v.object({ ok: v.boolean() });
 
@@ -73,7 +63,6 @@ export function pictureUrl(workspace: string, slate: string, digest: string): st
 const CliSetupSchema = v.object({
   publicOrigin: v.string(), installCommand: v.string(), setupCommand: v.optional(v.string()), authCommand: v.string(),
 });
-
 
 export type CliSetup = v.InferOutput<typeof CliSetupSchema>;
 
@@ -413,7 +402,6 @@ export function testWebSearch(route: WebSearchRoute, query: string, signal: Abor
 }
 
 export type WebSearchAnswer = v.InferOutput<typeof WEB.search.output>;
-
 
 export const listProviderCatalog = () =>
   settle(api(v.array(ProviderCatalogEntrySchema), 'GET', '/providers/catalog'));

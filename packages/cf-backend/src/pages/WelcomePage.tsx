@@ -1,8 +1,6 @@
 /** First-run setup wizard; an unfinished account lands here from any URL. */
-import { Cause, Effect } from 'effect';
 import { useState, useCallback, useEffect, type CSSProperties } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import {
   AppWindowIcon, DesktopTowerIcon, SparkleIcon,
@@ -11,7 +9,8 @@ import {
 import {
   APP_ROUTES, ONBOARDING_STEPS, personName, suggestedMailUsername,
 } from "@kinu.run/core";
-import { renderThrownChain, settle, detach } from "@kinu.run/core/obs";
+import { detach, detachPromise } from "@kinu.run/core/obs";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { ProvidersPanel } from "@/components/account/ProvidersPanel";
@@ -129,8 +128,9 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const [reached, setReached] = useState(step);
   // `null` until touched, so a slow profile load never overwrites an edit.
   const [name, setName] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const advance = useLabelledStep();
+  const busy = advance.busy !== null;
+  const { error } = advance;
   const [revealed, setRevealed] = useState(false);
   // Chosen when the step opens: Next installs it on Finish, and Not now leaves Home as it is.
   const [assistant, setAssistant] = useState<AssistantChoice>(DEFAULT_ASSISTANT);
@@ -169,51 +169,19 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
     // Stamped here as the server will stamp it, so the gate lets Home through; the server's own replaces it.
     if (current !== null && current.onboardedAt === null) account.set({ ...current, onboardedAt: Date.now() });
     detach(finishSetup(assistant.install ? assistant.name : null, () => account.reload()));
-    detach(Effect.promise(async () => navigate(APP_ROUTES.home, { replace: true })));
+    detachPromise(() => navigate(APP_ROUTES.home, { replace: true }));
   }, [account, navigate, assistant]);
 
-  const next = useCallback(() => settle(Effect.gen(function* () {
-    setError(null);
-
+  // Next is the address, made with its mailbox at once; the footer's Not now passes it by.
+  const next = (): void => advance.run("next", async () => {
     if (step === 0 && name !== null && name.trim() !== "" && name !== profile?.displayName) {
-      setBusy(true);
-
-      const failure = yield* Effect.matchCause(Effect.promise(() => setDisplayName(name)), {
-        onSuccess: () => null,
-        onFailure: (failed) => renderThrownChain({ cause: Cause.squash(failed) }),
-      });
-
-      setBusy(false);
-
-      if (failure !== null) {
-        setError(failure);
-
-        return;
-      }
-
+      await setDisplayName(name);
       account.reload();
     }
 
-    // Next is the address, made with its mailbox at once; the footer's Not now passes it by.
-    if (onMail) {
-      setBusy(true);
-
-      const failure = yield* Effect.matchCause(Effect.promise(() => createMailAddress(address.username)), {
-        onSuccess: () => null,
-        onFailure: (failed) => renderThrownChain({ cause: Cause.squash(failed) }),
-      });
-
-      setBusy(false);
-
-      if (failure !== null) {
-        setError(failure);
-
-        return;
-      }
-    }
-
+    if (onMail) await createMailAddress(address.username);
     goTo(Math.min(step + 1, LAST_STEP));
-  })), [step, name, profile, account, onMail, address.username, LAST_STEP, goTo]);
+  });
 
   return (
     <Surface look="page" className="fixed inset-0 overflow-y-auto">
@@ -301,8 +269,8 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   Skip setup
                 </Button>
                 {onMail && <Button variant="ghost" size="sm" data-mail-not-now disabled={busy} onClick={() => goTo(Math.min(step + 1, LAST_STEP))}>Not now</Button>}
-                <Button variant="primary" size="md" disabled={busy || (onMail && address.state !== "available")} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
-                  {busy && <Loader size="sm" />} Next
+                <Button variant="primary" size="md" disabled={onMail && address.state !== "available"} busy={busy} onClick={next}>
+                  Next
                 </Button>
               </div>
             ) : (

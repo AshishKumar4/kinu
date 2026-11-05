@@ -6,7 +6,7 @@ import {
   type DeviceConsent,
 } from "@/lib/user-api";
 import { Button } from "@/components/ui/Button";
-import { Card } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
 import { Modal } from "@/components/ui/Modal";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource, type Revalidate } from "@/hooks/use-async-resource";
@@ -104,7 +104,7 @@ export function DevicesCard() {
       </Card>
 
       {connecting && (
-        <Modal title="Connect a machine" onClose={() => setConnecting(false)} maxWidthClass="max-w-lg">
+        <Modal title="Connect a machine" onClose={() => setConnecting(false)} width="md">
           <ConnectDevicePanel flow={flow} devices={lastValue(roster.resource)} />
         </Modal>
       )}

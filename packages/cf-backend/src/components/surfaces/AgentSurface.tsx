@@ -15,7 +15,7 @@ import { Effect } from "effect";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import { putAccountFact } from "../../lib/user-api";
 import { MarkdownContent, Section } from "./shared";
-import { timeAgo, workspaceDisplayTitle } from "@kinu.run/core";
+import { timeAgo, workspaceDisplayTitle, countOf } from "@kinu.run/core";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { QualityView } from "./evolution-panels";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog } from "./changelog-entries";
@@ -86,10 +86,6 @@ function Label({ children, mono = false }: { children: React.ReactNode; mono?: b
   return <Chip><span className={`truncate${mono ? " t-mono" : ""}`}>{children}</span></Chip>;
 }
 
-function Quiet({ children }: { children: React.ReactNode }) {
-  return <p className="t-body p-text-3">{children}</p>;
-}
-
 function Who({ as, workspace, address }: { as: AgentStatus; workspace: string | undefined; address: string | null }) {
   const look = useMascotOf(workspace ?? as.name)("main", 0);
   const title = workspaceDisplayTitle({ name: as.name, displayName: as.displayName });
@@ -111,7 +107,7 @@ function Who({ as, workspace, address }: { as: AgentStatus; workspace: string | 
         {as.purpose !== "" && <p className="t-body p-text-2">{as.purpose}</p>}
         <div className="flex flex-wrap gap-2">
           <Label mono>{as.model}</Label>
-          <Label>{as.messageCount} {as.messageCount === 1 ? "message" : "messages"}</Label>
+          <Label>{countOf(as.messageCount, "message")}</Label>
           <Label>Prompt v{as.scaffoldVersion}</Label>
         </div>
       </div>
@@ -176,7 +172,7 @@ function Knows({ read, memory, memoryContent, onSearchMemory, facts, factsResour
         {read.state === "loading" && <div className="flex h-16 items-center justify-center" data-memory-loading><Loader size="sm" /></div>}
         {empty && <p data-empty className="t-body p-text-3">No notes yet.</p>}
 
-        {searching && notes.length === 0 && <Quiet>No matches.</Quiet>}
+        {searching && notes.length === 0 && <p className="t-body p-text-3">No matches.</p>}
 
         {notes.length > 0 && (
           <div className="space-y-2">
@@ -245,7 +241,7 @@ function Changing({ rpc, readMoves, version }: {
         {(view === null || resource.status === "error") && <ChangelogFailure resource={resource} reload={reload} />}
         {seenError !== null && <p className="t-meta p-warning">Could not mark these as seen: {seenError}</p>}
         {view !== null && entries.length === 0 && (
-          <Quiet>No changes yet.</Quiet>
+          <p className="t-body p-text-3">No changes yet.</p>
         )}
         {entries.length > 0 && (
           <Group data-changelog="">

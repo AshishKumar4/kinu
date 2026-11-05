@@ -35,6 +35,7 @@ import { SlateDashboard } from './SlateDashboard';
 import { countingRpc, type WorkspaceRpc } from '@/lib/workspace-rpc';
 import type { AsyncResource } from '@/hooks/use-async-resource';
 import { TerminalReplay } from '@/components/terminal-replay';
+import { workspaceRoute } from "@kinu.run/core";
 
 /** The Agent tab's read of the sample agent, answered at once: it has nothing to wait on. */
 const LANDING_SNAPSHOT = { status: 'ready', value: LANDING_AGENT } satisfies AsyncResource<AgentStatus>;
@@ -448,7 +449,7 @@ export default function LandingWorkspaceFrame(): ReactElement {
   });
 
   return (
-    <MemoryRouter initialEntries={[`/workspace/${LANDING_WORKSPACE}`]}>
+    <MemoryRouter initialEntries={[workspaceRoute(LANDING_WORKSPACE)]}>
       <AccountProvider>
       <WorkspaceRosterProvider live={null}>
       <div
@@ -464,10 +465,10 @@ export default function LandingWorkspaceFrame(): ReactElement {
         <SidebarRail folded={false} />
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspaceHeader
-          workspace={{ name: LANDING_WORKSPACE, title: TITLE, to: `/workspace/${LANDING_WORKSPACE}`, editValue: TITLE, rename: async () => {}, remove: () => {} }}
-          chats={LANDING_CHATS.map((agent) => ({ agent, to: `/workspace/${LANDING_WORKSPACE}`, rename: async () => {} }))}
+          workspace={{ name: LANDING_WORKSPACE, title: TITLE, to: workspaceRoute(LANDING_WORKSPACE), editValue: TITLE, rename: async () => {}, remove: () => {} }}
+          chats={LANDING_CHATS.map((agent) => ({ agent, to: workspaceRoute(LANDING_WORKSPACE), rename: async () => {} }))}
           active="main"
-          newChat={`/workspace/${LANDING_WORKSPACE}`}
+          newChat={workspaceRoute(LANDING_WORKSPACE)}
           trailing={inspectorControl && <InspectorToggle control={inspectorControl} />}
         />
           <div data-workspace-panel="run" className="flex h-[620px] min-h-0 flex-col md:h-[680px]">

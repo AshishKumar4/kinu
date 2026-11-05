@@ -1,5 +1,4 @@
-import { Effect, Cause } from 'effect';
-import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useCallback, useId, type ReactNode } from "react";
+import { createContext, Fragment, memo, useContext, useState, useRef, useEffect, useId, type ReactNode } from "react";
 import {
   ArrowClockwiseIcon,
   WrenchIcon, CaretRightIcon,
@@ -9,7 +8,7 @@ import {
   ArrowBendUpRightIcon,
   TerminalWindowIcon, FileTextIcon, UsersThreeIcon, BrainIcon,
   ListChecksIcon, GlobeIcon, ChartLineUpIcon, DotsThreeCircleIcon, DesktopTowerIcon, ArrowsLeftRightIcon,
-  ThumbsUpIcon, ThumbsDownIcon,
+  ThumbsUpIcon, ThumbsDownIcon, type Icon,
 } from "@phosphor-icons/react";
 import { Link } from "react-router-dom";
 import { settingsPath } from "@/components/SettingsRail";
@@ -22,10 +21,10 @@ import {
   describeToolCall, executorLabel, rowText, summarizeToolCall,
 } from "@kinu.run/core";
 import type { DiffAnchor, InlineSteer, JsonObject, JsonValue, PlacedSteer, ProgramEffects, ToolCallEffect } from "@kinu.run/core";
-import { ASK_OWNER_TOOL, changeNotesCard, clockTime, slatesChanged } from "@kinu.run/core";
+import { ASK_OWNER_TOOL, changeNotesCard, clockTime, isBuiltinToolName, slatesChanged, type BuiltinToolName } from "@kinu.run/core";
 import { FeedbackCard } from "@/components/surfaces/changes/FeedbackCard";
 import * as v from "valibot";
-import { diagnostics, renderThrownChain, detach } from "@kinu.run/core/obs";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { SlateInlineContext, usePreviewFold } from "@/components/slates/context";
 import { AnswerText, MarkdownContent, CodeBlock, SlateLink, type AnswerChat } from "@/components/surfaces/shared";
@@ -42,14 +41,14 @@ import { RECORDED_AT_METADATA_KEY, redactPayload, redactSecrets, segmentBySteers
 import { classifyProgrammaticTurn, endedMidWork, isSteeredMessage, systemEventTurn, turnFailure, turnFailureFacts } from "@kinu.run/core";
 import { EventRow, foldRepeats, ProgrammaticTurnCard, type CardState } from "@/components/ProgrammaticTurnCard";
 import { useToggledSet } from "@/hooks/use-toggled-set";
-import { StatePill, StatusDot, type StatePillTone } from "@/components/ui/Status";
+import { StatePill, type StatePillTone } from "@/components/ui/Status";
+import { Dot } from "@/components/ui/Dot";
 import { ChatDisclosure, ToolRun, TurnRollup, usePhaseLinesOnSeen, useSeenRunning, WorkLabel } from "@/components/ChatDisclosure";
 import type { UnavailableDevice } from "@/hooks/use-workspace-reads";
 import { Bubble } from "@/components/ui/Bubble";
 import { CallReceipt, ReceiptDetail } from "@/components/CallReceipt";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
-import { Dot } from "@/components/ui/Dot";
 import { IconControl } from "@/components/ui/IconControl";
 import { InlineAction } from "@/components/ui/InlineAction";
 import { Surface } from "@/components/ui/Surface";
@@ -160,46 +159,33 @@ function StoppedMidWorkRow() {
 function jsonString(input: JsonObject | undefined, key: string): string | null {
   const value = input?.[key];
 
-  return v.is(v.string(), value) ? value : null;
+  return typeof value === "string" ? value : null;
 }
 
 function displayToolValue(value: JsonValue): string {
-  return v.is(v.string(), value) ? value : JSON.stringify(value, null, 2) ?? "";
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? "";
 }
 
-const TOOL_LABELS = new Map(Object.entries({
-  run: "Run command",
-  eval: "Tool program",
-  file: "Files",
-  agents: "Agents",
-  memory: "Memory",
-  tasks: "Tasks",
-  web: "Web",
-  report: "Report",
-}));
+/** Each native tool's name in a call's head, and its mark: keyed by core's names, so a renamed tool fails the build. */
+const TOOL_FACE = {
+  shell: { label: "Run command", Icon: TerminalWindowIcon },
+  eval: { label: "Tool program", Icon: LightningIcon },
+  file: { label: "Files", Icon: FileTextIcon },
+  agents: { label: "Agents", Icon: UsersThreeIcon },
+  memory: { label: "Memory", Icon: BrainIcon },
+  tasks: { label: "Tasks", Icon: ListChecksIcon },
+  web: { label: "Web", Icon: GlobeIcon },
+  report: { label: "Report", Icon: ChartLineUpIcon },
+} satisfies Record<BuiltinToolName, { label: string; Icon: Icon }>;
 
 function toolLabel(toolName: string): string {
-  return TOOL_LABELS.get(toolName) ?? toolName;
+  return isBuiltinToolName(toolName) ? TOOL_FACE[toolName].label : toolName;
 }
 
 function toolIcon(toolName: string): ReactNode {
-  if (toolName === "shell") return <TerminalWindowIcon size={16} />;
+  const { Icon } = isBuiltinToolName(toolName) ? TOOL_FACE[toolName] : { Icon: DotsThreeCircleIcon };
 
-  if (toolName === "eval") return <LightningIcon size={16} />;
-
-  if (toolName === "file") return <FileTextIcon size={16} />;
-
-  if (toolName === "agents") return <UsersThreeIcon size={16} />;
-
-  if (toolName === "memory") return <BrainIcon size={16} />;
-
-  if (toolName === "tasks") return <ListChecksIcon size={16} />;
-
-  if (toolName === "web") return <GlobeIcon size={16} />;
-
-  if (toolName === "report") return <ChartLineUpIcon size={16} />;
-
-  return <DotsThreeCircleIcon size={16} />;
+  return <Icon size={16} />;
 }
 
 /** Where a one-question subagent's chat opens, relative to the chat its `agents` call sits in; null draws no link. */
@@ -290,7 +276,7 @@ function ToolCallBlock({ toolName, input, output, effect, receipt, isRunning, is
   if (isRunning) {
     stateName = "running";
     stateTone = "live";
-    stateBadge = <><StatusDot tone="live" />Running</>;
+    stateBadge = <><Dot tone="live" />Running</>;
   } else if (failed) {
     stateName = "failed";
     stateTone = "quiet";
@@ -759,24 +745,10 @@ function MessageFeedback({
   current: 'positive' | 'negative' | null;
   onFeedback: (messageId: string, feedback: 'positive' | 'negative' | null) => Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const { busy: running, error, run } = useLabelledStep();
+  const busy = running !== null;
 
-  const toggle = useCallback((next: 'positive' | 'negative') => detach(Effect.gen(function* () {
-    if (busy) return;
-    setBusy(true);
-    setFailed(false);
-    const apply = current === next ? null : next;
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => onFeedback(messageId, apply));
-    }), (refused) => Effect.sync(() => {
-      diagnostics.event('ui.feedback_failed', { error: renderThrownChain({ cause: Cause.squash(refused) }) });
-      setFailed(true);
-    })), Effect.sync(() => {
-      setBusy(false);
-    }));
-  })), [busy, current, messageId, onFeedback]);
+  const toggle = (next: 'positive' | 'negative'): void => run(next, async () => onFeedback(messageId, current === next ? null : next));
 
   return (
     <div className={`flex items-center gap-1 transition-opacity ${current === null ? 'opacity-0 group-hover/msg:opacity-100 focus-within:opacity-100' : ''}`} data-message-feedback>
@@ -788,7 +760,7 @@ function MessageFeedback({
         title="Mark this response poor. Feeds evolution scoring." aria-label="Mark this response poor">
         <ThumbsDownIcon size={14} weight={current === 'negative' ? 'fill' : 'regular'} />
       </IconControl>
-      {failed && <span className="t-status p-danger">Could not save. Try again.</span>}
+      {error !== null && <span className="t-status p-danger" title={error}>Could not save. Try again.</span>}
     </div>
   );
 }

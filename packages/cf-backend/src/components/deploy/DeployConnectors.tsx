@@ -17,6 +17,7 @@ import { IconTile } from "@/components/ui/IconTile";
 import { TextInput } from "@/components/ui/Field";
 import { readConnectorsBefore, setGoogleClient, type DeployHeard } from "@/lib/deploy-page-api";
 import { useDeployRead } from "@/components/deploy/use-deploy-read";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 /** GitHub's return to the page once it made a Kinu's app: the app, for the Kinu named (`before` it is deployed, held for
  *  its deploy), or GitHub's or Cloudflare's words. */
@@ -86,20 +87,14 @@ type SaveGoogle = (client: OAuthClient) => Promise<DeployHeard<{ readonly google
 function GoogleClientSteps({ origin, save: saveClient, onSaved, onCancel }: { origin: string; save: SaveGoogle; onSaved: () => void; onCancel: () => void }) {
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [refused, setRefused] = useState<string | null>(null);
+  const { busy, error: refused, run } = useLabelledStep(onSaved);
   const redirect = googleRedirect(origin);
 
-  const save = () => Effect.gen(function* () {
-    setSaving(true);
-    setRefused(null);
+  const save = (): void => run("save", () => Effect.gen(function* () {
     const heard = yield* Effect.promise(async () => saveClient({ clientId, clientSecret }));
 
-    setSaving(false);
-
-    if ("refusal" in heard) setRefused(heard.refusal.error);
-    else onSaved();
-  });
+    if ("refusal" in heard) return yield* Effect.fail(heard.refusal.error);
+  }));
 
   return (
     <div className="space-y-4" data-deploy-google-steps>
@@ -131,7 +126,7 @@ function GoogleClientSteps({ origin, save: saveClient, onSaved, onCancel }: { or
       {refused !== null && <p role="alert" className="t-meta p-danger">{refused}</p>}
       <div className="flex justify-end gap-2">
         <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>
-        <Button size="sm" disabled={saving || clientId.trim() === "" || clientSecret.trim() === ""} onClick={() => detach(save())}>Save</Button>
+        <Button size="sm" busy={busy !== null} disabled={clientId.trim() === "" || clientSecret.trim() === ""} onClick={save}>Save</Button>
       </div>
     </div>
   );
@@ -139,19 +134,18 @@ function GoogleClientSteps({ origin, save: saveClient, onSaved, onCancel }: { or
 
 function GoogleConnector({ kinu, onChanged }: { kinu: DeployedKinu; onChanged: () => void }) {
   const [open, setOpen] = useState(false);
-  const [refused, setRefused] = useState<string | null>(null);
+  const { busy, error: refused, run } = useLabelledStep(onChanged);
 
   if (kinu.connectors.google) {
-    const composio = () => Effect.gen(function* () {
+    const composio = (): void => run("composio", () => Effect.gen(function* () {
       const heard = yield* Effect.promise(async () => setGoogleClient(kinu.account, kinu.name, null));
 
-      if ("refusal" in heard) setRefused(heard.refusal.error);
-      else onChanged();
-    });
+      if ("refusal" in heard) return yield* Effect.fail(heard.refusal.error);
+    }));
 
     return (
       <Connector id="google" brand="google" title="Google" copy="Connected through your own Google app."
-        action={<Button size="sm" variant="ghost" onClick={() => detach(composio())}>Use Composio instead</Button>}>
+        action={<Button size="sm" variant="ghost" onClick={composio} busy={busy !== null}>Use Composio instead</Button>}>
         {refused !== null && <p role="alert" className="t-meta p-danger">{refused}</p>}
       </Connector>
     );

@@ -16,7 +16,7 @@ import { executorLabel } from "@kinu.run/core";
 import type { ConnectionStatus } from "@/hooks/use-chat-owner";
 import type { AgentStatus, WorkspaceLayout, WorkspaceNotice } from "@kinu.run/core";
 import { WorkspaceAutomations } from "@/components/WorkspaceAutomations";
-import { Card, Field, composing } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
 import { CopyField } from "@/components/ui/CopyField";
 import { Chip } from "@/components/ui/Chip";
 import { Group } from "@/components/ui/Group";
@@ -26,11 +26,12 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { WorkspaceLogo } from "@/components/ui/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import { showing, detach, settle } from '@kinu.run/core/obs';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
+import { useLabelledStep } from '@/hooks/use-labelled-step';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { downloadWorkspaceArchive } from "@/lib/workspace-archive";
 import { Notice } from "@/components/ui/Notice";
-import { TextArea, TextInput } from "@/components/ui/Field";
+import { TextArea, TextInput, Field, composing } from "@/components/ui/Field";
 
 const APPROVAL_LABEL: Record<ShellApprovalMode, string> = {
   strict: "Strict",
@@ -104,25 +105,20 @@ interface SettingsSource {
 }
 
 function LogoField({ title, logo, rpc }: { title: string; logo: string | null | undefined; rpc: WorkspaceRpc }) {
-  const [drawing, setDrawing] = useState(false);
-  const [note, setNote] = useState<string | null>(null);
+  const { busy, error: note, run } = useLabelledStep();
 
-  const redraw = useCallback(() => {
-    setDrawing(true);
-    setNote(null);
-    detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const { drawn, refusal } = yield* Effect.promise(() => rpc("regenerateWorkspaceLogo", []));
+  const redraw = (): void => run("draw", () => Effect.gen(function* () {
+    const { drawn, refusal } = yield* Effect.promise(() => rpc("regenerateWorkspaceLogo", []));
 
-      if (!drawn) setNote(refusal ?? "The model's drawing could not be used; the monogram stays. Try again.");
-    }), showing(setNote)), Effect.sync(() => setDrawing(false))));
-  }, [rpc]);
+    if (!drawn) return yield* Effect.fail(refusal ?? "The model's drawing could not be used; the monogram stays. Try again.");
+  }));
 
   return (
     <Field label="Logo">
       <div className="flex items-center gap-3" data-logo-field>
         <WorkspaceLogo title={title} logo={logo} size={40} />
-        <Button size="sm" onClick={redraw} disabled={drawing}>
-          {drawing ? <><Loader size="sm" /> Drawing…</> : "Draw a new one"}
+        <Button size="sm" onClick={redraw} busy={busy !== null}>
+          {busy !== null ? "Drawing…" : "Draw a new one"}
         </Button>
       </div>
       {note && <p className="t-meta p-text-3">{note}</p>}
@@ -145,8 +141,8 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
   const layout = useSettingField<WorkspaceLayout>();
   const advisor = useSettingField<AdvisorConfig>();
 
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  const { busy, error: err, run } = useLabelledStep();
+  const saving = busy !== null;
 
   // The title is the roster's; the soul rides the workspace snapshot, so it hydrates or fails with it.
   const { hydrate: hydrateDisplayName } = displayName;
@@ -205,44 +201,39 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
 
   const dirty = displayName.dirty || soul.dirty || layout.dirty || approval.dirty || advisor.dirty;
 
-  const save = useCallback(() => detach(Effect.gen(function* () {
+  // Each field is marked saved as its own write lands, so a failed one is all that stays dirty and is named.
+  const save = (): void => {
     // Only edited fields are written; the form has no authority over fields still loading or failed.
-    const writes: Array<Promise<object>> = [];
-    const commits: Array<() => void> = [];
+    const writes: Array<{ readonly what: string; readonly run: () => Promise<void> }> = [];
 
-    const write = <T,>(field: SettingField<T>, put: (value: T) => Promise<object>) => {
+    const write = <T,>(what: string, field: SettingField<T>, put: (value: T) => Promise<object>) => {
       const { value } = field;
 
       if (!field.dirty || value === null) return;
-      writes.push(put(value));
-      commits.push(() => field.markSaved(value));
+      writes.push({ what, run: async () => { await put(value); field.markSaved(value); } });
     };
 
-    write(displayName, async (name) => {
+    write("the name", displayName, async (name) => {
       const titled = await rpc("setDisplayName", [name]);
 
       rename(agentId, titled.displayName);
 
       return titled;
     });
-    write(soul, (text) => rpc("setSoul", [text]));
-    write(layout, (chosen) => rpc("setLayout", [chosen]));
-    write(approval, (mode) => rpc("setShellApprovalMode", [mode]));
-    write(advisor, (config) => rpc("setEvolutionConfig", [config]));
+    write("SOUL.md", soul, (text) => rpc("setSoul", [text]));
+    write("the layout", layout, (chosen) => rpc("setLayout", [chosen]));
+    write("shell approval", approval, (mode) => rpc("setShellApprovalMode", [mode]));
+    write("the advisor", advisor, (config) => rpc("setEvolutionConfig", [config]));
 
     if (writes.length === 0) return;
 
-    setSaving(true);
-    setErr(null);
+    run("save", () => Effect.gen(function* () {
+      const settled = yield* Effect.promise(async () => Promise.allSettled(writes.map((each) => each.run())));
+      const unsaved = settled.flatMap((result, at) => (result.status === "rejected" ? [`${writes[at]?.what ?? "a field"}: ${renderThrownChain({ cause: result.reason })}`] : []));
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => Promise.all(writes));
-
-      for (const commit of commits) commit();
-    }), showing(setErr)), Effect.sync(() => {
-      setSaving(false);
+      if (unsaved.length > 0) return yield* Effect.fail(`Not saved: ${unsaved.join("; ")}`);
     }));
-  })), [rpc, rename, agentId, displayName, soul, layout, approval, advisor]);
+  };
 
   if (connectionStatus !== "connected") {
     return (
@@ -353,8 +344,6 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
 
 /** A grant is scoped to one rule on one executor: it stops the asking, never widens reach, and cannot soften a refused rule. */
 export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(
     async () => (await rpc("getShellApprovalGrants", [])).grants,
@@ -364,17 +353,8 @@ export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   const { resource, reload } = useAsyncResource(load);
   const grants = lastValue(resource);
 
-  const revoke = (grant: ApprovalGrant) => Effect.gen(function* () {
-    setBusy(`${grant.rule}@${grant.executor}`);
-    setErr(null);
-
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => rpc("revokeShellApprovalGrants", [[grant]]));
-      reload();
-    }), showing(setErr)), Effect.sync(() => {
-      setBusy(null);
-    }));
-  });
+  const { busy, error: err, run } = useLabelledStep(reload);
+  const revoke = (grant: ApprovalGrant): void => run(`${grant.rule}@${grant.executor}`, async () => rpc("revokeShellApprovalGrants", [[grant]]));
 
   if (resource.status !== "error" && grants !== null && grants.length === 0) return null;
 
@@ -394,7 +374,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
               <code className="t-mono p-text">{grant.rule}</code>
               <span className="p-text-3">on</span>
               <span className="p-text-2">{executorLabel(grant.executor)}</span>
-              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => detach(revoke(grant))} disabled={busy !== null}
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={() => revoke(grant)} disabled={busy !== null}
                 busy={busy === `${grant.rule}@${grant.executor}`}
                 title={`Ask again next time a command trips ${grant.rule} on ${executorLabel(grant.executor)}`}>Revoke</Button>
             </div>
@@ -418,8 +398,6 @@ function decisionWord(row: InstructionSourceRow): string {
 
 /** Approval binds the exact bytes: any later edit stops matching the digest and drops the file back to reference material. */
 function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<InstructionSourceView | null>(null);
   const [cursor, setCursor] = useState<SeekCursor | undefined>(undefined);
 
@@ -433,52 +411,36 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
   const { resource, reload } = useAsyncResource(load);
   const page = lastValue(resource);
 
+  const { busy, error: err, run } = useLabelledStep();
+
   // Opening a row reads that file only; the listing carries no bytes.
-  const read = (row: InstructionSourceRow) => Effect.gen(function* () {
+  const read = (row: InstructionSourceRow): void => {
     if (open?.path === row.path) {
       setOpen(null);
 
       return;
     }
 
-    setBusy(row.path);
-    setErr(null);
+    run(row.path, async () => setOpen(await rpc("readInstructionApproval", [row.path])));
+  };
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      setOpen(yield* Effect.promise(async () => rpc("readInstructionApproval", [row.path])));
-    }), showing(setErr)), Effect.sync(() => {
-      setBusy(null);
-    }));
-  });
+  const decide = (row: InstructionSourceRow, action: "approve" | "revoke"): void => run(row.path, () => Effect.gen(function* () {
+    if (action === "approve") {
+      // Approval binds the digest the owner was just shown; if the file moved on, nothing is granted.
+      const opened = open?.path === row.path
+        ? open
+        : (yield* Effect.promise(async () => rpc("readInstructionApproval", [row.path])));
 
-  const decide = (row: InstructionSourceRow, action: "approve" | "revoke") => Effect.gen(function* () {
-    setBusy(row.path);
-    setErr(null);
+      if (!opened) return yield* Effect.fail("Kinu could not read that file, so nothing was approved. Try again.");
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      if (action === "approve") {
-        // Approval binds the digest the owner was just shown; if the file moved on, nothing is granted.
-        const opened = open?.path === row.path
-          ? open
-          : (yield* Effect.promise(async () => rpc("readInstructionApproval", [row.path])));
+      yield* Effect.promise(async () => rpc("approveInstruction", [row.path, opened.digest]));
+    } else {
+      yield* Effect.promise(async () => rpc("revokeInstruction", [row.path]));
+    }
 
-        if (!opened) {
-          setErr("Kinu could not read that file, so nothing was approved. Try again.");
-
-          return;
-        }
-
-        yield* Effect.promise(async () => rpc("approveInstruction", [row.path, opened.digest]));
-      } else {
-        yield* Effect.promise(async () => rpc("revokeInstruction", [row.path]));
-      }
-
-      setOpen(null);
-      reload();
-    }), showing(setErr)), Effect.sync(() => {
-      setBusy(null);
-    }));
-  });
+    setOpen(null);
+    reload();
+  }));
 
   const rows = page?.items ?? null;
 
@@ -511,15 +473,15 @@ function InstructionApprovalsCard({ rpc }: { rpc: WorkspaceRpc }) {
                   </span>
                   <span className="p-text-3 shrink-0">{state}</span>
                   {row.reason === undefined && (
-                    <Button variant="ghost" size="sm" className="ml-auto shrink-0" onClick={() => detach(read(row))} disabled={busy !== null}
+                    <Button variant="ghost" size="sm" className="ml-auto shrink-0" onClick={() => read(row)} disabled={busy !== null}
                       busy={busy === row.path}>{readWord}</Button>
                   )}
                   {followed && (
-                    <Button variant="ghost" size="sm" className={row.reason === undefined ? "shrink-0" : "ml-auto shrink-0"} onClick={() => detach(decide(row, "revoke"))}
+                    <Button variant="ghost" size="sm" className={row.reason === undefined ? "shrink-0" : "ml-auto shrink-0"} onClick={() => decide(row, "revoke")}
                       disabled={busy !== null} title="Stop following this file as instructions">Revoke</Button>
                   )}
                   {!followed && row.reason === undefined && (
-                    <Button size="sm" className="shrink-0" onClick={() => detach(decide(row, "approve"))} disabled={busy !== null}
+                    <Button size="sm" className="shrink-0" onClick={() => decide(row, "approve")} disabled={busy !== null}
                       title="Follow these exact contents as instructions">Approve</Button>
                   )}
                 </div>
@@ -555,26 +517,15 @@ function WorkspaceBackupCard({
   rpc: WorkspaceRpc;
   workspace: string;
 }) {
-  const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const { busy, error: err, run } = useLabelledStep();
 
-  const download = useCallback(() => detach(Effect.gen(function* () {
-    setBusy(true);
-    setErr(null);
+  const download = (): void => run("export", () => Effect.gen(function* () {
     setStatus("Exporting…");
+    const records = yield* downloadWorkspaceArchive(rpc, workspace, (read) => setStatus(`Exporting… ${read} records`));
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      const records = yield* downloadWorkspaceArchive(rpc, workspace, (read) => setStatus(`Exporting… ${read} records`));
-
-      setStatus(`Downloaded ${records} records.`);
-    }), showing((chain) => {
-      setStatus(null);
-      setErr(chain);
-    })), Effect.sync(() => {
-      setBusy(false);
-    }));
-  })), [rpc, workspace]);
+    setStatus(`Downloaded ${records} records.`);
+  }).pipe(Effect.tapCause(() => Effect.sync(() => setStatus(null)))));
 
   return (
     <Card title="Backup">
@@ -583,8 +534,8 @@ function WorkspaceBackupCard({
         with <code className="font-mono">kinu import &lt;file&gt;</code>. Download one before you delete a
         workspace. The archive holds everything in the workspace, so keep it as safe as a password.
       </p>
-      <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await download(); }))} disabled={busy || !workspace}>
-        {busy ? "Exporting…" : "Download archive"}
+      <Button variant="primary" size="sm" onClick={download} busy={busy !== null} disabled={!workspace}>
+        {busy !== null ? "Exporting…" : "Download archive"}
       </Button>
       {status && <div className="t-meta p-text-2 mt-1">{status}</div>}
       {err && <div className="t-meta p-danger mt-1">Export failed: {err}</div>}
@@ -602,37 +553,19 @@ function AlwaysActiveSkillsCard({
   const names = lastValue(pinned.resource) ?? [];
   const publish = pinned.set;
   const [input, setInput] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [saveErr, setErr] = useState<string | null>(null);
+  const { busy, error: saveErr, run } = useLabelledStep();
   const err = saveErr ?? (pinned.resource.status === 'error' ? pinned.resource.message : null);
 
-  const save = useCallback((next: string[]) => settle(Effect.gen(function* () {
-    setBusy(true);
-    setErr(null);
+  const save = (next: string[]): void => run('save', async () => publish((await rpc('setAlwaysActiveSkills', [next])).names));
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-      publish((yield* Effect.promise(async () => rpc('setAlwaysActiveSkills', [next]))).names);
-    }), showing(setErr)), Effect.sync(() => { setBusy(false); }));
-  })), [rpc, publish]);
-
-  const add = useCallback(async () => {
+  const add = (): void => {
     const n = input.trim();
 
     if (!n) return;
-
-    if (names.includes(n)) {
-      setInput('');
-
-      return;
-    }
-
     setInput('');
-    await save([...names, n]);
-  }, [input, names, save]);
 
-  const remove = useCallback(async (n: string) => {
-    await save(names.filter(x => x !== n));
-  }, [names, save]);
+    if (!names.includes(n)) save([...names, n]);
+  };
 
   return (
     <Card title="Always-active skills">
@@ -644,12 +577,12 @@ function AlwaysActiveSkillsCard({
         {names.length === 0
           ? <span className="t-meta p-text-3">No skills pinned.</span>
           : names.map(n => (
-            <Chip key={n} removeLabel={`Unpin ${n}`} onRemove={() => detach(Effect.promise(async () => { await remove(n); }))}><span className="t-mono">{n}</span></Chip>
+            <Chip key={n} removeLabel={`Unpin ${n}`} onRemove={() => save(names.filter((x) => x !== n))}><span className="t-mono">{n}</span></Chip>
           ))}
       </div>
       <div className="flex gap-2 mt-2">
-        <TextInput size="sm" value={input} placeholder="skill-name" onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))} />
-        <Button variant="primary" size="sm" onClick={() => detach(Effect.promise(async () => { await add(); }))} disabled={busy || !input.trim()}>Pin</Button>
+        <TextInput size="sm" value={input} placeholder="skill-name" onChange={(e) => setInput(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && !composing(e.nativeEvent)) add(); }} />
+        <Button variant="primary" size="sm" onClick={add} disabled={busy !== null || !input.trim()}>Pin</Button>
       </div>
       {err && <div className="t-meta p-danger mt-1">{err}</div>}
     </Card>

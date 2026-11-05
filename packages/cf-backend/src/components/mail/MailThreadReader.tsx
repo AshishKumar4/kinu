@@ -4,7 +4,7 @@ import { ArrowSquareOutIcon, CaretLeftIcon, TrashIcon, TrayIcon } from "@phospho
 import type { MailBox, MailThreadSummary, MailThreadView } from "@kinu.run/core";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { useLabelledStep } from "@/components/ui/ConfirmDialog";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { readMailThread, updateMailThread } from "@/lib/mail-api";
 import { MailMessage } from "./MailMessage";

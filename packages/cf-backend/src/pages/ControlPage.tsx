@@ -13,9 +13,8 @@ import {
   ANALYTICS_OFF, METRICS_WINDOWS, type AnalyticsResult, type ControlAuditRow, type ControlFeedbackRow, type ControlWorkspaceRow,
 } from '@kinu.run/core/control-plane';
 import { formatBytes, workspaceDisplayTitle, type SeekCursor } from '@kinu.run/core';
-import {
-  Notice, PageWalker, Panel, SectionHeader, Stat, useControlRead, when,
-} from '../components/control/panels';
+import { PageWalker, Panel, SectionHeader, Stat, useControlRead, when } from '../components/control/panels';
+import { Notice } from '@/components/ui/Notice';
 import { WorkspaceDrilldown } from '../components/control/WorkspaceDrilldown';
 import { AccountStanding, AccountsTable } from '../components/control/AccountsView';
 import { Button } from "@/components/ui/Button";
@@ -79,7 +78,7 @@ export default function ControlPage(): ReactNode {
             </Button>
             {user === null ? (
               // Workspace names are unique only per account, so the owner is required.
-              <Notice tone="warn">
+              <Notice tone="warning">
                 Open a workspace from the Workspaces tab or an account row.
               </Notice>
             ) : (
@@ -115,7 +114,7 @@ function TabBody(
 }
 
 function OverviewView(): ReactNode {
-  const { load, reload } = useControlRead(fetchOverview, []);
+  const { load, reload } = useControlRead(fetchOverview);
 
   return (
     <div className="space-y-3">
@@ -158,7 +157,7 @@ function usePageWalk() {
 
 function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode {
   const { cursor, page, next, first } = usePageWalk();
-  const { load, reload } = useControlRead(() => fetchUsers(cursor), [cursor]);
+  const { load, reload } = useControlRead(useCallback(() => fetchUsers(cursor), [cursor]));
 
   return (
     <div className="space-y-3">
@@ -194,7 +193,7 @@ function UserDetailView(
   },
 ): ReactNode {
   const { cursor, page, next, first } = usePageWalk();
-  const { load, reload } = useControlRead(() => fetchUserDetail(userId, cursor), [userId, cursor]);
+  const { load, reload } = useControlRead(useCallback(() => fetchUserDetail(userId, cursor), [userId, cursor]));
 
   return (
     <div className="space-y-3">
@@ -213,7 +212,7 @@ function UserDetailView(
                 limits={detail.limits} onChanged={reload} />
             </Surface>
             {detail.reconcile.status === 'failed' && (
-              <Notice tone="warn">
+              <Notice tone="warning">
                 {detail.reconcile.reason} Nothing was changed in the index.
               </Notice>
             )}
@@ -249,9 +248,7 @@ function WorkspacesView(
   const { cursor, page, next, first } = usePageWalk();
   const [includeRemoved, setIncludeRemoved] = useState(false);
 
-  const { load, reload } = useControlRead(
-    () => fetchWorkspaces({ cursor, includeRemoved }), [cursor, includeRemoved],
-  );
+  const { load, reload } = useControlRead(useCallback(() => fetchWorkspaces({ cursor, includeRemoved }), [cursor, includeRemoved]));
 
   return (
     <div className="space-y-3">
@@ -293,7 +290,7 @@ function WorkspacesView(
 }
 
 function IncidentsView(): ReactNode {
-  const { load, reload } = useControlRead(fetchIncidents, []);
+  const { load, reload } = useControlRead(fetchIncidents);
 
   return (
     <div className="space-y-3">
@@ -337,7 +334,7 @@ function feedbackAttachment(f: ControlFeedbackRow): ReactNode {
 
 function FeedbackView(): ReactNode {
   const { cursor, page, next, first } = usePageWalk();
-  const { load, reload } = useControlRead(() => fetchFeedback(cursor), [cursor]);
+  const { load, reload } = useControlRead(useCallback(() => fetchFeedback(cursor), [cursor]));
 
   return (
     <div className="space-y-3">
@@ -378,7 +375,7 @@ function FeedbackView(): ReactNode {
 function MetricsView(): ReactNode {
   const [hours, setHours] = useState(24);
 
-  const { load, reload } = useControlRead(() => fetchMetrics(hours), [hours]);
+  const { load, reload } = useControlRead(useCallback(() => fetchMetrics(hours), [hours]));
 
   return (
     <div className="space-y-3">
@@ -393,7 +390,7 @@ function MetricsView(): ReactNode {
       />
       <Panel load={load}>
         {(metrics) => metrics.missing.length > 0 ? (
-          <Notice tone="muted">
+          <Notice tone="info">
             {metrics.missing.includes(ANALYTICS_OFF)
               ? `${ANALYTICS_OFF} Its Cloudflare account has Analytics Engine off.`
               : `Analytics is not configured on this deployment: ${metrics.missing.join(', ')} not set.`}
@@ -457,7 +454,7 @@ const AUDIT_TONE: Record<ControlAuditRow['outcome'], string> = {
 
 function AuditView(): ReactNode {
   const { cursor, page, next, first } = usePageWalk();
-  const { load, reload } = useControlRead(() => fetchAudit(cursor), [cursor]);
+  const { load, reload } = useControlRead(useCallback(() => fetchAudit(cursor), [cursor]));
 
   return (
     <div className="space-y-3">

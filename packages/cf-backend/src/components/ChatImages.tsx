@@ -3,9 +3,8 @@
  * it, read through the workspace's own file route. A web address loads only when the owner asks, since loading it tells
  * that site the answer was read. A click opens the picture whole, the message's others a step away.
  */
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import type { LiveTail } from "@kinu.run/core";
-import { createPortal } from "react-dom";
 import {
   ArrowLeftIcon, ArrowRightIcon, DownloadSimpleIcon, FolderSimpleIcon, GlobeIcon, ImageBrokenIcon, LaptopIcon, TerminalWindowIcon,
   XIcon, type Icon,
@@ -16,7 +15,7 @@ import { isToolUIPart } from "ai";
 import { drawnText, namedImages, type ImageMachine, type NamedImage } from "@kinu.run/core";
 import { IconAnchor, IconControl } from "@/components/ui/IconControl";
 import { PillButton } from "@/components/ui/Pill";
-import { LightboxStep, ShotFrame } from "@/components/ui/Lightbox";
+import { LightboxFrame, LightboxStep, ShotFrame } from "@/components/ui/Lightbox";
 
 /** Where the chat reads a workspace file's bytes, and where Files shows it. Absent, the chat names pictures only. */
 export interface ChatImageSource {
@@ -217,27 +216,15 @@ function Lightbox({ pictures, index, onIndex, onClose }: {
   const picture = pictures[index];
   const many = pictures.length > 1;
 
-  useEffect(() => {
-    const key = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") onClose();
-
-      if (event.key === "ArrowLeft" && many) onIndex((index - 1 + pictures.length) % pictures.length);
-
-      if (event.key === "ArrowRight" && many) onIndex((index + 1) % pictures.length);
-    };
-
-    window.addEventListener("keydown", key);
-
-    return () => window.removeEventListener("keydown", key);
-  }, [index, many, onClose, onIndex, pictures.length]);
+  const step = (by: number): void => onIndex((index + by + pictures.length) % pictures.length);
 
   if (at === null || picture === undefined) return null;
   const src = pictureSrc(picture, at);
   const name = pictureName(picture, at.home);
 
-  // Above every pane, whatever transform an answer's entrance leaves on its column.
-  return createPortal(
-    <div className="p-lightbox" role="dialog" aria-modal aria-label={name} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  return (
+    <LightboxFrame label={name} onClose={onClose}
+      onKeyDown={(event) => { if (many && (event.key === "ArrowLeft" || event.key === "ArrowRight")) step(event.key === "ArrowLeft" ? -1 : 1); }}>
       <div className="p-lightbox-bar">
         <span className="min-w-0 truncate font-mono p-text">{name}</span>
         {picture.kind === "file" && <Where machine={picture.machine} device={picture.device} />}
@@ -256,19 +243,18 @@ function Lightbox({ pictures, index, onIndex, onClose }: {
       </div>
       <div className="p-lightbox-stage relative" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
         {many && (
-          <LightboxStep side="left" aria-label="Previous" onClick={() => onIndex((index - 1 + pictures.length) % pictures.length)}>
+          <LightboxStep side="left" aria-label="Previous" onClick={() => step(-1)}>
             <ArrowLeftIcon size={15} />
           </LightboxStep>
         )}
         <img src={src} alt={name} {...(picture.kind === "web" && { referrerPolicy: "no-referrer" as const })} />
         {many && (
-          <LightboxStep side="right" aria-label="Next" onClick={() => onIndex((index + 1) % pictures.length)}>
+          <LightboxStep side="right" aria-label="Next" onClick={() => step(1)}>
             <ArrowRightIcon size={15} />
           </LightboxStep>
         )}
       </div>
-    </div>,
-    document.body,
+    </LightboxFrame>
   );
 }
 

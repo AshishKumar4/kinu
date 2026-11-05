@@ -29,7 +29,7 @@ export default function ConnectedPage() {
   useEffect(() => { setFinished(finishConnect(ended)); }, [ended.run, ended.service, ended.error]);
 
   return (
-    <Surface look="page" className="t-body flex h-screen items-center justify-center p-6" data-connect-finished={finished.kind}>
+    <Surface look="page" className="t-body flex h-dvh items-center justify-center p-6" data-connect-finished={finished.kind}>
       {said(finished, ended.service, ended.error)}
     </Surface>
   );

@@ -15,6 +15,7 @@ import { ancestorIds, cleanNodeLabel, clipToWidth, isCompeted, LABEL_MIN_SCALE, 
 import { scoreBand } from '@kinu.run/core/swarm-view';
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
+import { countOf } from "@kinu.run/core";
 
 interface SwarmTreeRegion {
 	runId: string;
@@ -1059,7 +1060,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 					</span>
 				)}
 				{node.visits !== null && (
-					<span className="p-text-3">{node.visits} rollout{node.visits === 1 ? "" : "s"}</span>
+					<span className="p-text-3">{countOf(node.visits, "rollout")}</span>
 				)}
 				{/* The placed column (matches the ruler), not the row's depth: an elected orphan root sits at column 0. */}
 				<span className="p-text-3">depth {tip.column}</span>

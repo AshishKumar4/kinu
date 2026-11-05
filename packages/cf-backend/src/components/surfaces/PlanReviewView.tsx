@@ -21,7 +21,7 @@ import { editorAnnotationOf } from "@/components/plan-review/notes";
 import type { Block, EditorMode } from "@plannotator/ui/types";
 import { extractFrontmatter, parseMarkdownToBlocks } from "@plannotator/ui/utils/parser";
 import { createPlanAnnotationSaveQueue, slateUiSegments } from "@kinu.run/core";
-import { renderThrownChain, showing, detach } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, detach, detachPromise } from "@kinu.run/core/obs";
 import { usePlanDecision } from "@/hooks/use-plan-decision";
 import { usePlanRepliesSeen } from "@/hooks/use-plan-replies-seen";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -29,6 +29,7 @@ import { Notice } from "@/components/ui/Notice";
 import { Dot } from "@/components/ui/Dot";
 import { Surface } from "@/components/ui/Surface";
 import { Scrim } from "@/components/ui/Drawer";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 type RootNote = PassageNote | GeneralNote;
 
@@ -160,27 +161,26 @@ function DismissPlan({ plan, rpc, readOnly, deciding, saving, owed, onError }: {
   owed: boolean;
   onError: (message: string | null) => void;
 }) {
-  const [busy, setBusy] = useState(false);
+  const { busy: running, run } = useLabelledStep();
+  const busy = running !== null;
 
   if (readOnly || !planReviewAwaitingDecision(plan)) return null;
 
-  const dismiss = () => Effect.gen(function* () {
-    setBusy(true);
+  // The view's own line says a failure, so the step keeps none.
+  const dismiss = (): void => run("dismiss", () => {
     onError(null);
 
-    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+    return Effect.catchCause(Effect.gen(function* () {
       const result = yield* Effect.promise(async () => rpc("dismissPlanReview", [plan.id, plan.revision]));
 
       if (!result.ok) onError(result.error);
-    }), showing(onError)), Effect.sync(() => {
-      setBusy(false);
-    }));
+    }), showing(onError));
   });
 
   return (
     // Stacked, it sits under the decisions: the quiet way out after the two that answer the plan.
-    <Button type="button" size="sm" variant="ghost" className="order-last self-center whitespace-nowrap @[36rem]:order-none @[36rem]:self-auto" onClick={() => detach(dismiss())} disabled={deciding !== null || saving || owed || busy}>
-      {busy && !owed ? <Loader size="sm" /> : "Dismiss"}
+    <Button type="button" size="sm" variant="ghost" className="order-last self-center whitespace-nowrap @[36rem]:order-none @[36rem]:self-auto" onClick={dismiss} busy={busy && !owed} disabled={deciding !== null || saving || owed || busy}>
+      Dismiss
     </Button>
   );
 }
@@ -539,14 +539,14 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
                 size="sm"
                 variant="secondary"
                 className="shrink-0 grow justify-center whitespace-nowrap @[36rem]:grow-0"
-                onClick={() => detach(Effect.promise(async () => decide("request_changes")))}
+                onClick={() => detachPromise(() => decide("request_changes"))}
                 disabled={held || saving || planDecisionRefusal(shown, "request_changes") !== null}
               >
                 {deciding === "request" ? <Loader size="sm" /> : "Request changes"}
               </Button>
               <Button variant="primary" size="sm"
                 className="grow justify-center whitespace-nowrap @[36rem]:grow-0"
-                onClick={() => detach(Effect.promise(async () => decide("approve")))}
+                onClick={() => detachPromise(() => decide("approve"))}
                 disabled={held || saving || planDecisionRefusal(shown, "approve") !== null}
               >
                 {deciding === "approve" ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
@@ -556,7 +556,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
           {handoffPending && (
             <Button variant="primary" size="sm"
               className="justify-center whitespace-nowrap"
-              onClick={() => detach(Effect.promise(async () => decide(plan.status === "approved" ? "approve" : "request_changes")))}
+              onClick={() => detachPromise(() => decide(plan.status === "approved" ? "approve" : "request_changes"))}
               disabled={held || saving}
             >
               {deciding ? <Loader size="sm" /> : retryLabel}

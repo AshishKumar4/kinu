@@ -11,6 +11,8 @@ import {
 import {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   newestOpener, ownerAsks, planSurface,
+  countOf,
+  agentRoute, workspaceRoute,
 } from "@kinu.run/core";
 import { APP_ROUTES, liveStep, rowText, threadLiveTail, type OwedOwnerIntent, type PlanReview, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
 import type { UIMessage } from "ai";
@@ -63,7 +65,7 @@ import { WorkspaceOverview } from "@/components/workspaces/WorkspaceOverview";
 import { WorkspaceSettings } from "@/pages/SettingsPage";
 import { useLayoutDrawer, useWorkspaceArea } from "@/components/layout";
 import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
-import { attempt, renderThrownChain, settleLogged, showing, detach, settle, type KinuError } from "@kinu.run/core/obs";
+import { attempt, renderThrownChain, settleLogged, showing, detach, settle, type KinuError, detachPromise } from "@kinu.run/core/obs";
 import { TextInput } from "@/components/ui/Field";
 import { WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments } from "@/components/workspaces/NewChatView";
@@ -71,6 +73,7 @@ import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { Notice } from "@/components/ui/Notice";
 import { IconControl } from "@/components/ui/IconControl";
 import { OpenWorkspaceProvider } from "@/hooks/use-open-workspace";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 
 /** The mission is shown as the standing brief, not sent as an opening message
  *  the agent would then try to carry out. */
@@ -116,39 +119,26 @@ function ForkModal({
   onSubmit: (name: string) => Promise<void>;
 }) {
   const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  const submit = useCallback(() => detach(Effect.gen(function* () {
-    if (busy) return;
-    setBusy(true);
-    setErr(null);
-
-    return yield* Effect.catchCause(Effect.gen(function* () {
-      yield* Effect.promise(async () => onSubmit(name.trim()));
-    }), showing((chain) => {
-      setErr(chain);
-      setBusy(false);
-    }));
-  })), [name, busy, onSubmit]);
+  const { busy, error, run } = useLabelledStep();
+  const submit = (): void => run("fork", async () => onSubmit(name.trim()));
 
   return (
     <Modal
       title="Fork the workspace from here"
       icon={<GitBranchIcon size={18} className="p-accent-fg" />}
       onClose={onCancel}
-      busy={busy}
+      busy={busy !== null}
       footer={<>
-        <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <Button variant="primary" size="sm" onClick={submit} disabled={busy}>
-          {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
+        <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy !== null}>Cancel</Button>
+        <Button variant="primary" size="sm" onClick={submit} busy={busy !== null}>
+          {busy !== null ? "Forking…" : "Fork"}
         </Button>
       </>}
     >
       <div className="t-meta p-text-2 space-y-2">
         <p>Create a new workspace from <span className="font-mono p-text">{sourceName}</span>, with its own conversation and its own copy of the files.</p>
         <ul className="list-disc list-inside space-y-px p-text-3">
-          <li>Conversation: the {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"} up to this one</li>
+          <li>Conversation: the {countOf(messagesUpToHere, "message")} up to this one</li>
           <li>Files: the project, SOUL.md and memory as they are now, not as they were at this message</li>
           <li>Also copied: learned tools and settings</li>
           <li>Starts fresh: swarm trees, evolution events, scaffold, installed runtimes</li>
@@ -162,17 +152,13 @@ function ForkModal({
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="a generated address, e.g. quiet-harbor-3f9a2c1d"
-          disabled={busy}
+          disabled={busy !== null}
           className="t-mono"
         />
         <p className="t-meta p-text-3">Lowercase letters, digits and hyphens, at most 31 characters</p>
       </div>
 
-      {err && (
-        <Notice tone="danger">
-          {err}
-        </Notice>
-      )}
+      {error !== null && <Notice tone="danger">{error}</Notice>}
     </Modal>
   );
 }
@@ -220,8 +206,8 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
           headDeltas={main.headDeltas} onSelect={() => undefined} />
       </div>
       {/* The workspace holds every running worker, whoever started the swarm; its siblings run on. */}
-      <ViewOnlyBar running={working} onStop={() => detach(Effect.promise(async () => settleLogged("agents.stop_failed", { doing: "stop a swarm worker", otherwise: "io" },
-        () => main.rpc("stopSwarmWorker", [nodeId]))))} />
+      <ViewOnlyBar running={working} onStop={() => detachPromise(() => settleLogged("agents.stop_failed", { doing: "stop a swarm worker", otherwise: "io" },
+        () => main.rpc("stopSwarmWorker", [nodeId])))} />
     </div>
   );
 }
@@ -282,10 +268,10 @@ function shownPanelAgent(agents: readonly PanelAgent[], node: string | null, sub
 }
 
 function agentPagePath(workspace: string, { open }: PanelAgent): string {
-  if (open.kind === "chat") return open.path === null ? `/workspace/${workspace}` : subagentBase(workspace, open.path).slice(0, -1);
+  if (open.kind === "chat") return open.path === null ? workspaceRoute(workspace) : agentRoute(workspace, open.path);
   const owner = open.owner === null ? "" : `&owner=${encodeURIComponent(open.owner)}`;
 
-  return `/workspace/${workspace}?node=${encodeURIComponent(`${open.runId}/${open.nodeId}`)}${owner}`;
+  return `${workspaceRoute(workspace)}?node=${encodeURIComponent(`${open.runId}/${open.nodeId}`)}${owner}`;
 }
 
 /** `node` is `<run>/<node>`. */
@@ -326,7 +312,7 @@ function DeleteChat({ chat, workspace, shown, dismiss, onClose }: {
     <DeleteChatDialog title={chat.title} onClose={onClose} onConfirm={async () => {
       await dismiss(chat.path, false);
 
-      if (shown === chat.path) await navigate(`/workspace/${workspace}`);
+      if (shown === chat.path) await navigate(workspaceRoute(workspace));
     }} />
   );
 }
@@ -354,7 +340,7 @@ function chatTab(workspace: string, agent: PanelAgent, actions: {
 }): ChatTab {
   const path = agent.open.kind === "chat" ? agent.open.path : null;
 
-  if (path === null) return { agent, to: `/workspace/${workspace}`, rename: actions.renameMain, remove: actions.clearMain, clears: true };
+  if (path === null) return { agent, to: workspaceRoute(workspace), rename: actions.renameMain, remove: actions.clearMain, clears: true };
 
   return {
     agent, to: subagentBase(workspace, path).slice(0, -1),
@@ -371,7 +357,7 @@ function openBarItem(view: string | undefined, shown: PanelAgent | undefined): s
 }
 
 function subagentBase(workspace: string, subName: string): string {
-  return `/workspace/${workspace}/agents/${subName.split("/").map(encodeURIComponent).join("/")}/`;
+  return `${agentRoute(workspace, subName)}/`;
 }
 
 /** A subagent below a direct child is addressed by its `/`-joined path of names, as its socket and RPCs take it. */
@@ -544,7 +530,7 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
   if (focus !== null && !tabsShown && view === undefined) {
     return (
       <FocusBar
-        workspace={{ name: workspace, title, logo, to: `/workspace/${workspace}/activity` }}
+        workspace={{ name: workspace, title, logo, to: workspaceRoute(workspace, "activity") }}
         agent={{
           label: focus.label ?? "", ...mascotOf(speaking?.key ?? "main", speaking?.colour ?? 0), activity: speaking?.activity,
         }}
@@ -561,12 +547,12 @@ function WorkspaceBar({ workspace, title, editValue, state, agents, shown, view,
       <WorkspaceHeader
         workspace={{
           name: workspace,
-          title, logo, to: `/workspace/${workspace}/overview`, editValue,
+          title, logo, to: workspaceRoute(workspace, "overview"), editValue,
           rename: async (name) => { rename(workspace, (await state.rpc("setDisplayName", [name])).displayName); }, remove: () => setRemoving(true),
         }}
         chats={chats}
         active={openBarItem(view, shown)}
-        newChat={`/workspace/${workspace}/new`}
+        newChat={workspaceRoute(workspace, "new")}
         leading={menu}
         trailing={barActions}
       />
@@ -596,7 +582,7 @@ function WorkspaceView({ view, workspace, title, state, agents, open, clearMain 
   if (view === "new") return <NewChatView workspace={workspace} title={title} createChat={state.createSubagent} />;
 
   // The desktop's own page went with D99: its address lands on the desktop where it lives now, the Environment surface.
-  if (view === "desktop") return <Navigate to={`/workspace/${encodeURIComponent(workspace)}?${DESKTOP_LANDING}`} replace />;
+  if (view === "desktop") return <Navigate to={`${workspaceRoute(workspace)}?${DESKTOP_LANDING}`} replace />;
 
   // What the agent did and is doing, from its chat and its watches (1018-xao, Muse's activity log).
   if (view === "activity") return <ActivityView workspace={workspace} title={title} rpc={state.rpc} now={liveStep(threadLiveTail({ last: state.messages.at(-1), liveness: state.liveness }))} />;
@@ -808,7 +794,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
   const openAsk = useCallback(async (key: string): Promise<void> => {
     setAskFocus(key);
 
-    if (subName !== undefined) await navigate(`/workspace/${encodeURIComponent(agentId ?? "")}`);
+    if (subName !== undefined) await navigate(workspaceRoute(agentId ?? ""));
     workbench.current?.showChat();
   }, [subName, navigate, agentId, workbench]);
 
@@ -1015,7 +1001,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
       {bar}
 
       {view !== undefined && <WorkspaceView view={view} workspace={agentId} title={shownTitle} state={state} agents={agentsPanel.list}
-        open={(agent) => { detach(Effect.promise(async () => agentsPanel.open(agent))); }} clearMain={() => setClearingMain(true)} />}
+        open={(agent) => { detachPromise(() => agentsPanel.open(agent)); }} clearMain={() => setClearingMain(true)} />}
       {view === undefined && (
       <WorkbenchPanels
         ref={workbench}
@@ -1023,7 +1009,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
         contents={state}
         quiet={focus !== null}
         onInspector={setInspectorControl}
-        chat={(control) => <SubagentChatBase.Provider value={{ base: `/workspace/${agentId}/agents/`, parent: null }}><ChatSlates shownInPanel={panelShows(control)}>
+        chat={(control) => <SubagentChatBase.Provider value={{ base: `${workspaceRoute(agentId)}/agents/`, parent: null }}><ChatSlates shownInPanel={panelShows(control)}>
             {shownNode !== null && (
               <SwarmNodePane key={shownNode} main={state} node={shownNode} ownerPath={nodeOwner} agent={shownAgent} rosterLoaded={rosterLoaded} />
             )}
@@ -1043,7 +1029,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
               extras={{
                 float: agentId === undefined ? undefined : (
                   <BackgroundWork workspace={agentId} agents={agentsPanel.list} jobs={state.backgroundJobs}
-                    open={(agent) => { detach(Effect.promise(async () => agentsPanel.open(agent))); }} openWork={() => show("Work")} />
+                    open={(agent) => { detachPromise(() => agentsPanel.open(agent)); }} openWork={() => show("Work")} />
                 ),
                 before: (i) => placed.before.get(i),
                 row: (msg, i) => {
@@ -1128,7 +1114,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
             previewAddress={previewAddress}
             previewError={state.previewError}
             previewStarting={state.previewStarting}
-            onRefreshPorts={(...args: Parameters<typeof state.refreshExposedPorts>) => detach(Effect.promise(async () => state.refreshExposedPorts(...args)))}
+            onRefreshPorts={() => detachPromise(state.refreshExposedPorts)}
             plan={visiblePlan}
             owedIntents={state.owedIntents}
             snapshot={state.snapshot}
@@ -1146,7 +1132,7 @@ function OpenWorkspace({ onGone, workspace, layout }: WorkspacePageProps & { onG
             onExecute={state.executeInExecutor}
             backgroundJobs={state.backgroundJobs}
             inspectedWork={state.inspectedWork}
-            onRefreshJobs={(...args: Parameters<typeof state.refreshBackgroundJobs>) => detach(Effect.promise(async () => state.refreshBackgroundJobs(...args)))}
+            onRefreshJobs={() => detachPromise(state.refreshBackgroundJobs)}
             pendingActions={state.pendingActions}
             onOpenAsk={openAsk}
             slates={state.slates}

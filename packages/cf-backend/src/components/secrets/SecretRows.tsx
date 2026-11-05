@@ -7,7 +7,7 @@ import { TrashIcon } from "@phosphor-icons/react";
 import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { parseDotenv, secretProvider } from "@kinu.run/core";
 import { Cause, Effect } from "effect";
-import { Choice } from "@/components/ui/form";
+import { Select } from "@/components/ui/Select";
 import { listWorkspaces, type SecretEntry } from "@/lib/user-api";
 import { isSecretName, positionWords, type SecretPosition } from "@kinu.run/core";
 import { Button } from "@/components/ui/Button";
@@ -110,7 +110,7 @@ const POSITION_KINDS: ReadonlyArray<{ value: PositionKind; label: string }> = [
 export function PositionField({ position, onChange, label }: { position: SecretPosition; onChange: (next: SecretPosition) => void; label: string }) {
   return (
     <div className="flex flex-wrap gap-2" data-secret-position>
-      <Choice<PositionKind> label={`Where ${label} is sent`} value={position.kind} options={POSITION_KINDS} className="sm:max-w-60"
+      <Select<PositionKind> label={`Where ${label} is sent`} value={position.kind} options={POSITION_KINDS} className="sm:max-w-60"
         onChange={(kind) => onChange(kind === "authorization" ? AUTHORIZATION : { kind, name: position.kind === "authorization" ? "" : position.name })} />
       {position.kind !== "authorization" && (
         <TextInput className="min-w-0 flex-1 sm:max-w-56" value={position.name} onChange={(e) => onChange({ kind: position.kind, name: e.target.value })} spellCheck={false} placeholder={position.kind === "header" ? "X-API-Key" : "key"} aria-label={`The ${position.kind === "header" ? "header" : "query parameter"} ${label} is sent in`} />

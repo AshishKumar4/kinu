@@ -1,6 +1,5 @@
 /** The reads only the workspace's pane draws, over the chat's socket, and the frames that move them. */
 import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction } from "react";
-import { Effect } from "effect";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState, SubagentActivityEventSchema,
   type MctsProgress, branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, LIVE_READS,
@@ -17,7 +16,7 @@ import type { ExecutorInfo, PanelAgent } from "@kinu.run/core";
 import { applySignalCard, parseSignalCardEvent, type SignalCard } from "@kinu.run/core";
 import { appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas } from "@kinu.run/core";
 import { parseMemoryNotes } from "@kinu.run/core";
-import { detach, diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError, detachPromise } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts, type ExecutorPortRefresh, type PinnedPreviewPort,
 } from "@kinu.run/core";
@@ -479,7 +478,7 @@ export function useWorkspaceReads(link: ChatLink) {
   ]);
 
   const rereadLive = useCallback((reads: readonly LiveRead[], also: readonly (() => Promise<void>)[] = []): void => {
-    detach(Effect.promise(async () => {
+    detachPromise(async () => {
       try {
         await Promise.all([...reads.map((read) => liveReads[read]?.()), ...also.map((read) => read())]);
       } catch (cause) {
@@ -489,7 +488,7 @@ export function useWorkspaceReads(link: ChatLink) {
           otherwise: 'io',
         }));
       }
-    }));
+    });
   }, [liveReads]);
 
   const refreshLiveData = useCallback((): void => {
@@ -635,7 +634,7 @@ export function useWorkspaceReads(link: ChatLink) {
       return;
     }
 
-    searchTimer.current = setTimeout(() => detach(Effect.promise(async () => {
+    searchTimer.current = setTimeout(() => detachPromise(async () => {
       // Published only while this query is still the newest.
       let thrown: { cause: unknown } | null = null;
 
@@ -658,7 +657,7 @@ export function useWorkspaceReads(link: ChatLink) {
       if (thrown !== null && seq === searchSeq.current) {
         setSourceError("memory", `Memory search failed: ${readFailureText(thrown)}`);
       }
-    })), MEMORY_SEARCH_DEBOUNCE_MS);
+    }), MEMORY_SEARCH_DEBOUNCE_MS);
   }, [rpc, memoryContent, setSourceError]);
 
   // Fires the RPC only; the broadcast renders the row. An optimistic append double-rendered output.

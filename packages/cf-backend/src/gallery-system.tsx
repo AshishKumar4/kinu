@@ -21,10 +21,11 @@ import { Empty } from "@/components/ui/Empty";
 import { FlowStep } from "@/components/ui/FlowCard";
 import { Field, TextArea, TextInput } from "@/components/ui/Field";
 import { Group } from "@/components/ui/Group";
-import { Loader, Skeleton } from "@/components/ui/Loader";
+import { Loader } from "@/components/ui/Loader";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { Menu } from "@/components/ui/Menu";
 import { Meter } from "@/components/ui/Meter";
-import { DialogBox } from "@/components/ui/Modal";
+import { DialogFace } from "@/components/ui/Modal";
 import { Notice } from "@/components/ui/Notice";
 import { Popover } from "@/components/ui/Popover";
 import { Pressable } from "@/components/ui/Pressable";
@@ -620,12 +621,16 @@ function Overlays() {
           <SaveBarCycle />
           </div>
           <div className="grid gap-3">
-            <DialogBox title="Rename the workspace" width="sm" footer={<><Button size="sm" variant="ghost">Cancel</Button><Button variant="primary">Rename</Button></>}>
-              <Field label="Name"><TextInput defaultValue="API Worker" /></Field>
-            </DialogBox>
-            <DialogBox title="Disconnect Groq?" width="sm" footer={<><Button size="sm" variant="ghost">Cancel</Button><Button variant="destructive">Disconnect</Button></>}>
-              <p className="t-body">Its key and the model it serves go together.</p>
-            </DialogBox>
+            <div className="p-dialog p-dialog-sm">
+              <DialogFace heading={<h3 className="t-title">Rename the workspace</h3>} footer={<><Button size="sm" variant="ghost">Cancel</Button><Button variant="primary">Rename</Button></>}>
+                <Field label="Name"><TextInput defaultValue="API Worker" /></Field>
+              </DialogFace>
+            </div>
+            <div className="p-dialog p-dialog-sm">
+              <DialogFace heading={<h3 className="t-title">Disconnect Groq?</h3>} footer={<><Button size="sm" variant="ghost">Cancel</Button><Button variant="destructive">Disconnect</Button></>}>
+                <p className="t-body">Its key and the model it serves go together.</p>
+              </DialogFace>
+            </div>
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <Popover trigger={<Button size="sm">Open a popover</Button>} title="Public link"><p className="t-body">Anyone with the link can open it.</p></Popover>
@@ -633,7 +638,7 @@ function Overlays() {
             <span className="p-tooltip rounded-[var(--r-control)] px-2 py-1">A tooltip at rest</span>
           </div>
           <Empty icon={HardDrivesIcon} title="Nothing in your Drive yet" action={<Button size="sm" variant="secondary">Upload a file</Button>}>Files here are in every workspace you own.</Empty>
-          <div className="flex items-center gap-4"><Loader size="sm" /><div className="flex-1"><Skeleton /></div></div>
+          <div className="flex items-center gap-4"><Loader size="sm" /><div className="flex-1 space-y-2"><Skeleton /><Skeleton /><Skeleton width="60%" /></div></div>
           <div className="space-y-3">{[40, 85, 100].map((value) => <Meter key={value} label={`${String(value)}% used`} value={value} shown={`${String(value)}%`} />)}</div>
           <Table>
             <Table.Header><Table.Row><Table.Head>Model</Table.Head><Table.Head>Turns</Table.Head></Table.Row></Table.Header>

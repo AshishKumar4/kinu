@@ -7,7 +7,7 @@ import { SidebarHeader } from "./SidebarHeader";
 import { SidebarFooter } from "./SidebarFooter";
 import { useWorkspaceRpc, type ConnectionStatus } from "../hooks/use-chat-owner";
 import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
-import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry } from "@kinu.run/core";
+import { isPlaceholderWorkspaceTitle, rosterHeadline, shortAge, workspaceDisplayTitle, WORKSPACE_TITLE_MAX, type PanelAgent, type RosterEntry, type WorkspaceEntry, workspaceRoute } from "@kinu.run/core";
 import { useRename } from "@/hooks/use-rename";
 import { SidebarAgents } from "./SidebarAgents";
 import { ChatMascot, WorkspaceLogo } from "@/components/ui/Marks";
@@ -16,12 +16,11 @@ import { AgentStatusMark } from "./AgentStatus";
 import { RemoveWorkspaceDialog } from "./RemoveWorkspaceDialog";
 import { useAgentsNav, useOpenAgentsPanel, type WorkspaceAgentsPanel } from "@/hooks/use-agents-nav";
 import { navActive, PRIMARY_NAV } from "./nav";
-import { composing } from "@/components/ui/form";
-import { StatusDot } from "@/components/ui/Status";
+import { Dot } from "@/components/ui/Dot";
 import { workspaceStatusTone } from "@/components/workspaces/workspace-status-tone";
 import { Button } from "@/components/ui/Button";
 import { Pressable } from "@/components/ui/Pressable";
-import { TextInput } from "@/components/ui/Field";
+import { TextInput, composing } from "@/components/ui/Field";
 import { NavRow, NavRowButton } from "@/components/ui/NavRow";
 import { wakeAheadOf } from "@/hooks/use-wake-ahead";
 import { Surface } from "@/components/ui/Surface";
@@ -114,7 +113,7 @@ function WorkspaceDot({ entry }: { entry: RosterEntry }) {
 
   if (status === "idle" || status === "unreported") return null;
 
-  return <StatusDot className="block" tone={workspaceStatusTone(status)} title={label} />;
+  return <Dot tone={workspaceStatusTone(status)} label={label} />;
 }
 
 export default function Sidebar({ onCollapse, accountOpen = false }: { onCollapse?: () => void; accountOpen?: boolean } = {}) {
@@ -185,7 +184,7 @@ export default function Sidebar({ onCollapse, accountOpen = false }: { onCollaps
                       onDone={() => setEditingWorkspace(null)} />
                   ) : (
                     <>
-                      <NavRow to={`/workspace/${a.name}`} current={pathname === `/workspace/${a.name}` && panel === null} {...wakeAheadOf(a.name)}>
+                      <NavRow to={workspaceRoute(a.name)} current={pathname === workspaceRoute(a.name) && panel === null} {...wakeAheadOf(a.name)}>
                         <span className="relative flex shrink-0">
                           <WorkspaceLogo title={shown} logo={a.logo} />
                           <span className="p-logo-badge"><WorkspaceDot entry={a} /></span>
@@ -237,7 +236,7 @@ function WorkspaceChats({ panel, trigger, onAgents }: { panel: WorkspaceAgentsPa
         </li>
       ))}
       <li>
-        <NavRow to={`/workspace/${panel.workspace}/new`} size="sm" quiet>
+        <NavRow to={workspaceRoute(panel.workspace, "new")} size="sm" quiet>
           <PlusIcon size={14} className="shrink-0" aria-hidden /> <span className="t-body">New agent</span>
         </NavRow>
       </li>

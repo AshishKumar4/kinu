@@ -6,7 +6,6 @@ import HomePage, { NewWorkspacePage } from "./pages/HomePage";
 import WorkspacePage from "./pages/WorkspacePage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { APP_ROUTES, needsOnboarding, pageIsVisitors } from "@kinu.run/core";
-import { settingsPath } from "./components/SettingsRail";
 import { AccountProvider, useAccount } from "@/hooks/use-account";
 import { setupFinishing } from "@/lib/setup-finish";
 import { lastValue } from "./hooks/use-async-resource";
@@ -183,8 +182,6 @@ export default function App({ visitor = pageIsVisitors() }: { readonly visitor?:
             <Route path={APP_ROUTES.shared} element={<Page label="shared"><DrivePage tab="shared" /></Page>} />
             <Route path={APP_ROUTES.workspaces} element={<Page label="workspaces"><WorkspacesPage /></Page>} />
             <Route path={APP_ROUTES.plugins} element={<Page label="plugins"><PluginsPage /></Page>} />
-            {/* Devices is a Settings section; the old address still lands there. */}
-            <Route path={APP_ROUTES.devices} element={<Navigate to={settingsPath("devices")} replace />} />
             <Route path={`${APP_ROUTES.mail}/*`} element={<Page label="mail"><MailPage /></Page>} />
             <Route path={APP_ROUTES.workspace} element={<WorkspaceRoute label="workspace" />} />
             <Route path={APP_ROUTES.workspaceAgent} element={<WorkspaceRoute label="workspace-agent" />} />

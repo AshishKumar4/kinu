@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Loader } from "@cloudflare/kumo";
+import { Loader } from "@/components/ui/Loader";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import type { AsyncResource } from "@/hooks/use-async-resource";
 

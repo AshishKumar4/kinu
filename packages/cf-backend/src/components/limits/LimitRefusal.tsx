@@ -6,7 +6,7 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { WarningIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, shownBytes } from "@kinu.run/core";
+import { APP_ROUTES, shownBytes, workspaceRoute } from "@kinu.run/core";
 import { limitRefusalOf, type LimitRefusal } from "@/lib/limits-api";
 import { useWorkspaceRosterIfAny } from "@/hooks/use-workspace-roster";
 import { Modal } from "@/components/ui/Modal";
@@ -40,7 +40,7 @@ function computerSaid(text: string, titled: (workspace: string) => string): Said
     return {
       title: `Your free computer is running in ${titled(elsewhere)}`,
       body: "Stop it there to start one here. Chats keep working without the computer. On your own Kinu every workspace has its own.",
-      room: { label: `Open ${titled(elsewhere)}`, to: `/workspace/${encodeURIComponent(elsewhere)}` },
+      room: { label: `Open ${titled(elsewhere)}`, to: workspaceRoute(elsewhere) },
     };
   }
 

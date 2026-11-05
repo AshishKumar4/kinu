@@ -1,8 +1,6 @@
-import { Effect } from "effect";
-import { useCallback, useState } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { retargetedTier, specWithoutAccount, type ModelMenuResponse, type ProfileCatalogEnvelope } from "@kinu.run/core";
-import { detach, showing } from "@kinu.run/core/obs";
+import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { ModelPicker } from "@/components/ModelPicker";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { getProfileCatalog, listAvailableModels, updateProfileCatalog } from "@/lib/user-api";
@@ -11,25 +9,18 @@ import { useAsyncResource } from "@/hooks/use-async-resource";
 export function DefaultModelField() {
   const catalog = useAsyncResource(getProfileCatalog);
   const menu = useAsyncResource(listAvailableModels);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, run } = useLabelledStep();
+  const saving = busy !== null;
   const reloadCatalog = catalog.reload;
   const reloadMenu = menu.reload;
   const publish = catalog.set;
 
-  const choose = useCallback((envelope: ProfileCatalogEnvelope, listing: ModelMenuResponse, model: string) => {
+  const choose = (envelope: ProfileCatalogEnvelope, listing: ModelMenuResponse, model: string): void => {
     const declared = listing.models.find((entry) => entry.spec === specWithoutAccount(model))?.reasoningEfforts;
     const tiers = { ...envelope.catalog.tiers, default: retargetedTier(envelope.catalog.tiers.default, model, declared) };
 
-    setSaving(true);
-    setError(null);
-    detach(Effect.ensuring(
-      Effect.catchCause(Effect.gen(function* () {
-        publish(yield* Effect.promise(() => updateProfileCatalog({ ...envelope.catalog, tiers }, envelope.version)));
-      }), showing(setError)),
-      Effect.sync(() => setSaving(false)),
-    ));
-  }, [publish]);
+    run("save", async () => publish(await updateProfileCatalog({ ...envelope.catalog, tiers }, envelope.version)));
+  };
 
   const retry = () => { reloadCatalog(); reloadMenu(); };
 

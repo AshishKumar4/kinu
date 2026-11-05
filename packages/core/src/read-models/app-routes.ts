@@ -11,7 +11,6 @@ export const APP_ROUTES = {
   welcome: '/welcome',
   workspaces: '/workspaces',
   plugins: '/plugins',
-  devices: '/devices',
   mail: '/mail',
   userMcp: '/user/settings/mcp',
   workspace: '/workspace/:agentId',
@@ -46,6 +45,17 @@ export const APP_ROUTES = {
   /** Where every connect run in a helper tab ends (`connectedPath`): it tells the tab that started it, then closes. */
   connected: '/connected',
 } as const;
+
+/** A workspace's address in the app: its chat, or one of its own pages (`overview`, `settings`, `new`, `activity`). */
+export function workspaceRoute(workspace: string, view?: string): string {
+  return `/workspace/${encodeURIComponent(workspace)}${view === undefined ? '' : `/${view}`}`;
+}
+
+/** A hosted agent's chat in its workspace: `path` is its address under the workspace's main, `scout/reader` for a
+ *  helper's helper. */
+export function agentRoute(workspace: string, path: string): string {
+  return `${workspaceRoute(workspace)}/agents/${path.split('/').map(encodeURIComponent).join('/')}`;
+}
 
 /**
  * What a connect's finish page tells the tab that started it, over the `CONNECT_CHANNEL` broadcast: the run it ends,

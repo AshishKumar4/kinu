@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getCliSetup, type CliSetup } from "@/lib/user-api";
-import { Card } from "@/components/ui/form";
+import { Card } from "@/components/ui/Card";
 import { CopyField } from "@/components/ui/CopyField";
 
 export function CliInstallCard() {

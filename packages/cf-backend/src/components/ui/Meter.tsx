@@ -47,7 +47,7 @@ export function StepDots({ label, steps, at }: { label: string; steps: readonly 
   return (
     <ol aria-label={label} className="flex items-center justify-center gap-2">
       {steps.map((step, index) => (
-        <li key={step} aria-current={index === at ? "step" : undefined}>
+        <li key={step} aria-current={index === at ? "step" : undefined} aria-label={step}>
           <span className="p-step-dot" data-state={dotState(index, at)} />
         </li>
       ))}

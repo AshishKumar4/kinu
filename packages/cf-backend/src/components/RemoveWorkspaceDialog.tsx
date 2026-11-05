@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import { useMatch, useNavigate } from "react-router-dom";
 import { TrashIcon } from "@phosphor-icons/react";
-import { workspaceDisplayTitle } from "@kinu.run/core";
+import { workspaceDisplayTitle, workspaceRoute } from "@kinu.run/core";
 import { removeWorkspace } from "@/lib/user-api";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { ConfirmDialog } from "./ui/ConfirmDialog";
@@ -9,7 +9,7 @@ import { ConfirmDialog } from "./ui/ConfirmDialog";
 /** Leaves first: a mounted socket would reconnect and `idFromName` resurrect it empty. */
 export function RemoveWorkspaceDialog({ workspace, onClose }: { workspace: { name: string; displayName: string }; onClose: () => void }) {
   const navigate = useNavigate();
-  const inPage = useMatch({ path: `/workspace/${workspace.name}`, end: false }) !== null;
+  const inPage = useMatch({ path: workspaceRoute(workspace.name), end: false }) !== null;
   const inSwarm = useMatch({ path: `/swarm/${workspace.name}`, end: false }) !== null;
   const inside = inPage || inSwarm;
   const { remove } = useWorkspaceRoster();

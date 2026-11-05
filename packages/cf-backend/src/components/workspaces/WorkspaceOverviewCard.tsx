@@ -1,6 +1,6 @@
 /** One workspace on the roster, drawn from the tile its entry carries: the card reads nothing of its own. */
 import { Link } from "react-router-dom";
-import { APP_ROUTES, rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type RosterEntry } from "@kinu.run/core";
+import { APP_ROUTES, rosterHeadline, shortAge, workspaceDisplayTitle, type WorkspaceOverview, type RosterEntry, workspaceRoute } from "@kinu.run/core";
 import { SlatePicture } from "@/components/slates/SlatePicture";
 import { ChatMascot } from "@/components/ui/Marks";
 import { useMascotOf } from "@/hooks/use-chat-mascot";
@@ -36,7 +36,7 @@ export function WorkspaceOverviewCard({ workspace, variant, first = false }: {
   const age = shortAge(workspace.lastVisited);
   const pictured = overview?.slates.find((slate) => slate.picture !== null);
   // The owner's assistant is Home, and wears the face Home's bar shows it in.
-  const to = workspace.home === true ? APP_ROUTES.home : `/workspace/${workspace.name}`;
+  const to = workspace.home === true ? APP_ROUTES.home : workspaceRoute(workspace.name);
   const face = useMascotOf(workspace.name)("main", 0);
 
   if (variant === 'line') {
