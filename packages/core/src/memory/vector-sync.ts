@@ -84,7 +84,7 @@ export function adaptMemory(
       const stamped = noteDateAt(lines, endLine);
 
       if (stamped !== null) return stamped;
-      const read = changed.get(path) ?? files.stat(path, { follow: false }).then((stat) => stat?.mtimeMs);
+      const read = changed.get(path) ?? Promise.resolve(files.stat(path, { follow: false })).then((stat) => stat?.mtimeMs);
 
       changed.set(path, read);
 
