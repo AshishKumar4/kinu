@@ -133,6 +133,17 @@ const PROVIDER_REFUSALS: readonly { readonly cause: string; readonly said: RegEx
 
 const SEARCH_ENVELOPE = /^Error: [\w-]+\/[\w-]+: (\d+) web search call\(s\), none answered: /u;
 
+/** The platform's refusal of a container for want of the account's room, in the devbox's own sentence for a refused
+ *  start (`#unready`, packages/devbox/src/devbox.ts) with Cloudflare's words in it: a first-run case quoting what the
+ *  product answered, or the devbox tier's last error (`PlatformRefusal`, scripts/devbox-container-tier.ts). */
+const CONTAINER_REFUSAL = {
+  cause: "the platform refused a container: the account's resource limit (Cloudflare, Account resource limit exceeded)",
+  said: /the platform refused this box a container: Account resource limit exceeded\b/u,
+};
+
+/** A first-run case's own report of a subgoal it missed, which opens a test's first error. */
+const CASE_ENVELOPE = /^Error: [\w-]+\/[\w-]+: /u;
+
 /** What a run prints when it failed past the tests vitest lists: a deadline (the tier's own, or the hang detector's and
  *  the leftover check's, scripts/deadline.ts), a suite or an error outside any test. */
 const UNLISTED_FAILURES = [/^first-run: stopped before/mu, /^KILLED\s/mu, /^LEFT\s/mu, /Failed Suites \d+/u, /Unhandled (Errors|Rejection)/u];
@@ -143,8 +154,16 @@ const TESTS_FAILED_VERDICT = 'exit 1';
 /** The provider's refusal `error`, a failed test's first error, is, or undefined: every call it names refused alike. */
 function refusalOf(error: string): string | undefined {
   const calls = Number(SEARCH_ENVELOPE.exec(error)?.[1] ?? 0);
+  const billing = PROVIDER_REFUSALS.find((refusal) => calls > 0 && (error.match(refusal.said) ?? []).length === calls)?.cause;
 
-  return PROVIDER_REFUSALS.find((refusal) => calls > 0 && (error.match(refusal.said) ?? []).length === calls)?.cause;
+  if (billing !== undefined) return billing;
+
+  return CASE_ENVELOPE.test(error) && CONTAINER_REFUSAL.said.test(error) ? CONTAINER_REFUSAL.cause : undefined;
+}
+
+/** The error Bun printed as a script's own uncaught failure, the last before `bun run` named the script that exited. */
+function lastScriptError(output: string): string | undefined {
+  return [...output.matchAll(/^error: (.*)$/gmu)].map((match) => match[1] ?? '').filter((line) => !/^script ".*" exited with code \d+$/u.test(line)).at(-1);
 }
 
 /**
@@ -158,6 +177,10 @@ export function externalCause(colored: string): string | undefined {
   // vitest colours its summary even into a log: production 06498fc55's ` FAIL ` is red-on-white.
   const output = stripVTControlCharacters(colored);
   const begun = (output.match(/^ RUN {2}v/gmu) ?? []).length;
+
+  // A script that ran no vitest stops at its first failure: the devbox tier's last error is its one, and is the
+  // platform's refusal only when it opens with it.
+  if (begun === 0) return CONTAINER_REFUSAL.said.exec(lastScriptError(output) ?? '')?.index === 0 ? CONTAINER_REFUSAL.cause : undefined;
   const summaries = [...output.matchAll(/^\s+Tests\s+(?:(\d+) failed\b)?/gmu)];
   const failed = summaries.reduce((sum, match) => sum + Number(match[1] ?? 0), 0);
   const whole = begun > 0 && summaries.length === begun && /^tier liveness: PROVEN\b/mu.test(output);

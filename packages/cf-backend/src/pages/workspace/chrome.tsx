@@ -218,9 +218,9 @@ export function WorkspaceView({ view, workspace, title, state, agents, open, cle
 export function GoneWorkspace() {
   return (
     <div className="h-full flex flex-col items-center justify-center gap-2 px-6 text-center" data-workspace-gone>
-      <p className="t-body p-text">This workspace no longer exists</p>
-      <p className="t-meta p-text-3">It was deleted, here or somewhere else.</p>
-      <Link to="/" className="t-meta mt-1 p-link">Back to your workspaces</Link>
+      <p className="t-body p-text">No workspace at this address</p>
+      <p className="t-meta p-text-3">It may have been deleted, here or somewhere else, or never made.</p>
+      <Link to="/" className="t-meta mt-1 p-link">Back to Home</Link>
     </div>
   );
 }

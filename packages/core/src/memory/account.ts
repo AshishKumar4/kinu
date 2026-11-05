@@ -296,6 +296,17 @@ export class AccountMemoryStore {
   }
 
   /** What waits on the owner, oldest first: the view's `pending`, for a reader that needs only that. */
+  /** Withdraws the proposals still pending that `workspace` filed, as an eval workspace's teardown does with its own:
+   *  no later trial reads them. Answers how many it withdrew. */
+  withdrawFrom(workspace: string): number {
+    const withdrawn = this.sql<{ id: string }>`UPDATE account_memory_proposals SET status = 'withdrawn'
+      WHERE status = 'pending' AND json_extract(origin_json, '$.workspace') = ${workspace} RETURNING id`;
+
+    if (withdrawn.length > 0) markStoreChanged(this.sql);
+
+    return withdrawn.length;
+  }
+
   pending(): AccountMemoryProposal[] {
     return settleSync(Effect.forEach(this.sql<ProposalRow>`
       SELECT id, proposal_json, origin_json, created_at FROM account_memory_proposals WHERE status = 'pending' ORDER BY created_at, id`, readProposal));

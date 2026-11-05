@@ -102,7 +102,7 @@ export function ChatGptConnect({ plan, onSignedIn }: { plan: ChatGptPlan; onSign
           <WayButton icon={<DesktopTowerIcon size={16} />} title="Use your PC"
             text="Sign in on a machine running Kinu. The sign-in stays on that machine." onClick={() => { setError(null); setWay("pc"); }} />
           <WayButton icon={<GlobeIcon size={16} />} title="Sign in here"
-            text="Sign in in this browser, then paste back the address it lands on." onClick={() => { setError(null); setWay("here"); }} />
+            text="Sign in from this browser, then paste back the address it lands on." onClick={() => { setError(null); setWay("here"); }} />
         </div>
       )}
       {way === "pc" && <OnYourPc plan={plan} onDone={finished} onGaveUp={gaveUp} onFailed={shown} />}

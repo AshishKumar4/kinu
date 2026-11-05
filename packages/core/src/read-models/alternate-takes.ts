@@ -1,5 +1,5 @@
 /** Pure half of the chat's takes chip and comparison (AlternateTakes.tsx renders it). */
-import type { AlternateTakeSet } from '../mcts/takes';
+import type { AlternateTakeSet, TakePickOutcome } from '../mcts/takes';
 
 /** The user's pick when one exists, else the convergence winner. */
 export function currentTakeIndex(set: AlternateTakeSet): number {
@@ -22,4 +22,14 @@ export function cycleTakeIndex(current: number, delta: number, count: number): n
 
 export function hasComparableTakes(set: AlternateTakeSet | undefined | null): set is AlternateTakeSet {
   return (set?.candidates.length ?? 0) >= 2;
+}
+
+/** What picking take `n` did, as every chat says it. */
+export function describeTakePick(result: TakePickOutcome, n: number): string {
+  if (!result.changedAnswer) {
+    return `Take ${n} confirmed. The answered approach stays as an explicit preference.`;
+  }
+
+  return `Take ${n} picked. Preference recorded, convergence re-pointed`
+    + (result.continuationQueued ? ', and the agent will continue with this approach.' : '.');
 }

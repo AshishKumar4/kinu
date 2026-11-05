@@ -35,6 +35,12 @@ describe('a message\'s references become links', () => {
       .toBe('See [vfs://a/b.md](T:vfs://a/b.md), then [`vfs://c`](T:vfs://c) and [the plan](T:vfs://p.md).');
   });
 
+  // CODE-8 #17: a target with parentheses is the renderer's whole target, and a double-backtick span is one span.
+  test('a link whose target holds parentheses, and a reference in a double-backtick span', () => {
+    expect(linkFileReferences('[x](vfs://docs/a(b).md) and ``vfs://c`` and `` `vfs://d` `` stay one span.', links))
+      .toBe('[x](T:vfs://docs/a(b).md) and [``vfs://c``](T:vfs://c) and `` `vfs://d` `` stay one span.');
+  });
+
   test('fenced code, code that only mentions one, other schemes and a reference naming nothing stay as written', () => {
     const fenced = '```sh\ncat vfs://x\n```\n~~~\nvfs://y\n~~~';
     expect(linkFileReferences(fenced, links)).toBe(fenced);
