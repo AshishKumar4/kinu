@@ -1438,26 +1438,28 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Only the start coordinator opens restoration; recovery first retires unsafe work. */
   devboxStartup(): Promise<void> {
-    return settle(attempt('io', async () => {
+    return settle(Effect.gen({ self: this }, function* () {
       const since = Date.now();
       this.#trace('startup.callback.enter', {
         generation: this.#generation, running: this.ctx.container?.running === true, phase: this.#restoration.phase,
       });
 
-      try {
-        await this.#dispatch(STARTUP_CALLBACK, async () => {
-          if (this.#closed || this.#quiescing !== undefined) return;
-          await this.#adopted();
+      // Why the start left the box unattached, if it did: the startup's failure, told after its exit is traced.
+      const unattached = yield* attempt('io', async () => this.#dispatch(STARTUP_CALLBACK, async (): Promise<string | undefined> => {
+        if (this.#closed || this.#quiescing !== undefined) return undefined;
+        await this.#adopted();
 
-          // A stale buffered startup row cannot reopen a settled running generation (D12).
-          if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
-          await this.#startContainer();
+        // A stale buffered startup row cannot reopen a settled running generation (D12).
+        if (this.ctx.container?.running === true && this.#admission() !== undefined) return undefined;
+        await this.#startContainer();
+        const restoration = this.#restoration;
 
-          if (this.#restoration.phase === 'unattached') refuse(new DevboxError("io", this.#restoration.reason));
-        });
-      } finally {
+        return restoration.phase === 'unattached' ? restoration.reason : undefined;
+      })).pipe(Effect.ensuring(Effect.sync(() => {
         this.#trace('startup.callback.exit', { generation: this.#generation, ms: Date.now() - since, phase: this.#restoration.phase });
-      }
+      })));
+
+      if (unattached !== undefined) return yield* new DevboxError('io', unattached);
     }));
   }
 
@@ -2450,30 +2452,32 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return settle(Effect.gen({ self: this }, function* () {
       yield* this.#afterQuiesce(arrived, 'not-ready');
 
-      return yield* attempt('not-ready', async (): Promise<AttachOutcome> => {
+      const repairing = yield* attempt('not-ready', async () => {
         this.#closed = false;
         this.stampInteraction();
         await this.#adopted();
 
-        if (this.#restoration.phase === 'repair') {
-          await this.#repairAttached(this.#generation);
-        } else {
-          if (this.#unready() !== undefined) {
-            this.ctx.storage.kv.delete(START_REFUSED_KEY);
-            await this.#settle({ phase: 'unstarted' });
-            await this.#startContainer();
-
-            if (this.#admission() === undefined) {
-              refuse(new DevboxError("io", `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`));
-            }
-          }
-
-          await this.#ensureReady(arrived);
-        }
-
-        return await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY)
-          ?? { kind: 'empty', detail: 'this box has attached nothing' };
+        return this.#restoration.phase === 'repair';
       });
+
+      if (repairing) {
+        yield* attempt('not-ready', async () => this.#repairAttached(this.#generation));
+      } else {
+        const restarted = yield* attempt('not-ready', async () => {
+          if (this.#unready() === undefined) return true;
+          this.ctx.storage.kv.delete(START_REFUSED_KEY);
+          await this.#settle({ phase: 'unstarted' });
+          await this.#startContainer();
+
+          return this.#admission() !== undefined;
+        });
+
+        if (!restarted) return yield* new DevboxError('io', `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`);
+        yield* attempt('not-ready', async () => this.#ensureReady(arrived));
+      }
+
+      return yield* attempt('not-ready', async (): Promise<AttachOutcome> => await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY)
+        ?? { kind: 'empty', detail: 'this box has attached nothing' });
     }));
   }
 
@@ -3076,7 +3080,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   override alarm(): Promise<void> {
-    return settle(attempt('io', async () => {
+    return settle(Effect.gen({ self: this }, function* () {
       const now = Date.now();
 
       for (const [key, at] of Array.from(this.ctx.storage.kv.list<number>({ prefix: SCHEDULE_PREFIX }))) {
@@ -3084,23 +3088,28 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         const callback = key.slice(SCHEDULE_PREFIX.length);
 
         if (this.ctx.storage.kv.get<number>(key) !== at) continue;
-        await this.#dispatch(callback, () => this.dispatchAlarm(callback));
+        const handler = this.alarmHandler(callback);
+
+        if (handler === undefined) return yield* new DevboxError('io', `unknown devbox alarm: ${callback}`);
+        yield* attempt('io', async () => this.#dispatch(callback, handler));
 
         if (this.ctx.storage.kv.get<number>(key) === at) this.ctx.storage.kv.delete(key);
       }
 
-      await this.#scheduleAlarm();
+      yield* attempt('io', async () => this.#scheduleAlarm());
     }));
   }
-  protected async dispatchAlarm(callback: string): Promise<void> {
+
+  /** The work a due alarm row runs, by its callback; undefined for a callback this box does not know. */
+  protected alarmHandler(callback: string): (() => Promise<void>) | undefined {
     switch (callback) {
-      case STARTUP_CALLBACK: await this.devboxStartup(); break;
-      case HEARTBEAT_CALLBACK: await this.devboxHeartbeat(); break;
-      case CHECKPOINT_CALLBACK: await this.devboxCheckpoint(); break;
-      case INCIDENT_CALLBACK: await this.devboxIncidents(); break;
-      case GOLDEN_BUILD_CALLBACK: await this.devboxGolden(false); break;
-      case GOLDEN_REFRESH_CALLBACK: await this.devboxGolden(true); break;
-      default: refuse(new DevboxError("io", `unknown devbox alarm: ${callback}`));
+      case STARTUP_CALLBACK: return () => this.devboxStartup();
+      case HEARTBEAT_CALLBACK: return () => this.devboxHeartbeat();
+      case CHECKPOINT_CALLBACK: return () => this.devboxCheckpoint();
+      case INCIDENT_CALLBACK: return () => this.devboxIncidents();
+      case GOLDEN_BUILD_CALLBACK: return () => this.devboxGolden(false);
+      case GOLDEN_REFRESH_CALLBACK: return () => this.devboxGolden(true);
+      default: return undefined;
     }
   }
   /** An exec on a stopped container would start a blank one, and save its empty disk. */
