@@ -228,15 +228,24 @@ export class SessionHistory {
 
     if (kept?.members === members && kept.selection.contextId === selection.contextId && kept.selection.revision === selection.revision) return kept;
 
-    return { selection, members, ...await this.partition(members) };
+    const parted = await this.partition(members);
+
+    if (parted instanceof KinuError) return settle(Effect.fail(parted));
+
+    return { selection, members, ...parted };
   }
 
   /** Revisions are durable: a past one reads back as it was. */
   async materializeAt(selection: ContextSelection): Promise<MaterializedContext> {
-    return this.partition(this.context.entries(selection));
+    const parted = await this.partition(this.context.entries(selection));
+
+    if (parted instanceof KinuError) return settle(Effect.fail(parted));
+
+    return parted;
   }
 
-  private async partition(members: readonly ContextEntry[]): Promise<MaterializedContext> {
+  /** The members' messages, the renders apart; an error where one did not materialize. */
+  private async partition(members: readonly ContextEntry[]): Promise<MaterializedContext | KinuError> {
     const all = await this.messages.materializeAll(members);
     const entries: ContextEntry[] = [];
     const messages: ModelMessage[] = [];
@@ -246,7 +255,7 @@ export class SessionHistory {
       const member = members[index];
       const message = all[index];
 
-      if (message === undefined) throw new KinuError('io', 'a context member did not materialize');
+      if (message === undefined) return new KinuError('io', 'a context member did not materialize');
 
       if (this.messages.originOf(member) === 'render') renders.push({ message, at: messages.length });
       else { entries.push(member); messages.push(message); }
@@ -300,7 +309,9 @@ export class SessionHistory {
       for (const message of messages) this.messages.insert(message, proposal.cause === 'context_transform' ? 'context_transform' : 'edit');
       this.proposals.stage({ ...proposal, base });
 
-      return this.editEvent({ proposalId: proposal.id, selection: base, status: 'staged', turnId: proposal.turnId, events });
+      const audit = this.editEvent({ proposalId: proposal.id, selection: base, status: 'staged', turnId: proposal.turnId, events });
+
+      return audit instanceof KinuError ? yield* Effect.fail(audit) : audit;
     })));
 
     publication?.publish();
@@ -338,8 +349,11 @@ export class SessionHistory {
         this.proposals.stage({ id: proposalId, base: selected, author: options.author, via: options.via, cause: 'edit', turnId: options.turnId, expectedPending: pending,
           changes: [...base.filter(entry => !turnEntries.has(entry.entryId)).map(entry => ({ entryId: entry.entryId, expected: entry, replacement: null })), ...entries.map(entry => ({ entryId: entry.entryId, expected: null, replacement: entry }))] });
 
-        return { result: { selection: selected, proposalId },
-          publication: this.editEvent({ proposalId, selection: selected, status: 'staged', turnId: options.turnId, events: options.events ?? null }) };
+        const publication = this.editEvent({ proposalId, selection: selected, status: 'staged', turnId: options.turnId, events: options.events ?? null });
+
+        if (publication instanceof KinuError) return settleSync(Effect.fail(publication));
+
+        return { result: { selection: selected, proposalId }, publication };
       }
 
       this.proposals.closeAll(selected.contextId, 'history_rewritten');
@@ -378,6 +392,8 @@ export class SessionHistory {
 
     const candidate = preview.entries;
     const staged = await this.partition(candidate);
+
+    if (staged instanceof KinuError) return settle(Effect.fail(staged));
     const before = toolPairingGaps(current.messages);
     const after = toolPairingGaps(staged.messages);
     const refusal = before.calls.size > 0 || after.calls.size > 0 || after.results.size > 0 ? 'unpaired_tool_call' : null;
@@ -389,8 +405,11 @@ export class SessionHistory {
         return refusal;
       }, turnId);
 
-      return { applied,
-        publication: applied === null ? null : this.editEvent({ proposalId: pending.proposal_id, selection: applied, status: 'activated', turnId, events }) };
+      const publication = applied === null ? null : this.editEvent({ proposalId: pending.proposal_id, selection: applied, status: 'activated', turnId, events });
+
+      if (publication instanceof KinuError) return settleSync(Effect.fail(publication));
+
+      return { applied, publication };
     });
 
     committed.publication?.publish();
@@ -401,7 +420,8 @@ export class SessionHistory {
     return { ...settled, changed: false };
   }
 
-  private editEvent(edit: ContextEditAudit): { publish(): void } | null {
+  /** The edit's audit event, to publish once its commit holds; an error where its proposal is gone. */
+  private editEvent(edit: ContextEditAudit): { publish(): void } | null | KinuError {
     const { proposalId, selection, status, turnId, events } = edit;
 
     if (events === null || turnId === null) return null;
@@ -410,7 +430,7 @@ export class SessionHistory {
     if (runId === null) return null;
     const proposal = this.proposals.inspect(proposalId);
 
-    if (proposal === null) throw new KinuError('missing', 'context proposal disappeared before its audit event');
+    if (proposal === null) return new KinuError('missing', 'context proposal disappeared before its audit event');
     const via = proposal.metadata.via;
 
     if (via !== 'file' && via !== 'session' && via !== 'owner') return null;

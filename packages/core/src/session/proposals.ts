@@ -49,7 +49,12 @@ export class SessionProposals {
     this.actor.assertCurrent();
     const metadata = this.sql<ContextProposalMetadata>`SELECT proposal_id,context_id,base_revision,author,via,cause,turn_id,deferred_reason,recorded_at,status,closed_reason,build_identity FROM context_proposals WHERE actor_id=${this.actor.actorId} AND proposal_id=${id}`[0];
 
-    return metadata === undefined ? null : { metadata, entries: this.compose(id, this.context.entries({ contextId: metadata.context_id, revision: metadata.base_revision })) };
+    if (metadata === undefined) return null;
+    const entries = this.compose(id, this.context.entries({ contextId: metadata.context_id, revision: metadata.base_revision }));
+
+    if (entries instanceof KinuError) return settleSync(Effect.fail(entries));
+
+    return { metadata, entries };
   }
 
   stage(proposal: ContextProposal): void {
@@ -78,7 +83,7 @@ export class SessionProposals {
         VALUES(${actorId},${proposal.id},${proposal.base.contextId},${proposal.base.revision},${proposal.author},${proposal.via},${proposal.cause},${proposal.turnId},${proposal.buildIdentity ?? null},'pending',${Date.now()})`;
 
       for (const change of proposal.changes) {
-        this.validateExpected(base.get(change.entryId), change.expected);
+        if (changedSince(base.get(change.entryId), change.expected)) return yield* Effect.fail(changedBase());
         void this.sql`INSERT INTO context_proposal_entries(actor_id,proposal_id,entry_id,expected_message_id,message_id,position)
           VALUES(${actorId},${proposal.id},${change.entryId},${change.expected?.messageId ?? null},${change.replacement?.messageId ?? null},${change.replacement?.position ?? null})`;
       }
@@ -93,7 +98,11 @@ export class SessionProposals {
 
     if (proposal === null || selected === null || selected.contextId !== proposal.context_id) return { blocked: 'history_rewritten' };
 
-    return { entries: this.compose(id, this.context.entries(selected)) };
+    const entries = this.compose(id, this.context.entries(selected));
+
+    if (entries instanceof KinuError) return settleSync(Effect.fail(entries));
+
+    return { entries };
   }
 
   previewAt(id: string, selection: ContextSelection): readonly ContextEntry[] {
@@ -104,7 +113,9 @@ export class SessionProposals {
         return yield* Effect.fail(new KinuError('missing', 'context proposal does not belong to this revision'));
       }
 
-      return this.compose(id, this.context.entries(selection));
+      const entries = this.compose(id, this.context.entries(selection));
+
+      return entries instanceof KinuError ? yield* Effect.fail(entries) : entries;
     }));
   }
 
@@ -119,6 +130,8 @@ export class SessionProposals {
 
       if (selected === null || selected.contextId !== proposal.context_id) return yield* Effect.fail(new KinuError('denied', 'proposal belongs to another selected context'));
       const next = this.compose(id, this.context.entries(selected));
+
+      if (next instanceof KinuError) return yield* Effect.fail(next);
       const refusal = validate(next);
       const actorId = this.actor.actorId;
 
@@ -153,14 +166,15 @@ export class SessionProposals {
     return row?.status === 'pending' ? row : null;
   }
 
-  private compose(id: string, current: readonly ContextEntry[]): ContextEntry[] {
+  /** The proposal's changes over `current`, or why they no longer apply to it. */
+  private compose(id: string, current: readonly ContextEntry[]): ContextEntry[] | KinuError {
     const changes = this.sql<ChangeRow>`SELECT entry_id,expected_message_id,message_id,position
       FROM context_proposal_entries WHERE actor_id=${this.actor.actorId} AND proposal_id=${id}`;
 
     const members = new Map(current.map(entry => [entry.entryId, entry]));
 
     for (const change of changes) {
-      this.validateExpected(members.get(change.entry_id), change.expected_message_id === null ? null : { messageId: change.expected_message_id });
+      if (changedSince(members.get(change.entry_id), change.expected_message_id === null ? null : { messageId: change.expected_message_id })) return changedBase();
       members.delete(change.entry_id);
     }
 
@@ -169,14 +183,17 @@ export class SessionProposals {
     for (const change of changes.sort((a, b) => (a.position ?? -1) - (b.position ?? -1))) {
       if (change.message_id === null) continue;
 
-      if (change.position === null) throw new KinuError('io', 'proposal replacement is incomplete');
+      if (change.position === null) return new KinuError('io', 'proposal replacement is incomplete');
       ordered.splice(change.position, 0, { entryId: change.entry_id, messageId: change.message_id, position: change.position });
     }
 
     return ordered.map((entry, position) => ({ ...entry, position }));
   }
-
-  private validateExpected(actual: ContextEntry | undefined, expected: MessageReference | null): void {
-    if (expected === null ? actual !== undefined : actual?.messageId !== expected.messageId) throw new KinuError('denied', 'context edit targets content that changed since its base');
-  }
 }
+
+/** Whether the entry a change expected is no longer the one there. */
+function changedSince(actual: ContextEntry | undefined, expected: MessageReference | null): boolean {
+  return expected === null ? actual !== undefined : actual?.messageId !== expected.messageId;
+}
+
+const changedBase = (): KinuError => new KinuError('denied', 'context edit targets content that changed since its base');
