@@ -189,7 +189,7 @@ describe("a call that is not the owner's holds none of them", () => {
   test("a viewer's eval program is handed no bindings, the owner's both", async () => {
     const { reads, placeholder } = await shop();
 
-    // As `ActorAgent.codemodeLaunch` reads them for each run.
+    // As `OrchestratorAgent.codemodeLaunch` reads them for each run.
     expect(await reads.commandEnvironment('run', 'viewer')).toEqual({});
     expect(await reads.commandEnvironment('run', 'owner')).toEqual({ CLOUDFLARE_API_TOKEN: placeholder, DATABASE_PASSWORD: DB_VALUE, ...GIT_HELPER });
   });

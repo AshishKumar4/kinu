@@ -62,7 +62,7 @@ function restartedWorkspace(listed: Listed[]) {
     return stored === null ? null : { kind: stored.kind, input: JSON.parse(store.getInput(jobId) ?? 'null') };
   };
 
-  // As the actor wires its runner (actor-agent.ts): its workspace box is asked by the job's exec id.
+  // As the actor wires its runner (orchestrator.ts): its workspace box is asked by the job's exec id.
   const runner = new BackgroundJobRunner({
     store, fiber, clock, inbox: hostDeliveries({ broadcast: () => {}, enqueueTurn: async () => ({ status: 'queued' as const }) }).signals,
     stillRunning: async (job) => isWorkspaceProcessJob(row(job.id)) && await workspaceProcessJobRuns(box, job.id),
