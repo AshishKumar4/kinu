@@ -23,6 +23,15 @@ describe('the pictures an answer names', () => {
     ]);
   });
 
+  // CODE-8 #16: the renderer draws a picture whose address holds parentheses, so the chat must name it too.
+  test('a markdown picture whose address holds parentheses, and a name in a double-backtick span', () => {
+    const text = '![a](https://en.wikipedia.org/wiki/Foo_(bar).png) and ``a `tick` in chart.png``, then `` logo.svg ``.';
+
+    expect(namedImages(text, AT).map((image) => (image.kind === 'file' ? image.path : image.url))).toEqual([
+      'https://en.wikipedia.org/wiki/Foo_(bar).png', '/home/main/logo.svg',
+    ]);
+  });
+
   test('a name with no folder in prose, a data address and a file that is not a picture name nothing', () => {
     expect(namedImages('Version v1.2.png shipped; data:image/png;base64,AAAA and notes/todo.md stay words.', AT)).toEqual([]);
   });

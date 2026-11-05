@@ -2726,6 +2726,8 @@ export {
 
 export { KINU_PROGRAM_MODULE, programPlace, type ProgramImport } from './execution/program-place';
 
+export { moduleSpecifiers, type ModuleSpecifier } from './utils/module-specifiers';
+
 export {
   type DeviceHubClient,
   type HubDeviceCallOptions,

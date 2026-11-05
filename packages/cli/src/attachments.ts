@@ -30,21 +30,51 @@ interface PathToken {
   mention: boolean;
 }
 
-/** A mention or a path, where a person or a terminal wrote one: quoted, or a word whose spaces a backslash escapes. */
-const TOKEN_RE = /(^|\s)(@(?:"[^"\n]+"|'[^'\n]+'|(?:\\.|[^\s\\])+)|"[^"\n]+"|'[^'\n]+'|~\/(?:\\.|[^\s\\])+)/g;
-
 /** A pasted path as the shell it came from wrote it: its quotes and escapes undone; as written where it is no word. */
 export function pastedPath(written: string): string {
   return readShellWord(written) ?? written;
+}
+
+/** How a word may name a file: a mention, a quoted path, or a home or absolute path a terminal's drag-and-drop wrote. */
+const PATH_STARTS = ['@', '"', "'", '~/', '/'] as const;
+
+/** Each whitespace-separated word of `text` as a shell reads it: quotes and backslash escapes keep spaces inside. */
+function shellWords(text: string): { readonly raw: string; readonly index: number }[] {
+  const words: { readonly raw: string; readonly index: number }[] = [];
+  let at = 0;
+
+  while (at < text.length) {
+    while (at < text.length && /\s/u.test(text[at] ?? '')) at += 1;
+    const start = at;
+
+    while (at < text.length && !/\s/u.test(text[at] ?? '')) at = pastWordPart(text, at);
+
+    if (at > start) words.push({ raw: text.slice(start, at), index: start });
+  }
+
+  return words;
+}
+
+/** Past one piece of a word at `at`: an escaped character, a quoted run (to the end of the line where it never closes), or one character. */
+function pastWordPart(text: string, at: number): number {
+  const char = text[at];
+
+  if (char === '\\') return Math.min(at + 2, text.length);
+
+  if (char !== '"' && char !== "'") return at + 1;
+  let end = at + 1;
+
+  while (end < text.length && text[end] !== char && text[end] !== '\n') end += char === '"' && text[end] === '\\' ? 2 : 1;
+
+  return text[end] === char ? end + 1 : end;
 }
 
 /** Purely lexical; resolution happens in resolvePromptAttachments. */
 function extractPathTokens(text: string): PathToken[] {
   const tokens: PathToken[] = [];
 
-  for (const m of text.matchAll(TOKEN_RE)) {
-    const raw = m[2];
-    const index = m.index + m[1].length;
+  for (const { raw, index } of shellWords(text)) {
+    if (!PATH_STARTS.some((start) => raw.startsWith(start))) continue;
     const mention = raw.startsWith('@');
     const path = pastedPath(mention ? raw.slice(1) : raw);
 

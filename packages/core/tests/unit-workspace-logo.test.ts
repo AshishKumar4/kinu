@@ -34,6 +34,12 @@ describe('a drawn logo, rebuilt from the allowlist', () => {
       .toBe('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><style></style><circle class="a" r="4"/></svg>');
   });
 
+  // CODE-8 #21: a `>` inside a quoted value ends no tag, so the attributes after it are judged, not read as text.
+  test('reads a tag past a quoted `>`: what follows is still judged attribute by attribute; an image-set loads nothing', () => {
+    expect(sanitizeWorkspaceLogoSvg(svg('<circle r="4" class="a>b" fill="#abc" onclick="x()" style="fill:image-set(&quot;https://evil.example/p.png&quot; 1x)"/>')))
+      .toBe('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle r="4" class="a>b" fill="#abc"/></svg>');
+  });
+
   test('stays well-formed XML: a repeated attribute keeps its first, and an xlink reference becomes plain href', () => {
     expect(sanitizeWorkspaceLogoSvg(svg('<circle r="4" fill="#abc" fill="#def"/><use xlink:href="#a"/>')))
       .toBe('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle r="4" fill="#abc"/><use href="#a"/></svg>');

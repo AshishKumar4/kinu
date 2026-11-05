@@ -52,7 +52,8 @@ const TEXT_HOLDERS = new Set(['style', 'text', 'tspan']);
 function unsafeValue(value: string): boolean {
   const lowered = value.toLowerCase();
 
-  if (/javascript:|data:|vbscript:|expression\(|@import|\\|<|behavior:|-moz-binding/.test(lowered)) return true;
+  // `image-set(` and any absolute or scheme-relative address load from elsewhere as `url(` does.
+  if (/javascript:|data:|vbscript:|expression\(|@import|\\|<|behavior:|-moz-binding|image-set\(|https?:|\/\//.test(lowered)) return true;
 
   return [...lowered.matchAll(/url\(\s*(['"]?)([^)'"]*)\1\s*\)/g)].some((match) => !/^#[\w-]+$/.test(match[2] ?? ''))
     || (lowered.includes('url(') && !/url\(\s*['"]?#/.test(lowered));
@@ -67,9 +68,9 @@ function keptAttributes(element: string, source: string): string | null {
   // First wins: XML refuses a redefinition.
   const kept = new Map<string, string>();
 
-  for (const match of source.matchAll(/([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g)) {
-    const name = (match[1] ?? '').toLowerCase();
-    const value = decodeEntities(match[2] ?? match[3] ?? match[4] ?? '', XML_ENTITIES);
+  for (const attribute of attributesOf(source)) {
+    const name = attribute.name.toLowerCase();
+    const value = decodeEntities(attribute.value, XML_ENTITIES);
 
     if (!ATTRIBUTES.has(name) || unsafeValue(value)) continue;
 
@@ -143,6 +144,113 @@ class Rebuilt {
   }
 }
 
+type MarkupToken =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'open'; readonly name: string; readonly attributes: string; readonly selfClosing: boolean }
+  | { readonly kind: 'close'; readonly name: string };
+
+const NAME_START = /[A-Za-z]/u;
+
+const NAME_PART = /[\w:-]/u;
+
+/** Where the tag opened at `from` ends: its `>`, past any quoted attribute value; -1 if it never does. */
+function tagEnd(source: string, from: number): number {
+  let quote: string | null = null;
+
+  for (let at = from; at < source.length; at += 1) {
+    const char = source[at];
+
+    if (quote !== null) {
+      if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") quote = char;
+    else if (char === '>') return at;
+  }
+
+  return -1;
+}
+
+/** The markup as text runs and tags, a tag's attributes kept whole: a `>` inside a quoted value ends no tag. */
+function* markupTokens(source: string): Generator<MarkupToken> {
+  let at = 0;
+
+  while (at < source.length) {
+    const open = source.indexOf('<', at);
+
+    if (open !== at) {
+      yield { kind: 'text', text: source.slice(at, open === -1 ? source.length : open) };
+
+      if (open === -1) return;
+    }
+
+    const closing = source[open + 1] === '/';
+    let name = skipBlanks(source, open + (closing ? 2 : 1));
+    const nameStart = name;
+
+    if (!NAME_START.test(source[name] ?? '')) {
+      // A `<` that opens no tag says nothing a logo keeps.
+      at = open + 1;
+      continue;
+    }
+
+    while (NAME_PART.test(source[name] ?? '')) name += 1;
+    const end = tagEnd(source, name);
+
+    if (end === -1) return;
+    const inner = source.slice(name, end);
+    const selfClosing = inner.trimEnd().endsWith('/');
+
+    yield closing
+      ? { kind: 'close', name: source.slice(nameStart, name) }
+      : { kind: 'open', name: source.slice(nameStart, name), attributes: selfClosing ? inner.trimEnd().slice(0, -1) : inner, selfClosing };
+    at = end + 1;
+  }
+}
+
+function skipBlanks(source: string, from: number): number {
+  let at = from;
+
+  while (/\s/u.test(source[at] ?? '')) at += 1;
+
+  return at;
+}
+
+/** Each `name`, `name=value`, `name="value"` or `name='value'` in a tag's attribute text, in order. */
+function attributesOf(source: string): { readonly name: string; readonly value: string }[] {
+  const found: { readonly name: string; readonly value: string }[] = [];
+  let at = skipBlanks(source, 0);
+
+  while (at < source.length) {
+    let end = at;
+
+    while (end < source.length && !/[\s=/>]/u.test(source[end] ?? '')) end += 1;
+    const name = source.slice(at, end);
+    let next = skipBlanks(source, end);
+    let value = '';
+
+    if (source[next] === '=') {
+      const start = skipBlanks(source, next + 1);
+      const quote = source[start];
+
+      if (quote === '"' || quote === "'") {
+        const close = source.indexOf(quote, start + 1);
+        value = source.slice(start + 1, close === -1 ? source.length : close);
+        next = close === -1 ? source.length : close + 1;
+      } else {
+        let unquoted = start;
+
+        while (unquoted < source.length && !/[\s>]/u.test(source[unquoted] ?? '')) unquoted += 1;
+        value = source.slice(start, unquoted);
+        next = unquoted;
+      }
+    }
+
+    if (name !== '') found.push({ name, value });
+    at = skipBlanks(source, Math.max(next, end + (name === '' ? 1 : 0)));
+  }
+
+  return found;
+}
+
 /** The first `<svg>` in `written`, rebuilt; null if absent, empty or over the cap. */
 export function sanitizeWorkspaceLogoSvg(written: string): string | null {
   const start = written.search(/<svg[\s>]/i);
@@ -157,11 +265,11 @@ export function sanitizeWorkspaceLogoSvg(written: string): string | null {
 
   const rebuilt = new Rebuilt();
 
-  for (const [whole, rawName, rawAttributes = '', selfClosing, text] of source.matchAll(/<\/?\s*([a-zA-Z][\w:-]*)([^>]*?)(\/?)>|([^<]+)|</g)) {
-    if (rawName === undefined) rebuilt.text(text ?? '');
-    else if (whole.startsWith('</')) {
-      if (rebuilt.close(rawName.toLowerCase())) break;
-    } else if (!rebuilt.start(rawName.toLowerCase(), rawAttributes, selfClosing === '/')) return null;
+  for (const token of markupTokens(source)) {
+    if (token.kind === 'text') rebuilt.text(token.text);
+    else if (token.kind === 'close') {
+      if (rebuilt.close(token.name.toLowerCase())) break;
+    } else if (!rebuilt.start(token.name.toLowerCase(), token.attributes, token.selfClosing)) return null;
   }
 
   return rebuilt.finish();
