@@ -17,6 +17,12 @@ async function exited(pid: number): Promise<boolean> {
   return state === '' || state.startsWith('Z');
 }
 
+/** A process that says `ready` once it is the process it stays, so no exec follows the word: between an exec's new image
+ *  and its arguments, /proc reads an empty command line and environment, and the record would miss its own process. */
+const waits = "console.log('ready'); setTimeout(() => {}, 30_000)";
+
+const waitsDeaf = `process.on('SIGTERM', () => {}); ${waits}`;
+
 /** Spawns `cmd` as `fixture`'s process (none names no fixture) and resolves once it prints `ready`, its sign that it is
  *  set up. */
 async function started(cmd: readonly string[], fixture?: string): Promise<Bun.Subprocess<'ignore', 'pipe', 'inherit'>> {
@@ -31,7 +37,7 @@ async function started(cmd: readonly string[], fixture?: string): Promise<Bun.Su
 test('a recorded process that ignores SIGTERM is killed, and has exited when the call settles', async () => {
   const fixture = scratchDir('kill-recorded');
   const pidfile = join(fixture, 'daemon.pid');
-  const child = await started(['sh', '-c', "trap '' TERM; echo ready; exec sleep 30"], fixture);
+  const child = await started([process.execPath, '-e', waitsDeaf], fixture);
   writeFileSync(pidfile, `${String(child.pid)}\n`);
 
   await killAndAwaitExit(present(recordedIn(pidfile, fixture), 'the record'));
@@ -46,7 +52,7 @@ test('a recorded process that ignores SIGTERM is killed, and has exited when the
 test('a pid a stranger holds is never recorded, however soon after the record it started', async () => {
   const fixture = scratchDir('kill-stranger');
   const pidfile = join(fixture, 'daemon.pid');
-  const stranger = await started(['sh', '-c', 'echo ready; exec sleep 30']);
+  const stranger = await started([process.execPath, '-e', waits]);
 
   writeFileSync(pidfile, `${String(stranger.pid)}\n`);
 
@@ -58,7 +64,7 @@ test('a pid a stranger holds is never recorded, however soon after the record it
 
 test('a record whose pid another run holds now kills nothing', async () => {
   const fixture = scratchDir('kill-reused');
-  const holder = await started(['sh', '-c', 'echo ready; exec sleep 30'], fixture);
+  const holder = await started([process.execPath, '-e', waits], fixture);
 
   await killAndAwaitExit({ pid: holder.pid, generation: 'an earlier run of this pid' });
 
@@ -70,7 +76,6 @@ test('a record whose pid another run holds now kills nothing', async () => {
 // A successor whose handover a test's timeout cut short was in no pidfile, and ran on with its home removed
 // (daemon-update suite, 2026-10-21): a fixture's processes are found by what their command lines name.
 test('every process naming a fixture in its command line is found without a pidfile, and no other is', async () => {
-  const waits = "console.log('ready'); setTimeout(() => {}, 30_000)";
   const fixture = scratchDir('naming-fixture');
   const successor = await started([process.execPath, '-e', waits, join(fixture, 'pc-agent.js')]);
   const stranger = await started([process.execPath, '-e', waits, join(scratchDir('naming-stranger'), 'pc-agent.js')]);
@@ -102,7 +107,7 @@ test('with group, every process in the recorded group has exited when the call s
 test('with group, a recorded pid that leads no group is refused, and nothing is killed', async () => {
   const fixture = scratchDir('kill-leaderless');
   const pidfile = join(fixture, 'state');
-  const child = await started(['sh', '-c', 'echo ready; exec sleep 30'], fixture);
+  const child = await started([process.execPath, '-e', waits], fixture);
   writeFileSync(pidfile, `pid=${String(child.pid)}\n`);
 
   const refused = killAndAwaitExit(present(recordedIn(pidfile, fixture, /^pid=(\d+)$/mu), 'the record'), { group: true });
