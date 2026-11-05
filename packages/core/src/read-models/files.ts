@@ -124,16 +124,16 @@ export class ExecutorFileUpload {
     return this.chunks.done;
   }
 
-  async chunk(offset: number, chunk: Uint8Array, final: boolean): Promise<ExecutorWriteResult> {
-    const assembly = this.chunks.chunk(offset, chunk, final);
-
-    if (!('assembled' in assembly)) return assembly;
-
+  /** A chunk out of order or past the bounds is answered as the write's error; the final one writes the file. */
+  chunk(offset: number, chunk: Uint8Array, final: boolean): Promise<ExecutorWriteResult> {
     const { expectedRevision } = this.write;
 
-    return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
-      return writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembly.assembled, expectedRevision });
-    })));
+    return settle(Effect.matchEffect(this.chunks.chunk(offset, chunk, final), {
+      onFailure: (refused) => Effect.succeed<ExecutorWriteResult>({ error: refused.message }),
+      onSuccess: (assembled) => (assembled === null
+        ? Effect.succeed<ExecutorWriteResult>({ ok: true })
+        : orError(step(async (): Promise<ExecutorWriteResult> => writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembled, expectedRevision })))),
+    }));
   }
 
   abort(): void {
@@ -152,40 +152,44 @@ export class ChunkedUpload {
     return this.settled;
   }
 
-  chunk(offset: number, chunk: Uint8Array, final: boolean): { ok: true } | { error: string } | { assembled: Uint8Array } {
-    if (this.settled) return { error: 'file transfer already settled' };
+  /** The whole file once the final chunk lands, null before it; a chunk out of order or past the bounds fails the upload. */
+  chunk(offset: number, chunk: Uint8Array, final: boolean): Effect.Effect<Uint8Array | null, KinuError> {
+    return Effect.suspend(() => {
+      if (this.settled) return Effect.fail(new KinuError('bad_input', 'file transfer already settled'));
 
-    if (offset < 0) return { error: 'chunk offset must not be negative' };
+      if (offset < 0) return Effect.fail(new KinuError('bad_input', 'chunk offset must not be negative'));
 
-    if (offset !== this.received) {
-      return { error: `file transfer out of sync: expected offset ${String(this.received)}, got ${String(offset)}` };
-    }
+      if (offset !== this.received) {
+        return Effect.fail(new KinuError('bad_input', `file transfer out of sync: expected offset ${String(this.received)}, got ${String(offset)}`));
+      }
 
-    if (chunk.byteLength > FILE_CHUNK_BYTES) {
-      return { error: `chunk exceeds ${String(FILE_CHUNK_BYTES)} bytes` };
-    }
+      if (chunk.byteLength > FILE_CHUNK_BYTES) {
+        return Effect.fail(new KinuError('bad_input', `chunk exceeds ${String(FILE_CHUNK_BYTES)} bytes`));
+      }
 
-    if (this.received + chunk.byteLength > FILE_TRANSFER_MAX_BYTES) {
+      if (this.received + chunk.byteLength > FILE_TRANSFER_MAX_BYTES) {
+        this.settled = true;
+
+        return Effect.fail(new KinuError('bad_input', `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`));
+      }
+
+      this.parts.push(chunk);
+      this.received += chunk.byteLength;
+
+      if (!final) return Effect.succeed(null);
+      const assembled = new Uint8Array(this.received);
+      let at = 0;
+
+      for (const part of this.parts) {
+        assembled.set(part, at);
+        at += part.byteLength;
+      }
+
+      this.parts = [];
       this.settled = true;
 
-      return { error: `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit` };
-    }
-
-    this.parts.push(chunk);
-    this.received += chunk.byteLength;
-
-    if (!final) return { ok: true };
-    const assembled = new Uint8Array(this.received);
-    let at = 0;
-
-    for (const part of this.parts) {
-      assembled.set(part, at);
-      at += part.byteLength;
-    }
-
-    this.settled = true;
-
-    return { assembled };
+      return Effect.succeed(assembled);
+    });
   }
 
   abort(): void {

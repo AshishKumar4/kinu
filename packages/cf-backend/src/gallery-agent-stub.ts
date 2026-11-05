@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "reac
 import type { UIMessage } from "ai";
 import * as v from "valibot";
 import { JsonObjectSchema, openingListOf, RECORDED_AT_METADATA_KEY, WORK_TAB_JOBS, type PositionCursor } from "@kinu.run/core";
+import { Effect } from "effect";
+import { settle as refuse } from "@kinu.run/core/obs";
 
 interface GalleryConnectionError {
 	readonly code: number;
@@ -196,7 +198,8 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 
 				if (failure === null && served !== null) return served<T>(method, args);
 
-				return Promise.reject(failure ?? new Error(`gallery: no fixture serves ${method}`));
+				// Refused as the socket refuses a call: the caller's await rejects with it.
+				return refuse(Effect.die(failure ?? new Error(`gallery: no fixture serves ${method}`)));
 			},
 			send: () => {},
 			addEventListener: (type, listener) => {

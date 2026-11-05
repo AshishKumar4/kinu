@@ -6,7 +6,7 @@ import {
   DEFAULT_ROLE_ID, effectiveRoleCatalog, followJobOutput, ROSTER_READS, tierIdsOf,
   type JobOutputFrame, type JobOutputTail, type LiveRead, type SeekCursor, type SubagentChild,
 } from '@kinu.run/core';
-import { detach, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { attempt, detach, diagnostics, renderThrownChain } from '@kinu.run/core/obs';
 import type { AgentClient } from '../agent-client';
 import { loadActiveProfile } from '../default-model';
 import {
@@ -40,18 +40,9 @@ export function useHub({ client, seed, readHub, view, roster, label, running, me
 
     if (hub !== null && hub.identity === identity) return;
     const abort = new AbortController();
-    detach(Effect.promise(async () => {
-      try {
-        const fresh = await (readHub ?? loadHubData)(client);
-
-        if (!abort.signal.aborted) setHub({ identity, data: fresh });
-      } catch (cause) {
-        diagnostics.failure(
-          'tui.hub_refresh_failed',
-          toKinuError({ doing: 'refreshing the agent hub', cause, otherwise: 'unavailable' }),
-          { workspace: client.agentName },
-        );
-      }
+    detach(Effect.match(attempt({ doing: 'refreshing the agent hub', otherwise: 'unavailable' }, () => (readHub ?? loadHubData)(client)), {
+      onSuccess: (fresh) => { if (!abort.signal.aborted) setHub({ identity, data: fresh }); },
+      onFailure: (failed) => { diagnostics.failure('tui.hub_refresh_failed', failed, { workspace: client.agentName }); },
     }));
 
     return () => { abort.abort(); };

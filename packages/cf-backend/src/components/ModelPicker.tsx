@@ -1,5 +1,5 @@
 /** The one model picker for every surface; groups follow server order (connected-provider preference). */
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { ArrowsClockwiseIcon, BrainIcon, EyeIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import {
@@ -15,11 +15,12 @@ import { connectCloudflare } from "./CloudflareAIConnectNotice";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery, reasoningEffortChoice } from "./model-picker-options";
 import { BrandMark, providerBrand } from "./ui/BrandMark";
 import { ChatGptPlanUsage } from "./account/ChatGptConnect";
-import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
+import { detach, diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { lastValue, useAsyncResource, type AsyncResourceControl } from "../hooks/use-async-resource";
 import { Combobox, Select } from "@/components/ui/Select";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
+import { Effect } from "effect";
 
 type PickerValue = ModelMenuEntry | { value: string; items: ModelMenuEntry[] };
 
@@ -339,7 +340,7 @@ interface ModelTests {
 function useModelTests(test: ModelPickerProps["test"]): ModelTests {
   const [states, setStates] = useState<ReadonlyMap<string, TestState>>(new Map());
 
-  const settle = (spec: string, state: TestState | null) => setStates((prev) => {
+  const record = (spec: string, state: TestState | null) => setStates((prev) => {
     const next = new Map(prev);
 
     if (state === null) next.delete(spec); else next.set(spec, state);
@@ -347,24 +348,24 @@ function useModelTests(test: ModelPickerProps["test"]): ModelTests {
     return next;
   });
 
-  const toggle = (spec: string): void => {
+  const toggle = useCallback((spec: string): void => {
     if (test === undefined) return;
     const current = states.get(spec);
 
     if (current !== undefined && "running" in current) {
       current.running.abort();
-      settle(spec, null);
+      record(spec, null);
 
       return;
     }
 
     const controller = new AbortController();
-    settle(spec, { running: controller });
-    test(spec, controller.signal).then(
-      (result) => { if (!controller.signal.aborted) settle(spec, { result }); },
-      (...rejection: [unknown]) => { if (!controller.signal.aborted) settle(spec, { error: renderThrownChain({ cause: rejection[0] }) }); },
-    );
-  };
+    record(spec, { running: controller });
+    detach(Effect.match(Effect.tryPromise({ try: () => test(spec, controller.signal), catch: (cause) => ({ cause }) }), {
+      onSuccess: (result) => { if (!controller.signal.aborted) record(spec, { result }); },
+      onFailure: (failed) => { if (!controller.signal.aborted) record(spec, { error: renderThrownChain(failed) }); },
+    }));
+  }, [states, test]);
 
   return { enabled: test !== undefined, stateOf: (spec: string) => states.get(spec), toggle };
 }

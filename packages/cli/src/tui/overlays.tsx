@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type { SelectOption, SelectRenderable } from '@opentui/core';
 import { useState, useEffect, useMemo, useRef, type ReactNode } from 'react';
 import { describeExecutionContext, executorLabel, filterModels, OTHER_OPTION, formatContextWindow, formatModelSpec, modelTestText, parseModelSpec, specWithoutAccount, takeEvidence, type AgentModelEntry, type AlternateTakeCandidate, type AlternateTakeSet, type AskingAgent, type ChangelogEntry, type OwnerAnswer, type ModelTestResult, type ProviderFailure, type ShellApprovalRequest } from '@kinu.run/core';
@@ -8,7 +9,7 @@ import type { AgentChangelogView, ForkPoint } from '../agent-client';
 import type { DeviceConnectPromptState } from './use-device-connect';
 import type { ApprovalPrompt } from './use-approvals';
 import { terminalMayApprove, waitingApprovalDetails } from '../waiting-approvals';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { detach, renderThrownChain } from '@kinu.run/core/obs';
 import { createKeyDispatcher, useKeybindingRegistry, type TuiActionId } from './actions';
 import {
   REFERENCE_TERMINAL_GROUNDS,
@@ -459,12 +460,10 @@ function ModelListOverlay({ models, failures, currentSpec, terminal, loading, er
           const controller = new AbortController();
           testing.current = controller;
           setTested({ label: model.label, text: 'testing…', ok: true });
-          test(model.spec, controller.signal).then(
-            (result) => { if (!controller.signal.aborted) setTested({ label: model.label, text: modelTestText(result, { provider: model.provider, from: 'here' }), ok: result.ok }); },
-            (...rejection: [unknown]) => {
-              if (!controller.signal.aborted) setTested({ label: model.label, text: `the test couldn't run: ${renderThrownChain({ cause: rejection[0] })}`, ok: false });
-            },
-          );
+          detach(Effect.match(Effect.tryPromise({ try: () => test(model.spec, controller.signal), catch: (cause) => ({ cause }) }), {
+            onSuccess: (result) => { if (!controller.signal.aborted) setTested({ label: model.label, text: modelTestText(result, { provider: model.provider, from: 'here' }), ok: result.ok }); },
+            onFailure: (failed) => { if (!controller.signal.aborted) setTested({ label: model.label, text: `the test couldn't run: ${renderThrownChain(failed)}`, ok: false }); },
+          }));
 
           return true;
         }}

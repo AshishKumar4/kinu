@@ -1,6 +1,7 @@
 // Validates the gate: each fault patches only subjects its own layer owns, and must crater that layer
 // while leaving the others flat, measured against the clean run rather than the locked baseline.
 
+import { Effect } from 'effect';
 import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../src/extension';
 import { DynamicContextLedger, type DynamicContext } from '../src/prompting/volatile-context';
@@ -267,12 +268,11 @@ export const FAULTS: readonly Fault[] = Object.freeze([
         if (first && original.indexOf(first.oldText) !== original.lastIndexOf(first.oldText)) {
           const at = original.indexOf(first.oldText);
 
-          return {
-            ok: true,
+          return Effect.succeed({
             content: original.slice(0, at) + first.newText + original.slice(at + first.oldText.length),
             applied: [{ line: 1, removedLines: 1, addedLines: 1 }],
             spans: [{ start: at, end: at + first.oldText.length, inserted: first.newText.length }],
-          };
+          });
         }
 
         return s.applyFileEdits(original, edits, path);

@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import { mkdirSync, writeFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { useCallback, useEffect, useMemo, type RefObject } from 'react';
@@ -44,15 +45,20 @@ export function useComposerPaste(options: {
           return;
         }
 
-        try {
+        // Saved where only this user reads it, then named in the prompt; a save that fails is said.
+        const saved = Result.try(() => {
           const directory = join(AGENT_HOME, 'clipboard');
+
           mkdirSync(directory, { recursive: true, mode: 0o700 });
           const path = join(directory, `${crypto.randomUUID()}.${mime === 'image/png' ? 'png' : 'jpg'}`);
+
           writeFileSync(path, bytes, { mode: 0o600 });
-          insert(`@"${path}"`, 'image');
-        } catch (cause) {
-          note(`Could not save clipboard image: ${renderThrownChain({ cause })}`);
-        }
+
+          return path;
+        });
+
+        if (Result.isSuccess(saved)) insert(`@"${saved.success}"`, 'image');
+        else note(`Could not save clipboard image: ${renderThrownChain({ cause: saved.failure })}`);
 
         return;
       }

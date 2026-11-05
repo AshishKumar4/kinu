@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/Button";
 import { Effect } from 'effect';
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import { startTransition } from "react";
 import {
   DesktopTowerIcon, PencilSimpleIcon, TrashIcon,
@@ -11,7 +11,7 @@ import {
 } from "@/lib/user-api";
 import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode } from "@kinu.run/core";
-import { renderThrownChain, showing, detach, settle, detachPromise } from "@kinu.run/core/obs";
+import { chainOf, detach, settle, showing } from "@kinu.run/core/obs";
 import { Row, RowTile } from "@/components/ui/Row";
 import { Menu } from "@/components/ui/Menu";
 import { Chip } from "@/components/ui/Chip";
@@ -102,17 +102,30 @@ export function DeviceRow({
     );
   }
 
-  const save = async () => {
+  /** The name typed, kept; a rename that fails is said and the row reads again either way. */
+  const save = (): Effect.Effect<void> => Effect.gen(function* () {
     const name = (editing ?? "").trim();
     setEditing(null);
 
     if (!name || name === device.label) return;
 
-    try { await renameDevice(device.id, name); }
-    catch (e) { onError(`Could not rename device: ${renderThrownChain({ cause: e })}`); }
-
+    yield* Effect.catchCause(Effect.promise(() => renameDevice(device.id, name)), (failed) => Effect.sync(() => {
+      onError(`Could not rename device: ${chainOf(failed)}`);
+    }));
     onDeviceChanged();
-  };
+  });
+
+  const onNameKey = (e: KeyboardEvent<HTMLInputElement>): Effect.Effect<void> => Effect.gen(function* () {
+    if (composing(e.nativeEvent)) return;
+
+    if (e.key === "Enter") {
+      e.preventDefault();
+      setEditing(null);
+      yield* save();
+    }
+
+    if (e.key === "Escape") setEditing(null);
+  });
 
   const dropGrant = (agentName: string) => Effect.gen(function* () {
     yield* Effect.catchCause(Effect.promise(async () => revokeDeviceConsent(device.id, agentName)), showing((chain) => {
@@ -148,17 +161,7 @@ export function DeviceRow({
   const where = [device.hostname, device.os].filter((part) => part !== null && part !== "").join(" · ");
 
   const nameField = (
-    <TextInput size="sm" className="w-52" autoFocus value={editing ?? ""} onChange={(e) => setEditing(e.target.value)} onBlur={() => detachPromise(save)} onKeyDown={(e) => detachPromise(async () => {
-        if (composing(e.nativeEvent)) return;
-
-        if (e.key === "Enter") {
-          e.preventDefault();
-          setEditing(null);
-          await save();
-        }
-
-        if (e.key === "Escape") setEditing(null);
-      })} aria-label="Device name" />
+    <TextInput size="sm" className="w-52" autoFocus value={editing ?? ""} onChange={(e) => setEditing(e.target.value)} onBlur={() => detach(save())} onKeyDown={(e) => detach(onNameKey(e))} aria-label="Device name" />
   );
 
   const notes = [
