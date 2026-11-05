@@ -1,7 +1,8 @@
 /** A staging measurement, never a repair: no workspace read between disconnect and the planned inspection,
  * and none during the idle tail. Account lease beats update only UserDO's roster, not the workspace object. */
 import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 import { resolvePublicSessionPlan, type KinuPublicSession } from '../evals/src/session';
@@ -80,7 +81,7 @@ const worker = deploymentAt(target.origin)?.worker;
 
 if (worker === undefined) throw new Error(`${target.origin} is no deployment wrangler.jsonc declares, so the canary has no telemetry to read`);
 
-const out = options.out ?? `/mnt/local/kinu/logs/bg-canary-${iso(Date.now()).replaceAll(':', '-')}.json`;
+const out = options.out ?? join(tmpdir(), `bg-canary-${iso(Date.now()).replaceAll(':', '-')}.json`);
 
 const detachMs = BACKGROUND_POLICY.interactive.detachAfterMs;
 

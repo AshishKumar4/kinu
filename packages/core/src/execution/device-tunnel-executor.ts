@@ -16,7 +16,7 @@ import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { commandAnswer, ExecPartsSchema } from './exec-result';
 import { causeCodes, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import { settle } from '../obs/effect';
-import { DEVICE_METHOD } from './device-protocol';
+import { DEVICE_LIMITS, DEVICE_METHOD } from './device-protocol';
 import { commandTool, type CommandTool, type ExecutorProvider, type ExecutorCapability, type ExecutorStatus } from './types';
 import { shellCall } from './command-call';
 import {
@@ -135,11 +135,11 @@ const DeviceListResultSchema = v.array(JsonValueSchema);
 
 const DeviceListPageSchema = v.object({ entries: DeviceListResultSchema, next: v.nullable(v.number()) });
 
-/** Under the 32 MiB a Worker receives per WebSocket message or RPC, even as base64 in JSON. */
-const DEVICE_READ_CHUNK_BYTES = 8 * 1024 * 1024;
+/** Under the 32 MiB a Worker receives per WebSocket message or RPC, even as base64 in JSON; the daemon serves no more. */
+const DEVICE_READ_CHUNK_BYTES = DEVICE_LIMITS.readRangeMaxBytes;
 
-/** 10,000 names at NAME_MAX still fit one answer. */
-const DEVICE_LIST_PAGE_ENTRIES = 10_000;
+/** 10,000 names at NAME_MAX still fit one answer; the daemon lists no more at once. */
+const DEVICE_LIST_PAGE_ENTRIES = DEVICE_LIMITS.listPageMaxEntries;
 
 const DeviceStatSchema = v.nullable(v.object({
   size: v.number(),

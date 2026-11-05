@@ -295,12 +295,10 @@ describe('unmatchedTargets', () => {
   </testsuite>
 </testsuites>`;
 
-  // A report from the root suites says nothing about `packages/core/tests/e2e/`
-  // or the bench rig, which is exactly why each is its own target.
+  // A report from the root suites says nothing about the first-run cases or the bench rig, which is exactly why each
+  // is its own target.
   test('a report from the root suites alone leaves every other target unmatched', () => {
-    expect(unmatchedTargets(parseJUnit(REPORT))).toEqual([
-      './tests/first-run/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
-    ]);
+    expect(unmatchedTargets(parseJUnit(REPORT))).toEqual(['./tests/first-run/', './scripts/bench-external.test.ts']);
   });
 
   test('every target reporting satisfies every target', () => {
@@ -388,7 +386,7 @@ describe('the target set is the executed set', () => {
     // `bun run test:live:cloud` runs one file ON PURPOSE; the default list would
     // demand reports from targets that run never starts.
     const missing = unmatchedTargets(cloudReport(), SKIP_RATCHET_TARGETS);
-    expect(missing).toEqual(['./tests/first-run/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts']);
+    expect(missing).toEqual(['./tests/first-run/', './scripts/bench-external.test.ts']);
   });
 
   test('naming the target that ran clears it without weakening anything', () => {

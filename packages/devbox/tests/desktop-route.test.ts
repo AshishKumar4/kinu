@@ -5,11 +5,6 @@ import { expect, test } from 'bun:test';
 import { TEST_BOX_ID, harness } from './support/devbox-harness';
 
 class DesktopBox extends TestDevbox<unknown> {
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-
   protected override get previewHost(): string | undefined {
     return 'preview.test';
   }

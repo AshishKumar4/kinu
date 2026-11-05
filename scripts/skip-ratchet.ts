@@ -58,14 +58,7 @@ import { INFRA_FAILURE_MARKER } from '../packages/test-utils/src/live-model';
  * `./tests/browser/` is not here: its suites skip nothing and their rows run
  * them, and walking into them held this gate to its deadline (2026-09-28).
  *
- * FOUR ENTRIES, EACH A SET NOTHING ELSE CAN ANSWER FOR.
- *
- * `./packages/core/tests/e2e/` holds two live tests, both scaffold lifecycles,
- * behind `describe.skipIf(!isE2EConfigured())` over `AI_GATEWAY_BASE_URL` +
- * `AI_GATEWAY_AUTH`, and no ratchet target reached `packages/`, so both
- * skipped at every push inside `bun run test` with
- * nothing declaring them and no report anyone read. The same false green this
- * file exists for, one directory over.
+ * THREE ENTRIES, EACH A SET NOTHING ELSE CAN ANSWER FOR.
  *
  * `./scripts/bench-external.test.ts` holds the Terminal-Bench selection
  * regression. Its pinned population fixture makes the test unconditional;
@@ -73,7 +66,7 @@ import { INFRA_FAILURE_MARKER } from '../packages/test-utils/src/live-model';
  * in the reports so an accidental skip or missing sampler check remains visible.
  */
 export const SKIP_RATCHET_TARGETS: readonly string[] = [
-  './tests/live-model/', './tests/first-run/', './packages/core/tests/e2e/', './scripts/bench-external.test.ts',
+  './tests/live-model/', './tests/first-run/', './scripts/bench-external.test.ts',
 ];
 
 export const SKIP_LOCK_PATH = resolve(root, 'scripts/skip-ratchet.lock.json');

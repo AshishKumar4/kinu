@@ -8,13 +8,6 @@ import { harness } from './support/devbox-harness';
 import { xdotoolOf } from '../src/desktop-input';
 import type { DesktopRequest } from '../src/wire';
 
-class DesktopBox extends TestDevbox<unknown> {
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-}
-
 /** A PNG header for a 1280×768 image, and a byte that is not valid UTF-8, so a text decode would show. */
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 5, 0, 0, 0, 3, 0, 0xff]);
 
@@ -61,7 +54,7 @@ async function desktopBox(answer: (run: readonly string[], held: () => ExecProce
     return process;
   };
 
-  const { box } = harness(DesktopBox, undefined, async (argv, options) => {
+  const { box } = harness(TestDevbox, undefined, async (argv, options) => {
     if (argv[3] === 'kill-tree') {
       const pid = Number(argv[4]);
       const end = holding.get(pid);

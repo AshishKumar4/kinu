@@ -848,6 +848,11 @@ function checkpointDirFor(view, requested) {
  * for a large file a range at a time, each answer under the socket's 32 MiB
  * receive ceiling, so the whole file crosses whatever its size.
  */
+/** A range one answer can carry: a longer ask is a heap spike, not a read (audit 0916 M2). */
+function isRange(offset, length) {
+  return Number.isSafeInteger(offset) && offset >= 0 && Number.isSafeInteger(length) && length > 0 && length <= protocol.readRangeMaxBytes;
+}
+
 function readRangeBytes(view, file, offset, length) {
   // Opened where the view judged it, not by its name again: a directory of it swapped for a link since reads nothing
   // outside the root (L111 #2).
@@ -919,14 +924,21 @@ function listFilesAnswer(msg) {
   const view = viewFromFrame(msg);
   const offset = page.offset ?? 0;
 
-  if (page.limit !== undefined && (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(page.limit) || page.limit <= 0)) {
-    throw new Error('listFiles pages by a non-negative offset and a positive limit');
+  // A page is at most the hub's own: one answer for a whole huge directory is a heap spike (audit 0916 M2).
+  if (page.limit !== undefined && (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(page.limit) || page.limit <= 0
+    || page.limit > protocol.listPageMaxEntries)) {
+    throw new Error(`listFiles pages by a non-negative offset and a positive limit of at most ${protocol.listPageMaxEntries}`);
   }
 
-  // Read where the view judged it, through its descriptor: a link swapped in for it lists nothing (L111 #2).
-  return atJudged(view, dir, {}, (at) => at.list((entries) => (page.limit === undefined
-    ? entries.map((entry) => listEntry(view, dir, entry))
-    : listPage(entries, offset, page.limit, (entry) => listEntry(view, dir, entry)))));
+  // Read where the view judged it, through its descriptor: a link swapped in for it lists nothing (L111 #2). A hub from
+  // before paging names no page, and is answered whole only while the whole fits one page.
+  return atJudged(view, dir, {}, (at) => at.list((entries) => {
+    if (page.limit !== undefined) return listPage(entries, offset, page.limit, (entry) => listEntry(view, dir, entry));
+
+    if (entries.length > protocol.listPageMaxEntries) throw new Error(`listFiles of a directory over ${protocol.listPageMaxEntries} entries pages it`);
+
+    return entries.map((entry) => listEntry(view, dir, entry));
+  }));
 }
 
 /**
@@ -1543,9 +1555,7 @@ function handle(msg, ws, ctx) {
     } else if (method === METHODS.readRange) {
       const offset = params[1], length = params[2];
 
-      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-        return rpc(ws, id, null, 'readRange expects a positive safe offset and length');
-      }
+      if (!isRange(offset, length)) return rpc(ws, id, null, `readRange expects a positive safe offset and a length of at most ${protocol.readRangeMaxBytes} bytes`);
 
       const view = viewFromFrame(msg);
       const bytes = readRangeBytes(view, confinedDeviceViewPath(view, params[0], 'read'), offset, length);

@@ -14,6 +14,11 @@ export class TestDevbox<Env = unknown> extends Devbox<Env> {
     return TEST_DEVBOX_POLICY;
   }
 
+  /** No ambient tick pre-empts a test's own checkpoints; a suite about the tick turns it back on. */
+  protected override get ambientCheckpoints(): boolean {
+    return false;
+  }
+
   protected override diskChain(_ports: DiskChainPorts): DiskChain {
     return {
       attach: () => Effect.succeed({ kind: 'empty', detail: NO_DISK, recoveredTo: undefined }),

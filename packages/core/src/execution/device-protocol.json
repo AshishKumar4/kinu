@@ -5,6 +5,8 @@
   "authDeadlineClose": 4408,
   "accountHeader": "x-kinu-auth-account",
   "ptyMaxAxis": 1000,
+  "readRangeMaxBytes": 8388608,
+  "listPageMaxEntries": 10000,
   "methods": {
     "ping": {},
     "cancel": {},

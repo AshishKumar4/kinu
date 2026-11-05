@@ -281,7 +281,6 @@ Filename convention, not config:
 | `unit-*.test.ts` | A single module or function | <50ms each | In-memory only |
 | `integration-*.test.ts` | Multiple modules wired together | <500ms each | In-memory only |
 | `contract-*.test.ts` | External-system wire format (HTTP, SQL) | <100ms each | Mock fetch/SQL |
-| `e2e/*.test.ts` | Full system through public APIs | ~seconds | In-memory but realistic |
 | `smoke-*.test.ts` | "Does it boot / import" | <100ms | None |
 
 Core and cf-backend follow it. CLI suites use bare `<name>.test.ts`. One core test lives under `src/` rather than `tests/`: `skills/skills.test.ts`. (The 2026-08-19 run counted six, hence 248 rather than 242 files in the table above.)
@@ -296,7 +295,6 @@ packages/
 │  ├─ unit-*.test.ts          (pure logic)
 │  ├─ integration-*.test.ts   (multi-module flows)
 │  ├─ contract-providers.test.ts  (HTTP wire format per provider)
-│  ├─ e2e/                    (mcts-e2e, scaffold-e2e, + the real-LLM helper)
 │  ├─ fixtures/log-ban/       (a tsconfig project the log-ban test runs tsc over)
 │  └─ helpers.ts              (package-local helpers)
 ├─ cf-backend/tests/          (315 suite files; bun runs the 273 outside workerd/)
@@ -531,7 +529,7 @@ Read the columns knowing what produces them. `bun test --coverage-reporter=lcov`
 
 Workerd needs istanbul, and the pool says so. `@cloudflare/vitest-pool-workers@0.22.0` rejects the v8 provider outright: "V8 native coverage requires `node:inspector` which is not functional in the Workers runtime." With `--coverage.provider=istanbul` both pools report normally. The pool lcov paths are relative to each vite root, so the merge re-anchors them onto repository-relative paths.
 
-Intentional low coverage stays intentional: `core/tests/e2e/ai-gateway-llm.ts`, `test-utils/src/runtime.ts`, and the React surfaces under `cf-backend/src/components/`, which the puppeteer UI gates drive instead. Coverage finds gaps here. It is not a target to game. `bun run coverage:check` prints numbers without a threshold on purpose.
+Intentional low coverage stays intentional: `test-utils/src/runtime.ts` and the React surfaces under `cf-backend/src/components/`, which the puppeteer UI gates drive instead. Coverage finds gaps here. It is not a target to game. `bun run coverage:check` prints numbers without a threshold on purpose.
 
 ## Adding a new package
 

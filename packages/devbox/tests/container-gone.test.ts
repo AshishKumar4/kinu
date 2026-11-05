@@ -10,13 +10,8 @@ const BOOT_ID_KEY = 'devbox:boot-id';
 
 /** The shipped policy with a test-length probe: nothing here is about budgets. */
 class TestBox extends TestDevbox<unknown> {
-
   protected override get previewHost(): string | undefined {
     return 'preview.example';
-  }
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
   }
 }
 

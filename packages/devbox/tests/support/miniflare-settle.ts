@@ -15,7 +15,6 @@ function miniflareFootprint(): string {
     const root = join(tmpdir(), name);
     let entries: unknown[];
 
-
     try {
       entries = readdirSync(root, { recursive: true });
     } catch (cause) {

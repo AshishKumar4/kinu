@@ -23,6 +23,7 @@
  */
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import {
@@ -37,7 +38,7 @@ import { REPO_ROOT as ROOT } from './repo-root';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 /** Where the holder keeps its status (what it says, never a grant) and its run's work. */
-const STATE = '/mnt/local/kinu/tmp/eval-plan-run';
+const STATE = join(tmpdir(), 'eval-plan-run');
 
 const STATUS = join(STATE, 'status.json');
 
@@ -163,7 +164,7 @@ async function command(argv: readonly string[]): Promise<number> {
 
     // A stop waits for the holder's cleanup (a clear of every eval account) rather than the default 90 s.
     const started = Bun.spawnSync(['systemd-run', '--user', `--unit=${UNIT}`, '--collect', '--property=TimeoutStopSec=300', `--working-directory=${ROOT}`, `--setenv=HOME=${process.env['HOME'] ?? ''}`,
-      `--setenv=PATH=${process.env['PATH'] ?? ''}`, '--setenv=TMPDIR=/mnt/local/kinu/tmp', 'bash', '-c',
+      `--setenv=PATH=${process.env['PATH'] ?? ''}`, `--setenv=TMPDIR=${tmpdir()}`, 'bash', '-c',
       `set -a; . "$HOME/.config/kinu/secrets.env"; set +a; exec ${holder.join(' ')} > ${join(STATE, 'holder.log')} 2>&1`]);
 
     if (started.exitCode !== 0) throw new Error(`the holder did not start: ${started.stderr.toString()}`);
