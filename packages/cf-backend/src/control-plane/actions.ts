@@ -6,7 +6,7 @@
  */
 import { Cause, Effect, Result } from 'effect';
 import { renderThrownChain, settle, toKinuError, type ErrorCode } from '@kinu.run/core/obs';
-import { objectNamed, decodeJsonValue, type JsonValue } from '@kinu.run/core';
+import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
@@ -20,6 +20,7 @@ import { STORED_CLASSES } from '@kinu.run/core';
 import { accountIdFor } from '../auth/store';
 import type { SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { ObjectNamespace } from '@kinu.run/core';
+import { accountNamed } from '../user/workspace-placement';
 
 /** A UserDO name; it makes the workspace name beside it an address rather than a guess. */
 export const UserIdSchema = v.pipe(v.string(), v.regex(/^[a-f0-9]{32}$/));
@@ -248,7 +249,7 @@ async function accountAction<Id>(env: ActionEnv<Id>, action: AccountAction, oper
   }
 
   const userId = action.action === 'invite.email' ? accountIdFor(env, action.email) : action.userId;
-  const user = objectNamed(env.UserDO, userId);
+  const user = accountNamed(env.UserDO, userId);
 
   if (action.action === 'account.suspend') await user.limits_suspend(owner, action.reason, operator.email);
   else if (action.action === 'account.unsuspend') await user.limits_unsuspend(owner);
@@ -271,7 +272,7 @@ async function controlAction<Id>(env: ActionEnv<Id>, action: Exclude<ControlActi
     // Does not wake-and-claim: `removeWorkspace`/`destroyAgent` check ownership inside the call, and
     // claiming would run a broken workspace's scaffold bootstrap.
     const owner = await ownerCaller(env);
-    const user = objectNamed(env.UserDO, action.userId);
+    const user = accountNamed(env.UserDO, action.userId);
     // The registry's teardown forgets it in the index once it is gone; a failed one leaves no tombstone.
     await user.removeWorkspace(owner, action.workspace, action.userId);
 

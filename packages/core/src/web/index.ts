@@ -3,7 +3,6 @@ export {
   type WebSearchProvider,
   type WebSearchResult,
   type WebSearchResponse,
-  type WebFetchResult,
   type DefaultWebSearchProviderDeps,
   type WebScreenshot,
   type BrowserSessions,

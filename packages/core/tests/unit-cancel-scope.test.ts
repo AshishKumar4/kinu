@@ -7,7 +7,7 @@ import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index';
-import { initEventsHubTables } from '../src/events/hub/index';
+import { initEventsHubTables } from '../src/events/hub/schema';
 import { cancelBackgroundJob, cancelCurrentWork } from '../src/read-models/background-jobs';
 import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule } from '../src/types/primitives';

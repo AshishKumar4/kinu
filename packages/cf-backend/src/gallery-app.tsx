@@ -5,14 +5,13 @@
  * (`&roster=` names another); a workspace opens on the long turn; `&env=computer&pc=granted&pcdesktop=ready` gives it its
  * computer and the owner's PC. `&at=<path>` opens a page, and follows the page on screen.
  */
-import { lazy, Suspense, type ReactNode } from "react";
-import { Navigate, Route, Routes, useLocation } from "react-router-dom";
+import { Suspense, type ReactNode } from "react";
+import { lazyRoute } from "@/lazy-route";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { APP_ROUTES } from "@kinu.run/core";
 import Layout from "@/components/layout";
-import WorkspacePage from "@/pages/WorkspacePage";
-import UserSettingsPage from "@/pages/UserSettingsPage";
-import MailPage from "@/pages/MailPage";
+import { LISTED_SLATE_ROUTE, shellRoutes } from "@/App";
 import type { SocketCall } from "@/lib/workspace-rpc";
 import { seedGalleryChat, serveGalleryRpc } from "@/gallery-agent-stub";
 import { ASSISTANT_THREAD, AssistantHome, assistantRpc } from "@/gallery-assistant";
@@ -23,26 +22,16 @@ import { installMailPageFixture } from "@/gallery-mailpage";
 import DeployPage from "@/pages/DeployPage";
 import { DesignBar, KeepPlace, PhoneWindow, startDesign, useDesign } from "@/gallery-design-bar";
 
-const WorkspacesPage = lazy(() => import("@/pages/WorkspacesPage"));
-
-const PluginsPage = lazy(() => import("@/pages/PluginsPage"));
-
-
-const ExplorePage = lazy(() => import("@/pages/ExplorePage"));
-
-const ExploreWorkspacePage = lazy(() => import("@/pages/ExploreWorkspacePage"));
-
-const WelcomePage = lazy(() => import("@/pages/WelcomePage"));
-
-const GallerySlatePage = lazy(() => import("@/pages/GallerySlatePage"));
-
-const NewWorkspacePage = lazy(async () => ({ default: (await import("@/pages/HomePage")).NewWorkspacePage }));
+const WelcomePage = lazyRoute(() => import("@/pages/WelcomePage"));
 
 const loading = (page: ReactNode): ReactNode => (
   <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{page}</Suspense>
 );
 
-/** The route on screen: the one socket answers as the assistant on Home and as its own workspace elsewhere. */
+/** The assistant's own pages (its Activity): its chat and socket, as on Home. */
+const ASSISTANT_PATH = "/workspace/personal-assistant";
+
+/** The route on screen: the one socket answers as the assistant on Home and its own pages, and as its own workspace elsewhere. */
 let onScreen = "";
 
 /** Mounted before the routes, so a page's chat is seeded before it opens its socket: Home is the assistant's morning. */
@@ -52,7 +41,7 @@ function Seeder({ transcript }: { transcript: (name: string) => void }) {
   if (pathname !== onScreen) {
     onScreen = pathname;
 
-    if (pathname === APP_ROUTES.home) seedGalleryChat(ASSISTANT_THREAD);
+    if (pathname === APP_ROUTES.home || pathname.startsWith(ASSISTANT_PATH)) seedGalleryChat(ASSISTANT_THREAD);
     else if (pathname.startsWith("/workspace/")) transcript("longturn");
   }
 
@@ -68,25 +57,10 @@ function Pages() {
 
   return (
     <Routes key={background}>
+      {/* The app's own pages, with the assistant on Home and Drive over its fixture. */}
       <Route element={<Layout />}>
-        <Route index element={<AssistantHome />} />
-        <Route path={APP_ROUTES.workspaces} element={loading(<WorkspacesPage />)} />
-        <Route path={APP_ROUTES.newWorkspace} element={loading(<NewWorkspacePage />)} />
-        <Route path={APP_ROUTES.drive} element={<DriveRoute tab="mine" />} />
-        <Route path={APP_ROUTES.driveFolder} element={<DriveRoute tab="mine" />} />
-        <Route path={APP_ROUTES.slates} element={<DriveRoute tab="slates" />} />
-        <Route path={APP_ROUTES.shared} element={<DriveRoute tab="shared" />} />
-        <Route path={APP_ROUTES.explore} element={loading(<ExplorePage />)} />
-        <Route path={APP_ROUTES.exploreWorkspace} element={loading(<ExploreWorkspacePage />)} />
-        <Route path={APP_ROUTES.plugins} element={loading(<PluginsPage />)} />
-        <Route path={APP_ROUTES.gallerySlate} element={loading(<GallerySlatePage />)} />
-        <Route path="/mail/*" element={<MailPage />} />
-        <Route path="/workspace/:agentId" element={<WorkspacePage />} />
-        <Route path="/workspace/:agentId/agents/:subName" element={<WorkspacePage />} />
-        <Route path={APP_ROUTES.workspaceAgentPath} element={<WorkspacePage />} />
-        <Route path="/workspace/:agentId/:view" element={<WorkspacePage />} />
-        <Route path={APP_ROUTES.userSettings} element={<UserSettingsPage />} />
-        <Route path="*" element={<Navigate to={APP_ROUTES.home} replace />} />
+        {shellRoutes({ home: <AssistantHome />, drive: (tab) => <DriveRoute tab={tab} /> })}
+        {LISTED_SLATE_ROUTE}
       </Route>
       <Route path={APP_ROUTES.welcome} element={loading(<WelcomePage initialStep={0} />)} />
       <Route path="/deploy" element={<DeployPage />} />
@@ -112,7 +86,7 @@ function WholeApp({ transcript }: { transcript: (name: string) => void }) {
 export function appFrame(base: SocketCall, transcript: (name: string) => void) {
   const assistant = assistantRpc(base);
 
-  serveGalleryRpc(<T,>(method: string, args?: unknown[]): Promise<T> => (onScreen === APP_ROUTES.home ? assistant<T>(method, args) : base<T>(method, args)));
+  serveGalleryRpc(<T,>(method: string, args?: unknown[]): Promise<T> => (onScreen === APP_ROUTES.home || onScreen.startsWith(ASSISTANT_PATH) ? assistant<T>(method, args) : base<T>(method, args)));
   installExploreFixture();
   installMailPageFixture();
   installGalleryFixture("whole", EXPLORE_LISTINGS);

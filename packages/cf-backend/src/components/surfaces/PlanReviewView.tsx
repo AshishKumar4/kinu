@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { CheckCircleIcon, ChatCircleDotsIcon, NotePencilIcon, TrashIcon } from "@phosphor-icons/react";
@@ -21,7 +21,7 @@ import { editorAnnotationOf } from "@/components/plan-review/notes";
 import type { Block, EditorMode } from "@plannotator/ui/types";
 import { extractFrontmatter, parseMarkdownToBlocks } from "@plannotator/ui/utils/parser";
 import { createPlanAnnotationSaveQueue, slateUiSegments } from "@kinu.run/core";
-import { renderThrownChain, showing, detach, detachPromise } from "@kinu.run/core/obs";
+import { detach, detachPromise, renderThrownChain, settle, showing } from "@kinu.run/core/obs";
 import { usePlanDecision } from "@/hooks/use-plan-decision";
 import { usePlanRepliesSeen } from "@/hooks/use-plan-replies-seen";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
@@ -241,6 +241,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
   );
 }
 
+/** Keyed by its caller on the plan and its revision: a new revision opens fresh, its notes read again. */
 export default function PlanReviewView({ plan, rpc, readOnly = false, agentName = "Kinu", owedIntents }: PlanReviewViewProps) {
   const [notes, setNotes] = useState<ReviewAnnotation[]>(() => notesOf(plan));
   const [selected, setSelected] = useState<string | null>(null);
@@ -255,38 +256,28 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
   activePlanKey.current = planKey;
   const seen = usePlanRepliesSeen(planId);
 
-  // The reviewer writes only this revision's own notes; the review keeps the threads carried from earlier ones.
-  const annotationSaves = useMemo(() => createPlanAnnotationSaveQueue<ReviewAnnotation>(async (next) => {
+  // The reviewer writes only this revision's own notes; the review keeps the threads carried from earlier ones. A refusal
+  // and a failed call are both said on the plan still open, and neither saves.
+  const writeNotes = useCallback((next: readonly ReviewAnnotation[]) => settle(Effect.gen(function* () {
     if (planId === null || planRevision === null) return false;
 
     if (activePlanKey.current === planKey) setError(null);
 
-    try {
-      const result = await rpc("savePlanReviewAnnotations", [planId, planRevision, freshNotes(next)]);
+    return yield* Effect.match(Effect.tryPromise({ try: () => rpc("savePlanReviewAnnotations", [planId, planRevision, freshNotes(next)]), catch: (cause) => ({ cause }) }), {
+      onSuccess: (result) => {
+        if (!result.ok && activePlanKey.current === planKey) setError(result.error);
 
-      if (!result.ok) {
-        if (activePlanKey.current === planKey) setError(result.error);
+        return result.ok;
+      },
+      onFailure: (failed) => {
+        if (activePlanKey.current === planKey) setError(renderThrownChain(failed));
 
         return false;
-      }
+      },
+    });
+  })), [planId, planKey, planRevision, rpc]);
 
-      return true;
-    } catch (cause) {
-      if (activePlanKey.current === planKey) {
-        setError(renderThrownChain({ cause }));
-      }
-
-      return false;
-    }
-  }), [planId, planKey, planRevision, rpc]);
-
-  useEffect(() => {
-    setNotes(notesOf(plan));
-    setSelected(null);
-    setPanelOpen(false);
-    setSaving(false);
-    setError(null);
-  }, [plan?.id, plan?.revision]);
+  const annotationSaves = useMemo(() => createPlanAnnotationSaveQueue<ReviewAnnotation>(writeNotes), [writeNotes]);
 
   const editable = !readOnly && plan?.status === "pending";
   const decisionOwed = decisionOwedFor(owedIntents, plan?.id);

@@ -95,8 +95,8 @@ describe('the sidebar drills into a workspace\'s agents', () => {
   test('the bar\'s agents button opens the same list', async () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 1280);
-      await page.waitForSelector('.p-bar button[aria-label="All agents"]');
-      await page.click('.p-bar button[aria-label="All agents"]');
+      await page.waitForSelector('[data-workspace-bar] button[aria-label="All agents"]');
+      await page.click('[data-workspace-bar] button[aria-label="All agents"]');
       await page.waitForFunction(() => document.querySelector('[data-sidebar-agents]')?.closest('[inert]') === null);
       await page.close();
     });
@@ -129,8 +129,8 @@ describe('the sidebar drills into a workspace\'s agents', () => {
     await withGallery(async (gallery) => {
       const page = await shell(gallery, 390);
       const drawn = `[data-drawer] ${LIST}`;
-      await page.waitForSelector('.p-bar-menu button');
-      await page.click('.p-bar-menu button');
+      await page.waitForSelector('[data-bar-menu] button');
+      await page.click('[data-bar-menu] button');
       await page.waitForSelector(`[data-drawer] ${AGENTS_COUNTER}`);
       await still(page);
       await page.click(`[data-drawer] ${AGENTS_COUNTER}`);

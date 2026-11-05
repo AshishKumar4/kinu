@@ -40,6 +40,12 @@ const DEVICE_JOIN_SPENT = 'This connect command has expired or was already used.
 
 const DEVICE_NAME_MAX_LENGTH = 80;
 
+/** Machines one account links at a time: room for every machine a person or a small team keeps, and a bound on what
+ *  a stolen session can register. A machine connected again replaces its own row and counts once. */
+const DEVICE_LIMIT = 50;
+
+const DEVICE_LIMIT_REACHED = `This account has ${String(DEVICE_LIMIT)} linked machines. Remove one in Devices, then connect this one.`;
+
 const DEVICE_REMOVED = 'This machine was removed from your account, so it cannot be connected again under its old name. Run `kinu connect` on it.';
 
 function deviceCallFrame(deviceId: string, workspace: string | null, frameSandbox: JsonObject | null, opts: Parameters<UserDevices['deviceRpc']>[3]): NonNullable<Parameters<DeviceTunnel['rpc']>[2]> {
@@ -237,6 +243,9 @@ export class UserDevices {
 
   /** Durable record of commands running on devices (core execution/device-inflight.ts); the ledger owns the table. */
   readonly _inflight: DeviceRequestLedger;
+
+  /** Machines a registration is replacing now: each lends its slot under the cap to one registration only. */
+  readonly #replacing = new Set<string>();
 
   /** Single-use socket tickets a daemon buys with its key's signature, spent by the socket's AUTH frame. */
   private readonly connectTickets: SingleUseTickets<{ device_id: string }>;
@@ -543,9 +552,15 @@ export class UserDevices {
   /** A device registered under `claimed`'s id and granted its workspace in the same turn, or a new id with no grant. */
   private registered(caller: UserCaller, claimed: DeviceJoin | null, enrolment: DeviceEnrolment): Effect.Effect<{ deviceId: string }, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const replaced = yield* Effect.promise(() => this.replacedRegistration(enrolment));
-      const deviceId = claimed?.device_id ?? `dev-${nanoid(10)}`;
+      const proven = yield* Effect.promise(() => this.replacedRegistration(enrolment));
+      // Taken in this turn, so of two registrations proving the same machine one replaces it and the other is counted.
+      const replaced = proven !== null && !this.#replacing.has(proven) ? proven : null;
+
+      if (!this.admits(replaced)) return yield* new KinuError('bad_input', DEVICE_LIMIT_REACHED);
+
+      if (replaced !== null) this.#replacing.add(replaced);
       const now = Date.now();
+      const deviceId = claimed?.device_id ?? `dev-${nanoid(10)}`;
       const trimmedLabel = enrolment.label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
       this.host.sqlx(
         `INSERT INTO user_devices (id, public_key, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
@@ -556,11 +571,19 @@ export class UserDevices {
       // "always" records. One deleted since the command was issued is granted nothing.
       if (claimed?.workspace != null && this.host.workspaceRegistered(claimed.workspace)) this.setDeviceBinding(claimed.workspace, deviceId, 'allow');
 
-      if (replaced !== null) yield* Effect.promise(() => this.revokeDevice(caller, replaced));
+      if (replaced !== null) yield* Effect.promise(async () => this.revokeDevice(caller, replaced)).pipe(Effect.ensuring(Effect.sync(() => this.#replacing.delete(replaced))));
       else yield* Effect.promise(() => this.devicesMoved());
 
       return { deviceId };
     });
+  }
+
+  /** Whether another machine may be linked: always for one that replaces its own live row, else while under the cap. */
+  private admits(replaces: string | null): boolean {
+    if (replaces !== null && this.host.sqlx(`SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL`, replaces).length === 1) return true;
+    const [linked] = this.host.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_devices WHERE revoked_at IS NULL`);
+
+    return (linked?.n ?? 0) < DEVICE_LIMIT;
   }
 
   /**
@@ -572,6 +595,9 @@ export class UserDevices {
       const [held] = this.host.sqlx<{ revoked_at: number | null }>(`SELECT revoked_at FROM user_devices WHERE id = ?`, deviceId);
 
       if (held !== undefined && held.revoked_at !== null) return yield* new KinuError('bad_input', DEVICE_REMOVED);
+
+      // A row the reset dropped is a new link, counted as any is; a live one keeps its own slot.
+      if (held === undefined && !this.admits(null)) return yield* new KinuError('bad_input', DEVICE_LIMIT_REACHED);
       const now = Date.now();
       const trimmedLabel = enrolment.label?.trim().slice(0, DEVICE_NAME_MAX_LENGTH) ?? '';
       this.host.sqlx(

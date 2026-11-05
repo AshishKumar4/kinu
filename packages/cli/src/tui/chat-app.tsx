@@ -1,46 +1,17 @@
 /** OpenTUI chat surface for both backends. The input reducer owns turn state; the action registry owns key chords. */
 
-import {
-  createCliRenderer,
-  type CliRenderer,
-  type ScrollBoxRenderable,
-  type TextareaRenderable,
-} from '@opentui/core';
+import { createCliRenderer, type ScrollBoxRenderable, type TextareaRenderable } from '@opentui/core';
 import { createRoot, useRenderer, useTerminalDimensions } from '@opentui/react';
-import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
-import {
-  nextReasoningEffort, offeredReasoningEfforts, type AlternateTakeCandidate, type AlternateTakeSet,
-  type ChangelogEntry, type PendingDeviceConsent, type ReasoningEffort, type TierId,
-} from '@kinu.run/core';
-import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, composerVisibleRows } from '@kinu.run/core/tui';
-import {
-  findForkPivot,
-  forkCandidates,
-  type AgentChangelogView,
-  type AgentClient,
-  type AgentClientEvent,
-  type AgentClientSendOptions,
-  type AgentClientStatus,
-  type AgentTranscriptMessage,
-  type DeviceConsentDecision,
-  type ForkPoint,
-} from '../agent-client';
-import {
-  commandsForClient,
-  type OfferedCommand,
-  describeBranchStatus,
-  describeTakePick,
-  executeSlashCommand,
-  isBranchStatusEvent,
-  renderPlanReview,
-  performUndo,
-  type SlashOutcome,
-} from '../slash-commands';
+import { nextReasoningEffort, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type PendingDeviceConsent, type ReasoningEffort, type TierId } from '@kinu.run/core';
+import { composerVisibleRows } from '@kinu.run/core/tui';
+import { findForkPivot, forkCandidates, type AgentClient, type AgentClientEvent, type AgentClientSendOptions, type AgentClientStatus, type DeviceConsentDecision, type ForkPoint } from '../agent-client';
+import { commandsForClient, describeBranchStatus, describeTakePick, executeSlashCommand, isBranchStatusEvent, renderPlanReview, performUndo, type SlashOutcome } from '../slash-commands';
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments';
 import { listSidebarAgents } from '../agent-list';
 import { watchDeviceConsents } from '../consent-watch';
-import { ASK_OWNER_TOOL, contextWindowForSpec, describeProviderError, EMPTY_MODEL_MENU, filterCommands, resolveCommandDraft, specWithoutAccount, turnFailure, type AgentModelEntry, type AgentModelMenu, type AskingAgent, type OwnerAnswer } from '@kinu.run/core';
+import { ASK_OWNER_TOOL, contextWindowForSpec, EMPTY_MODEL_MENU, filterCommands, resolveCommandDraft, type AgentModelEntry, type AskingAgent, type OwnerAnswer } from '@kinu.run/core';
 import { requireInteractiveTerminal, TUI_EXIT_SIGNALS } from '../prompt';
 import { canonicalProjectRoot } from '../config';
 import { openBrowser } from '../commands/auth';
@@ -49,31 +20,11 @@ import { MessageList, type DisplayMessage } from './messages';
 import { useSubagentChat } from './use-subagent-chat';
 import { loadHubData, useHub } from './use-hub';
 import { createHostShell } from '@kinu.run/cli-backend';
-import type { TurnMeter } from '@kinu.run/core/tui';
-import {
-  ChangelogOverlay,
-  CommandHintOverlay,
-  deviceConsentCanApprove,
-  CommandPaletteOverlay,
-  DeviceConnectOverlay,
-  DeviceConsentOverlay,
-  ApprovalOverlay,
-  approvalCanApprove,
-  PromptHistoryOverlay,
-  ModelPickerOverlay,
-  PhaseLine,
-  TakesOverlay,
-  QuestionsOverlay,
-  SettingsOverlay,
-  ThemePickerOverlay,
-  type TuiSettingChoice,
-  WalkbackOverlay,
-} from './overlays';
-import { useDeviceConnectPrompt, type DeviceConnectPromptState } from './use-device-connect';
-import { useApprovals, type ApprovalPrompt } from './use-approvals';
-import {
-  JobOutputFrameSchema, READS_CHANGED_EVENT, type BroadcastEvent, type WorkMode,
-} from '@kinu.run/core';
+
+import { deviceConsentCanApprove, DeviceConnectOverlay, DeviceConsentOverlay, ApprovalOverlay, approvalCanApprove, PhaseLine, type TuiSettingChoice } from './overlays';
+import { useDeviceConnectPrompt } from './use-device-connect';
+import { useApprovals } from './use-approvals';
+import { JobOutputFrameSchema, READS_CHANGED_EVENT, type WorkMode } from '@kinu.run/core';
 import * as v from 'valibot';
 import { useComposerPaste } from './use-composer-paste';
 import { useDraftEditing } from './use-draft-editing';
@@ -83,14 +34,12 @@ import { composerKeyHandlers } from './draft-keys';
 import { modalKeyHandlers, sceneKeyHandlers } from './surface-keys';
 import type { ComposerKeyDeps } from './draft-keys';
 import type { SurfaceKeyDeps } from './surface-keys';
-import { useStreamingBuffer } from './streaming-buffer';
+
 import { initialInputState, reduceInput, type InputEffect, type InputMachineEvent } from '@kinu.run/core';
 import { agentDisplayLabel, clipText } from '@kinu.run/core/tui';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
-import {
-  HubOverlay, SubagentChatOverlay, type TuiHubData, type TuiHubRow, type TuiHubView,
-} from './hubs';
-import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
+import { type TuiHubData, type TuiHubRow } from './hubs';
+import { useTuiTheme } from './theme';
 import {
   TuiProductProvider,
   TuiShell,
@@ -104,9 +53,13 @@ import {
   type TuiAgentSource,
   type TuiAgentSummary,
 } from './tui-shell';
-import { attemptInItsWords, detach, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { Effect } from 'effect';
+import { attempt, attemptInItsWords, chainOf, detach, diagnostics, flight, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
 import { useKeyboard } from './use-keys';
+import { copyRefused, type ContextNumber, contextNumberOf, headerMeter, composerTakesKeys, composerPlaceholderFor, countStreamed, commandWorking, phaseLineLabel, errorLine, shownHistory, lastUrlFromMessages, unreadLine, tried, welcomeMessage, effortsForModel, persistedTranscriptEvent, modelOf, withModel, type CaughtFailure } from './chat-scene-text';
+import { type ActiveSurface, anyOverlayOpen, surfaceTitleFor } from './chat-surface';
+import { useTurnStream } from './use-turn-stream';
+import { ChatOverlay } from './chat-overlay';
 
 /** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
 interface TuiCreatedAgent {
@@ -132,83 +85,8 @@ export interface ChatAppOpts {
   readHub?: (client: AgentClient) => Promise<TuiHubData>;
 }
 
-export type ActiveSurface =
-  | { kind: 'commands' }
-  | { kind: 'history' }
-  | { kind: 'settings' }
-  | { kind: 'theme' }
-  | { kind: 'hub'; view: TuiHubView }
-  | { kind: 'model'; menu: AgentModelMenu; loading: boolean; error: string | null }
-  | { kind: 'changelog'; view: AgentChangelogView }
-  | { kind: 'takes'; set: AlternateTakeSet }
-  | { kind: 'questions'; asking: AskingAgent }
-  | { kind: 'subagent'; path: readonly string[]; label: string; actorId: string | null }
-  | null;
-
-function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string | null {
-  if (surface === null) return walkbackOpen ? 'Walk back ›' : null;
-
-  switch (surface.kind) {
-    case 'settings': return 'Settings ›';
-    case 'theme': return 'Theme ›';
-    case 'commands': return 'Commands ›';
-    case 'hub': return `${surface.view[0].toUpperCase()}${surface.view.slice(1)} ›`;
-    case 'model': return 'Model picker ›';
-    case 'changelog': return 'Changelog ›';
-    case 'takes': return 'Takes ›';
-    case 'questions': return 'Questions ›';
-    case 'subagent': return 'Subagent ›';
-    case 'history': return 'Prompt history ›';
-  }
-}
-
-function anyOverlayOpen(input: {
-  activeSurface: ActiveSurface;
-  navigationOpen: boolean;
-  walkbackOpen: boolean;
-  pendingConsent: PendingDeviceConsent | null;
-  approval: ApprovalPrompt | null;
-  deviceConnect: DeviceConnectPromptState | null;
-}): boolean {
-  return input.activeSurface !== null
-    || input.navigationOpen
-    || input.walkbackOpen
-    || input.pendingConsent !== null
-    || input.approval !== null
-    || input.deviceConnect !== null;
-}
-
-interface CaughtFailure {
-  cause: unknown;
-}
-
-function persistedTranscriptEvent(event: AgentClientEvent): boolean {
-  return event.type === 'turn-start'
-    || event.type === 'text-delta'
-    || event.type === 'tool-call'
-    || event.type === 'tool-result'
-    || event.type === 'step-cut'
-    || event.type === 'step-finish'
-    || event.type === 'turn-end'
-    || event.type === 'error';
-}
-
-let globalExit: (() => Promise<void>) | null = null;
-
-/** The scene's own exit when it was given one, else the app's. */
-function leave(onExit: ChatAppOpts['onExit']): void | Promise<void> {
-  return onExit ? onExit() : globalExit?.();
-}
-
-/** The model a status names; none before the first status arrives. */
-function modelOf(status: AgentClientStatus | null): string {
-  return status?.model ?? '';
-}
-
-/** A status update setting its model; none before the first status arrives. */
-function withModel(spec: string): (current: AgentClientStatus | null) => AgentClientStatus | null {
-  return (current) => current === null ? current : { ...current, model: spec };
-}
+/** The app's exit once `runTuiChat` has drawn it: every call joins the first. */
+let globalExit: (() => Effect.Effect<void>) | null = null;
 
 export function ChatApp(props: ChatAppOpts) {
   return (
@@ -258,13 +136,9 @@ function ChatScene({
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>(null);
   const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
-  const modelPicker = activeSurface?.kind === 'model' ? activeSurface : null;
-  const changelogView = activeSurface?.kind === 'changelog' ? activeSurface.view : null;
-  const takesView = activeSurface?.kind === 'takes' ? activeSurface.set : null;
   const commandPalette = activeSurface?.kind === 'commands';
   const hubView = activeSurface?.kind === 'hub' ? activeSurface.view : null;
   const settingsOpen = activeSurface?.kind === 'settings';
-  const themePickerOpen = activeSurface?.kind === 'theme';
 
   const [hubSelectedId, setHubSelectedIdState] = useState<string | null>(null);
   // Keys between renders read the latest choice.
@@ -416,6 +290,39 @@ function ChatScene({
     addMessage({ role: 'system', content: errorLine(renderThrownChain(failure)) });
   }, [addMessage]);
 
+  /** What a read that failed is said as, unless what asked for it has gone. */
+  const sayUnread = useCallback((signal: AbortSignal, what: string) => (failed: { readonly cause: unknown }) => {
+    if (!signal.aborted) addMessage({ role: 'system', content: unreadLine(what, failed) });
+  }, [addMessage]);
+
+  /** The scene's own exit when it was given one, else the app's. */
+  const leave = useCallback((): Promise<void> => settle(onExit === undefined ? (globalExit?.() ?? Effect.void) : Effect.promise(async () => onExit())), [onExit]);
+
+  /** A step whose failure is said in the transcript; it never rejects. */
+  const reported = useCallback(<A,>(step: () => PromiseLike<A>): Promise<void> => settle(Effect.catchCause(
+    Effect.asVoid(Effect.promise(async () => step())),
+    (failed) => Effect.sync(() => { addError({ cause: Cause.squash(failed) }); }),
+  )), [addError]);
+
+  /** Closes a client the page has left; a close that fails is said, worded by `say`, and never fails the step. */
+  const closeSaying = useCallback((left: AgentClient, say: (reason: string) => string): Promise<void> => settle(Effect.catchCause(
+    Effect.promise(() => left.close()),
+    (failed) => Effect.sync(() => { addMessage({ role: 'system', content: say(chainOf(failed)) }); }),
+  )), [addMessage]);
+
+  /** A step chosen from a panel: one at a time, with input held until it settles and the panel closed. */
+  const selecting = useCallback(<A,>(step: () => PromiseLike<A>): Promise<void> => {
+    if (selectionPendingRef.current) return Promise.resolve();
+    selectionPendingRef.current = true;
+    setActiveSurface(null);
+    setReady(false);
+
+    return settle(Effect.ensuring(Effect.promise(() => reported(step)), Effect.sync(() => {
+      selectionPendingRef.current = false;
+      setReady(true);
+    })));
+  }, [reported]);
+
   const approvalNote = useCallback((kind: 'decided' | 'error', message: string) => {
     addMessage({ role: 'system', content: kind === 'error' ? errorLine(message) : message });
   }, [addMessage]);
@@ -433,61 +340,10 @@ function ChatScene({
 
   // Live assistant segments: a tool-call seals the active segment so the next text-delta opens one after the tool,
   // keeping text and tools in chronological order.
-  const activeSegmentRef = useRef<string | null>(null);
-  /** If false at turn-end, turn.text is appended once. */
-  const turnStreamedTextRef = useRef(false);
-
-  const writeActiveSegment = useMemo(() => writeLiveMessage(activeSegmentRef, setMessages), []);
-  const stream = useStreamingBuffer(writeActiveSegment);
-  const activeThinkingRef = useRef<string | null>(null);
-  const writeThinking = useMemo(() => writeLiveMessage(activeThinkingRef, setMessages), []);
-  const thinkingStream = useStreamingBuffer(writeThinking);
-  const turnMeterRef = useRef<TurnMeter | null>(null);
-  const stepOutputsRef = useRef(new Set<string>());
-
-  const appendThinking = useCallback((delta: string) => {
-    if (!activeThinkingRef.current) {
-      const id = `msg-${++msgIdRef.current}`;
-      activeThinkingRef.current = id;
-      stepOutputsRef.current.add(id);
-      setMessages((prev) => [...prev, { id, role: 'thinking', content: '', live: true }]);
-      thinkingStream.start();
-    }
-
-    thinkingStream.append(delta);
-  }, [thinkingStream]);
-
-  const beginSegment = useCallback(() => {
-    const id = `msg-${++msgIdRef.current}`;
-    activeSegmentRef.current = id;
-    stepOutputsRef.current.add(id);
-    const segment: DisplayMessage = { id, role: 'assistant', content: '', live: true };
-    setMessages((prev) => [...prev, segment]);
-    stream.start();
-  }, [stream]);
-
-  const sealThinking = useCallback(() => {
-    const id = activeThinkingRef.current;
-
-    if (!id) return;
-    thinkingStream.finish();
-    activeThinkingRef.current = null;
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, live: false } : m)));
-  }, [thinkingStream]);
-
-  /** An empty segment (tool before any text) is removed. */
-  const sealSegment = useCallback(() => {
-    const id = activeSegmentRef.current;
-    activeSegmentRef.current = null;
-    stream.clear();
-
-    if (!id) return;
-    setMessages((prev) => prev.flatMap((m) => {
-      if (m.id !== id) return [m];
-
-      return m.content.trim() ? [{ ...m, live: false }] : [];
-    }));
-  }, [stream]);
+  const {
+    activeSegmentRef, turnStreamedTextRef, stream, activeThinkingRef, thinkingStream, turnMeterRef, stepOutputsRef,
+    appendThinking, beginSegment, sealThinking, sealSegment,
+  } = useTurnStream(setMessages, msgIdRef);
 
   /** Effects return to the caller so events and keys never race over state. */
   const dispatchInput = useCallback((event: InputMachineEvent): InputEffect[] => {
@@ -529,13 +385,14 @@ function ChatScene({
     thinkingStream.clear();
   }, [thinkingStream]);
 
-  const sendPrompt = useCallback(async (input: string, mode?: WorkMode) => {
+  const sendPrompt = useCallback((input: string, mode?: WorkMode) => {
     rememberPrompt(input);
     const generation = clientGenerationRef.current;
     clientActionCountRef.current += 1;
     let sentRow: string | null = null;
 
-    try {
+    // A send that failed was never admitted: its row goes, and the failure says why, unless the workspace changed.
+    return settle(Effect.ensuring(Effect.catchCause(Effect.promise(async () => {
       const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
 
       if (clientGenerationRef.current !== generation) return;
@@ -562,46 +419,39 @@ function ChatScene({
       const shown = sentRow;
 
       if (sent.landed === 'mid-turn') setMessages((prev) => prev.map((m) => (m.id === shown ? { ...m, steered: true } : m)));
-    } catch (err) {
+    }), (failed) => Effect.sync(() => {
       const unsent = sentRow;
 
-      // A send that failed was never admitted: its row goes, and the failure says why, unless the workspace changed.
-      if (clientGenerationRef.current === generation) {
-        if (unsent !== null) setMessages((prev) => prev.filter((m) => m.id !== unsent));
-        addError({ cause: err });
-      }
-    } finally {
-      clientActionCountRef.current -= 1;
-    }
+      if (clientGenerationRef.current !== generation) return;
+
+      if (unsent !== null) setMessages((prev) => prev.filter((m) => m.id !== unsent));
+      addError({ cause: Cause.squash(failed) });
+    })), Effect.sync(() => { clientActionCountRef.current -= 1; })));
   }, [addError, addMessage, client, nextTier, rememberPrompt]);
 
   /** Falls back to a normal send when the turn just finished. */
-  const performBranch = useCallback(async (input: string) => {
-    try {
-      const text = input.trim();
+  const performBranch = useCallback((input: string) => reported(async () => {
+    const text = input.trim();
 
-      if (!text) return;
+    if (!text) return;
 
-      if (machineRef.current.activeTurns > 0 && client.branch(text, { cwd: process.cwd() })) {
-        const branch: Omit<DisplayMessage, 'id'> = { role: 'user', content: text, branched: true };
-        addMessage(branch);
+    if (machineRef.current.activeTurns > 0 && client.branch(text, { cwd: process.cwd() })) {
+      const branch: Omit<DisplayMessage, 'id'> = { role: 'user', content: text, branched: true };
+      addMessage(branch);
 
-        return;
-      }
-
-      await sendPrompt(text);
-    } catch (cause) {
-      addError({ cause });
+      return;
     }
-  }, [addError, addMessage, client, sendPrompt]);
 
-  const performWalkback = useCallback(async (point: ForkPoint) => {
-    if (selectionPendingRef.current) return;
+    await sendPrompt(text);
+  }), [addMessage, client, reported, sendPrompt]);
+
+  const performWalkback = useCallback((point: ForkPoint) => {
+    if (selectionPendingRef.current) return Promise.resolve();
     selectionPendingRef.current = true;
     setReady(false);
     dispatchInput({ type: 'walkback-closed' });
 
-    try {
+    return settle(Effect.ensuring(Effect.promise(() => reported(async () => {
       const result = await client.fork(point);
 
       if (result.client !== client) {
@@ -615,13 +465,7 @@ function ChatScene({
         const previous = client;
         setClient(result.client);
         onClientChange?.(result.client);
-
-        try {
-          await previous.close();
-        } catch (closeError) {
-          const reason = renderThrownChain({ cause: closeError });
-          addMessage({ role: 'system', content: `The pre-fork session did not close cleanly: ${reason}` });
-        }
+        await closeSaying(previous, (reason) => `The pre-fork session did not close cleanly: ${reason}`);
       }
 
       setMessages((prev) => {
@@ -636,39 +480,37 @@ function ChatScene({
       });
 
       setInputText(point.text);
-    } catch (err) {
-      addError({ cause: err });
-    } finally {
+    })), Effect.sync(() => {
       selectionPendingRef.current = false;
       setReady(true);
-    }
-  }, [addError, addMessage, client, dispatchInput, forgetSessionTurn, onClientChange, setInputText]);
+    })));
+  }, [closeSaying, client, dispatchInput, forgetSessionTurn, onClientChange, reported, setInputText]);
 
-  const switchWorkspace = useCallback(async (
+  const switchWorkspace = useCallback((
     workspace: Pick<TuiAgentSummary, 'name' | 'label' | 'mode'>,
     preparedClient?: AgentClient,
   ) => {
     if (!preparedClient && workspace.name === client.agentName && workspace.mode === client.mode) {
       setNavigationOpen(false);
 
-      return;
+      return Promise.resolve();
     }
 
     if (!onWorkspaceSelect && !preparedClient) {
       setNavigationOpen(false);
       addMessage({ role: 'system', content: 'Exit to the home screen to open another workspace.' });
 
-      return;
+      return Promise.resolve();
     }
 
     if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
       setNavigationOpen(false);
       addMessage({ role: 'system', content: 'Finish or stop the active workspace action before switching.' });
 
-      return;
+      return Promise.resolve();
     }
 
-    if (selectionPendingRef.current) return;
+    if (selectionPendingRef.current) return Promise.resolve();
     selectionPendingRef.current = true;
     setNavigationOpen(false);
     setReady(false);
@@ -677,27 +519,30 @@ function ChatScene({
     let stopBuffering: (() => void) | null = null;
     let historyBoundary = 0;
 
-    try {
-      if (preparedClient) candidate = preparedClient;
-      else if (onWorkspaceSelect) candidate = await onWorkspaceSelect(workspace.name);
-      else throw new Error('Exit to the home screen to open another workspace.');
-      stopBuffering = candidate.subscribe((event) => { bufferedEvents.push(event); });
-      await candidate.connect();
-      let history: DisplayMessage[] = [];
-      let historyFailure: string | null = null;
+    return settle(Effect.catchCause(Effect.gen(function* () {
+      // One of the two is present, as checked above.
+      const chosen = preparedClient ?? (yield* Effect.promise(async () => onWorkspaceSelect?.(workspace.name)));
 
-      try {
-        history = shownHistory(await candidate.history());
-        historyBoundary = bufferedEvents.length;
-      } catch (error) {
-        historyFailure = errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: error })}`);
-      }
+      if (chosen === undefined) return;
+      candidate = chosen;
+      stopBuffering = chosen.subscribe((event) => { bufferedEvents.push(event); });
+      yield* Effect.promise(() => chosen.connect());
+      // Earlier messages that do not load are said in their place; the workspace still opens.
+
+      const { history, historyFailure } = yield* Effect.match(Effect.tryPromise({ try: () => chosen.history(), catch: (cause) => ({ cause }) }), {
+        onSuccess: (read) => {
+          historyBoundary = bufferedEvents.length;
+
+          return { history: shownHistory(read), historyFailure: null };
+        },
+        onFailure: (failed) => ({ history: [], historyFailure: unreadLine('Earlier messages', failed) }),
+      });
 
       const previous = client;
       draftsRef.current.set(`${previous.mode}:${previous.agentName}`, inputRef.current?.plainText ?? '');
-      preconnectedClientRef.current = candidate;
+      preconnectedClientRef.current = chosen;
       preconnectedEventsRef.current = {
-        client: candidate,
+        client: chosen,
         events: bufferedEvents,
         historyBoundary,
         stop: stopBuffering,
@@ -715,52 +560,36 @@ function ChatScene({
       setNextTier(null);
       resetHub();
       setInputState(initialInputState);
-      setInputText(draftsRef.current.get(`${candidate.mode}:${candidate.agentName}`) ?? '');
+      setInputText(draftsRef.current.get(`${chosen.mode}:${chosen.agentName}`) ?? '');
       setMessages([
-        welcomeMessage(candidate.agentName),
+        welcomeMessage(chosen.agentName),
         ...history,
         ...(historyFailure
           ? [{ id: `switch-history-${++msgIdRef.current}`, role: 'system' as const, content: historyFailure }]
           : []),
       ]);
-      setClient(candidate);
+      setClient(chosen);
       setReady(true);
-      onClientChange?.(candidate);
+      onClientChange?.(chosen);
       candidate = null;
       selectionPendingRef.current = false;
-
-      try {
-        await previous.close();
-      } catch (error) {
-        addMessage({
-          role: 'system',
-          content: errorLine(`The previous workspace did not close cleanly: ${renderThrownChain({ cause: error })}`),
-        });
-      }
-    } catch (error) {
+      yield* Effect.promise(() => closeSaying(previous, (reason) => errorLine(`The previous workspace did not close cleanly: ${reason}`)));
+    }), (failed) => Effect.gen(function* () {
       stopBuffering?.();
+      // A candidate opened for the switch that failed is closed; a close that fails too is recorded.
+      const opened: AgentClient | null = candidate;
 
-      if (candidate) {
-        try {
-          await candidate.close();
-        } catch (closeError) {
-          diagnostics.failure(
-            'tui.workspace_candidate_close_failed',
-            toKinuError({
-              doing: 'closing a failed workspace switch candidate',
-              cause: closeError,
-              otherwise: 'io',
-            }),
-            { workspace: candidate.agentName },
-          );
-        }
+      if (opened !== null) {
+        yield* Effect.catch(attempt({ doing: 'closing a failed workspace switch candidate', otherwise: 'io' }, () => opened.close()), (unclosed) => Effect.sync(() => {
+          diagnostics.failure('tui.workspace_candidate_close_failed', unclosed, { workspace: opened.agentName });
+        }));
       }
 
       setReady(true);
-      addError({ cause: error });
+      addError({ cause: Cause.squash(failed) });
       selectionPendingRef.current = false;
-    }
-  }, [addError, addMessage, client, forgetSessionTurn, onClientChange, onWorkspaceSelect, setInputText, stream]);
+    })));
+  }, [addError, client, closeSaying, forgetSessionTurn, onClientChange, onWorkspaceSelect, setInputText, stream]);
 
   /** Cloud supplies a facet client: the conversation nests under its parent workspace. */
   const createNewAgent = useCallback(async () => {
@@ -774,7 +603,7 @@ function ChatScene({
 
     addMessage({ role: 'system', content: 'Creating a new agent…' });
 
-    try {
+    await reported(async () => {
       const created = await onNewAgent(client);
 
       if (created.client) {
@@ -789,10 +618,8 @@ function ChatScene({
 
       await roster.reload();
       await switchWorkspace({ name: created.name, label: agentDisplayLabel({ name: created.name, label: created.displayName }), mode: 'local' });
-    } catch (error) {
-      addError({ cause: error });
-    }
-  }, [addError, addMessage, client, onNewAgent, roster, switchWorkspace]);
+    });
+  }, [addMessage, client, onNewAgent, reported, roster, switchWorkspace]);
 
   const openSubagent = useCallback((entry: TuiHubRow) => {
     if (entry.path === undefined) return;
@@ -803,36 +630,22 @@ function ChatScene({
 
   const subagentChat = useSubagentChat(client, subagentSurface);
 
-  const openModelPicker = useCallback(async () => {
+  const openModelPicker = useCallback(() => {
     const request = ++modelRequestRef.current;
     setActiveSurface({ kind: 'model', menu: EMPTY_MODEL_MENU, loading: true, error: null });
 
-    try {
-      const menu = await client.listModels();
-
-      if (modelRequestRef.current !== request) return;
-      setModelCatalog(menu.models);
-      setActiveSurface({ kind: 'model', menu, loading: false, error: null });
-    } catch (err) {
-      if (modelRequestRef.current !== request) {
-        diagnostics.failure(
-          'tui.model_list_stale_failure',
-          toKinuError({
-            doing: 'listing models for a closed TUI panel',
-            cause: err,
-            otherwise: 'unavailable',
-          }),
-          { workspace: client.agentName },
-        );
-      } else {
-        setActiveSurface({
-          kind: 'model',
-          menu: EMPTY_MODEL_MENU,
-          loading: false,
-          error: renderThrownChain({ cause: err }),
-        });
-      }
-    }
+    // A list that fails for a panel since closed is recorded; one for the open panel is said in it.
+    return settle(Effect.match(attempt({ doing: 'listing models for a closed TUI panel', otherwise: 'unavailable' }, () => client.listModels()), {
+      onSuccess: (menu) => {
+        if (modelRequestRef.current !== request) return;
+        setModelCatalog(menu.models);
+        setActiveSurface({ kind: 'model', menu, loading: false, error: null });
+      },
+      onFailure: (failed) => {
+        if (modelRequestRef.current !== request) diagnostics.failure('tui.model_list_stale_failure', failed, { workspace: client.agentName });
+        else setActiveSurface({ kind: 'model', menu: EMPTY_MODEL_MENU, loading: false, error: renderThrownChain({ cause: failed.cause ?? failed }) });
+      },
+    }));
   }, [client]);
 
   const openQuestions = useCallback(async () => {
@@ -853,79 +666,42 @@ function ChatScene({
     );
   }, [addError, addMessage, client]);
 
-  const selectModel = useCallback(async (spec: string) => {
-    if (selectionPendingRef.current) return;
-    setReady(false);
-    selectionPendingRef.current = true;
-    setActiveSurface(null);
+  const selectModel = useCallback((spec: string) => selecting(async () => {
+    const result = await client.setModel(spec);
 
-    try {
-      const result = await client.setModel(spec);
-      setStatus(withModel(result.spec));
-      addMessage({ role: 'system', content: `Model: ${result.spec}` });
-    } catch (err) {
-      addError({ cause: err });
-    } finally {
-      selectionPendingRef.current = false;
-      setReady(true);
+    setStatus(withModel(result.spec));
+    addMessage({ role: 'system', content: `Model: ${result.spec}` });
+  }), [addMessage, client, selecting]);
+
+  const revertChangelogEntry = useCallback((entry: ChangelogEntry) => selecting(async () => {
+    if (!entry.revert) {
+      addMessage({ role: 'system', content: `"${entry.summary}" is informational (${entry.kind}). Nothing to revert.` });
+
+      return;
     }
-  }, [addError, addMessage, client]);
 
-  const revertChangelogEntry = useCallback(async (entry: ChangelogEntry) => {
-    if (selectionPendingRef.current) return;
-    selectionPendingRef.current = true;
-    setActiveSurface(null);
-    setReady(false);
+    const result = await client.revertChangelogEntry(entry.id);
 
-    try {
-      if (!entry.revert) {
-        addMessage({ role: 'system', content: `"${entry.summary}" is informational (${entry.kind}). Nothing to revert.` });
-
-        return;
-      }
-
-      const result = await client.revertChangelogEntry(entry.id);
-      addMessage({
-        role: 'system',
-        content: result.ok
-          ? `Reverted: ${entry.summary}\n→ ${result.detail ?? 'done'}`
-          : `Revert failed: ${result.error ?? 'unknown error'}`,
-      });
-    } catch (err) {
-      addError({ cause: err });
-    } finally {
-      selectionPendingRef.current = false;
-      setReady(true);
-    }
-  }, [addError, addMessage, client]);
+    addMessage({
+      role: 'system',
+      content: result.ok
+        ? `Reverted: ${entry.summary}\n→ ${result.detail ?? 'done'}`
+        : `Revert failed: ${result.error ?? 'unknown error'}`,
+    });
+  }), [addMessage, client, selecting]);
 
   /** A changed answer streams its continuation as the next turn. */
-  const pickTake = useCallback(async (set: AlternateTakeSet, candidate: AlternateTakeCandidate) => {
-    if (selectionPendingRef.current) return;
-    selectionPendingRef.current = true;
-    setActiveSurface(null);
-    setReady(false);
+  const pickTake = useCallback((set: AlternateTakeSet, candidate: AlternateTakeCandidate) => selecting(async () => {
+    const index = set.candidates.findIndex((entry) => entry.nodeId === candidate.nodeId) + 1;
+    const result = await client.pickTake(set.id, candidate.nodeId);
 
-    try {
-      const index = set.candidates.findIndex((entry) => entry.nodeId === candidate.nodeId) + 1;
-      const result = await client.pickTake(set.id, candidate.nodeId);
-      addMessage({ role: 'system', content: describeTakePick(result, index) });
-    } catch (err) {
-      addError({ cause: err });
-    } finally {
-      selectionPendingRef.current = false;
-      setReady(true);
-    }
-  }, [addError, addMessage, client]);
+    addMessage({ role: 'system', content: describeTakePick(result, index) });
+  }), [addMessage, client, selecting]);
 
-  const selectReasoningEffort = useCallback(async (chosen: ReasoningEffort) => {
-    try {
-      await client.setReasoningEffort(chosen);
-      setStatus((value) => value === null ? value : { ...value, reasoningEffort: chosen });
-    } catch (cause) {
-      addError({ cause });
-    }
-  }, [addError, client]);
+  const selectReasoningEffort = useCallback((chosen: ReasoningEffort) => reported(async () => {
+    await client.setReasoningEffort(chosen);
+    setStatus((value) => value === null ? value : { ...value, reasoningEffort: chosen });
+  }), [client, reported]);
 
   const openWorkspaces = useCallback(() => {
     setNavigationOpen(true);
@@ -980,7 +756,7 @@ function ChatScene({
 
         return;
       case 'exit':
-        await leave(onExit);
+        await leave();
 
         return;
       case 'model-picker':
@@ -1042,7 +818,7 @@ function ChatScene({
     addMessage,
     client,
     deviceConnect.open,
-    onExit,
+    leave,
     openModelPicker,
     openWorkspaces,
   ]);
@@ -1059,7 +835,7 @@ function ChatScene({
           addMessage({ role: 'system', content: 'Interrupting the active turn… (Esc again to walk back)' });
           break;
         case 'exit':
-          return leave(onExit);
+          return leave();
         case 'clear-input':
           setInputText('');
           break;
@@ -1083,7 +859,7 @@ function ChatScene({
     }
 
     return action;
-  }, [addMessage, client, onExit, performBranch, sendPrompt, setInputText]);
+  }, [addMessage, client, leave, performBranch, sendPrompt, setInputText]);
 
   const runLocalCommand = useCallback(async (typed: string) => {
     const shared = !typed.startsWith('!!');
@@ -1096,7 +872,7 @@ function ChatScene({
     addMessage({ role: 'system', content: shown });
   }, [addMessage]);
 
-  const handleSubmit = useCallback(async (input: string) => {
+  const handleSubmit = useCallback((input: string) => {
     const text = input.trim();
 
     if (!text) return;
@@ -1110,142 +886,116 @@ function ChatScene({
     }
 
     const generation = clientGenerationRef.current;
+    const submitted = text.startsWith('/') ? resolveCommandDraft(commands, text) : text;
 
-    try {
-      const submitted = text.startsWith('/') ? resolveCommandDraft(commands, text) : text;
+    if (!submitted.startsWith('/')) return sendPrompt(submitted);
 
-      if (!submitted.startsWith('/')) {
-        await sendPrompt(submitted);
+    clientActionCountRef.current += 1;
+    setCommandPhase(commandWorking(commands, submitted));
+
+    // A command that fails for the workspace still open is said; one for a workspace since left is recorded.
+    return settle(Effect.ensuring(Effect.catch(attempt({ doing: 'finishing a submit for a previous workspace', otherwise: 'unavailable' }, async () => {
+      const outcome = await executeSlashCommand(client, submitted);
+
+      if (submitted === '/help' && outcome.kind === 'text') {
+        addMessage({ role: 'system', content: `${outcome.text}\n\n${composerHelp(keybindings)}` });
 
         return;
       }
 
-      clientActionCountRef.current += 1;
-      setCommandPhase(commandWorking(commands, submitted));
+      if (clientGenerationRef.current !== generation) return;
 
-      try {
-        const outcome = await executeSlashCommand(client, submitted);
+      if (outcome.kind === 'queue') {
+        if (outcome.text) await runInputEffects(dispatchInput({ type: 'queue', text: outcome.text }));
+        else addMessage({ role: 'system', content: 'Usage: /queue <text>. It sends after the running turn, or at once when idle.' });
 
-        if (submitted === '/help' && outcome.kind === 'text') {
-          addMessage({ role: 'system', content: `${outcome.text}\n\n${composerHelp(keybindings)}` });
-
-          return;
-        }
-
-        if (clientGenerationRef.current !== generation) return;
-
-        if (outcome.kind === 'queue') {
-          if (outcome.text) await runInputEffects(dispatchInput({ type: 'queue', text: outcome.text }));
-          else addMessage({ role: 'system', content: 'Usage: /queue <text>. It sends after the running turn, or at once when idle.' });
-
-          return;
-        }
-
-        if (outcome.kind === 'branch') {
-          if (outcome.text) await performBranch(outcome.text);
-          else addMessage({ role: 'system', content: `Usage: /branch <text> (or ${keybindings.hint('conversation.branch')} on a draft). It runs the redirect as a parallel branch of the running turn.` });
-
-          return;
-        }
-
-        if (outcome.kind === 'plan') {
-          if (outcome.text) await sendPrompt(outcome.text, 'plan');
-          else addMessage({ role: 'system', content: 'Usage: /plan <what to plan>. It drafts a plan for you to approve (/plan approve) or send back (/plan changes <feedback>).' });
-
-          return;
-        }
-
-        if (outcome.kind === 'fork') {
-          const candidates = forkCandidates(messages);
-
-          if (candidates.length === 0) {
-            addMessage({ role: 'system', content: 'No user messages to walk back to.' });
-
-            return;
-          }
-
-          if (!outcome.ref) {
-            dispatchInput({ type: 'open-walkback' });
-
-            return;
-          }
-
-          const index = Number.parseInt(outcome.ref, 10) - 1;
-          const picked = Number.isInteger(index) ? candidates[index] : undefined;
-
-          if (!picked) {
-            addMessage({ role: 'system', content: `No walk-back candidate "${outcome.ref}". Esc-Esc (or /fork) lists them.` });
-
-            return;
-          }
-
-          await performWalkback(picked);
-
-          return;
-        }
-
-        if (outcome.kind === 'undo') {
-          const undone = await performUndo(client, outcome.ref);
-          addMessage({ role: 'system', content: undone.text });
-
-          if (undone.restored && forkCandidates(messages).length > 0) {
-            // Files plus conversation: reuse the Esc-Esc walk-back picker for the conversation half.
-            addMessage({ role: 'system', content: 'Pick a message to also walk back the conversation, or Esc to keep it.' });
-            dispatchInput({ type: 'open-walkback' });
-          }
-
-          return;
-        }
-
-        await applySlashOutcome(outcome);
-      } finally {
-        setCommandPhase(null);
-        clientActionCountRef.current -= 1;
+        return;
       }
-    } catch (err) {
-      if (clientGenerationRef.current === generation) addError({ cause: err });
-      else {
-        diagnostics.failure(
-          'tui.stale_submit_failed',
-          toKinuError({ doing: 'finishing a submit for a previous workspace', cause: err, otherwise: 'unavailable' }),
-          { workspace: client.agentName },
-        );
+
+      if (outcome.kind === 'branch') {
+        if (outcome.text) await performBranch(outcome.text);
+        else addMessage({ role: 'system', content: `Usage: /branch <text> (or ${keybindings.hint('conversation.branch')} on a draft). It runs the redirect as a parallel branch of the running turn.` });
+
+        return;
       }
-    }
+
+      if (outcome.kind === 'plan') {
+        if (outcome.text) await sendPrompt(outcome.text, 'plan');
+        else addMessage({ role: 'system', content: 'Usage: /plan <what to plan>. It drafts a plan for you to approve (/plan approve) or send back (/plan changes <feedback>).' });
+
+        return;
+      }
+
+      if (outcome.kind === 'fork') {
+        const candidates = forkCandidates(messages);
+
+        if (candidates.length === 0) {
+          addMessage({ role: 'system', content: 'No user messages to walk back to.' });
+
+          return;
+        }
+
+        if (!outcome.ref) {
+          dispatchInput({ type: 'open-walkback' });
+
+          return;
+        }
+
+        const index = Number.parseInt(outcome.ref, 10) - 1;
+        const picked = Number.isInteger(index) ? candidates[index] : undefined;
+
+        if (!picked) {
+          addMessage({ role: 'system', content: `No walk-back candidate "${outcome.ref}". Esc-Esc (or /fork) lists them.` });
+
+          return;
+        }
+
+        await performWalkback(picked);
+
+        return;
+      }
+
+      if (outcome.kind === 'undo') {
+        const undone = await performUndo(client, outcome.ref);
+        addMessage({ role: 'system', content: undone.text });
+
+        if (undone.restored && forkCandidates(messages).length > 0) {
+          // Files plus conversation: reuse the Esc-Esc walk-back picker for the conversation half.
+          addMessage({ role: 'system', content: 'Pick a message to also walk back the conversation, or Esc to keep it.' });
+          dispatchInput({ type: 'open-walkback' });
+        }
+
+        return;
+      }
+
+      await applySlashOutcome(outcome);
+    }), (failed) => Effect.sync(() => {
+      if (clientGenerationRef.current === generation) addError({ cause: failed.cause ?? failed });
+      else diagnostics.failure('tui.stale_submit_failed', failed, { workspace: client.agentName });
+    })), Effect.sync(() => {
+      setCommandPhase(null);
+      clientActionCountRef.current -= 1;
+    })));
   }, [addError, addMessage, applySlashOutcome, client, commands, dispatchInput, messages, performBranch, performWalkback, ready, runInputEffects, sendPrompt, runLocalCommand]);
 
   /** Once per set, never for one already picked from. */
-  const hintAlternateTakes = useCallback(async () => {
+  const hintAlternateTakes = useCallback(() => {
     const generation = clientGenerationRef.current;
 
-    try {
-      const set = await client.latestTakes();
-
-      if (
-        clientGenerationRef.current === generation
-        && set
-        && set.candidates.length >= 2
-        && !set.chosenNodeId
-        && hintedTakesRef.current !== set.id
-      ) {
+    return settle(Effect.match(attempt({ doing: 'reading takes for a previous workspace', otherwise: 'unavailable' }, () => client.latestTakes()), {
+      onSuccess: (set) => {
+        if (clientGenerationRef.current !== generation || !set || set.candidates.length < 2 || set.chosenNodeId || hintedTakesRef.current === set.id) return;
         hintedTakesRef.current = set.id;
         addMessage({ role: 'system', content: `${set.candidates.length} takes: /takes to compare` });
-      }
-    } catch (takesError) {
-      if (clientGenerationRef.current === generation) {
-        addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${renderThrownChain({ cause: takesError })}`) });
-      } else {
-        diagnostics.failure(
-          'tui.stale_takes_read_failed',
-          toKinuError({
-            doing: 'reading takes for a previous workspace',
-            cause: takesError,
-            otherwise: 'unavailable',
-          }),
-          { workspace: client.agentName },
-        );
-      }
-    }
+      },
+      onFailure: (failed) => {
+        if (clientGenerationRef.current === generation) {
+          addMessage({ role: 'system', content: errorLine(`This turn's takes could not be read: ${renderThrownChain({ cause: failed.cause ?? failed })}`) });
+        } else {
+          diagnostics.failure('tui.stale_takes_read_failed', failed, { workspace: client.agentName });
+        }
+      },
+    }));
   }, [addMessage, client]);
 
   const handleTurnEnd = useCallback(async (event: Extract<AgentClientEvent, { type: 'turn-end' }>) => {
@@ -1456,7 +1206,7 @@ function ChatScene({
       detach(Effect.promise(() => handleClientEvent(event)));
     });
 
-    let replayTask: Promise<void> | null = null;
+    let replayTask: Promise<void> = Promise.resolve();
 
     if (buffered) {
       buffered.stop();
@@ -1471,103 +1221,69 @@ function ChatScene({
       })();
     }
 
-    detach(Effect.promise(async () => {
-      try {
-        if (!skipHydrationRef.current) {
-          try {
-            const history = shownHistory(await client.history());
+    // Each part's failure is said in its own words; the replay of what arrived meanwhile always finishes.
+    detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      if (!skipHydrationRef.current) {
+        yield* Effect.match(tried(() => client.history()), {
+          onSuccess: (read) => {
+            const history = shownHistory(read);
 
-            if (!abort.signal.aborted && history.length > 0) {
-              setMessages([welcomeMessage(client.agentName), ...history]);
-            }
-          } catch (historyError) {
-            if (!abort.signal.aborted) {
-              addMessage({ role: 'system', content: errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: historyError })}`) });
-            }
-          }
-        }
+            if (!abort.signal.aborted && history.length > 0) setMessages([welcomeMessage(client.agentName), ...history]);
+          },
+          onFailure: sayUnread(abort.signal, 'Earlier messages'),
+        });
+      }
 
-        skipHydrationRef.current = false;
-        let connected = true;
+      skipHydrationRef.current = false;
 
-        try {
-          if (!preconnected) await client.connect();
-        } catch (error) {
-          connected = false;
-
+      const connected = preconnected || (yield* Effect.match(tried(() => client.connect()), {
+        onSuccess: () => true,
+        onFailure: (failed) => {
           if (!abort.signal.aborted) {
-            addError({ cause: error });
+            addError(failed);
             setConnectFailed(true);
           }
-        }
 
-        if (!connected || abort.signal.aborted) return;
-        setConnectFailed(false);
-        setReady(true);
+          return false;
+        },
+      }));
 
-        if (client.mode !== 'cloud') return;
+      if (!connected || abort.signal.aborted) return;
+      setConnectFailed(false);
+      setReady(true);
 
-        try {
-          await deviceConnect.offerIfUnconnected();
-        } catch (cause) {
-          // A courtesy offer: failure is a diagnostic, not a conversation line.
-          diagnostics.failure(
-            'tui.device_connect_offer_failed',
-            toKinuError({ doing: 'offering the device-connect prompt', cause, otherwise: 'unavailable' }),
-            { workspace: client.agentName },
-          );
-        }
-      } catch (cause) {
-        if (!abort.signal.aborted) addError({ cause });
-      } finally {
-        if (replayTask) await replayTask;
-      }
-    }));
+      if (client.mode !== 'cloud') return;
+
+      // A courtesy offer: failure is a diagnostic, not a conversation line.
+      yield* Effect.catch(attempt({ doing: 'offering the device-connect prompt', otherwise: 'unavailable' }, () => deviceConnect.offerIfUnconnected()), (failed) => Effect.sync(() => {
+        diagnostics.failure('tui.device_connect_offer_failed', failed, { workspace: client.agentName });
+      }));
+    }), (failed) => Effect.sync(() => {
+      if (!abort.signal.aborted) addError({ cause: Cause.squash(failed) });
+    })), Effect.promise(async () => { await replayTask; })));
 
     return () => {
       abort.abort();
       unsubscribe();
     };
-  }, [addError, addMessage, client, connectAttempt, deviceConnect.offerIfUnconnected, handleClientEvent]);
+  }, [addError, client, connectAttempt, deviceConnect.offerIfUnconnected, handleClientEvent, sayUnread]);
 
   useEffect(() => {
     const abort = new AbortController();
-    detach(Effect.promise(async () => {
-      await Promise.all([
-        (async () => {
-          try {
-            const next = await client.status();
-
-            if (abort.signal.aborted) return;
-            setStatus(next);
-          } catch (cause) {
-            if (!abort.signal.aborted) {
-              addMessage({
-                role: 'system',
-                content: errorLine(`Workspace status could not be read: ${renderThrownChain({ cause })}`),
-              });
-            }
-          }
-        })(),
-        (async () => {
-          try {
-            const menu = await client.listModels();
-
-            if (!abort.signal.aborted) setModelCatalog(menu.models);
-          } catch (cause) {
-            if (!abort.signal.aborted) {
-              addMessage({
-                role: 'system',
-                content: errorLine(`The model catalog could not be read: ${renderThrownChain({ cause })}`),
-              });
-            }
-          }
-        })(),
-      ]);
-    }));
+    // Either read that fails says so in the transcript; the other still lands.
+    detach(Effect.all([
+      Effect.match(tried(() => client.status()), {
+        onSuccess: (next) => { if (!abort.signal.aborted) setStatus(next); },
+        onFailure: sayUnread(abort.signal, 'Workspace status'),
+      }),
+      Effect.match(tried(() => client.listModels()), {
+        onSuccess: (menu) => { if (!abort.signal.aborted) setModelCatalog(menu.models); },
+        onFailure: sayUnread(abort.signal, 'The model catalog'),
+      }),
+    ], { concurrency: 'unbounded' }));
 
     return () => { abort.abort(); };
-  }, [addMessage, client]);
+  }, [client, sayUnread]);
 
   // The shared watcher shows each consent once and cancels on settle.
   const consentDecisionRef = useRef<((decision: DeviceConsentDecision | 'cancelled') => void) | null>(null);
@@ -1582,15 +1298,15 @@ function ChatScene({
 
     const watcher = watchDeviceConsents(consents, {
       present: (consent, signal) => new Promise((resolve) => {
-        const settle = (outcome: DeviceConsentDecision | 'cancelled') => {
+        const decide = (outcome: DeviceConsentDecision | 'cancelled') => {
           consentDecisionRef.current = null;
           setPendingConsent(null);
           setTimeout(() => { resolve(outcome); }, 0);
         };
 
-        consentDecisionRef.current = settle;
+        consentDecisionRef.current = decide;
         setPendingConsent(consent);
-        signal.addEventListener('abort', () => settle('cancelled'), { once: true });
+        signal.addEventListener('abort', () => decide('cancelled'), { once: true });
       }),
       note: (kind, message) => {
         addMessage({ role: 'system', content: kind === 'error' ? errorLine(message) : message });
@@ -1769,7 +1485,7 @@ function ChatScene({
 
     if (connectFailed) {
       setConnectFailed(false);
-      setConnectAttempt((attempt) => attempt + 1);
+      setConnectAttempt((tries) => tries + 1);
 
       return;
     }
@@ -1801,158 +1517,6 @@ function ChatScene({
   // A resize re-wraps without an edit event.
   useEffect(syncComposerRows, [width, syncComposerRows]);
   inputShouldFocusRef.current = inputFocused;
-
-  /** Exactly one overlay is on screen, first match wins. */
-  function activeOverlay(): ReactNode {
-    if (activeSurface?.kind === 'history') {
-      return (
-        <PromptHistoryOverlay entries={promptHistory} terminal={{ width: sceneWidth, height }} onSelect={(text) => {
-          setActiveSurface(null);
-          setInputText(text);
-          inputRef.current?.gotoBufferEnd();
-        }} />
-      );
-    }
-
-    if (themePickerOpen) {
-      return (
-        <ThemePickerOverlay
-          terminal={{ width: sceneWidth, height }}
-          selection={preferences.theme ?? DEFAULT_TUI_THEME_SELECTION}
-          onSelect={(selection: ThemeSelection) => {
-            setActiveSurface(null);
-            updatePreferences((current) => ({ ...current, theme: selection }));
-          }}
-        />
-      );
-    }
-
-    if (settingsOpen) {
-      return (
-        <SettingsOverlay
-          settings={settings}
-          terminal={{ width: sceneWidth, height }}
-          onSelect={(setting) => {
-            setActiveSurface(null);
-
-            if (setting.command.endsWith(' ')) {
-              setInputText(setting.command);
-
-              return;
-            }
-
-            const task = setting.command === '/model' ? openModelPicker() : handleSubmit(setting.command);
-            detach(Effect.promise(() => task));
-          }}
-        />
-      );
-    }
-
-    if (subagentSurface !== null) {
-      return (
-        <SubagentChatOverlay
-          chat={subagentChat ?? { name: subagentSurface.path.join('/'), label: subagentSurface.label, messages: null, error: null }}
-          width={sceneWidth}
-          height={height}
-          scrollRef={(value) => { subagentScrollRef.current = value; }}
-        />
-      );
-    }
-
-    if (hubView !== null && hubLive !== undefined) {
-      return (
-        <HubOverlay
-          view={hubView}
-          data={{ ...hubLive, answered }}
-          width={sceneWidth}
-          height={height}
-          selectedAgentId={hubSelectedId}
-          {...(onNewAgent !== undefined ? { newAgentHint: keybindings.hint('hub.new-agent') } : {})}
-        />
-      );
-    }
-
-    if (commandPalette) {
-      return (
-        <CommandPaletteOverlay
-          commands={commands}
-          terminal={{ width: sceneWidth, height }}
-          onSelect={(command) => {
-            setActiveSurface(null);
-            setInputText(`${command.name}${command.usage ? ' ' : ''}`);
-          }}
-        />
-      );
-    }
-
-    if (modelPicker) {
-      return (
-        <ModelPickerOverlay
-          models={modelPicker.menu.models}
-          failures={modelPicker.menu.failures}
-          accounts={modelPicker.menu.accounts}
-          currentSpec={modelSpec}
-          terminal={{ width: sceneWidth, height }}
-          loading={modelPicker.loading}
-          error={modelPicker.error}
-          onSelect={(spec) => detach(Effect.promise(() => selectModel(spec)))}
-          test={(spec, signal) => client.testModel(spec, signal)}
-        />
-      );
-    }
-
-    if (changelogView) {
-      return (
-        <ChangelogOverlay
-          view={changelogView}
-          terminal={{ width: sceneWidth, height }}
-          onSelect={(entry) => detach(Effect.promise(() => revertChangelogEntry(entry)))}
-        />
-      );
-    }
-
-    if (activeSurface?.kind === 'questions') {
-      const { asking } = activeSurface;
-
-      return (
-        <QuestionsOverlay
-          asking={asking}
-          terminal={{ width: sceneWidth, height }}
-          onAnswer={(answers) => detach(answerQuestions(asking, answers))}
-          onChat={() => {
-            setActiveSurface(null);
-            addMessage({ role: 'system', content: 'Write your answer as a message; it answers the open questions.' });
-          }}
-        />
-      );
-    }
-
-    if (takesView) {
-      return (
-        <TakesOverlay
-          set={takesView}
-          terminal={{ width: sceneWidth, height }}
-          onSelect={(candidate) => detach(Effect.promise(() => pickTake(takesView, candidate)))}
-        />
-      );
-    }
-
-    if (inputState.walkbackOpen && walkbackList.length > 0) {
-      return (
-        <WalkbackOverlay
-          candidates={walkbackList}
-          terminal={{ width: sceneWidth, height }}
-          onSelect={(candidate) => detach(Effect.promise(() => performWalkback(candidate)))}
-        />
-      );
-    }
-
-    return (
-
-      <CommandHintOverlay commands={commandHints} terminal={{ width: sceneWidth, height }} />
-
-    );
-  }
 
   return (
     <TuiShell
@@ -2063,119 +1627,21 @@ function ChatScene({
         />
       </box>
 
-      {activeOverlay()}
+      <ChatOverlay
+        surface={activeSurface} width={sceneWidth} height={height} client={client} commands={commands} commandHints={commandHints}
+        promptHistory={promptHistory} settings={settings} modelSpec={modelSpec} subagentChat={subagentChat} subagentScrollRef={subagentScrollRef}
+        hubLive={hubLive} answered={answered} hubSelectedId={hubSelectedId} canCreateAgent={onNewAgent !== undefined}
+        walkbackList={walkbackList} walkbackOpen={inputState.walkbackOpen}
+        close={() => setActiveSurface(null)} setInputText={setInputText} toInputEnd={() => inputRef.current?.gotoBufferEnd()}
+        addMessage={addMessage} openModelPicker={openModelPicker} handleSubmit={handleSubmit} selectModel={selectModel}
+        revertChangelogEntry={revertChangelogEntry} answerQuestions={answerQuestions} pickTake={pickTake} performWalkback={performWalkback}
+      />
       {pendingConsent && <DeviceConsentOverlay consent={pendingConsent} terminal={{ width: sceneWidth, height }} />}
       {deviceConnect.state && <DeviceConnectOverlay prompt={deviceConnect.state} terminal={{ width: sceneWidth, height }} />}
       {approval.prompt && <ApprovalOverlay prompt={approval.prompt} terminal={{ width: sceneWidth, height }} />}
     </box>
     </TuiShell>
   );
-}
-
-function copyRefused(outcome: Extract<SlashOutcome, { kind: 'text' }>, renderer: CliRenderer): string | null {
-  if (outcome.copy === undefined || renderer.copyToClipboardOSC52(outcome.copy)) return null;
-
-  return 'This terminal does not accept clipboard writes (OSC 52), so nothing was copied.';
-}
-
-interface ContextNumber {
-  readonly tokens: number;
-  readonly window: number | undefined;
-}
-
-function contextNumberOf(event: BroadcastEvent): ContextNumber | null {
-  const { type, contextTokens, contextWindow } = event;
-
-  return type === 'context_fill' && contextTokens !== undefined ? { tokens: contextTokens, window: contextWindow } : null;
-}
-
-function recordedContext(status: AgentClientStatus | null): ContextNumber | null {
-  const fill = status?.context ?? null;
-
-  return fill === null ? null : { tokens: fill.tokens, window: fill.window ?? undefined };
-}
-
-function headerMeter(
-  live: ContextNumber | null, status: AgentClientStatus | null, catalogWindow: number | undefined,
-): { tokens: number | null; window: number | undefined } {
-  const context = live ?? recordedContext(status);
-
-  return context === null ? { tokens: null, window: catalogWindow } : { tokens: context.tokens, window: context.window ?? catalogWindow };
-}
-
-function composerTakesKeys(ready: boolean, connectFailed: boolean, overlayOpen: boolean): boolean {
-  return (ready || connectFailed) && !overlayOpen;
-}
-
-function composerPlaceholderFor(ready: boolean, isProcessing: boolean, connectFailed: boolean): string {
-  if (connectFailed) return 'Not connected · Enter to try again';
-
-  if (!ready) return 'Connecting…';
-
-  return isProcessing ? TUI_COMPOSER_STEERING_PLACEHOLDER : TUI_COMPOSER_PLACEHOLDER;
-}
-
-function writeLiveMessage(
-  ref: { readonly current: string | null },
-  setMessages: (update: (prev: DisplayMessage[]) => DisplayMessage[]) => void,
-): (value: string | null) => void {
-  return (value) => {
-    const id = ref.current;
-
-    if (!id || value === null) return;
-    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: value } : m)));
-  };
-}
-
-function countStreamed(meter: TurnMeter | null, delta: string): void {
-  if (meter) meter.streamedChars += delta.length;
-}
-
-function commandWorking(commands: readonly OfferedCommand[], submitted: string): string | null {
-  const name = submitted.split(/\s/u)[0]?.toLowerCase();
-
-  return commands.find((command) => command.name === name)?.working ?? null;
-}
-
-function phaseLineLabel(isProcessing: boolean, turnPhase: string | null, nextTier: TierId | null, commandPhase: string | null): string | null {
-  if (isProcessing) return turnPhase ?? 'thinking';
-
-  if (commandPhase !== null) return commandPhase;
-
-  return nextTier === null ? null : `next turn · ${nextTier}`;
-}
-
-/** Plain text: the TUI styles system messages itself. */
-function errorLine(message: string): string {
-  return `Error: ${describeProviderError({ cause: message })}`;
-}
-
-/** History as the live turn drew it: an answer whose turn failed is followed by the failure's error line. */
-function shownHistory(history: readonly AgentTranscriptMessage[]): DisplayMessage[] {
-  return history.flatMap((row): DisplayMessage[] => {
-    const failure = turnFailure({ metadata: row.metadata });
-
-    return failure === null ? [row] : [row, { id: `${row.id}-failure`, role: 'system', content: errorLine(failure) }];
-  });
-}
-
-function lastUrlFromMessages(messages: DisplayMessage[]): string | null {
-  const urlRe = /https?:\/\/[^\s)\]}>'"]+/g;
-
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-
-    if (msg.role !== 'assistant' && msg.role !== 'system') continue;
-    const matches = msg.content.match(urlRe);
-
-    if (matches && matches.length > 0) return matches[matches.length - 1];
-  }
-
-  return null;
-}
-
-function welcomeMessage(agentName: string): DisplayMessage {
-  return { id: 'welcome', role: 'system', content: `Connected to ${agentName}. Type a message or /help for commands.` };
 }
 
 export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
@@ -2186,14 +1652,10 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
   const root = createRoot(renderer);
   let currentClient = opts.client;
 
-  const cleanup = async () => {
-    let closeFailure: string | null = null;
-
-    try {
-      await currentClient.close();
-    } catch (error) {
-      closeFailure = renderThrownChain({ cause: error });
-    }
+  // The one exit: closes the workspace, tears the screen down and ends the process; a later call joins the first. A
+  // failure on the way is said, and the process ends with 1.
+  const exit = flight(() => Effect.catchCause(Effect.gen(function* () {
+    const closeFailure = yield* Effect.match(tried(() => currentClient.close()), { onSuccess: () => null, onFailure: renderThrownChain });
 
     root.render(<box />);
     renderer.destroy();
@@ -2201,40 +1663,17 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
     if (closeFailure) console.error(`\n  The workspace did not close cleanly: ${closeFailure}`);
     console.log('\n  Goodbye.\n');
     process.exit(0);
-  };
-
-  const shutDown = async () => {
-    try {
-      await cleanup();
-    } catch (cause) {
-      console.error(`\n  The TUI could not shut down cleanly: ${renderThrownChain({ cause })}`);
-      process.exit(1);
-    }
-  };
-
-  let exiting: Promise<void> | null = null;
-
-  const exit = () => {
-    exiting ??= shutDown();
-
-    return exiting;
-  };
+  }), (failed) => Effect.sync(() => {
+    console.error(`\n  The TUI could not shut down cleanly: ${chainOf(failed)}`);
+    process.exit(1);
+  })), { keep: 'exit' });
 
   globalExit = exit;
 
-  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, () => detach(Effect.promise(exit)));
+  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, () => detach(exit()));
 
   root.render(<ChatApp {...renderOptions} onClientChange={(client) => { currentClient = client; }} />);
 
   await new Promise<void>(() => {});
 }
 
-function effortsForModel(
-  catalog: readonly AgentModelEntry[],
-  spec: string,
-  status: AgentClientStatus | null,
-): ReasoningEffort[] {
-  const listed = specWithoutAccount(spec);
-
-  return offeredReasoningEfforts(catalog.find((model) => model.spec === listed)?.reasoningEfforts, status?.reasoningEffort);
-}

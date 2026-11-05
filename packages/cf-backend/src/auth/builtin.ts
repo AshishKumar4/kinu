@@ -19,6 +19,7 @@ import {
 import type { UserDO } from '../user/user-do';
 import type { ApiVariables, FamilyEnv } from '../api/context';
 import type { ObjectNamespace } from '@kinu.run/core';
+import { accountNamed, placementFor } from '../user/workspace-placement';
 
 type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
   | 'builtinAdmissible' | 'builtinCreateInvite' | 'builtinInvitedEmail' | 'builtinIsOwner' | 'builtinIssueChallenge' | 'builtinPasskeyAccount'
@@ -66,7 +67,7 @@ async function reserve<Id>(env: BuiltinAuthEnv<Id>, attempt: readonly AttemptBuc
 }
 
 async function signedIn<Id>(env: BuiltinAuthEnv<Id>, request: Request, profile: OAuthProfile, returnTo: string): Promise<Response> {
-  const session = await createSession(env, profile);
+  const session = await createSession(env, profile, placementFor(request.cf));
   const headers = new Headers({ 'cache-control': 'no-store' });
 
   headers.append('set-cookie', sessionCookie(session));
@@ -296,7 +297,7 @@ async function resetTo<Id>(env: BuiltinAuthEnv<Id>, request: Request, reset: Omi
   if (current === null) return resetRefused(reset.grant);
   const ended = current.generation + 1;
 
-  await objectNamed(env.UserDO, current.userId).raiseCredentialFloor(caller, ended);
+  await accountNamed(env.UserDO, current.userId).raiseCredentialFloor(caller, ended);
   const account = await accounts(env).builtinApplyReset(caller, { ...reset, ended });
 
   if (account === null) return resetRefused(reset.grant);

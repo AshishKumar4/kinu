@@ -5,9 +5,9 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
-import {
-  EventLog, initEventsHubTables, type IngressDescriptor,
-} from '../src/events/hub/index';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import type { IngressDescriptor } from '../src/events/hub/types';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
 import { createTestActors, createTestActorsOver, createTestSql, withHostDeliveries } from '@kinu.run/test-utils';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';

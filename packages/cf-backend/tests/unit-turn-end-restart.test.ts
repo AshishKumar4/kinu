@@ -5,7 +5,6 @@
  */
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, setSystemTime, test } from 'bun:test';
-import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
 import {
   agentSql, driveUntil, gatewayWorkspace, hostedMainActor, mainDatabase, relayedReports, storedChat, workspaceMainActor, type StartedHarness,
@@ -16,6 +15,7 @@ import {
 } from './helpers/agent-facets';
 import { socketConnection } from './helpers/bindings';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { chatRequest } from './helpers/chat-frames';
 
 const ASK = 'Summarize the release.';
 
@@ -57,12 +57,6 @@ async function restartMain(workspace: StartedHarness): Promise<void> {
 }
 
 /** The owner's message, or their Retry of `id` (its messages up to the turn it retries), as the pane sends each. */
-function chatRequest(requestId: string, id: string, trigger: 'submit-message' | 'regenerate-message', text = ASK): string {
-  return JSON.stringify({
-    type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST, id: requestId,
-    init: { method: 'POST', body: JSON.stringify({ messages: [{ id, role: 'user', parts: [{ type: 'text', text }] }], trigger }) },
-  });
-}
 
 /** A workspace whose main agent starts a one-node search, then says so; `nodeCalls` counts the node's model calls. */
 function searching() {
@@ -93,7 +87,7 @@ test('a turn whose answer could not commit ends failed, and a restart does not r
 
   // Its answer's commit fails: the turn ends failed, its failure recorded.
   failNextAnswerWrite(mainKey(workspace));
-  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message'));
+  await workspace.agent.onMessage(owner, chatRequest(id, ASK, { messageId: id, trigger: 'submit-message' }));
   await workspace.agent.harnessAgentsIdle();
   const before = asked();
 
@@ -109,7 +103,7 @@ test("main's isolate dying after its model answered, as its turn was being close
   // Whatever main's turn asks its workspace between its model's answer and its commit is held on the way: it dies there.
   const reading = delayNextOpenWork();
   const id = crypto.randomUUID();
-  const sending = Promise.resolve(workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message')));
+  const sending = Promise.resolve(workspace.agent.onMessage(owner, chatRequest(id, ASK, { messageId: id, trigger: 'submit-message' })));
   const first = await Promise.race([reading.reached.then(() => 'held' as const), sending.then(() => 'answered' as const)]);
 
   // Its held call is never answered: the isolate died in it. A turn that asked nothing leaves the hold unused.
@@ -130,11 +124,11 @@ test("a failed turn the owner retried is answered once by the Retry, and a resta
   const id = crypto.randomUUID();
 
   failNextAnswerWrite(mainKey(workspace));
-  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message'));
+  await workspace.agent.onMessage(owner, chatRequest(id, ASK, { messageId: id, trigger: 'submit-message' }));
   await workspace.agent.harnessAgentsIdle();
 
   // The owner retries it: the Retry runs it again and answers.
-  await workspace.agent.onMessage(owner, chatRequest(crypto.randomUUID(), id, 'regenerate-message'));
+  await workspace.agent.onMessage(owner, chatRequest(crypto.randomUUID(), ASK, { messageId: id, trigger: 'regenerate-message' }));
   await driveUntil(workspace, 'the Retry never ran', () => asked() === 2);
   await workspace.agent.harnessAgentsIdle();
 
@@ -150,7 +144,7 @@ test("a node whose isolate dies after its run ended, with its end untold, is not
   const id = crypto.randomUUID();
 
   // Sent as the pane sends it; nothing waits for its agents to rest, which a dead isolate's telling never lets them.
-  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
+  await workspace.agent.onMessage(owner, chatRequest(id, SEARCH, { messageId: id, trigger: 'submit-message' }));
 
   await told.reached;
   const node = workspace.db.query<{ storage_key: string }, []>("SELECT storage_key FROM workspace_actors WHERE origin = 'swarm'").get();
@@ -191,7 +185,7 @@ test("a hire whose isolate dies as its turn's report goes to its hirer is asked 
   const id = crypto.randomUUID();
 
   // Sent as the pane sends it; nothing waits for its agents to rest, which a held report never lets them.
-  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', ASKED));
+  await workspace.agent.onMessage(owner, chatRequest(id, ASKED, { messageId: id, trigger: 'submit-message' }));
   const hire = await reporting.reached;
 
   // The hire's isolate dies as its report goes: its answer, and the report it owes, are its own, told when next woken.
@@ -237,7 +231,7 @@ test("a node whose isolate dies after its run's end committed, before it was tol
 
   const id = crypto.randomUUID();
 
-  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
+  await workspace.agent.onMessage(owner, chatRequest(id, SEARCH, { messageId: id, trigger: 'submit-message' }));
   await driveUntil(workspace, "the node's run never ended", () => {
     const node = workspace.db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE origin = 'swarm'").get();
 
@@ -274,7 +268,7 @@ test("a node whose end outgrows a stored row keeps it spilled, and its search he
   const told = delayNextRunEnd();
   const id = crypto.randomUUID();
 
-  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
+  await workspace.agent.onMessage(owner, chatRequest(id, SEARCH, { messageId: id, trigger: 'submit-message' }));
   await told.reached;
   const node = workspace.db.query<{ storage_key: string }, []>("SELECT storage_key FROM workspace_actors WHERE origin = 'swarm'").get();
 
@@ -309,7 +303,7 @@ test("a hire whose assigned turn fails as it opens tells its hirer once, though 
   const id = crypto.randomUUID();
   const told = () => relayedReports(workspace.db).filter((report) => report.includes('failed to run its assigned turn'));
 
-  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', ASKED));
+  await workspace.agent.onMessage(owner, chatRequest(id, ASKED, { messageId: id, trigger: 'submit-message' }));
   setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
   await driveUntil(workspace, "the hire's hirer was never told its task failed", () => told().length > 0);
   await workspace.agent.harnessAgentsIdle();
@@ -324,7 +318,7 @@ test("main's isolate dying as its workspace finishes reading the answer's stream
   const id = crypto.randomUUID();
 
   // The owner's request is answered as the turn's stream ends, which the held read never lets it.
-  const sending = Promise.resolve(workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message')));
+  const sending = Promise.resolve(workspace.agent.onMessage(owner, chatRequest(id, ASK, { messageId: id, trigger: 'submit-message' })));
   const first = await Promise.race([reading.then((key) => ({ held: key })), sending.then(() => ({ held: null }))]);
 
   expect(first.held).not.toBeNull();
@@ -343,7 +337,7 @@ test("a node whose isolate dies as it asks whether its run goes on, after its la
   const asking = holdNextResume();
   const id = crypto.randomUUID();
 
-  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message', SEARCH));
+  await workspace.agent.onMessage(owner, chatRequest(id, SEARCH, { messageId: id, trigger: 'submit-message' }));
   workspace.agent.harnessResetAgentIsolate(await asking);
   setSystemTime(new Date(Date.now() + RECOVERY_BACKOFF_CEILING_MS + 1));
   await driveUntil(workspace, 'the search never settled', () => searchSettled(workspace));
@@ -380,7 +374,7 @@ test("a hire whose answer cannot commit tells its hirer its turn failed, once", 
   const started = workspace;
   const told = () => relayedReports(started.db).filter((report) => report.includes('failed to run its assigned turn'));
 
-  await started.agent.onMessage(owner, chatRequest(id, id, 'submit-message', ASKED));
+  await started.agent.onMessage(owner, chatRequest(id, ASKED, { messageId: id, trigger: 'submit-message' }));
   await driveUntil(started, "the hire's hirer was never told its turn failed", () => told().length > 0);
   await started.agent.harnessAgentsIdle();
 
@@ -391,7 +385,7 @@ test("the owner's inspector reads main's step output where main's turns now run,
   const { workspace } = answering();
   const id = crypto.randomUUID();
 
-  await workspace.agent.onMessage(owner, chatRequest(id, id, 'submit-message'));
+  await workspace.agent.onMessage(owner, chatRequest(id, ASK, { messageId: id, trigger: 'submit-message' }));
   await workspace.agent.harnessAgentsIdle();
 
   const [run] = (await workspace.agent.getRunSummaries()).items;

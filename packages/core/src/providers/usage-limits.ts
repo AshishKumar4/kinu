@@ -46,7 +46,7 @@ export const LimitReportSchema: v.GenericSchema<LimitReport> = v.object({
   provider: v.string(), account: v.string(), at: v.number(), windows: v.array(LimitWindowSchema), undocumented: v.optional(v.boolean()),
 });
 
-export interface LimitRead {
+interface LimitRead {
   readonly account: string;
   readonly headers: Readonly<Record<string, string>>;
   readonly fetch: typeof fetch;

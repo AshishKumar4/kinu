@@ -19,8 +19,8 @@ import {
   type SkillFileRefusal,
   workspaceRoute,
 } from "@kinu.run/core";
-import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
-import { useMediaQuery } from "@/hooks/use-media-query";
+import { attempt, detach, diagnostics, settle, showing } from "@kinu.run/core/obs";
+import { WIDE_QUERY, useMediaQuery } from "@/hooks/use-media-query";
 import { ToolPage } from "@/components/ui/PageHeader";
 import { NavRow } from "@/components/ui/NavRow";
 import {
@@ -146,7 +146,7 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
   tab: DriveTab; path: string; shown: DriveListing | null; places: readonly DriveTab[]; unseen: boolean;
 }) {
   // Drawn only from `lg`; the tree in it reads nothing while it is not drawn.
-  const drawn = useMediaQuery("(min-width: 1024px)");
+  const drawn = useMediaQuery(WIDE_QUERY);
   const listings = useFolderWay(drawn && tab === "mine", path, shown);
 
   if (!drawn) return null;
@@ -180,7 +180,7 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
 /** Below `lg`, the places as the row under the bar; with one place there is nothing to switch. */
 /** Below `lg`, where the places column is not drawn, the places are the tool's row under its header. */
 function PlacesRow({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
-  const column = useMediaQuery("(min-width: 1024px)");
+  const column = useMediaQuery(WIDE_QUERY);
 
   if (column || places.length < 2) return null;
 
@@ -374,29 +374,37 @@ function TextPage({ text, name }: { text: string | null; name: string }) {
 /** The first lines of a text file, read once the tile is in view. */
 function TextCover({ path, name }: { path: string; name: string }) {
   const holder = useRef<HTMLSpanElement>(null);
+  const [shown, setShown] = useState(false);
   const [text, setText] = useState<string | null>(null);
 
   useEffect(() => {
     const element = holder.current;
 
     if (element === null) return;
-    let live = true;
 
     const observer = new IntersectionObserver((seen) => {
       if (!seen.some((entry) => entry.isIntersecting)) return;
       observer.disconnect();
-      readDriveText(path, 2048).then(
-        (file) => { if (live) setText(file.content ?? null); },
-        (...rejection: [unknown]) => {
-          diagnostics.failure("drive.cover_read_failed", toKinuError({ doing: `read ${path} for its tile`, cause: rejection[0], otherwise: "unavailable" }));
-        },
-      );
+      setShown(true);
     });
 
     observer.observe(element);
 
-    return () => { live = false; observer.disconnect(); };
-  }, [path]);
+    return () => { observer.disconnect(); };
+  }, []);
+
+  // Read once it has come into view: a cover that never does costs nothing.
+  useEffect(() => {
+    if (!shown) return;
+    let live = true;
+
+    detach(Effect.match(attempt({ doing: `read ${path} for its tile`, otherwise: "unavailable" }, () => readDriveText(path, 2048)), {
+      onSuccess: (file) => { if (live) setText(file.content ?? null); },
+      onFailure: (failed) => { diagnostics.failure("drive.cover_read_failed", failed); },
+    }));
+
+    return () => { live = false; };
+  }, [path, shown]);
 
   return <span ref={holder} className="absolute inset-0"><TextPage text={text} name={name} /></span>;
 }

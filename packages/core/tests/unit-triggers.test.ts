@@ -4,10 +4,9 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestActorsOver, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-import {
-  TriggerRegistry, initEventsHubTables,
-  type AlarmScheduler, type RegisterSpec, type TriggerKind,
-} from '../src/events/hub/index';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import { TriggerRegistry, type AlarmScheduler, type RegisterSpec } from '../src/events/hub/triggers';
+import type { TriggerKind } from '../src/events/hub/types';
 import {
   EventLog, JsonObjectSchema, cancelTrigger, createTimerTrigger, dailyTimeOf, fireDueTriggers, listTriggers, retimeDailyTrigger,
   type KinuEvent, type TimerPayload,

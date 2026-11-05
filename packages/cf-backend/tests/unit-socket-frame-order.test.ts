@@ -10,6 +10,7 @@ import { gatedClientHandlers, type ClientHandlers } from '../src/client-socket-g
 import { sessionBearerConnectionTag } from '../src/cli/rpc-gate';
 import { socketConnection } from './helpers/bindings';
 import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do';
+import { chatRequest } from './helpers/chat-frames';
 
 const users: TestUserDO[] = [];
 
@@ -27,11 +28,6 @@ function nameOf(message: WSMessage): string {
 }
 
 /** A send from the chat's composer, as the SDK's transport frames it. */
-function chatRequest(text: string): string {
-  const body = { messages: [{ id: `input-${text}`, role: 'user', parts: [{ type: 'text', text }] }], trigger: 'submit-message' };
-
-  return JSON.stringify({ type: 'cf_agent_use_chat_request', id: text, init: { method: 'POST', body: JSON.stringify(body) } });
-}
 
 /**
  * A gate over a browser session whose authority the owner's user object answers when the test says, frame by frame,
@@ -145,7 +141,7 @@ test("the Stop's RPC keeps its place in the room's order ahead of the send that 
   }, room);
 
   const stop = handlers.onMessage(socket, JSON.stringify({ type: 'rpc', id: 'stop', method: 'cancelCurrentWork', args: [] }));
-  const send = handlers.onMessage(socket, chatRequest('send'));
+  const send = handlers.onMessage(socket, chatRequest('send', 'send'));
 
   await bothAsked;
   asked[1]?.();

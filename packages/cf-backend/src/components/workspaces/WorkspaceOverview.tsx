@@ -102,7 +102,7 @@ export function WorkspaceOverview({ workspace, title, logo, rpc, readMoves, plan
     <Page fill icon={<WorkspaceLogo title={title} logo={logo} size={20} />} title={title} data-workspace-overview>
       <p className="t-body p-text-3" data-overview-summary>
         {work === null ? "Reading the workspace…" : summaryOf(agents, cards)}
-        {lineage && <> · forked from <Link to={workspaceRoute(lineage.sourceWorkspaceName)} className="p-accent-fg hover:underline">its parent</Link></>}
+        {lineage && <> · forked from <Link to={workspaceRoute(lineage.sourceWorkspaceName)} className="p-link">its parent</Link></>}
       </p>
 
       <section aria-labelledby="overview-github" className="flex flex-col gap-3">

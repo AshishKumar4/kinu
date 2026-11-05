@@ -6,7 +6,7 @@ export const PROPOSED_TASK_STATUSES = [
   'completed',
 ] as const;
 
-export type ProposedTaskStatus = (typeof PROPOSED_TASK_STATUSES)[number];
+type ProposedTaskStatus = (typeof PROPOSED_TASK_STATUSES)[number];
 
 export interface ProposedTask {
   id: string;

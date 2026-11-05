@@ -245,6 +245,7 @@ export {
   type WorkspaceTitleState,
   isWorkspaceName,
   validateWorkspaceName,
+  WORKSPACE_ADDRESS_MAX,
 } from './identity/naming';
 
 export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_LOGO_SYSTEM_PROMPT } from './identity/logo';
@@ -391,9 +392,9 @@ export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateSt
 
 // Browser-safe slate vocabulary, so it belongs on this value-imported barrel.
 export {
-  buildSlateHostContext, isSlateFrameMessage, keptSlateContext, slateFrameSrc, slateLinkId, SLATE_BRIDGE_MESSAGE,
-  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_QUERY_PARAM, SLATE_THEME_TOKENS,
-  SlateFrameMessageSchema, type SlateHostContext,
+  buildSlateHostContext, readSlateFrameMessage, keptSlateContext, slateFrameSrc, slateLinkId, SLATE_BRIDGE_MESSAGE,
+  SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
+  type SlateHostContext,
 } from './slates/host-context';
 
 export {
@@ -1080,7 +1081,7 @@ export {
 export { readScreenData, screenDataFrames } from './execution/device-screen-data';
 
 export {
-  nimbusSessionShell, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,
+  nimbusSessionShell, nimbusShellSession, type NimbusSandboxHandle, type NimbusSandboxFiles, type NimbusStartResult,
   type NimbusExecResult, type NimbusPortInfo, nimbusSessionFiles,
 } from './execution/nimbus';
 
@@ -1379,16 +1380,16 @@ export { type RatioProblem } from './strategy/exec-ratio';
 
 export { liveHead, LiveWorkers } from './strategy/live-workers';
 
-export { runNodeAgent, type HostedNodeSeat } from './strategy/node-agent';
+export { NODE_BUILTIN_TOOLS, runNodeAgent, type HostedNodeSeat } from './strategy/node-agent';
 
 export {
   facetHomeProvisioner, facetHomeReleaser, nodeWorkspace, type NodeHomeHost, type NodeIdentity, type NodeWorkspace,
   type NodeWorkspaceProvisioner,
 } from './strategy/node-workspace';
 
-export { type ExplorationRecord, type Floor, type ObjectiveIdentity, type PublicationState } from './types/objective';
+export { type ExplorationRecord, type Floor, type ObjectiveIdentity, type PublicationState, type VerifierFault } from './types/objective';
 
-export { NAMED_SWARM_PRESETS } from './types/swarm';
+export { NAMED_SWARM_PRESETS, type SwarmCarry, type SwarmScore, type SwarmUnit } from './types/swarm';
 
 // Bench harness: pure math; the runner lives in scripts/bench.ts.
 export {

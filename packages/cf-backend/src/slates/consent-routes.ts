@@ -1,10 +1,11 @@
 /** The viewer's own grants and decisions. The app's session gate runs before this family, including its CSRF check. */
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
-import { err, json, objectNamed, safeJson, type ObjectNamespace, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
+import { err, json, safeJson, type ObjectNamespace, type OwnerCapabilityEnv, type UserCaller } from '@kinu.run/core';
 import { EffectDecisionSchema, SlateConsentSchema, SlateConsentsAnswerSchema } from '@kinu.run/core/slates';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 import type { UserDO } from '../user/user-do';
+import { accountNamed } from '../user/workspace-placement';
 
 type ConsentAuthority = Pick<UserDO, 'slateConsents' | 'consentSlate' | 'withdrawSlateConsent' | 'decideSlateEffect'>;
 
@@ -23,7 +24,7 @@ const RootQuerySchema = v.pipe(v.string(), v.parseJson(),
   v.record(v.string(), v.string()));
 
 function account(c: Context<ConsentEnv>): ConsentAuthority {
-  return objectNamed(c.env.UserDO, c.get('identity').userId);
+  return accountNamed(c.env.UserDO, c.get('identity').userId);
 }
 
 export const consentRoutes = new Hono<ConsentEnv>();

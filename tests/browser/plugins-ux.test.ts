@@ -433,7 +433,6 @@ describe('MCP presets', () => {
             expect(text).toContain('GitHub');
             expect(text).toContain('Connected');
             expect(text).toContain('Needs sign-in');
-            expect(text).toContain('Add custom server');
 
             // Google is one connection, not a preset, drawn as a row like theirs.
             await modal.waitForSelector('[role="dialog"] [data-plugin-source="google"][data-plugin-state="Connected"]');

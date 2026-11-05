@@ -5,18 +5,15 @@ import { isStepCount, tool, type LanguageModel, type ModelMessage, type ToolSet 
 import { z } from 'zod';
 import { runChat, type ChatEvent } from '../src/chat';
 import { createChatModel } from '../src/llm';
+import { sseBody } from '@kinu.run/test-utils';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
 const ORPHAN_ID = 'call_ed15d29f352a4735e6b01b5';
 
-function sse(events: string[]): string {
-  return events.map((e) => `data: ${e}\n\n`).join('');
-}
-
 /** Text + one `shell` call, finishing on tool_calls: the state when the owner presses stop. */
 function toolStep(id: string): Response {
-  return new Response(sse([
+  return new Response(sseBody([
     JSON.stringify({ choices: [{ delta: { content: 'checking the tree' } }] }),
     JSON.stringify({ choices: [{ delta: { tool_calls: [
       { index: 0, id, type: 'function', function: { name: 'shell', arguments: '{"command":"git status"}' } },
@@ -27,7 +24,7 @@ function toolStep(id: string): Response {
 }
 
 function textStep(text: string): Response {
-  return new Response(sse([
+  return new Response(sseBody([
     JSON.stringify({ choices: [{ delta: { content: text } }] }),
     JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 30, completion_tokens: 3, total_tokens: 33 } }),
     '[DONE]',

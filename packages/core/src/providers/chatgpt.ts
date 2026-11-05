@@ -31,7 +31,7 @@ const CHATGPT_SIGNED_OUT = 'chatgpt_signed_out';
 
 const TOOL_NAMESPACE = 'functions';
 
-export interface ChatGptDeviceRoute {
+interface ChatGptDeviceRoute {
   readonly fetch: typeof fetch;
   unavailableReason(): Promise<string | undefined>;
 }

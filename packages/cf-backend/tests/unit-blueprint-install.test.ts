@@ -5,10 +5,10 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { Hono } from 'hono';
 import {
-  asFetchFunction, BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
+  BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
   type NameOrigin, type ProfileCatalogEnvelope, type UserCaller, type WorkspaceSeed,
 } from '@kinu.run/core';
-import { present } from '@kinu.run/test-utils';
+import { present, holdFetch } from '@kinu.run/test-utils';
 import type { FamilyEnv } from '../src/api/context';
 import { handleInstallRequest, installedAssistant, type InstallAuthority, type InstallBody } from '../src/user/blueprint-install';
 import type { CreateWorkspaceEnv } from '../src/user/workspace-access';
@@ -126,7 +126,7 @@ function account({ mailDown = false } = {}) {
 
   // One provider stand-in while any install runs, so installs at once share it.
   let installing = 0;
-  const originalFetch = globalThis.fetch;
+  const network = holdFetch();
 
   const install = async (id: string, body: Partial<InstallBody>) => {
     const owner = await testOwner();
@@ -141,7 +141,7 @@ function account({ mailDown = false } = {}) {
       }));
 
     // No reachable provider: the menu falls back to the native Workers AI default, as production creates do.
-    if (installing++ === 0) globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+    if (installing++ === 0) network.stub(async () => new Response('{}', { status: 503 }));
 
     try {
       const response = present(await serveFamily(family)(new Request(`https://kinu.run/api/user/blueprints/${id}/install`, {
@@ -150,7 +150,7 @@ function account({ mailDown = false } = {}) {
 
       return { status: response.status, body: await response.json() };
     } finally {
-      if (--installing === 0) globalThis.fetch = originalFetch;
+      if (--installing === 0) network.restore();
     }
   };
 

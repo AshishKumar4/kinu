@@ -311,7 +311,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'reads the machine — inode tables, temp roots, stray project markers — none of which a hash over the tree stands for.' },
   },
   {
-    run: 'bun test --timeout=0 --isolate scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/mail-wiring.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts scripts/fault-script.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/jsonc.test.ts scripts/mail-wiring.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts scripts/fault-script.test.ts',
     label: 'Pattern census and parser self-tests',
     tier: 'push',
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
@@ -330,15 +330,6 @@ export const LADDER: readonly Gate[] = [
       + "index.css outside theme.ts and the role table",
     blind: 'class names built at run time from parts, and what a component computes in the browser (computed-style.ts)',
     inputs: { kind: 'derived', imports: CF_BACKEND_SOURCES },
-  },
-  {
-    run: 'bun scripts/pattern-inventory.ts',
-    label: 'Pattern inventory',
-    tier: 'local',
-    seconds: 2.5, // Measured 2026-09-23 on the 24-thread box at load 5: 2.50/2.51/2.63 s.
-    catches: 'unclassified code-pattern and named scanner candidates in the shared source corpus',
-    blind: 'runtime aliases, unnamed scanners, native source and embedded shell language tokens',
-    inputs: { kind: 'derived' },
   },
   {
     run: 'bun run lint',
@@ -1761,43 +1752,9 @@ export const LADDER: readonly Gate[] = [
     // its 28 files' timings sum to 700 s, so four timed shards of about 175 s each.
     ciShards: 4,
     seconds: 131.47,
-    catches: 'the six UI gates\' own decision logic, including the one that would have '
-      + 'caught `--radius` being undefined at `:root` while 191 `rounded-*` sites '
-      + 'computed 0px. The original two self-tests ran in NO tier until this line: the gates were '
-      + 'built, deliberately kept off the deploy path for their Chrome cost, and their '
-      + 'logic was then guarded by nothing anywhere. Now also the THEME axis, which had '
-      + 'no coverage at all: `gallery.html:7-22` resolves the initial `data-mode` and '
-      + '`data-palette` from `prefers-color-scheme` and localStorage, and until 2026-09-24 '
-      + 'the harness pinned neither, so every token assertion here was made against whichever '
-      + 'scheme the desktop settings portal happened to answer — dark on this machine, and '
-      + 'silently the other on a build or CI image that answered differently. The four '
-      + 'cascade scenarios now pin the default theme AND assert they got it, since a pin '
-      + 'nobody reads back is not a pin, and three further passes drive the real "Switch '
-      + 'to light mode" and "Switch to the silk palette" controls to audit the other '
-      + 'three themes: umber light (`index.css:300-388`), silk dark and silk light '
-      + '(`index.css:389-589`). Each is a structurally distinct palette rather than a '
-      + 'filter over another, umber light carries its own record of "three passes of '
-      + 'complaint, all the same one", and in any of them an unmapped role token renders '
-      + 'as Kumo\'s uncustomised brand colour instead of throwing. And the plan '
-      + 'document AS A BROWSER LAYS IT OUT, which was authored and then run by '
-      + 'nothing: `tests/browser/plan-review-ux.test.ts` was untracked and claimed by no row '
-      + 'while this same table was edited for three other new suites, so the headline '
-      + 'UI change of its slice shipped with its acceptance evidence never executed. It '
-      + 'measures the two refusals the header owes the document — a later h1 stays '
-      + 'where the agent wrote it, and an ANNOTATED h1 keeps its block, because the '
-      + 'highlighter resolves an anchor inside the viewer\'s own article and a promoted '
-      + 'block leaves the rail an entry that can never draw — plus the '
-      + 'narrow-container scrim actually CLOSING the rail rather than dimming a '
-      + 'document with no way back, and the action strip collapsing on a settled plan '
-      + 'instead of spending a margin on buttons nobody can press. The models '
-      + 'section\'s accessible names are read the same way: every tier row and '
-      + 'role field stays reachable by the name assistive technology announces. The '
-      + 'living background is measured on the shipped shell itself: it sits '
-      + 'behind the rail and the page with pointer-events none and a negative '
-      + 'z-index, stops its clock when the document is hidden, draws one still '
-      + 'under reduced motion and on a phone width, never mounts under a '
-      + 'workspace route, and follows the overview read model through idle, '
-      + 'working and attention.',
+    catches: 'the UI gates\' own decisions (computed style against the theme tokens, design-system scan), and each '
+      + 'browser suite\'s behaviour on the gallery: the plan document\'s layout and rail, the models section\'s accessible '
+      + 'names, and every other *-ux suite the glob admits, in the theme each pins and asserts it got',
     blind: 'the gallery render itself. `gate:computed-style` boots vite and Chrome over '
       + '21 frames × 4 themes and stays a standalone run — a gate that fails because '
       + 'Chrome is missing fails for a reason unrelated to the change under test. Also '
@@ -2212,13 +2169,13 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:mutation-fences',
     label: 'Concurrency fences stay load-bearing',
-    ciExempt: 'proves the tree being deployed, not a push: it materialises a `git worktree add --detach` copy and runs eight '
-      + '`bun test` processes inside it. It runs in the deploy\'s source-phase job on armada, whose '
+    ciExempt: 'proves the tree being deployed, not a push: it materialises a `git worktree add --detach` copy and runs two '
+      + '`bun test` processes per fence inside it. It runs in the deploy\'s source-phase job on armada, whose '
       + 'checkout carries the whole history.',
     tier: 'deploy',
-    // Four fences, each proved twice (pristine green, mutant red) inside one
-    // sparse `git worktree add --detach` copy: 2.5s measured 2026-08-31 on the
-    // 24-thread box, dominated by the eight `bun test` spawns.
+    // Each fence proved twice (pristine green, mutant red) inside one sparse
+    // `git worktree add --detach` copy: 2.5s measured 2026-08-31 on the 24-thread
+    // box, dominated by two `bun test` spawns per fence.
     seconds: 2.5,
     catches: 'a concurrency fence whose red proof has rotted. A fence is a guard whose two '
       + 'readings both compile — `this.#owns(gen)` around a stale write, a `spawnedBefore` '

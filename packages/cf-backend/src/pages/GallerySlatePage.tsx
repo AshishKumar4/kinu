@@ -1,13 +1,13 @@
 /**
  * A listed slate's own page (sharing v7 `gallery-slate`): Open by its link, Fork with its key, Star, and Report.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { Effect } from "effect";
 import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
 import { FlagIcon, FolderIcon, GitForkIcon, GithubLogoIcon, PlayIcon, PlugIcon, SparkleIcon, StarIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, galleryPicturePath, type GalleryListing, type GallerySlate, type RoomService } from "@kinu.run/core";
+import { APP_ROUTES, galleryPicturePath, type GalleryListing, type RoomService } from "@kinu.run/core";
 import { detach, showing } from "@kinu.run/core/obs";
 import { useGallerySignedIn } from "@/hooks/use-gallery-signed-in";
 import { FRAME_PAGE, Page } from "@/components/ui/PageHeader";
@@ -27,6 +27,7 @@ import { Group } from "@/components/ui/Group";
 import { Surface } from "@/components/ui/Surface";
 import { TextArea } from "@/components/ui/Field";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 
 function ReportDialog({ listing, onClose, onSent }: { listing: GalleryListing; onClose: () => void; onSent: () => void }) {
   const [reason, setReason] = useState("");
@@ -84,36 +85,13 @@ function UsesYours({ needs }: { needs: readonly RoomService[] }) {
   );
 }
 
-export default function GallerySlatePage() {
-  const { workspace = "", slate = "" } = useParams();
-  const [search] = useSearchParams();
-  const signedIn = useGallerySignedIn();
-  const [read, setRead] = useState<GallerySlate | null>(null);
-  const [failure, setFailure] = useState<string | null>(null);
-  const [tries, setTries] = useState(0);
-  const [like, setLike] = useState<readonly ExploreItem[]>([]);
-  const [star, setStar] = useState<{ on: boolean; count: number } | null>(null);
+/** The slate's star as the reader sees it: their own press over the count the page was read with, for this slate only. */
+function useStar(workspace: string, slate: string, listing: GalleryListing | null) {
+  const shownSlate = `${workspace}/${slate}`;
+  const [pressed, setPressed] = useState<{ slate: string; on: boolean; count: number } | null>(null);
+  const listed = listing === null ? null : { on: listing.starred, count: listing.stars };
+  const star = pressed?.slate === shownSlate ? pressed : listed;
   const [starFailure, setStarFailure] = useState<string | null>(null);
-  // Back from signing in to fork: the picker is open.
-  const [dialog, setDialog] = useState<"fork" | "report" | null>(signedIn && search.has("fork") ? "fork" : null);
-  const [reported, setReported] = useState(false);
-
-  // The slate's page, then more apps of its category from Explore: never itself.
-  useEffect(() => {
-    let current = true;
-
-    detach(Effect.catchCause(Effect.flatMap(Effect.promise(() => readGallerySlate(workspace, slate)), (page) => {
-      if (!current) return Effect.void;
-      setRead(page);
-      setStar({ on: page.listing.starred, count: page.listing.stars });
-
-      return Effect.map(Effect.promise(() => readExplore({ q: "", kind: "app", sort: "trending", category: page.listing.category, page: 0 })), (same) => {
-        if (current) setLike(same.items.filter((each) => each.kind === "app" && (each.app.workspace !== workspace || each.app.slate !== slate)).slice(0, 2));
-      });
-    }), showing((chain) => { if (current) setFailure(chain); })));
-
-    return () => { current = false; };
-  }, [workspace, slate, tries]);
 
   // Drawn at once, and put back if the Gallery refuses it.
   const toggleStar = useCallback(() => {
@@ -121,16 +99,55 @@ export default function GallerySlatePage() {
     const before = star;
     const on = !before.on;
 
-    setStar({ on, count: before.count + (on ? 1 : -1) });
+    setPressed({ slate: shownSlate, on, count: before.count + (on ? 1 : -1) });
     setStarFailure(null);
     detach(Effect.catchCause(Effect.promise(() => starListing({ workspace, slate, on })), showing((chain) => {
-      setStar(before);
+      setPressed({ slate: shownSlate, ...before });
       setStarFailure(chain);
     })));
-  }, [star, workspace, slate]);
+  }, [star, workspace, slate, shownSlate]);
+
+  return { star, starFailure, toggleStar };
+}
+
+/** The slate's page, then more apps of its category from Explore once the page says which: never itself. */
+function useSlatePage(workspace: string, slate: string) {
+  const loadPage = useCallback(() => readGallerySlate(workspace, slate), [workspace, slate]);
+  const page = useAsyncResource(loadPage);
+  const read = lastValue(page.resource);
+  const category = read?.listing.category;
+
+  const loadLike = useCallback(async (): Promise<readonly ExploreItem[]> => {
+    if (category === undefined) return [];
+    const same = await readExplore({ q: "", kind: "app", sort: "trending", category, page: 0 });
+
+    return same.items.filter((each) => each.kind === "app" && (each.app.workspace !== workspace || each.app.slate !== slate)).slice(0, 2);
+  }, [category, workspace, slate]);
+
+  const likeRead = useAsyncResource(loadLike);
+  const like = lastValue(likeRead.resource) ?? [];
+  let failure: string | null = null;
+
+  if (likeRead.resource.status === "error") failure = likeRead.resource.message;
+
+  if (page.resource.status === "error") failure = page.resource.message;
+
+  return { read, like, failure, retry: () => { page.reload(); likeRead.reload(); } };
+}
+
+export default function GallerySlatePage() {
+  const { workspace = "", slate = "" } = useParams();
+  const [search] = useSearchParams();
+  const signedIn = useGallerySignedIn();
+  const { read, like, failure, retry } = useSlatePage(workspace, slate);
+  const { star, starFailure, toggleStar } = useStar(workspace, slate, read?.listing ?? null);
+  // Back from signing in to fork: the picker is open.
+  const [dialog, setDialog] = useState<"fork" | "report" | null>(signedIn && search.has("fork") ? "fork" : null);
+  const [reported, setReported] = useState(false);
+
 
   if (failure !== null) {
-    return <div className={FRAME_PAGE}><LoadFailure what="this slate" message={failure} onRetry={() => { setFailure(null); setTries((count) => count + 1); }} /></div>;
+    return <div className={FRAME_PAGE}><LoadFailure what="this slate" message={failure} onRetry={retry} /></div>;
   }
 
   if (read === null || star === null) return <div className="flex h-full items-center justify-center"><Loader size="base" /></div>;

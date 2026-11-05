@@ -64,8 +64,13 @@ const AnnotationCard = ({
 }: CardProps) => {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(annotation.text ?? '');
+  // A note saved elsewhere replaces the draft here.
+  const [savedText, setSavedText] = useState(annotation.text);
 
-  useEffect(() => setText(annotation.text ?? ''), [annotation.text]);
+  if (savedText !== annotation.text) {
+    setSavedText(annotation.text);
+    setText(annotation.text ?? '');
+  }
 
   const save = () => {
     const next = text.trim();

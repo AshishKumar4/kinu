@@ -6,15 +6,12 @@ import {
   INTERRUPTED_TURN, runChat, createChatModel,
   type ChatEvent,
 } from '../src/index';
+import { sseBody } from '@kinu.run/test-utils';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
 
-function sse(events: string[]): string {
-  return events.map((e) => `data: ${e}\n\n`).join('');
-}
-
 function healthyToolStep(): Response {
-  return new Response(sse([
+  return new Response(sseBody([
     JSON.stringify({ choices: [{ delta: { content: 'Let me look' } }] }),
     JSON.stringify({ choices: [{ delta: { tool_calls: [
       { index: 0, id: 'tc1', type: 'function', function: { name: 'shell', arguments: '{"command":"wc -l"}' } },
@@ -89,7 +86,7 @@ describe('dead provider stream fails the turn', () => {
   });
 
   test('a [DONE]-only SSE mid-task throws instead of fake-completing', async () => {
-    const { threw, done } = await driveTurn(() => new Response(sse(['[DONE]']), { headers: SSE_HEADERS }));
+    const { threw, done } = await driveTurn(() => new Response(sseBody(['[DONE]']), { headers: SSE_HEADERS }));
     expect(done).toBeUndefined();
     expect(threw?.message ?? '').toContain('terminated prematurely');
   });
@@ -100,7 +97,7 @@ describe('dead provider stream fails the turn', () => {
 
   for (const step of finished) {
     test(step.name, async () => {
-      const { threw, done } = await driveTurn(() => new Response(sse([
+      const { threw, done } = await driveTurn(() => new Response(sseBody([
         JSON.stringify({ choices: [{ delta: { content: step.text } }] }),
         JSON.stringify({ choices: [{ delta: {}, finish_reason: step.reason }], usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 } }),
         '[DONE]',
@@ -112,7 +109,7 @@ describe('dead provider stream fails the turn', () => {
   }
 
   test('a model-chosen stop WITHOUT content is still a completion, not an error', async () => {
-    const { threw, done } = await driveTurn(() => new Response(sse([
+    const { threw, done } = await driveTurn(() => new Response(sseBody([
       JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 0, total_tokens: 20 } }),
       '[DONE]',
     ]), { headers: SSE_HEADERS }));
@@ -126,7 +123,7 @@ describe('dead provider stream fails the turn', () => {
 describe('an unmapped finish reason alone is not a dead stream', () => {
   test('a FINAL step whose only output was a TOOL CALL survives an unmapped reason', async () => {
     // A tool-call step emits no text; it must be the last step because the verdict is read after the loop.
-    const toolStepEndingOnOther = () => new Response(sse([
+    const toolStepEndingOnOther = () => new Response(sseBody([
       JSON.stringify({ choices: [{ delta: { tool_calls: [
         { index: 0, id: 'tc9', type: 'function', function: { name: 'shell', arguments: '{"command":"ls"}' } },
       ] } }] }),
@@ -153,7 +150,7 @@ describe('a stream has no elapsed deadline', () => {
     const pending = driveTurn(() => new Response(new ReadableStream({
       start(c) {
         controller = c;
-        c.enqueue(enc.encode(sse([
+        c.enqueue(enc.encode(sseBody([
           JSON.stringify({ choices: [{ delta: { content: 'started' } }] }),
         ])));
         started.resolve();
@@ -167,7 +164,7 @@ describe('a stream has no elapsed deadline', () => {
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    controller?.enqueue(enc.encode(sse([
+    controller?.enqueue(enc.encode(sseBody([
       JSON.stringify({ choices: [{ delta: { content: ' and completed' } }] }),
       JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 3, total_tokens: 23 } }),
       '[DONE]',
@@ -187,7 +184,7 @@ describe('a stream has no elapsed deadline', () => {
 
     const pending = driveTurn(() => new Response(new ReadableStream({
       start(controller) {
-        controller.enqueue(enc.encode(sse([
+        controller.enqueue(enc.encode(sseBody([
           JSON.stringify({ choices: [{ delta: { content: 'partial work' } }] }),
         ])));
         started.resolve();

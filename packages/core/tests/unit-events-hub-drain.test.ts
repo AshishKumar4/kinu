@@ -1,7 +1,7 @@
 // buildDrainBatch excludes the agent's own self-emitted/internal events (anti-self-wake).
 import { describe, test, expect } from 'bun:test';
-import { buildDrainBatch } from '../src/events/hub/index';
-import type { BaseEvent, IngressKind, PeerAgentPayload, KinuEvent } from '../src/events/hub/index';
+import { buildDrainBatch } from '../src/events/hub/drain';
+import type { BaseEvent, IngressKind, PeerAgentPayload, KinuEvent } from '../src/events/hub/types';
 import { present } from '@kinu.run/test-utils';
 
 const EVENT_BASE = {

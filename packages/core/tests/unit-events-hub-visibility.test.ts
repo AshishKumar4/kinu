@@ -3,12 +3,12 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, createTestActorsOver, filesIn, present } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-import {
-  EVENT_BRIEF_MAX_CHARS, EventLog, applyVisibilityForStorage, eventContentPath, initEventsHubTables,
-  redactPayload, renderForLLM, spillEventContent,
-} from '../src/events/hub/index';
+import { eventContentPath, spillEventContent } from '../src/events/hub/content-spill';
+import { EventLog } from '../src/events/hub/log';
+import { initEventsHubTables } from '../src/events/hub/schema';
+import { EVENT_BRIEF_MAX_CHARS, applyVisibilityForStorage, redactPayload, renderForLLM } from '../src/events/hub/visibility';
 import { redactSecrets } from '../src/safety/secret-patterns';
-import type { BaseEvent } from '../src/events/hub/index';
+import type { BaseEvent } from '../src/events/hub/types';
 import { receivePeerMessage } from '../src/events/ingress/peer';
 import { acceptContainerEvent } from '../src/events/ingress/container';
 import { makeSqlExec } from './helpers';

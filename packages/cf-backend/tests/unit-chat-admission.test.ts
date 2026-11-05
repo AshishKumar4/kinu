@@ -13,9 +13,10 @@ import {
   workspaceMainActor, type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { chatCompletion, GATEWAY_MODEL, requestOf, stubAiBinding } from './helpers/platform-gateway';
-import { actorConnectionTag, RunEventRecorder, WORKSPACE_TITLE_SYSTEM_PROMPT, type SendMetadata } from '@kinu.run/core';
+import { actorConnectionTag, RunEventRecorder, WORKSPACE_TITLE_SYSTEM_PROMPT } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
 import { wrapDatabase } from '@kinu.run/core/identity';
+import { chatRequest, doneFrames } from './helpers/chat-frames';
 
 function scriptedAnswerResult(text: string) {
   return {
@@ -57,30 +58,6 @@ function connection(agent: { broadcast: (message: string, exclude?: string[]) =>
   });
 
   return { wire, sent, frame: (holds) => frames.until(holds) };
-}
-
-function chatRequest(id: string, text: string, metadata?: SendMetadata): string {
-  return JSON.stringify({
-    type: 'cf_agent_use_chat_request', id,
-    init: { method: 'POST', body: JSON.stringify({
-      messages: [{ id: `input-${id}`, role: 'user', parts: [{ type: 'text', text }], ...(metadata !== undefined && { metadata }) }],
-      trigger: 'submit-message',
-    }) },
-  });
-}
-
-function doneFrames(sent: readonly string[]): Array<{ id: string; error?: string; landed?: string }> {
-  return sent.flatMap((raw) => {
-    const parsed = v.safeParse(v.object({
-      type: v.literal('cf_agent_use_chat_response'),
-      id: v.string(), done: v.optional(v.boolean()), error: v.optional(v.boolean()),
-      landed: v.optional(v.string()), body: v.optional(v.string()),
-    }), JSON.parse(raw));
-
-    if (!parsed.success || parsed.output.done !== true) return [];
-
-    return [{ id: parsed.output.id, ...(parsed.output.error === true && { error: parsed.output.body }), ...(parsed.output.landed !== undefined && { landed: parsed.output.landed }) }];
-  });
 }
 
 /** `turn` for the loop's own seal; anything else is the harness plane's notices. */
@@ -150,7 +127,7 @@ describe('a chat request through the production gate', () => {
     const gate = agent.harnessChatGate();
 
     // As `kinu run` sends against the cloud: one task on the deep tier, run as an independent task.
-    await gate(wire, chatRequest('req-oneshot', 'Count the files.', { kinuTier: 'deep', kinuTurn: { oneShot: true } }));
+    await gate(wire, chatRequest('req-oneshot', 'Count the files.', { metadata: { kinuTier: 'deep', kinuTurn: { oneShot: true } } }));
     await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-oneshot'));
     await gate(wire, chatRequest('req-next', 'And the folders?'));
     await frame((frames) => doneFrames(frames).some((done) => done.id === 'req-next'));

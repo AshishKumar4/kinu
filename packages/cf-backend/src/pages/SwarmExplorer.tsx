@@ -50,7 +50,8 @@ function CanvasNotice({ failure, loading, what, waiting, empty, onRetry }: {
 }
 
 export default function SwarmExplorer() {
-  const { agentId } = useParams();
+  // Its route always names the workspace.
+  const { agentId = "" } = useParams();
   const [params] = useSearchParams();
   const runId = params.get("run");
   const state = useKinu(agentId);
@@ -87,7 +88,7 @@ export default function SwarmExplorer() {
   return (
     <Surface look="page" className="h-full flex flex-col">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 border-b p-border">
-        <Link to={workspaceRoute(agentId ?? "")} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
+        <Link to={workspaceRoute(agentId)} className="shrink-0"><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
         <div className="hidden sm:block h-4 shrink-0 border-l p-border" />
         <GitForkIcon size={16} className="p-accent-fg shrink-0" />
         <span className="t-label p-text shrink-0">Swarm explorer</span>

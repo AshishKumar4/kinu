@@ -77,7 +77,7 @@ export function unitHash(text: string): number {
   return x / 0x1_0000_0000;
 }
 
-export interface Interval {
+interface Interval {
   lo: number;
   hi: number;
   level: number;

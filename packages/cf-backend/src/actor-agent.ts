@@ -11,7 +11,6 @@ import {
   type AgentContext, type Connection, type ConnectionContext,
 } from "agents";
 import {
-  objectNamed,
   inspectSubagentStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
   type BackgroundJob, type BackgroundJobRunnerDeps, type Clock, type WorkspaceJobPorts, WorkspaceJobAuthorities, type JobAuthority,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
@@ -200,6 +199,7 @@ import {
 import * as v from 'valibot';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from './wake-jobs';
 import { callUserMcpTool } from './user-mcp-call';
+import { accountNamed } from './user/workspace-placement';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
 interface ModelDimensions {
@@ -2979,7 +2979,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const userId = this.getOwnerUserId();
 
     if (!userId) return null;
-    const stub: UserHubClient = objectNamed(this.env.UserDO, userId);
+    const stub: UserHubClient = accountNamed(this.env.UserDO, userId);
 
     return stub;
   }
@@ -3003,7 +3003,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   protected requireOwnerUserDO(): UserHubClient {
-    return objectNamed(this.env.UserDO, this.requireOwner());
+    return accountNamed(this.env.UserDO, this.requireOwner());
   }
 
   /** Throws when no capability token exists; an unclaimed workspace reaches nothing. */

@@ -24,14 +24,6 @@ afterAll(() => { rmSync(root, { recursive: true, force: true }); });
 
 const STAMP = 'KINU_JOB_ID';
 
-class TestBox extends TestDevbox<unknown> {
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-}
-
-
 /** The read of a box that is running, which answers rows, never null. */
 function read(listeners: readonly PortListener[] | null): readonly PortListener[] {
   if (listeners === null) throw new Error('the box is running, yet its listener read answered as if it were down');
@@ -47,7 +39,7 @@ function server(fifo: string): string {
 
 describe("a port's listener", () => {
   test('reads as the stamp on the command that started it, or on its nearest ancestor', async () => {
-    const { box } = harness(TestBox, undefined, localExec);
+    const { box } = harness(TestDevbox, undefined, localExec);
     await box.devboxStartup();
     const cwd = mkdtempSync(join(root, 'serve-'));
     const fifos = ['direct', 'parent', 'none'].map((name) => join(cwd, name));
@@ -87,7 +79,7 @@ describe("a port's listener", () => {
   // Devbox review P1-2: the rest ask matched a listener to a command by its process group, so a server in a group of its
   // own, as a job's server under its tmux pane is (D95), went unnamed. The listener's ancestry finds it.
   test("the rest ask names the port a command's server listens on, whatever process group the server is in", async () => {
-    const { box, container, rows } = harness(TestBox, undefined, localExec);
+    const { box, container, rows } = harness(TestDevbox, undefined, localExec);
     await box.devboxStartup();
     const fifo = join(mkdtempSync(join(root, 'rest-')), 'port');
 
@@ -114,7 +106,7 @@ describe("a port's listener", () => {
   });
 
   test('a port nothing holds has no listener', async () => {
-    const { box } = harness(TestBox, undefined, localExec);
+    const { box } = harness(TestDevbox, undefined, localExec);
     await box.devboxStartup();
     const unheld = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data: () => {} } });
     const port = unheld.port;
@@ -125,7 +117,7 @@ describe("a port's listener", () => {
   });
 
   test('a box that is not running answers null, and the read does not start it', async () => {
-    const { box, container } = harness(TestBox, undefined, localExec);
+    const { box, container } = harness(TestDevbox, undefined, localExec);
     await box.devboxStartup();
     await container.stop();
     const starts = container.startOptions.length;
@@ -139,7 +131,7 @@ describe("a port's listener", () => {
 // activation failed its job. The box names the processes still running under a job's stamp, so the job is picked up.
 describe("a job's processes", () => {
   test('are the ones running under its stamp, and none once they exit', async () => {
-    const { box } = harness(TestBox, undefined, localExec);
+    const { box } = harness(TestDevbox, undefined, localExec);
     await box.devboxStartup();
     const cwd = mkdtempSync(join(root, 'stamped-'));
     const fifos = ['kept', 'other'].map((name) => join(cwd, name));
@@ -177,7 +169,7 @@ describe("a job's processes", () => {
   });
 
   test('a box that is not running answers null, and the read does not start it', async () => {
-    const { box, container } = harness(TestBox, undefined, localExec);
+    const { box, container } = harness(TestDevbox, undefined, localExec);
     await box.devboxStartup();
     await container.stop();
     const starts = container.startOptions.length;

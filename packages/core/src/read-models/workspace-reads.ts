@@ -2,9 +2,10 @@
  * The workspace page's reads as one policy: which sources it reads, which a landed opening refreshes, which read may
  * still publish, and how their failures read to the owner. Pure; the browser's `useKinu` drives it.
  */
+import { Cause, Effect, Result } from 'effect';
 import * as v from 'valibot';
 import { looksLikeSecretField } from '../events/hub/visibility';
-import { renderThrownChain } from '../obs/index';
+import { type KinuError, renderThrownChain, settle } from '../obs/index';
 
 /** Each source owns and clears its own message, so one recovery never hides another failure.
  *  Sources store the bare reason; the sentence is composed once, below. */
@@ -192,16 +193,17 @@ export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): 
 export type SnapshotLoad = "loaded" | "superseded" | { failed: string };
 
 /** A landed snapshot clears its seeded surfaces' failures, except any whose own refresh was
- *  admitted after this load started. The reason is returned; retry cadence is the caller's. */
-export async function loadWorkspaceSnapshot(
+ *  admitted after this load started. The reason is returned, the read's failure or defect alike; retry cadence is the
+ *  caller's. */
+export function loadWorkspaceSnapshot(
   read: (
     isCurrent: () => boolean,
     isSourceCurrent: (source: LiveRefreshSource) => boolean,
-  ) => Promise<void>,
+  ) => Effect.Effect<void, KinuError>,
   report: LiveRefreshReporter,
   admit: (requestKey: LiveRefreshSource) => () => boolean,
   seeded: readonly LiveRefreshSource[],
-): Promise<SnapshotLoad> {
+): Effect.Effect<SnapshotLoad> {
   const isCurrent = admit("snapshot");
 
   const seededReads = new Map(
@@ -211,22 +213,20 @@ export async function loadWorkspaceSnapshot(
   const isSourceCurrent = (source: LiveRefreshSource): boolean =>
     seededReads.get(source)?.() ?? false;
 
-  try {
-    await read(isCurrent, isSourceCurrent);
-
+  return Effect.catchCause(Effect.map(read(isCurrent, isSourceCurrent), (): SnapshotLoad => {
     if (!isCurrent()) return "superseded";
     report("snapshot", null);
 
     for (const [source, stillCurrent] of seededReads) if (stillCurrent()) report(source, null);
 
     return "loaded";
-  } catch (error) {
+  }), (cause) => Effect.sync((): SnapshotLoad => {
     if (!isCurrent()) return "superseded";
-    const failed = readFailureText({ cause: error });
+    const failed = readFailureText({ cause: Cause.squash(cause) });
     report("snapshot", failed);
 
     return { failed };
-  }
+  }));
 }
 
 export interface LiveResourceRead<Value> {
@@ -237,21 +237,22 @@ export interface LiveResourceRead<Value> {
   readonly isCurrent: () => boolean;
 }
 
-export async function refreshLiveResource<Value>(
+/** One live resource read again: applied and its failure cleared while it is still current; its failure reported. */
+export function refreshLiveResource<Value>(
   { source, read, apply, report, isCurrent }: LiveResourceRead<Value>,
 ): Promise<void> {
-  if (!isCurrent()) return;
+  if (!isCurrent()) return Promise.resolve();
 
-  try {
-    const value = await read();
-
-    if (!isCurrent()) return;
-    apply(value);
-    report(source, null);
-  } catch (error) {
-    if (!isCurrent()) return;
-    report(source, readFailureText({ cause: error }));
-  }
+  return settle(Effect.match(Effect.tryPromise({ try: read, catch: (cause) => ({ cause }) }), {
+    onSuccess: (value) => {
+      if (!isCurrent()) return;
+      apply(value);
+      report(source, null);
+    },
+    onFailure: (failed) => {
+      if (isCurrent()) report(source, readFailureText(failed));
+    },
+  }));
 }
 
 /** A failure as one line of the owner's notice, whatever was thrown. */
@@ -261,8 +262,10 @@ export function readFailureText({ cause }: { cause: unknown }): string {
 
   if (text.success && text.output.trim()) return text.output;
 
-  try { return JSON.stringify(cause) || "unknown error"; }
-  catch (error) { return `unrenderable error: ${renderThrownChain({ cause: error })}`; }
+  // A value JSON cannot write (a cycle, a BigInt) is named as such, with why.
+  const written = Result.try(() => JSON.stringify(cause));
+
+  return Result.isSuccess(written) ? written.success || "unknown error" : `unrenderable error: ${renderThrownChain({ cause: written.failure })}`;
 }
 
 /** `a`, `a and b`, `a, b, and c`. */

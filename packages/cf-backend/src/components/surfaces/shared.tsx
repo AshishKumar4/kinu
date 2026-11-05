@@ -64,7 +64,7 @@ export function CodeBlock({ children, className, wrap = false }: { children: str
     ? resource.value.html : null;
 
   return (
-    <div className={`p-code p-code-block my-2${wrap ? " p-code-wrap" : ""}`}>
+    <div data-code-block className={`p-code p-code-block my-2${wrap ? " p-code-wrap" : ""}`}>
       <div className="t-meta t-mono p-code-head flex items-center justify-between gap-2 px-3 py-1">
         <span className="truncate font-mono">{lang || "code"}</span>
         <CopyText value={code} />
@@ -90,7 +90,7 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
           {src && (
             <>
               {" ("}
-              <a href={src} target="_blank" rel="noopener noreferrer" className="p-accent-fg hover:underline break-all">{src}</a>
+              <a href={src} target="_blank" rel="noopener noreferrer" className="p-link break-all">{src}</a>
               {")"}
             </>
           )}
@@ -211,7 +211,7 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
           return <InlineAction data-file-link={href} onClick={() => files.open(href)}>{children}</InlineAction>;
         }
 
-        return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent-fg hover:underline">{children}</a>;
+        return <a href={href} target="_blank" rel="noopener noreferrer" className="p-link">{children}</a>;
       },
       img({ src, alt, title }) { return <MarkdownImage key={src ?? ""} src={src} alt={alt} title={title} />; },
       table({ children }) { return <Surface look="outlined" className="p-scroll-x my-2"><table className="t-meta p-text-2 w-full border-collapse">{children}</table></Surface>; },

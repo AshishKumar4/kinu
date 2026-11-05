@@ -66,7 +66,7 @@ export function DeployStart({ declined, refusal, signingIn, onSignIn }: {
       {said}
       <div className="mt-5"><WhatGetsMade name="kinu" domain={null} computer={false} mail={null} /></div>
       <p data-deploy-local className="mt-6 border-t p-border pt-4 t-meta">
-        Or run Kinu on your own computer, with nothing else to set up. <a href={LOCAL_INSTALL} className="p-accent-fg hover:underline">How to install it</a>
+        Or run Kinu on your own computer, with nothing else to set up. <a href={LOCAL_INSTALL} className="p-link">How to install it</a>
       </p>
     </DeployShell>
   );

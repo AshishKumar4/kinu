@@ -394,7 +394,9 @@ function workspaceOverDevice() {
 
   const asked: string[] = [];
 
-  const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots() });
+  const shellSession = createShellSession({
+    home: WORKSPACE_ROOT, userRoots: () => mounted.userRoots(), plane: () => mounted,
+  });
 
   const shell = withApprovalGatedShell(workspaceShell(workspace), { filesOwner: 'agent', shellSession }, {
     mode: () => 'strict',
@@ -482,6 +484,37 @@ describe('a workspace shell over the user\'s mounts', () => {
       expect(asked.map((request) => request.write?.path)).toContain('/pc/proj/sub/../a.txt');
       expect(await device.readFile('/proj/a.txt')).toEqual(new TextEncoder().encode('kept by the owner'));
       expect(await workspace.vfs.stat(`${WORKSPACE_ROOT}/a.txt`)).toBeNull();
+    } finally {
+      db.close();
+    }
+  });
+
+  // Links earlier calls made carry a later call's writes onto the user's machine, however the path reaches them: the
+  // shell judges a path where it lands, as the file tools judge theirs.
+  test('a write through a link an earlier call made into /pc is asked as the user\'s file, and a denied one writes nothing', async () => {
+    const { db, shell, asked, workspace, device } = workspaceOverDevice();
+    const written: string[] = [];
+
+    device.writeFile = async (path) => { written.push(path); };
+
+    const kernel = (await workspace.session()).vfs.as(CRED_SESSION_USER);
+
+    await kernel.symlink('/pc/proj', `${WORKSPACE_ROOT}/proj`);
+    await kernel.symlink('/pc/proj/sub', `${WORKSPACE_ROOT}/sub-link`);
+    await kernel.mkdir(`${WORKSPACE_ROOT}/out`);
+    await kernel.symlink('/pc/proj', `${WORKSPACE_ROOT}/out/project`);
+
+    const through = [
+      'printf replacement > proj/a.txt', `cd ${WORKSPACE_ROOT}/proj && cp /dev/null a.txt`,
+      'printf replacement > sub-link/../a.txt', 'cp /dev/null out/*/a.txt',
+    ];
+
+    try {
+      for (const command of through) expect((await shell.exec(command)).exitCode).not.toBe(0);
+      expect((await shell.exec('printf mine > notes.txt && cp notes.txt out/')).exitCode).toBe(0);
+
+      expect(asked).toEqual(through);
+      expect(written).toEqual([]);
     } finally {
       db.close();
     }

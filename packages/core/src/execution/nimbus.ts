@@ -6,7 +6,8 @@ import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { OutputSink, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { collectExecStream, type ExecChunk, type ExecOutput, type ExecStream } from '@nimbus-sh/core/runtime/exec-stream.js';
-import type { VfsMount, WorkspacePrincipal } from '../vfs/mounts';
+import type { VfsMount, VfsMountRouting, WorkspacePrincipal } from '../vfs/mounts';
+import { createShellSession, type ShellPlane, type ShellSession } from './shell-session';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
 import { atVfsPath } from '../vfs/errno';
 import { syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -608,6 +609,16 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, place: { readonly h
   }
 
   return shell;
+}
+
+/**
+ * The review session of the workspace's Nimbus shell over its mount table: a named call resumes Nimbus's own directory,
+ * a detach frees the name, and a path is judged where `plane` lands it.
+ */
+export function nimbusShellSession(shell: Shell, home: string, plane: () => ShellPlane & Pick<VfsMountRouting, 'userRoots'>): ShellSession {
+  return createShellSession({
+    home, userRoots: () => plane().userRoots(), plane, stored: async (name) => await shell.cwd?.(name) ?? null, detachFrees: true,
+  });
 }
 
 /**

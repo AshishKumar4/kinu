@@ -155,7 +155,7 @@ export interface HostedNodeSeat<A extends SeatedActor = SeatedActor> {
   readonly receipts: Omit<EffectClaimDeps, 'execution'>;
 }
 
-export interface NodeLoopDeps {
+interface NodeLoopDeps {
   /** The actor this node is: a node's turn writes a durable claim, so it needs an identity and `actor.runtime`. */
   actor: SeatedActor;
   infer: HostedNodeSeat['infer'];

@@ -4,7 +4,7 @@
  * a refusal posted to `/pc/update-refused` is kept, in order.
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
 import * as v from 'valibot';
@@ -22,11 +22,14 @@ export const HUB_NONCE = `pcc_${'n'.repeat(43)}`;
 export const PLATFORM_ARTIFACT = `/downloads/kinu-cli-${process.platform}-${process.arch}.tar.gz`;
 
 /** Shape scripts/build-cli-dist.sh publishes: `kinu/pc-agent/<files>` plus the stamp. */
-export async function daemonArchive(files: Record<string, string>, stamp: string): Promise<Uint8Array> {
+/** `planted`: a link beside the daemon files that points out of the device home, as a hostile archive would carry. */
+export async function daemonArchive(files: Record<string, string>, stamp: string, planted?: 'link'): Promise<Uint8Array> {
   const work = scratchDir('update-hub-archive');
   mkdirSync(join(work, 'kinu', 'pc-agent'), { recursive: true });
 
   for (const [name, content] of Object.entries(files)) writeFileSync(join(work, 'kinu', 'pc-agent', name), content);
+
+  if (planted === 'link') symlinkSync('/etc/passwd', join(work, 'kinu', 'pc-agent', 'settings.js'));
   writeFileSync(join(work, 'kinu', 'pc-agent', 'pc-agent.version'), `${stamp}\n`);
   writeFileSync(join(work, 'kinu', 'cli.js'), 'console.log("not the daemon");\n');
   const archived = await runToExit(['tar', '-czf', join(work, 'a.tar.gz'), '-C', work, 'kinu']);
@@ -110,6 +113,21 @@ export interface UpdateHubOptions {
   pushAlways?: boolean;
   /** Checksums the test key never signed: unsigned, or signed by the hub's own key. */
   signing?: 'none' | 'foreign';
+  /** The download goes on past the archive, with no length said, for as long as the machine reads. */
+  endless?: boolean;
+}
+
+/** An archive followed by zeros, never ending: what a hostile host serves to fill a machine before any checksum. */
+function endlessBody(archive: Uint8Array): ReadableStream<Uint8Array> {
+  const zeros = new Uint8Array(1024 * 1024);
+  let sent = false;
+
+  return new ReadableStream({
+    pull(controller) {
+      controller.enqueue(sent ? zeros : archive);
+      sent = true;
+    },
+  });
 }
 
 export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
@@ -149,7 +167,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
       if (pathname === '/pc/connect') return self.upgrade(req) ? undefined : new Response('upgrade failed', { status: 400 });
 
-      if (pathname === PLATFORM_ARTIFACT) return new Response(Buffer.from(opts.archive));
+      if (pathname === PLATFORM_ARTIFACT) return new Response(opts.endless === true ? endlessBody(opts.archive) : Buffer.from(opts.archive));
 
       if (pathname === `${PLATFORM_ARTIFACT}.sha256`) return new Response(`${opts.sidecarDisagrees === true ? '0'.repeat(64) : digest}  ${PLATFORM_ARTIFACT.slice('/downloads/'.length)}\n`);
 

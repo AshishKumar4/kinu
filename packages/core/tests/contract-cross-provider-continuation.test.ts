@@ -10,9 +10,10 @@ import {
   isPortableToolCallId,
   ANTHROPIC_CRED_KEY,
   parseJsonObject,
-  type ChatEvent, type JsonObject, type ModelCallDeps, type AuthResolution,
+  type ChatEvent, type JsonObject,
 } from '../src/index';
-import { createMockFetch, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
+import { createMockFetch, type MockFetchHandle, type RecordedRequest, modelCallDeps } from '@kinu.run/test-utils';
+import { namedSseBody } from '@kinu.run/test-utils';
 
 /** Answers each call with the next script, holding the last one once they run out. */
 function replayingScripts(scripts: readonly string[]) {
@@ -36,19 +37,6 @@ const COMPAT_REASONING = 'I should use the lookup tool.';
 
 const COMPAT_BASE = 'https://compat.example/v1';
 
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
-  const store = new Map(Object.entries(creds));
-
-  return {
-    env: {},
-    sessionAffinity: 'kinu-test',
-    workspaceAffinity: 'kinu-test',
-    fetch: fetchFn,
-    async getAuth(key) { return store.get(key) ?? null; },
-    async hasCredential(key) { return store.has(key); },
-  };
-}
-
 /** One side effect counted across both turns: a re-issued completed call shows up here. */
 function countingTools() {
   let executions = 0;
@@ -69,14 +57,11 @@ function countingTools() {
 }
 
 /** Every event terminated, including the last: the SSE parser drops an unterminated tail. */
-function sse(events: ReadonlyArray<readonly [string, JsonObject]>): string {
-  return `${events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n`).join('\n')}\n`;
-}
 
 const ANTHROPIC_USAGE = { input_tokens: 10, output_tokens: 4 };
 
 /** Step 1: the model reasons, then calls the tool. */
-const ANTHROPIC_TOOL_USE = sse([
+const ANTHROPIC_TOOL_USE = namedSseBody([
   ['message_start', { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: ANTHROPIC_USAGE } }],
   ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }],
   ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: ANTHROPIC_REASONING } }],
@@ -91,7 +76,7 @@ const ANTHROPIC_TOOL_USE = sse([
 
 /** A text step with a chosen stop reason; `max_tokens` maps to the `length` the continuation reads. */
 function anthropicText(id: string, text: string, stopReason: 'max_tokens' | 'end_turn'): string {
-  return sse([
+  return namedSseBody([
     ['message_start', { type: 'message_start', message: { id, type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: ANTHROPIC_USAGE } }],
     ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
     ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } }],
@@ -233,7 +218,7 @@ async function truncatedAnthropicTurn(tools: ToolSet): Promise<{
     respond: replayingScripts(scripts),
   }]);
 
-  const deps = makeDeps({
+  const deps = modelCallDeps({
     [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
   }, mock.fetch);
 
@@ -266,7 +251,7 @@ async function replayOnCompat(
     }),
   }]);
 
-  const deps = makeDeps({
+  const deps = modelCallDeps({
     'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: COMPAT_BASE },
   }, mock.fetch);
 
@@ -303,7 +288,7 @@ async function reasonedCompatTurn(tools: ToolSet): Promise<{
     respond: replayingScripts(scripts),
   }]);
 
-  const deps = makeDeps({
+  const deps = modelCallDeps({
     'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: COMPAT_BASE },
   }, mock.fetch);
 
@@ -333,7 +318,7 @@ async function replayOnAnthropic(
     }),
   }]);
 
-  const deps = makeDeps({
+  const deps = modelCallDeps({
     [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
   }, mock.fetch);
 
@@ -481,7 +466,7 @@ describe('reasoning replay from an OpenAI-compatible model to Anthropic', () => 
 });
 
 /** A turn whose one search the provider ran itself: its call and result both ride the assistant message. */
-const ANTHROPIC_SERVER_SEARCH = sse([
+const ANTHROPIC_SERVER_SEARCH = namedSseBody([
   ['message_start', { type: 'message_start', message: { id: 'msg_s', type: 'message', role: 'assistant', content: [], model: 'claude-opus-4-7', stop_reason: null, usage: ANTHROPIC_USAGE } }],
   ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'server_tool_use', id: 'srvtoolu_01SourceMinted', name: 'web_search', input: {} } }],
   ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"query":"release date"}' } }],
@@ -501,7 +486,7 @@ describe('a search the provider ran itself, replayed', () => {
   test('its result is handed back under the same id as its call', async () => {
     const mock = createMockFetch([{ match: 'api.anthropic.com', respond: replayingScripts([ANTHROPIC_SERVER_SEARCH]) }]);
 
-    const deps = makeDeps({
+    const deps = modelCallDeps({
       [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
     }, mock.fetch);
 

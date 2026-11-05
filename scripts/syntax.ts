@@ -1044,8 +1044,9 @@ export function importUses(
   });
   // `lazy(() => import('./m'))`: React resolves the promise and reads exactly
   // `.default`, so the module's default export is consumed without a binding
-  // this scope walk could see. Only that shape counts: a dynamic import handed
-  // anywhere else proves nothing about which member is read.
+  // this scope walk could see; `lazyRoute` (cf-backend's lazy with a stale-chunk
+  // reload) hands its promise to `lazy` the same way. Only that shape counts: a
+  // dynamic import handed anywhere else proves nothing about which member is read.
   walk(tree, node => {
     const { raw } = node;
 
@@ -1060,7 +1061,7 @@ export function importUses(
     const callee = call.callee.type === 'MemberExpression' && !call.callee.computed
       ? call.callee.property : call.callee;
 
-    if (callee.type !== 'Identifier' || callee.name !== 'lazy') return;
+    if (callee.type !== 'Identifier' || (callee.name !== 'lazy' && callee.name !== 'lazyRoute')) return;
     const specifier = literalString(raw.source);
 
     if (specifier !== undefined) record({ specifier, imported: 'default' }, node);

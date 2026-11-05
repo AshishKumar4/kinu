@@ -84,9 +84,7 @@ export interface StartFault {
   readonly created: boolean;
 }
 
-
 const alarmTimes = new WeakMap<DurableObjectStorage, { at: number | null; scheduled: string[] }>();
-
 
 /** Unmodelled platform members throw by name: a stand-in that answered would answer wrongly,
  *  and an absent one would surface elsewhere as a missing property. */
@@ -503,7 +501,6 @@ export class FakeSandbox {
     return { stdout: '', stderr: `Failed to change directory to '${cwd}'`, exitCode: 1 };
   }
 
-
   /** `mkdir -p` creates what it names: how a container earns the directories
    *  later commands are allowed to stand in. */
   #recordDirectories(command: string): void {
@@ -677,10 +674,8 @@ export class FakeSandbox {
     this.mountCalls.push(`unmount:${mountPath}`);
     this.sequence.push(`unmount:${mountPath}`);
 
-
     this.s3fsMounts.delete(mountPath);
   }
-
 
   async startProcess(
     command: string,
@@ -795,7 +790,6 @@ export class FakeSandbox {
     return Promise.resolve();
   }
 
-
   destroy(): Promise<void> {
     this.destroys += 1;
     const fault = this.destroyFault;
@@ -875,7 +869,6 @@ export class FakeSandbox {
 
     return;
   }
-
 
   stops = 0;
 
@@ -1428,7 +1421,6 @@ Object.defineProperty(globalThis, 'scheduler', {
     },
   },
 });
-
 
 /** Derived from the class's constructor signature: the Workers types parameterise it,
  *  and a second spelling here would be a second opinion on the platform. */

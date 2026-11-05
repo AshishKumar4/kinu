@@ -13,7 +13,7 @@ import {
   type BackgroundPolicy, type BackgroundJob, type InvocationSurface,
 } from '../src/jobs/index';
 import { jobRedriveResumeGate } from '../src/heads/reconcile';
-import { initEventsHubTables } from '../src/events/hub/index';
+import { initEventsHubTables } from '../src/events/hub/schema';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';

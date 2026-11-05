@@ -30,6 +30,9 @@ export const DEVICE_FRAMES = protocol.frames;
 
 export const DEVICE_ERRORS = protocol.errors;
 
+/** The most one answer of the daemon carries: a file range's bytes, a directory page's entries. */
+export const DEVICE_LIMITS = { readRangeMaxBytes: protocol.readRangeMaxBytes, listPageMaxEntries: protocol.listPageMaxEntries } as const;
+
 export const DEVICE_UPDATE_REQUIRED = protocol.updateRequired;
 
 export const DEVICE_METHOD = Object.fromEntries(Object.keys(protocol.methods).map((method) => [method, method]));

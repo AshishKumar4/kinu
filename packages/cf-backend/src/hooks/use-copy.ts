@@ -1,5 +1,7 @@
 /** writeText rejects on denied permission, insecure origin, or an unfocused document; feedback waits for the outcome. */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { detach } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 
 export type CopyStatus = "idle" | "copied" | "failed";
 
@@ -18,12 +20,13 @@ export function useCopy(): CopyControl {
 
   const copy = useCallback((text: string) => {
     clearTimeout(timer.current);
-    navigator.clipboard.writeText(text).then(
-      () => setStatus("copied"),
-      () => setStatus("failed"),
-    ).finally(() => {
+    // A refused write (no permission, no focus) says so on the control, as a landed one does.
+    detach(Effect.ensuring(Effect.match(Effect.tryPromise({ try: () => navigator.clipboard.writeText(text), catch: () => "refused" }), {
+      onSuccess: () => setStatus("copied"),
+      onFailure: () => setStatus("failed"),
+    }), Effect.sync(() => {
       timer.current = setTimeout(() => setStatus("idle"), RESET_MS);
-    });
+    })));
   }, []);
 
   return { status, copy };

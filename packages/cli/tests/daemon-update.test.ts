@@ -325,6 +325,35 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(alive(pidfile(home))).toBe(true);
   });
 
+  // SECURITY-devices C1 and L2: a hub could hand a signed older build back, an archive of any size, or one whose members
+  // reach outside the device home. Each is refused before anything lands; the old daemon keeps the machine.
+  test('an older release, an endless download and an archive carrying a link each land nothing', async () => {
+    const outcome = async (served: UpdateHub, stamp: string) => {
+      const home = installedMachine(served.origin, stamp);
+      const daemon = startDaemon(home, await releaseSigningEnv());
+
+      await daemon.waitForLog('device.update_failed');
+
+      return {
+        said: daemon.log().split('\n').find((line) => line.includes('device.update_failed')),
+        kept: installed(home, 'pc-agent.js') === DAEMON_FILES['pc-agent.js'] && installed(home, 'pc-agent.version').trim() === stamp,
+        downloads: served.hits.filter((hit) => hit.startsWith('/downloads/')).length,
+      };
+    };
+
+    const [older, endless, linked] = await Promise.all([
+      outcome(hub({ served: OLD, archive: await daemonArchive(DAEMON_FILES, OLD) }), NEW),
+      outcome(hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), endless: true }), OLD),
+      outcome(hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW, 'link') }), OLD),
+    ]);
+
+    expect({ older, endless, linked }).toEqual({
+      older: { said: expect.stringContaining('older than the installed'), kept: true, downloads: 0 },
+      endless: { said: expect.stringContaining('over 134217728 bytes'), kept: true, downloads: 1 },
+      linked: { said: expect.stringContaining('not a file or a directory'), kept: true, downloads: 1 },
+    });
+  });
+
   test('a landed daemon that fails its selftest is rolled back to .prev; no successor starts', async () => {
     const broken = { ...DAEMON_FILES, 'pc-agent.js': 'process.exit(7);\n' };
     const served = hub({ served: NEW, archive: await daemonArchive(broken, NEW) });

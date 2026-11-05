@@ -4,7 +4,6 @@
  */
 import { afterEach, beforeEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
-import { asFetchFunction } from '@kinu.run/core';
 import {
   setDiagnosticsSink,
 } from '@kinu.run/core/obs';
@@ -29,7 +28,7 @@ import { pageDeployedBuildSha, reportChatStreamFailure, reportRenderFailure } fr
 import { readUIMessageStream, type UIMessageChunk } from 'ai';
 import { APP_ROUTES, routeTemplateOf } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
-import { type RecordedLog, createRecordingLogger } from '@kinu.run/test-utils';
+import { type RecordedLog, createRecordingLogger, holdFetch } from '@kinu.run/test-utils';
 
 const ORIGIN = 'https://kinu.example.com';
 
@@ -376,12 +375,12 @@ describe('the payload the browser builds', () => {
   ].join('\n');
 
   const posts: { url: string; body: string }[] = [];
-  const realFetch = globalThis.fetch;
+  const network = holdFetch();
 
   beforeEach(() => {
     posts.length = 0;
     Object.assign(globalThis, { location: { pathname: '/workspace/demo' } });
-    globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+    network.stub(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = requestUrl(input);
 
       if (init?.method === 'POST') posts.push({ url, body: v.parse(v.string(), init.body ?? '') });
@@ -391,7 +390,7 @@ describe('the payload the browser builds', () => {
   });
 
   afterEach(() => {
-    globalThis.fetch = realFetch;
+    network.restore();
     Reflect.deleteProperty(globalThis, 'location');
   });
 
@@ -530,18 +529,18 @@ describe('fitting a report to the one bound', () => {
 
 describe('a chat stream the tab could not read', () => {
   const posts: string[] = [];
-  const realFetch = globalThis.fetch;
+  const network = holdFetch();
 
   beforeEach(() => {
     posts.length = 0;
-    globalThis.fetch = asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    network.stub(async (_input: RequestInfo | URL, init?: RequestInit) => {
       posts.push(v.parse(v.string(), init?.body ?? ''));
 
       return new Response('{}', { status: 202 });
     });
   });
 
-  afterEach(() => { globalThis.fetch = realFetch; });
+  afterEach(network.restore);
 
   /** What `useChat` hands the page when the parts break the UI-message protocol, read by `ai`'s own reader. */
   async function protocolFailure(): Promise<Error> {
@@ -581,7 +580,7 @@ describe('a chat stream the tab could not read', () => {
   });
 
   test('a refused report rejects with the route\'s answer, where the page logs it, instead of passing for sent', async () => {
-    globalThis.fetch = asFetchFunction(async () => new Response('{"error":"Missing Authorization: Bearer <token>"}', { status: 401 }));
+    network.stub(async () => new Response('{"error":"Missing Authorization: Bearer <token>"}', { status: 401 }));
 
     await expect(reportChatStreamFailure(new Error('stream broke'), 'root', { release: STAMP.sha, route: APP_ROUTES.workspace }))
       .rejects.toThrow(/refused: 401 .*Missing Authorization/u);

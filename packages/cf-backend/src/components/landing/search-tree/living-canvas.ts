@@ -3,7 +3,8 @@
  * keeping the picture's clock and state. Reduced motion gets one evolved frame and no clock.
  */
 
-import { diagnostics, type LogEventName, renderThrownChain } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { detach, diagnostics, type LogEventName, renderThrownChain } from '@kinu.run/core/obs';
 import type { ArtFrame, ArtPalette, ArtRenderer } from '@kinu.run/core/web/art';
 import { createCanvasRenderer } from '@kinu.run/core/web/hero-canvas';
 import { boxOf, createPlayback, readPalette, type Box, type FrameTimes } from './stage';
@@ -58,13 +59,14 @@ function afterFirstPaint(): Promise<void> {
   return promise;
 }
 
-/** A picture's resting strokes are drawn onto a second canvas, sized only once a frame names a rest, and stamped each frame. */
-function canvasRenderer(canvas: HTMLCanvasElement, palette: ArtPalette): ArtRenderer {
+/** A picture's resting strokes are drawn onto a second canvas, sized only once a frame names a rest, and stamped each
+ *  frame. Null where this browser gives a canvas no 2d drawing: the picture is not drawn. */
+function canvasRenderer(canvas: HTMLCanvasElement, palette: ArtPalette): ArtRenderer | null {
   const context = canvas.getContext('2d');
   const layer = document.createElement('canvas');
   const surface = layer.getContext('2d');
 
-  if (context === null || surface === null) throw new Error('the art canvas has no 2d context');
+  if (context === null || surface === null) return null;
 
   return createCanvasRenderer(context, palette, {
     surface,
@@ -89,7 +91,7 @@ interface RendererChoice {
   readonly failed: LogEventName;
 }
 
-async function pickRenderer({ canvas, palette, box, resolution, failed }: RendererChoice): Promise<ArtRenderer> {
+async function pickRenderer({ canvas, palette, box, resolution, failed }: RendererChoice): Promise<ArtRenderer | null> {
   if (!('gpu' in navigator)) return canvasRenderer(canvas, palette);
   const adapter = await navigator.gpu.requestAdapter();
 
@@ -193,28 +195,25 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
   const onGpuFault = (error: Error): void => {
     if (renderer?.kind !== 'webgpu') return;
 
-    try {
-      const next = installCanvas();
-      const fallback = canvasRenderer(next, palette);
-      renderer = fallback;
-      next.dataset.renderer = fallback.kind;
-      fit();
-      playback.sync();
-      diagnostics.event(spec.events.faulted, { reason: renderThrownChain({ cause: error }) });
-    } catch (swap) {
-      diagnostics.event(spec.events.fallbackFailed, {
-        fault: renderThrownChain({ cause: error }),
-        reason: renderThrownChain({ cause: swap }),
-      });
-    }
-  };
+    const next = installCanvas();
+    const fallback = canvasRenderer(next, palette);
 
-  const startFailed = (...rejection: [unknown]): never => {
-    throw new Error('the art renderer did not start', { cause: rejection[0] });
+    if (fallback === null) {
+      diagnostics.event(spec.events.fallbackFailed, { fault: renderThrownChain({ cause: error }), reason: 'the art canvas has no 2d context' });
+
+      return;
+    }
+
+    renderer = fallback;
+    next.dataset.renderer = fallback.kind;
+    fit();
+    playback.sync();
+    diagnostics.event(spec.events.faulted, { reason: renderThrownChain({ cause: error }) });
   };
 
   /** The picture may be sized to the renderer, so it is made once the renderer is known. */
   const start = (): void => {
+    if (disposed) return;
     teardownRenderer();
     still = reduced.matches || spec.holdStill?.() === true;
     const next = installCanvas();
@@ -231,7 +230,10 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
       return;
     }
 
-    pickRenderer({ canvas: next, palette, box, resolution: spec.resolution, failed: spec.events.failed }).then((picked) => {
+    // A renderer that does not start is a defect, logged; the picture is then not drawn.
+    detach(Effect.map(Effect.promise(() => pickRenderer({ canvas: next, palette, box, resolution: spec.resolution, failed: spec.events.failed })), (picked) => {
+      if (picked === null) return;
+
       if (disposed || canvas !== next) {
         picked.dispose();
 
@@ -251,7 +253,7 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
       }
 
       playback.sync();
-    }).catch(startFailed);
+    }));
   };
 
   const onTheme = (): void => {
@@ -281,7 +283,8 @@ export function mountLivingCanvas<Frame extends ArtFrame, Art extends LivingArt<
   resize.observe(host);
   theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-theme'] });
   reduced.addEventListener('change', start);
-  start();
+  // Begun once the caller has its handle, as a listener is: a renderer's start is never awaited.
+  queueMicrotask(start);
 
   return {
     art: () => art,

@@ -66,7 +66,7 @@
     "gate:test-clocks": "bun scripts/test-clocks.ts",
     "gate:typecheck-coverage": "bun scripts/typecheck-coverage.ts",
     "gate:python-suites": "bun scripts/python-suites.ts",
-    "sweep:mutation": "bun scripts/mutation-sweep.ts",
+    "sweep:mutation": "bun scripts/mutation-pilot.ts --catalogue",
     "sweep:flakes": "bun scripts/flake-gate.ts --sweep",
     "census:bloat": "bun scripts/bloat-census.ts",
     "proof:comment-only": "bun scripts/comment-only.ts",

@@ -4,9 +4,9 @@ import { CaretRightIcon, CheckIcon, PushPinIcon } from "@phosphor-icons/react";
 import * as v from "valibot";
 import type { SlateCallResult } from "@kinu.run/core";
 import {
-  buildSlateHostContext, isPreviewUrl, isSlateFrameMessage, PREVIEW_SANDBOX, slateFrameSrc,
-  SLATE_HOST_CONTEXT_MESSAGE, SLATE_INLINE_HEIGHT_LIMIT, SLATE_THEME_TOKENS,
-  SlateFrameMessageSchema, SLATE_UI_ATTRIBUTE, type SlateHostContext,
+  buildSlateHostContext, isPreviewUrl, readSlateFrameMessage, PREVIEW_SANDBOX, slateFrameSrc,
+  SLATE_HOST_CONTEXT_MESSAGE, SLATE_THEME_TOKENS,
+  SLATE_UI_ATTRIBUTE, type SlateHostContext,
 } from "@kinu.run/core";
 import { useElementSize } from "@/hooks/use-element-size";
 import { useTheme } from "@/hooks/use-theme";
@@ -46,9 +46,24 @@ const SavedSlateSchema = v.object({ id: v.string(), title: v.string() });
 /** Each slate's last height in the chat, so a card drawn again opens at its size and nothing below it moves. */
 const KNOWN_HEIGHTS = new Map<string, number>();
 
-/** A height an answer's page told, kept for whatever draws it next: the page drawn here, or its served frame. */
-export function rememberHeight(id: string, height: number): void {
-  KNOWN_HEIGHTS.set(id, height);
+/** Hears the heights `frame`'s page tells from `origin` (none while it is null), and keeps each for whatever draws the
+ *  slate `id` next: the page drawn here, or its served frame. */
+export function useToldHeights(frame: RefObject<HTMLIFrameElement | null>, origin: string | null, id: string, told: (height: number) => void): void {
+  useEffect(() => {
+    if (origin === null) return;
+
+    const onMessage = (event: MessageEvent): void => {
+      const message = readSlateFrameMessage(event, frame.current?.contentWindow ?? null, origin);
+
+      if (message === null) return;
+      KNOWN_HEIGHTS.set(id, message.height);
+      told(message.height);
+    };
+
+    window.addEventListener("message", onMessage);
+
+    return () => window.removeEventListener("message", onMessage);
+  }, [frame, origin, id, told]);
 }
 
 export function knownHeight(id: string): number | undefined {
@@ -156,8 +171,11 @@ function SaveControl({ name, page, save, open }: { name: string; page: string; s
   );
 }
 
-/** No chrome: the frame sits in the answer, and its fold, save and open controls show over it on hover, or always where
- *  there is no hover. Folded, it is one quiet line naming it and why. */
+/** No chrome: the frame sits in the answer, and its fold, save and open controls sit above it at its right, never over
+ *  its page: shown on hover where there is hover, always where there is none, their room kept either way so nothing
+ *  moves. Their own layer over the frames: a served page's frame is hit-tested as its own surface, which a fold's
+ *  clip does not bound, so a press on a control under a frame still unfolding would go to that frame. Folded, it is one
+ *  quiet line naming it and why. */
 export function SlateCard({ id, block, url, measure, save, children }: {
   id: string;
   block?: string;
@@ -176,7 +194,6 @@ export function SlateCard({ id, block, url, measure, save, children }: {
   const why = folded ? reason : null;
 
   const name = block ?? id;
-
 
   const tools = (
     <>
@@ -198,7 +215,7 @@ export function SlateCard({ id, block, url, measure, save, children }: {
       {/* One element folded or not: the fold's own top bar is inside it, and a press must find it where it was. */}
       <span ref={register} className={folded
         ? "flex items-center gap-1 py-px"
-        : "p-slate-tools absolute right-1 top-1 z-10 flex items-center gap-1 opacity-0 transition-opacity group-hover/slate:opacity-100 group-focus-within/slate:opacity-100 [@media(hover:none)]:opacity-100"}>
+        : "p-slate-tools relative z-10 mb-1 ml-auto flex w-fit items-center gap-1 transition-opacity [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/slate:opacity-100 [@media(hover:hover)]:group-focus-within/slate:opacity-100"}>
         {tools}
       </span>
       <span id={body} className="p-fold" data-folded={folded ? "" : undefined} inert={folded}>
@@ -242,20 +259,9 @@ function useInlineHeight({ id, inline, sized, frame, previewOrigin, loaded, draw
     setLate(false);
   }, [drawn]);
 
-  useEffect(() => {
-    if (!inline || previewOrigin === null) return;
+  const hear = useCallback((next: number) => setSaid((was) => (was.height === next ? was : { height: next, times: was.times + 1 })), []);
 
-    const onMessage = (event: MessageEvent): void => {
-      if (!isSlateFrameMessage(event, frame.current?.contentWindow ?? null, previewOrigin)) return;
-      const next = Math.min(v.parse(SlateFrameMessageSchema, event.data).height, SLATE_INLINE_HEIGHT_LIMIT);
-      KNOWN_HEIGHTS.set(id, next);
-      setSaid((was) => (was.height === next ? was : { height: next, times: was.times + 1 }));
-    };
-
-    window.addEventListener('message', onMessage);
-
-    return () => window.removeEventListener('message', onMessage);
-  }, [inline, previewOrigin, id, frame]);
+  useToldHeights(frame, inline ? previewOrigin : null, id, hear);
 
   useEffect(() => {
     if (!waiting || !loaded) return;

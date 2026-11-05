@@ -70,7 +70,7 @@ import {
 } from './lifecycle';
 import { createCheckpointLane, createResourceLane, heldUntilDrained, pathScopes, portScope, type ResourceScope } from './operation-lanes';
 import { SupervisedProcesses, type EndTold } from './supervised-processes';
-import { DevboxError, attempt, attemptSync, hold, refuseStart, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
+import { DevboxError, attempt, attemptSync, caught, hold, refuse, rethrow, whenLost, refuseStart, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
@@ -393,9 +393,7 @@ interface Flights {
 }
 
 function unawaited(work: Promise<unknown>, lost: string): void {
-  void work.catch((cause: LateStartFailure['cause']) => {
-    console.error(`[devbox] ${lost}: ${describe({ cause })}`);
-  });
+  whenLost(work, (thrown) => { console.error(`[devbox] ${lost}: ${describe(thrown)}`); });
 }
 
 function fileFault(failure: DevboxError): DevboxError {
@@ -498,11 +496,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #withStorageMutation<T>(operation: () => Promise<T>): Promise<T> {
     const run = this.#storageMutationTail.then(operation);
     this.#storageMutationTail = (async () => {
-      try {
-        await run;
-      } catch (cause) {
-        console.error(`[devbox] storage mutation released its FIFO after failure: ${describe({ cause })}`);
-      }
+      const settled = await caught(async () => run);
+
+      if ('cause' in settled) console.error(`[devbox] storage mutation released its FIFO after failure: ${describe(settled)}`);
     })();
 
     return await run;
@@ -977,7 +973,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async #startNative(inputs: StartInputs, source: StartSource | undefined): Promise<void> {
-    if (this.#closed) throw new DevboxError("io", DESTROYED_START);
+    if (this.#closed) refuse(new DevboxError("io", DESTROYED_START));
     const container = this.#container();
     const generation = this.#generation;
     // No await separates teardown admission from the platform start. Native exec never starts one.
@@ -1331,7 +1327,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     );
     this.#invalidateGeneration();
     await this.#armStartup();
-    throw new DevboxError("io", 'this devbox is not ready: the restored container was replaced; a startup is armed');
+    refuse(new DevboxError("io", 'this devbox is not ready: the restored container was replaced; a startup is armed'));
   }
 
   /** The kernel's boot id, through the reader the process fences use: one identity per container. */
@@ -1379,20 +1375,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       return { cause: new DevboxError("io", reason) };
     }
 
-    try {
+    const ran = await caught(async () => {
       await this.#stampBootId(generation);
 
-      if (!this.#owns(generation)) return undefined;
-      await this.#attachAndRestore(generation, claim, steps);
+      if (this.#owns(generation)) await this.#attachAndRestore(generation, claim, steps);
+    });
 
-      return undefined;
-    } catch (error) {
-      // Fenced as `#recover` is: a superseded attempt clears nothing its successor holds.
-      if (!this.#stoppedUnder(started)) await this.#recover(generation, claim, { cause: error });
-      else if (this.#owns(generation)) this.#invalidateGeneration();
+    if ('value' in ran) return undefined;
 
-      return { cause: error };
-    }
+    // Fenced as `#recover` is: a superseded attempt clears nothing its successor holds.
+    if (!this.#stoppedUnder(started)) await this.#recover(generation, claim, ran);
+    else if (this.#owns(generation)) this.#invalidateGeneration();
+
+    return ran;
   }
 
   /** One budget for all phases (D19): an attach overrun replaces the identity; a later step's
@@ -1458,7 +1453,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           if (this.ctx.container?.running === true && this.#admission() !== undefined) return;
           await this.#startContainer();
 
-          if (this.#restoration.phase === 'unattached') throw new DevboxError("io", this.#restoration.reason);
+          if (this.#restoration.phase === 'unattached') refuse(new DevboxError("io", this.#restoration.reason));
         });
       } finally {
         this.#trace('startup.callback.exit', { generation: this.#generation, ms: Date.now() - since, phase: this.#restoration.phase });
@@ -1545,7 +1540,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const startsContainer = this.ctx.container?.running !== true;
     this.#trace('startup.admit.enter', { generation, running: !startsContainer });
 
-    try {
+    const admitted = await caught(async () => {
       const startable = startsContainer ? this.#startable() : undefined;
 
       if (startable instanceof DevboxError) {
@@ -1571,9 +1566,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
       // `golden` means the box's own snapshot was missing: its restore rebuilds from the backup, the slow start.
       this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation), source: source?.kind ?? 'running' });
-    } catch (thrown) {
-      await this.#refuseAdmission({ generation, since, startsContainer, inputs }, { cause: thrown });
-    }
+    });
+
+    if ('cause' in admitted) await this.#refuseAdmission({ generation, since, startsContainer, inputs }, admitted);
   }
 
   /** An admission that did not start: retried only where waiting can change the answer, else parked once (D94, amending
@@ -1634,16 +1629,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         const claim = await this.#claimRecovery();
 
         if (!claim.admit || !this.#owns(generation)) {
-          throw new DevboxError("io", 'attached-container repair could not claim recovery');
+          refuse(new DevboxError("io", 'attached-container repair could not claim recovery'));
         }
 
-        try {
+        const repaired = await caught(async () => {
           await this.#repairAttachedAttempt(generation, retryBootStamp);
 
           if (this.#owns(generation)) await this.#releaseRecovery(claim, generation);
-        } catch (error) {
-          await this.#recover(generation, claim, { cause: error });
-          throw error;
+        });
+
+        if ('cause' in repaired) {
+          await this.#recover(generation, claim, repaired);
+          rethrow(repaired);
         }
       });
     });
@@ -1832,21 +1829,22 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#invalidateGeneration(this.#flights.startup);
     const replacing = this.#generation;
 
-    try {
+    const destroyed = await caught(async () => {
       await this.#destroyContainer();
       await this.#awaitContainerStopped();
-    } catch (error) {
-      if (!this.#owns(replacing)) throw error;
+    });
+
+    if ('cause' in destroyed) {
+      if (!this.#owns(replacing)) rethrow(destroyed);
       // A failed destroy leaves the abandoned work running, so keep refusing even though
       // `#invalidateGeneration` made the box look ready; attaching over it is the overlap.
       await this.#settle({
         phase: 'unattached',
-        reason: `${reason}; and the container identity could not be destroyed: `
-          + describe({ cause: error }),
+        reason: `${reason}; and the container identity could not be destroyed: ${describe(destroyed)}`,
         // Terminal: the abandoned work still runs there. Only a caller asking by name may attach.
         retry: false,
       });
-      throw error;
+      rethrow(destroyed);
     }
 
     console.error(
@@ -1864,9 +1862,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }
 
     if (this.ctx.container?.running !== true) return;
-    throw new DevboxError("io", `the container still reported itself running ${String(CONTAINER_STOP_ATTEMPTS)} probes `
+    refuse(new DevboxError("io", `the container still reported itself running ${String(CONTAINER_STOP_ATTEMPTS)} probes `
     + `after it acknowledged the stop (${String(CONTAINER_STOP_ATTEMPTS * CONTAINER_STOP_INTERVAL_MS)}ms); `
-    + 'refusing to treat the identity as gone', );
+    + 'refusing to treat the identity as gone'));
   }
 
   /** A port is exposed only once its listener answers; each failure is recorded and the phase continues. */
@@ -2134,7 +2132,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#trace('readiness.armed', { phase: this.#restoration.phase });
 
     if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
-      throw new DevboxError('refused', terminalRefusal(this.#restoration.reason));
+      refuse(new DevboxError('refused', terminalRefusal(this.#restoration.reason)));
     }
 
     return {
@@ -2167,7 +2165,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const container = this.ctx.container;
 
     if (readiness.kind === 'pending' || container?.running !== true) {
-      throw new DevboxError("io", readiness.kind === 'pending' ? readiness.reason : 'this devbox is not ready: its container stopped after it was admitted');
+      refuse(new DevboxError("io", readiness.kind === 'pending' ? readiness.reason : 'this devbox is not ready: its container stopped after it was admitted'));
     }
 
     // Every operation route and only callers pass here (maintenance uses `#rawExec` and
@@ -2466,7 +2464,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
             await this.#startContainer();
 
             if (this.#admission() === undefined) {
-              throw new DevboxError("io", `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`);
+              refuse(new DevboxError("io", `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`));
             }
           }
 
@@ -2581,7 +2579,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     let warning: string | undefined;
 
-    try {
+    const listing = await caught(async () => {
       this.#trace('quiesce.list.enter', {});
       const listed = await this.#processes().list();
       this.#trace('quiesce.list.exit', { count: listed.length });
@@ -2595,11 +2593,15 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       for (const process of listed) if (process.status === 'completed' && residents.has(process.id)) await this.#supervised().forget(process.id, 'it finished');
 
-      if (!ending && listed.some(process => isProcessLive(process.status) && !residents.has(process.id))) {
-        return { kind: 'failed', reason: 'the stop is refused: unmanaged commands are still running', bytes: undefined, movedBytes: undefined };
-      }
-    } catch (cause) {
-      const reason = describe({ cause });
+      return listed.some(process => isProcessLive(process.status) && !residents.has(process.id));
+    });
+
+    if ('value' in listing && listing.value && !ending) {
+      return { kind: 'failed', reason: 'the stop is refused: unmanaged commands are still running', bytes: undefined, movedBytes: undefined };
+    }
+
+    if ('cause' in listing) {
+      const reason = describe(listing);
 
       // Never on a guess (D59).
       if (!ending) {
@@ -3062,11 +3064,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#trace('schedule.enter', { callback, running: this.ctx.container?.running === true });
 
     await this.#dispatch(callback, async () => {
-      try {
-        nextSeconds = await body();
-      } catch (error) {
-        console.error(`[devbox] scheduled ${callback} failed: ${describe({ cause: error })}`);
-      }
+      const ran = await caught(body);
+
+      if ('value' in ran) nextSeconds = ran.value;
+      else console.error(`[devbox] scheduled ${callback} failed: ${describe(ran)}`);
 
       this.#trace('schedule.exit', { callback, ms: Date.now() - since, nextSeconds: nextSeconds ?? undefined });
 
@@ -3099,7 +3100,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       case INCIDENT_CALLBACK: await this.devboxIncidents(); break;
       case GOLDEN_BUILD_CALLBACK: await this.devboxGolden(false); break;
       case GOLDEN_REFRESH_CALLBACK: await this.devboxGolden(true); break;
-      default: throw new DevboxError("io", `unknown devbox alarm: ${callback}`);
+      default: refuse(new DevboxError("io", `unknown devbox alarm: ${callback}`));
     }
   }
   /** An exec on a stopped container would start a blank one, and save its empty disk. */
@@ -3163,18 +3164,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           return beat;
         }
 
-        let observed: string;
+        // The boot-id read is the liveness ping too: one container call, not two (D28).
+        const read = await caught(async () => this.#readBootId());
 
-        try {
-          // The boot-id read is the liveness ping too: one container call, not two (D28).
-          observed = await this.#readBootId();
-        } catch (error) {
-          const reason = describe({ cause: error });
+        if ('cause' in read) {
+          const reason = describe(read);
           console.error(`[devbox] heartbeat ping failed: ${reason}`);
           await this.#tick({ running: true, ping: `failed: ${reason}`, armedNext: true });
 
           return beat;
         }
+
+        const observed = read.value;
 
         // Only a settled restoration: mid-wake the row and a fresh instance always mismatch.
         if (await this.#containerWasReplaced({ bootId: observed })) {
@@ -3244,14 +3245,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   async #runningForRest(): Promise<RunningForRest> {
-    try {
+    const read = await caught(async () => {
       const supervised = new Set((await this.#procSpecs()).map((spec) => spec.processId));
       const live = (await this.#processes().list()).filter((row) => isProcessLive(row.status));
 
-      return { live: live.map((row) => ({ ...row, supervised: supervised.has(row.id) })), unreadable: undefined };
-    } catch (error) {
-      return { live: [], unreadable: describe({ cause: error }) };
-    }
+      return live.map((row) => ({ ...row, supervised: supervised.has(row.id) }));
+    });
+
+    return 'value' in read ? { live: read.value, unreadable: undefined } : { live: [], unreadable: describe(read) };
   }
 
   async #askToRest(running: RunningForRest, now: number): Promise<string | undefined> {
@@ -3270,7 +3271,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (pids.length === 0) return new Map();
 
-    try {
+    const details = await caught(async () => {
       const listeners = await this.portListeners('') ?? [];
       const read = await this.#execute(`ps -o pid=,etimes= -p ${pids.join(',')} || true`);
       const ages = new Map(read.stdout.trim().split('\n').map((line) => line.trim().split(/\s+/).map(Number)).map(([pid = 0, age = 0]) => [pid, age] as const));
@@ -3279,11 +3280,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         ageSeconds: ages.get(pid),
         ports: [...new Set(listeners.filter((row) => row.ancestry.includes(pid)).map((row) => row.port))],
       }]));
-    } catch (error) {
-      console.error(`[devbox] the rest ask lists processes without ages or ports: ${describe({ cause: error })}`);
+    });
 
-      return new Map();
-    }
+    if ('value' in details) return details.value;
+    console.error(`[devbox] the rest ask lists processes without ages or ports: ${describe(details)}`);
+
+    return new Map();
   }
 
   /** D59: refused with no ask pending. */
@@ -3856,7 +3858,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const container = this.ctx.container;
 
     // A dev server runs no container (vite.config.ts), so a box there is refused once rather than retried.
-    if (container === undefined) throw new DevboxError('configuration', NO_CONTAINER);
+    if (container === undefined) refuse(new DevboxError('configuration', NO_CONTAINER));
 
     return container;
   }
@@ -3903,8 +3905,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // container it ends, which is no failure; a kill that refuses fails the stop (`endEveryProcess`).
     const sending = endEveryProcess(container);
 
-    try { await Promise.all([sending, ending]); }
-    catch (cause) { if (container.running) throw cause; }
+    const ended = await caught(async () => Promise.all([sending, ending]));
+
+    if ('cause' in ended && container.running) rethrow(ended);
 
     // The box ended this container itself: the next one is a start, not a replacement.
     await this.ctx.storage.delete(BOOT_ID_KEY);
@@ -4326,7 +4329,7 @@ async function admissionFailureOf(container: Container, signal: AbortSignal): Pr
 async function firstExec(container: Container, signal: AbortSignal): Promise<void> {
   const failed = await admissionFailureOf(container, signal);
 
-  if (failed !== undefined) throw failed.failure;
+  if (failed !== undefined) rethrow({ cause: failed.failure });
 }
 
 /** A locale that reads text as UTF-8; the C one the box starts in reads a byte past ASCII as an invalid sequence. */

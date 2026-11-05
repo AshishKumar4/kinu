@@ -148,7 +148,7 @@ const CITATION_ILLUSTRATIVE: readonly Illustrative[] = [
       + ' register quoting that spelling to say so.',
   },
   {
-    file: 'packages/cf-backend/src/gallery.tsx',
+    file: 'packages/cf-backend/src/gallery-data.tsx',
     cites: 'lean/Api/Sessions.lean',
     reason: 'Sample data for the design gallery, not a reference. The frame shows a'
       + ' search whose task is "Prove that the expiry sweep terminates for every session'

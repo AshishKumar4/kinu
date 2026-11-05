@@ -8,8 +8,6 @@ import * as v from 'valibot';
 import { harness } from './support/devbox-harness';
 
 class NamedBox extends TestDevbox<unknown> {
-  protected override get ambientCheckpoints(): boolean { return false; }
-
   protected override async hostname(): Promise<string> {
     return 'storefront';
   }

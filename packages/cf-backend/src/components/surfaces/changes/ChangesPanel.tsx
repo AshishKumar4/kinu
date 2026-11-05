@@ -12,6 +12,7 @@ import {
 import { ChangeMark, count, Counts, DiffBody, sinceLabel } from "./diff";
 import { FileTree, IconButton, MarkReviewed, Since, SourceMenu, Summary, typing } from "./parts";
 import { NotesFailure, SendFeedback, useNotes } from "./notes";
+import { useHeldWhile } from "@/hooks/use-held-while";
 import { Button } from "@/components/ui/Button";
 import { Surface } from "@/components/ui/Surface";
 import { Pressable } from "@/components/ui/Pressable";
@@ -442,7 +443,6 @@ function NarrowBody({ set, files, at, path, reviewable, onGo, onReviewed, onOpen
 
 export function ChangesPanel({ sets, source, onSource, now, file: initialFile = null, menuOpen = false, notesOpen: notesInitiallyOpen = false, reviewedAt, onReviewed, onUndo = null, onOpenInFiles }: PanelProps) {
   const [path, setPath] = useState<string | null>(initialFile);
-  const [notesOpen, setNotesOpen] = useState(notesInitiallyOpen);
   const [layout, setLayout] = useState<Layout>(storedLayout);
   const { attach, fits } = useWidthsReached(PANE_PX);
   const set = sets.find((each) => each.source === source) ?? sets[0];
@@ -452,6 +452,8 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
   const root = useRef<HTMLDivElement | null>(null);
   const notes = useNotes();
   const noted = (notes?.notes.length ?? 0) > 0;
+  // Out of notes, the list closes: a later first note must not cover the diff it is on.
+  const [notesOpen, setNotesOpen] = useHeldWhile(noted, notesInitiallyOpen);
   const moved = useRef(false);
   const last = useRef<string | null>(null);
 
@@ -476,10 +478,7 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
     root.current?.querySelector<HTMLElement>(selector)?.focus({ preventScroll: path !== null });
   }, [path]);
 
-  // Out of notes, the list closes: a later first note must not cover the diff it is on.
-  useEffect(() => {
-    if (!noted) setNotesOpen(false);
-  }, [noted]);
+
 
   if (set === undefined) return null;
 

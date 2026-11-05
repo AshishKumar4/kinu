@@ -4,10 +4,13 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { accountClassOf } from '../src/limits/class';
 import {
-  accountClassOf, AccountLimitsStore, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace,
-  freeTierOf, initAccountLimitTables, limitsReport, refusedFor, startSize, type AccountUse, type Admission, type FreeTier,
-} from '../src/limits/index';
+  admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, limitsReport, refusedFor, startSize, type AccountUse, type Admission,
+} from '../src/limits/admit';
+import { freeTierOf, type FreeTier } from '../src/limits/policy';
+import { initAccountLimitTables } from '../src/limits/schema';
+import { AccountLimitsStore } from '../src/limits/store';
 import { evalAccountEmail } from '../src/cloud-wire';
 import { makeSqlExec } from './helpers';
 import { classifyTurnFailure } from '../src/turn-failure';

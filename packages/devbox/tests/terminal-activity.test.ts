@@ -12,16 +12,10 @@ import type { StoredValue } from '../src/storage';
 import { TEST_BOX_ID, harness, wakeWhileArmed } from './support/devbox-harness';
 
 /** The shipped policy with a test-length probe: nothing here is about budgets. */
-class TestBox extends TestDevbox<unknown> {
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-}
 
 describe('noteTerminalActivity refuses before it stamps', () => {
   test('a box the platform admitted nothing to stamps no interaction', async () => {
-    const { box, container } = harness(TestBox);
+    const { box, container } = harness(TestDevbox);
     await container.stop();
     container.containerUnavailable = new Error('There is no container instance that can be provided to this Durable Object, try again later');
 
@@ -33,7 +27,7 @@ describe('noteTerminalActivity refuses before it stamps', () => {
   });
 
   test('an admitted box stamps the interaction the heartbeat reads', async () => {
-    const { box } = harness(TestBox);
+    const { box } = harness(TestDevbox);
     await box.devboxStartup();
     expect((await box.devboxState()).ready).toBe(true);
     // Startup is maintenance traffic and stamps nothing, so the stamp below comes only from
@@ -51,7 +45,7 @@ describe('noteTerminalActivity refuses before it stamps', () => {
 describe("only the box's own use holds it", () => {
   test('a box last used a minute ago holds through its idle window and rests once the quiet is confirmed', async () => {
     const start = Date.now();
-    const { box, rows } = harness(TestBox);
+    const { box, rows } = harness(TestDevbox);
 
     try {
       await box.devboxStartup();
@@ -74,7 +68,7 @@ describe("only the box's own use holds it", () => {
 
   test('a new interaction invalidates an older quiet stretch even if the next heartbeat was missed', async () => {
     const start = Date.now();
-    const { box, container } = harness(TestBox);
+    const { box, container } = harness(TestDevbox);
     const { idleMs, quietConfirmMs } = DEFAULT_DEVBOX_POLICY;
 
     try {
@@ -101,7 +95,7 @@ describe("only the box's own use holds it", () => {
 
   // What its workspace reads when a job settles or a port moves, to record which job serves an exposed port.
   test('reading its exposed ports and the listeners on them is not use', async () => {
-    const { box } = harness(TestBox);
+    const { box } = harness(TestDevbox);
     await box.devboxStartup();
 
     await box.getExposedPorts();
@@ -131,7 +125,7 @@ describe('a box with work still running asks before it rests', () => {
 
   test('a command still running is listed in one ask, and the box holds until it is answered', async () => {
     const start = Date.now();
-    const { box, container, rows } = harness(TestBox);
+    const { box, container, rows } = harness(TestDevbox);
 
     try {
       await box.devboxStartup();
@@ -156,7 +150,7 @@ describe('a box with work still running asks before it rests', () => {
 
   test('a supervised server alone asks too, and names the command being kept running', async () => {
     const start = Date.now();
-    const { box, container, rows } = harness(TestBox);
+    const { box, container, rows } = harness(TestDevbox);
 
     try {
       await box.devboxStartup();
@@ -175,7 +169,7 @@ describe('a box with work still running asks before it rests', () => {
 
   test('a box with nothing running rests without asking', async () => {
     const start = Date.now();
-    const { box, container, rows } = harness(TestBox);
+    const { box, container, rows } = harness(TestDevbox);
 
     try {
       await box.devboxStartup();
@@ -194,7 +188,7 @@ describe('a box with work still running asks before it rests', () => {
 
   test('a process list that never reads asks, and the box never rests without an answer', async () => {
     const start = Date.now();
-    const { box, container, rows } = harness(TestBox);
+    const { box, container, rows } = harness(TestDevbox);
     await box.devboxStartup();
     container.fileFaults.set('/var/tmp/devbox/processes', { errno: 13, message: 'the process directory cannot be read' });
 
@@ -221,7 +215,7 @@ describe('a box with work still running asks before it rests', () => {
 
   test("'keep' clears the ask and the box asks again one idle window later; 'now' saves and stops it", async () => {
     const start = Date.now();
-    const { box, container, rows } = harness(TestBox);
+    const { box, container, rows } = harness(TestDevbox);
 
     try {
       await box.devboxStartup();
@@ -248,14 +242,14 @@ describe('a box with work still running asks before it rests', () => {
   });
 
   test('an answer with no ask pending is refused, so it cannot stop a box in use', async () => {
-    const { box, container } = harness(TestBox);
+    const { box, container } = harness(TestDevbox);
     await box.devboxStartup();
 
     expect({ answer: (await box.answerRest('now')).kind, running: container.running.running }).toEqual({ answer: 'refused', running: true });
   });
 
   test('an unreadable supervised-spec store is an unknown too: the beat asks, it does not throw', async () => {
-    const { box, rows, storage } = harness(TestBox);
+    const { box, rows, storage } = harness(TestDevbox);
     await box.devboxStartup();
     readyToRest(rows, Date.now());
     storage.failListOn('devbox:proc:', new Error('storage read failed'));
@@ -275,7 +269,7 @@ describe('a box no caller used rests from its start', () => {
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
 
     try {
-      const { box, container } = harness(TestBox);
+      const { box, container } = harness(TestDevbox);
       await box.devboxStartup();
 
       // The shipped policy rests an idle box after about forty beats.
@@ -290,7 +284,7 @@ describe('a box no caller used rests from its start', () => {
 
 describe('every admitted operation is an interaction', () => {
   test('a file write on an admitted box stamps the lease the heartbeat reads', async () => {
-    const { box } = harness(TestBox);
+    const { box } = harness(TestDevbox);
     await box.devboxStartup();
     expect((await box.devboxState()).lastInteractionAt).toBeUndefined();
 
@@ -333,7 +327,7 @@ function socketPair(): [FakeSocket, FakeSocket] {
   return ends;
 }
 
-class PreviewBox extends TestBox {
+class PreviewBox extends TestDevbox {
   protected override get previewHost(): string | undefined {
     return 'preview.test';
   }

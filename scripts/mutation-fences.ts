@@ -59,6 +59,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { childEnv } from '../packages/test-utils/src/ambient-env';
+// A hook exports GIT_DIR, which outranks cwd: every git here runs in an environment that names no repository but its own.
+import { gitEnv } from '../packages/test-utils/src/git-env';
 import { trackedFiles, workspaceScope } from './sources';
 import { REPO_ROOT as root } from './repo-root';
 
@@ -90,8 +92,8 @@ export interface Fence {
 }
 
 /**
- * THE DECLARED FENCES. Four today, across the three subsystems the tier was built to
- * hammer, each named with the defect its absence shipped.
+ * THE DECLARED FENCES, across the subsystems the tier was built to hammer, each
+ * named with the defect its absence shipped.
  *
  * Adding a fence: name `file`, quote the guarded lines as `snippet`, write the
  * strip as `mutation`, and name the test that defends it. The gate itself
@@ -167,9 +169,9 @@ export const FENCES: readonly Fence[] = [
     // A restore over a container its admission did not start ends quietly when that container stops, and only a live
     // owner ends it: a superseded attempt failing on the stopped container would otherwise invalidate the generation
     // of the start that replaced it, and every reader would stop seeing that start.
-    snippet: `      else if (this.#owns(generation)) this.#invalidateGeneration();
+    snippet: `    else if (this.#owns(generation)) this.#invalidateGeneration();
 `,
-    mutation: `      else this.#invalidateGeneration();
+    mutation: `    else this.#invalidateGeneration();
 `,
     owner: {
       suite: 'packages/devbox/tests/checkpoint-adoption.test.ts',
@@ -327,7 +329,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
   const detached = spawnSync(
     'git',
     ['worktree', 'add', '--detach', '--no-checkout', copy, 'HEAD'],
-    { cwd: root, encoding: 'utf8' },
+    { cwd: root, encoding: 'utf8', env: gitEnv() },
   );
 
   if (detached.status !== 0) {
@@ -360,7 +362,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
       };
     }
 
-    const checkout = spawnSync('git', ['checkout', 'HEAD'], { cwd: copy, encoding: 'utf8' });
+    const checkout = spawnSync('git', ['checkout', 'HEAD'], { cwd: copy, encoding: 'utf8', env: gitEnv() });
 
     if (checkout.status !== 0) {
       return {
@@ -405,7 +407,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
         try {
           mutated = runSuite(fence.owner.suite, fence.owner.grep, copy);
         } finally {
-          spawnSync('git', ['checkout', '--', fence.file], { cwd: copy, encoding: 'utf8' });
+          spawnSync('git', ['checkout', '--', fence.file], { cwd: copy, encoding: 'utf8', env: gitEnv() });
         }
       }
 
@@ -419,7 +421,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
 
     return { results, stale: [], untracked: [], copyError: null };
   } finally {
-    spawnSync('git', ['worktree', 'remove', '--force', copy], { cwd: root, encoding: 'utf8' });
+    spawnSync('git', ['worktree', 'remove', '--force', copy], { cwd: root, encoding: 'utf8', env: gitEnv() });
     rmSync(copy, { recursive: true, force: true });
   }
 }

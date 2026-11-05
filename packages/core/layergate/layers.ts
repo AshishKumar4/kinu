@@ -21,6 +21,10 @@ import type { LexicalHit } from '../src/memory/hybrid-search';
 import type { ActiveSkill } from '../src/skills/types';
 import { workspaceSkillPath } from '../src/skills/discover';
 import type { PipelineSubjects } from './subjects';
+import { Effect, Result } from 'effect';
+import { settleSync } from '../src/obs/index';
+import type { FileEdited } from '../src/tools/file-edit';
+import type { FileRefusalError } from '../src/types/file-edits';
 import * as v from 'valibot';
 import type { RunEventInput } from '../src/events/types';
 import type { JsonValue } from '../src/utils/json';
@@ -29,6 +33,16 @@ import type { JsonValue } from '../src/utils/json';
 const PRUNED_SPEC = 'anthropic/claude-sonnet-4-5';
 
 /** Generic over the subjects record so a dependent package can define its own slice. */
+
+/** An edit's outcome as the probes record it: what it wrote, or the refusal's reason and words. */
+function editOutcome(effect: Effect.Effect<FileEdited, FileRefusalError>) {
+  const result = settleSync(Effect.result(effect));
+
+  return Result.isSuccess(result)
+    ? { ok: true, content: result.success.content, applied: result.success.applied, spans: result.success.spans }
+    : { ok: false, reason: result.failure.verdict, message: result.failure.message };
+}
+
 export interface Probe<S = PipelineSubjects> {
   /** `<layer>/<name>`: the baseline key. */
   readonly id: string;
@@ -1304,11 +1318,11 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const file = 'alpha\nbeta\nalpha\n';
 
           return [
-            ['unique', s.applyFileEdits(file, [{ oldText: 'beta', newText: 'BETA' }], '/f')],
-            ['repeated', s.applyFileEdits(file, [{ oldText: 'alpha', newText: 'A' }], '/f')],
-            ['absent', s.applyFileEdits(file, [{ oldText: 'gamma', newText: 'G' }], '/f')],
-            ['empty', s.applyFileEdits(file, [{ oldText: '', newText: 'G' }], '/f')],
-            ['no-op', s.applyFileEdits(file, [{ oldText: 'beta', newText: 'beta' }], '/f')],
+            ['unique', editOutcome(s.applyFileEdits(file, [{ oldText: 'beta', newText: 'BETA' }], '/f'))],
+            ['repeated', editOutcome(s.applyFileEdits(file, [{ oldText: 'alpha', newText: 'A' }], '/f'))],
+            ['absent', editOutcome(s.applyFileEdits(file, [{ oldText: 'gamma', newText: 'G' }], '/f'))],
+            ['empty', editOutcome(s.applyFileEdits(file, [{ oldText: '', newText: 'G' }], '/f'))],
+            ['no-op', editOutcome(s.applyFileEdits(file, [{ oldText: 'beta', newText: 'beta' }], '/f'))],
           ];
         },
       },
@@ -1316,18 +1330,18 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'file-plane/batch-is-atomic-and-original-anchored',
         asserts: 'every anchor matches the file as read, overlaps are refused, and one bad edit applies none',
         observe: (s) => [
-          ['chained', s.applyFileEdits('one\ntwo\n', [
+          ['chained', editOutcome(s.applyFileEdits('one\ntwo\n', [
             { oldText: 'one', newText: 'two' }, { oldText: 'two', newText: 'three' },
-          ], '/f')],
-          ['overlapping', s.applyFileEdits('abcdef\n', [
+          ], '/f'))],
+          ['overlapping', editOutcome(s.applyFileEdits('abcdef\n', [
             { oldText: 'abcd', newText: 'X' }, { oldText: 'cdef', newText: 'Y' },
-          ], '/f')],
-          ['one-bad', s.applyFileEdits('alpha\nbeta\n', [
+          ], '/f'))],
+          ['one-bad', editOutcome(s.applyFileEdits('alpha\nbeta\n', [
             { oldText: 'alpha', newText: 'A' }, { oldText: 'missing', newText: 'M' },
-          ], '/f')],
-          ['crlf-bom', s.applyFileEdits('\uFEFFa\r\nb\r\n', [{ oldText: 'a\nb', newText: 'c' }], '/f')],
-          ['mixed-endings', s.applyFileEdits('crlf\r\nlf\nT\r\n', [{ oldText: 'T', newText: 'X\nY' }], '/f')],
-          ['self-overlapping', s.applyFileEdits('aaa\n', [{ oldText: 'aa', newText: 'b' }], '/f')],
+          ], '/f'))],
+          ['crlf-bom', editOutcome(s.applyFileEdits('\uFEFFa\r\nb\r\n', [{ oldText: 'a\nb', newText: 'c' }], '/f'))],
+          ['mixed-endings', editOutcome(s.applyFileEdits('crlf\r\nlf\nT\r\n', [{ oldText: 'T', newText: 'X\nY' }], '/f'))],
+          ['self-overlapping', editOutcome(s.applyFileEdits('aaa\n', [{ oldText: 'aa', newText: 'b' }], '/f'))],
         ],
       },
       {
