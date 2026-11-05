@@ -443,8 +443,10 @@ export class MailStore {
     const answered = [parsed.inReplyTo, ...parsed.references].filter((id): id is string => id !== null).map(bare);
 
     for (const id of answered) {
+      // CROSS JOIN holds the message, found by its header index, as the outer loop: a plain join let SQLite walk every
+      // thread of the box by path, so each reply cost the box's size (a 4,000-thread box: 1 ms a reply and growing).
       const [found] = rows(v.object({ thread_id: v.string() }), this.deps.sql.exec(
-        'SELECT m.thread_id FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ?', id, path,
+        'SELECT m.thread_id FROM mail_messages m CROSS JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ?', id, path,
       ));
 
       if (found !== undefined) return found.thread_id;
@@ -473,7 +475,7 @@ export class MailStore {
     // Only an arrival: a message the person sent themselves, to their own address or an alias of it, carries the
     // Message-ID their sent copy holds, and arrives (staging 2026-10-22: a test to privacy@ never showed).
     const [seen] = headerId === null ? [] : rows(v.pick(MessageColumns, ['id', 'thread_id', 'verdict', 'woke']), this.deps.sql.exec(
-      "SELECT m.id, m.thread_id, m.verdict, m.woke FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ? AND m.send_state IS NULL",
+      "SELECT m.id, m.thread_id, m.verdict, m.woke FROM mail_messages m CROSS JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ? AND m.send_state IS NULL",
       headerId, box.path,
     ));
 
@@ -613,16 +615,27 @@ export class MailStore {
       bindings.push(ftsPhrases(query.query).join(' ') || '""');
     }
 
-    const ids = rows(v.object({ id: v.string(), latest: v.number(), unread: v.number() }), this.deps.sql.exec(
-      `SELECT t.id, (SELECT MAX(at) FROM mail_messages m WHERE m.thread_id = t.id) AS latest,
-         EXISTS (SELECT 1 FROM mail_messages u WHERE u.thread_id = t.id AND u.send_state IS NULL AND u.read = 0) AS unread
-       FROM mail_threads t WHERE ${where.join(' AND ')} ORDER BY latest DESC`, ...bindings,
-    )).filter((row) => query.before === undefined || row.latest < query.before);
+    // Each thread's newest message and whether any is unread, in one pass over the messages' thread index, so a page
+    // reads only its own rows: per thread, as before, a page of a 6,000-thread box cost 23 ms (2026-11-05).
+    const threads = `WITH latest AS (
+        SELECT thread_id, MAX(at) AS latest, MAX(send_state IS NULL AND read = 0) AS unread FROM mail_messages GROUP BY thread_id
+      ) SELECT t.id, l.latest, l.unread FROM mail_threads t JOIN latest l ON l.thread_id = t.id WHERE ${where.join(' AND ')}`;
 
-    const shown = ids.filter((row) => query.unread !== true || row.unread === 1).slice(0, query.limit ?? 50);
-    const threads = shown.map((row) => this.summary(row.id)).filter((summary): summary is MailThreadSummary => summary !== null);
+    // Older than the page's cursor, for the page and for its count alike.
+    const before = query.before === undefined ? '' : ' AND l.latest < ?';
+    const cursor = query.before === undefined ? [] : [query.before];
 
-    return { threads, unread: ids.filter((row) => row.unread === 1).length };
+    const shown = rows(v.object({ id: v.string() }), this.deps.sql.exec(
+      `${threads}${before}${query.unread === true ? ' AND l.unread = 1' : ''} ORDER BY l.latest DESC LIMIT ?`, ...bindings, ...cursor, query.limit ?? 50,
+    ));
+
+    const [counted] = rows(v.object({ unread: v.number() }), this.deps.sql.exec(
+      `SELECT COUNT(*) AS unread FROM (${threads}${before} AND l.unread = 1)`, ...bindings, ...cursor,
+    ));
+
+    const summaries = shown.map((row) => this.summary(row.id)).filter((summary): summary is MailThreadSummary => summary !== null);
+
+    return { threads: summaries, unread: counted?.unread ?? 0 };
   }
 
   private messages(threadId: string): Message[] {
