@@ -59,6 +59,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { childEnv } from '../packages/test-utils/src/ambient-env';
+// A hook exports GIT_DIR, which outranks cwd: every git here runs in an environment that names no repository but its own.
+import { gitEnv } from '../packages/test-utils/src/git-env';
 import { trackedFiles, workspaceScope } from './sources';
 import { REPO_ROOT as root } from './repo-root';
 
@@ -327,7 +329,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
   const detached = spawnSync(
     'git',
     ['worktree', 'add', '--detach', '--no-checkout', copy, 'HEAD'],
-    { cwd: root, encoding: 'utf8' },
+    { cwd: root, encoding: 'utf8', env: gitEnv() },
   );
 
   if (detached.status !== 0) {
@@ -360,7 +362,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
       };
     }
 
-    const checkout = spawnSync('git', ['checkout', 'HEAD'], { cwd: copy, encoding: 'utf8' });
+    const checkout = spawnSync('git', ['checkout', 'HEAD'], { cwd: copy, encoding: 'utf8', env: gitEnv() });
 
     if (checkout.status !== 0) {
       return {
@@ -405,7 +407,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
         try {
           mutated = runSuite(fence.owner.suite, fence.owner.grep, copy);
         } finally {
-          spawnSync('git', ['checkout', '--', fence.file], { cwd: copy, encoding: 'utf8' });
+          spawnSync('git', ['checkout', '--', fence.file], { cwd: copy, encoding: 'utf8', env: gitEnv() });
         }
       }
 
@@ -419,7 +421,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
 
     return { results, stale: [], untracked: [], copyError: null };
   } finally {
-    spawnSync('git', ['worktree', 'remove', '--force', copy], { cwd: root, encoding: 'utf8' });
+    spawnSync('git', ['worktree', 'remove', '--force', copy], { cwd: root, encoding: 'utf8', env: gitEnv() });
     rmSync(copy, { recursive: true, force: true });
   }
 }

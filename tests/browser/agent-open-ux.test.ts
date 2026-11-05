@@ -43,7 +43,7 @@ async function openAgentsList(page: Page, scope: string): Promise<void> {
 function chatShows(page: Page, pane: string): Promise<boolean> {
   return page.$eval(pane, (node) => {
     // On a phone the bar's toggle swaps the chat for the workspace; unpressed, the chat is what shows.
-    const toggle = document.querySelector('.p-bar [data-inspector-toggle]');
+    const toggle = document.querySelector('[data-workspace-bar] [data-inspector-toggle]');
 
     return node.closest('[data-agents-panel]') === null && node.checkVisibility() && (toggle === null || toggle.getAttribute('aria-label') !== 'Show chat');
   });
@@ -56,7 +56,7 @@ describe('opening an agent shows its live chat in the main chat area', () => {
         const page = await workspace(gallery, viewport);
 
         // The list is the sidebar's: the rail's on a desktop, the drawer's on a phone.
-        if (viewport === 'phone') await page.click('.p-bar-menu button');
+        if (viewport === 'phone') await page.click('[data-bar-menu] button');
 
         await openAgentsList(page, viewport === 'phone' ? '[data-drawer]' : '[data-rail]');
         await page.click(`${viewport === 'phone' ? '[data-drawer]' : '[data-rail]'} [data-agent-row="a-scout"]`);
@@ -75,7 +75,7 @@ describe('opening an agent shows its live chat in the main chat area', () => {
         const page = await workspace(gallery, viewport);
 
         if (viewport === 'phone') {
-          await page.click('.p-bar [data-inspector-toggle]');
+          await page.click('[data-workspace-bar] [data-inspector-toggle]');
         }
 
         await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
@@ -95,7 +95,7 @@ describe('opening an agent shows its live chat in the main chat area', () => {
       await withGallery(async (gallery) => {
         const page = await workspace(gallery, viewport);
 
-        if (viewport === 'phone') await page.click('.p-bar [data-inspector-toggle]');
+        if (viewport === 'phone') await page.click('[data-workspace-bar] [data-inspector-toggle]');
 
         await page.click('nav[aria-label="Workspace"] button[aria-label="Work"]');
         await page.waitForSelector('[data-subagent-row]');

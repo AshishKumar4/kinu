@@ -219,7 +219,7 @@ export function ChatMascot({ seed, colour, activity, size = 16 }: { seed: string
         <Eyes face={face} />
         {accessory !== null && <Accessory kind={accessory} id={id} />}
       </g>
-      {face === "waiting" && <circle className="p-mascot-badge" cx={26.4} cy={5.6} r={4} fill="var(--c-danger)" stroke="var(--mascot-ring, var(--c-bg))" strokeWidth={1.6} />}
+      {face === "waiting" && <circle className="p-mascot-badge" data-mascot-badge cx={26.4} cy={5.6} r={4} fill="var(--c-danger)" stroke="var(--mascot-ring, var(--c-bg))" strokeWidth={1.6} />}
     </svg>
   );
 

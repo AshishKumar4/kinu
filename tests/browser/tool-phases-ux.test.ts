@@ -10,7 +10,7 @@ import { withGallery } from '../../scripts/gallery-harness';
 
 /** The thread's blocks as the chat draws them: rollups, phases and thoughts, each with where it stands. */
 function laidOut(page: Page) {
-  return page.$$eval('.p-thread-column [data-turn-rollup], .p-thread-column [data-tool-run]', (lines) => lines.map((line) => ({
+  return page.$$eval('[data-transcript] [data-turn-rollup], [data-transcript] [data-tool-run]', (lines) => lines.map((line) => ({
     kind: line.hasAttribute('data-turn-rollup') ? 'rollup' : 'phase',
     rolledUp: line.hasAttribute('data-tool-run') && line.closest('[data-turn-rollup]') !== null,
     phases: line.getAttribute('data-turn-rollup'),
@@ -25,7 +25,7 @@ async function opened(newPage: () => Promise<Page>, origin: string, query: strin
 
   await page.setViewport({ width: 1280, height: 1000 });
   await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=longturn${query}`, { waitUntil: 'networkidle0' });
-  await page.waitForSelector('.p-thread-column [data-tool-run], .p-thread-column [data-turn-rollup]');
+  await page.waitForSelector('[data-transcript] [data-tool-run], [data-transcript] [data-turn-rollup]');
 
   return page;
 }
@@ -38,7 +38,7 @@ describe('a long turn, in the real chat', () => {
 
       expect(top).toEqual([{ kind: 'rollup', rolledUp: false, phases: '5', state: null, title: 'calls', now: false }]);
       // The answer, and the thought that led to it, stand outside the rollup.
-      expect(await page.evaluate(() => [...document.querySelectorAll('.p-thread-column [data-said]')].filter((words) => words.closest('[data-turn-rollup]') === null).length)).toBe(1);
+      expect(await page.evaluate(() => [...document.querySelectorAll('[data-transcript] [data-said]')].filter((words) => words.closest('[data-turn-rollup]') === null).length)).toBe(1);
 
       await page.click('[data-turn-rollup] > button');
       await page.waitForSelector('[data-turn-rollup] [data-disclosure-body="open"]');
@@ -73,7 +73,7 @@ describe('a long turn, in the real chat', () => {
 
       const after = await page.evaluate(() => {
         const phase = document.querySelector('[data-tool-run="live"]');
-        const thought = document.querySelector('.p-thread-column [data-live-indicator="reasoning"]');
+        const thought = document.querySelector('[data-transcript] [data-live-indicator="reasoning"]');
 
         return { thought: thought !== null, outside: thought !== null && phase !== null && !phase.contains(thought) };
       });

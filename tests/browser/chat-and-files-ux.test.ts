@@ -175,7 +175,7 @@ async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
     for (const row of rows) {
       const card = row.querySelector('[data-system-event]');
       measured[row.getAttribute('data-chat-row') ?? ''] = {
-        userBubbles: row.querySelectorAll('.p-user-bubble').length,
+        userBubbles: row.querySelectorAll('[data-user-bubble]').length,
         systemEvent: card?.getAttribute('data-system-event') ?? null,
         said: card?.textContent ?? '',
         open: (card?.querySelector('[aria-expanded="true"]') ?? null) !== null,
@@ -206,7 +206,7 @@ async function readTails(page: Page): Promise<Record<string, TailFrame>> {
     const measured: Record<string, TailFrame> = {};
 
     for (const row of rows) {
-      const streaming = row.querySelector('.p-streaming');
+      const streaming = row.querySelector('[data-streaming]');
       const last = streaming?.lastElementChild ?? null;
       let heightCostPx = 0;
 
@@ -284,7 +284,7 @@ async function run(): Promise<Observed> {
     await stream.setViewport({ width: 1280, height: 1400 });
     await stream.goto(`${origin}/gallery.html?frame=streaming`, { waitUntil: 'networkidle0' });
     await stream.reload({ waitUntil: 'networkidle0' });
-    await stream.waitForSelector('[data-gallery-stream] .p-streaming');
+    await stream.waitForSelector('[data-gallery-stream] [data-streaming]');
     await stream.waitForSelector('[data-stream-id="st-tool"] [data-tool-state="running"]');
     const tails = await readTails(stream);
     await stream.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
@@ -672,7 +672,7 @@ describe('large tool runs, as the timeline draws them', () => {
 
 /** Each run of calls in the chat, in order: its calls, its state, its failures, how long it took, and its rows on screen. */
 function chatRuns(page: Page): Promise<{ calls: string | null; state: string | null; failed: string | null; span: boolean; rowsShown: number }[]> {
-  return page.$$eval('.p-thread-column [data-tool-run]', (runs) => runs.map((line) => ({
+  return page.$$eval('[data-transcript] [data-tool-run]', (runs) => runs.map((line) => ({
     calls: line.getAttribute('data-tool-run-calls'),
     state: line.getAttribute('data-tool-run'),
     failed: line.querySelector('[data-tool-run-failed]')?.getAttribute('data-tool-run-failed') ?? null,
@@ -712,7 +712,7 @@ describe("a turn's runs of tool calls, in the real chat", () => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('.p-thread-column [data-tool-run]');
+      await page.waitForSelector('[data-transcript] [data-tool-run]');
 
       expect(await chatRuns(page)).toEqual([
         { calls: '6', state: 'settled', failed: null, span: false, rowsShown: 0 },
@@ -721,13 +721,13 @@ describe("a turn's runs of tool calls, in the real chat", () => {
         { calls: '2', state: 'settled', failed: null, span: false, rowsShown: 0 },
       ]);
       expect(await page.evaluate(() => ({
-        answers: [...document.querySelectorAll('.p-thread-column [data-said]')].filter((answer) => answer.closest('[data-tool-run]') === null && answer.getClientRects().length > 0).length,
-        previewOutside: document.querySelector('.p-thread-column iframe') !== null && document.querySelector('[data-tool-run] iframe') === null,
-        askOutside: document.querySelector('.p-thread-column [data-ask-record]') !== null && document.querySelector('[data-tool-run] [data-ask-record]') === null,
+        answers: [...document.querySelectorAll('[data-transcript] [data-said]')].filter((answer) => answer.closest('[data-tool-run]') === null && answer.getClientRects().length > 0).length,
+        previewOutside: document.querySelector('[data-transcript] iframe') !== null && document.querySelector('[data-tool-run] iframe') === null,
+        askOutside: document.querySelector('[data-transcript] [data-ask-record]') !== null && document.querySelector('[data-tool-run] [data-ask-record]') === null,
       }))).toEqual({ answers: 3, previewOutside: true, askOutside: true });
 
       // Opened, the run with the failure shows every step, the failed one among them.
-      const failedRun = '.p-thread-column [data-tool-run-calls="20"]';
+      const failedRun = '[data-transcript] [data-tool-run-calls="20"]';
 
       await page.click(`${failedRun} > button`);
       await page.waitForFunction((line: string) => document.querySelector(`${line} [data-tool-state="failed"]`)?.getClientRects().length === 1, {}, failedRun);
@@ -741,12 +741,12 @@ describe("a turn's runs of tool calls, in the real chat", () => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('.p-thread-column [data-tool-run]');
+      await page.waitForSelector('[data-transcript] [data-tool-run]');
       await claimIs(page, { kind: 'admitted', turnId: 'tr-u4', claimedAt: 1 });
 
       // One call is its own row; a second makes a run, live, its view on screen.
       await runSoFar(page, { calls: 1 });
-      await page.waitForSelector('.p-thread-column [data-tool-state="running"]');
+      await page.waitForSelector('[data-transcript] [data-tool-state="running"]');
       await runSoFar(page, { calls: 3 });
       await page.waitForSelector('[data-tool-run="live"]');
       expect((await liveView(page))?.newestShown).toBe(true);
@@ -769,7 +769,7 @@ describe("a turn's runs of tool calls, in the real chat", () => {
       await runSoFar(page, { calls: 22, failAt: 4, answer: true });
       await page.waitForFunction(() => document.querySelector('[data-tool-run="live"]') === null);
       expect((await chatRuns(page)).at(-1)).toEqual({ calls: '22', state: 'settled', failed: '1', span: true, rowsShown: 0 });
-      expect(await page.evaluate(() => [...document.querySelectorAll('.p-thread-column [data-said]')].at(-1)?.closest('[data-tool-run]') === null)).toBe(true);
+      expect(await page.evaluate(() => [...document.querySelectorAll('[data-transcript] [data-said]')].at(-1)?.closest('[data-tool-run]') === null)).toBe(true);
       await page.close();
     });
   });
@@ -781,8 +781,8 @@ describe("a turn's runs of tool calls, in the real chat", () => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('.p-thread-column [data-tool-run]');
-      const line = '.p-thread-column [data-tool-run-calls="6"] > button';
+      await page.waitForSelector('[data-transcript] [data-tool-run]');
+      const line = '[data-transcript] [data-tool-run-calls="6"] > button';
 
       const read = () => page.$eval(line, (button) => ({
         open: button.getAttribute('aria-expanded'),
@@ -816,10 +816,10 @@ describe("a turn's runs of tool calls, in the real chat", () => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1000 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=toolruns`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('.p-thread-column [data-tool-run]');
+      await page.waitForSelector('[data-transcript] [data-tool-run]');
       await page.evaluate(async () => { await window.galleryNavigate?.('/workspace/api-worker/agents/route-checker'); });
       await page.waitForFunction(() => document.querySelector('[data-composer-root] textarea')?.getAttribute('placeholder')?.includes('route-checker') === true);
-      await page.waitForSelector('.p-thread-column [data-tool-run]');
+      await page.waitForSelector('[data-transcript] [data-tool-run]');
       expect((await chatRuns(page)).map((line) => [line.calls, line.state, line.rowsShown])).toEqual([['6', 'settled', 0], ['20', 'settled', 0], ['2', 'settled', 0], ['2', 'settled', 0]]);
 
       await page.goto(`${origin}/gallery.html?frame=transcript`, { waitUntil: 'networkidle0' });
@@ -844,7 +844,7 @@ describe('a turn the harness wrote, as the browser attributes it', () => {
     // THE INCIDENT, as a browser draws it. This row is the production shape:
     // a bare UUID id and `kinuEvent: fork_interrupted`, no author stamp,
     // which is what five rows in the owner's live workspaces look like. Under
-    // the four-name allowlist this rendered right-aligned in `.p-user-bubble`.
+    // the four-name allowlist this rendered right-aligned in `[data-user-bubble]`.
     const fork = observed.chat[UNSTAMPED_FORK_ROW];
     expect(fork.userBubbles).toBe(0);
     expect(fork.systemEvent).toBe('fork_interrupted');
@@ -1119,7 +1119,7 @@ describe('the gallery shell photographs a healthy neighbour', () => {
         account: document.querySelector('aside [data-account-panel]')?.textContent ?? '',
         chatShown: (document.querySelector('[data-gallery-chat] > *')?.getBoundingClientRect().width ?? 0) > 0,
         chatWidth: Math.round(document.querySelector('[data-gallery-chat] > *')?.getBoundingClientRect().width ?? 0),
-        composerWidth: Math.round(document.querySelector('[data-composer-root] > .p-composer')?.getBoundingClientRect().width ?? 0),
+        composerWidth: Math.round(document.querySelector('[data-composer-root] > [data-composer]')?.getBoundingClientRect().width ?? 0),
         headerSettings: document.querySelectorAll('[aria-label="Workspace settings"]').length,
         rosterSettings: document.querySelectorAll('[aria-label^="Workspace settings for"]').length,
       }));
@@ -1143,7 +1143,7 @@ describe('the gallery shell photographs a healthy neighbour', () => {
 
       const chatPanels = await panelBoxes(page);
 
-      await page.click('.p-bar button[data-inspector-toggle]');
+      await page.click('[data-workspace-bar] button[data-inspector-toggle]');
       await page.waitForFunction(
         () => [...document.querySelectorAll('[data-panel]')].some((panel, index) => (
           index === 1 && Math.round(panel.getBoundingClientRect().width) === 390
@@ -1252,7 +1252,7 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.waitForSelector(CHATS);
-      await page.waitForSelector('.p-thread-column');
+      await page.waitForSelector('[data-transcript]');
 
       // The refiner's own card first, stamped with its actor, then the
       // workspace's own drain with no stamp. The order is the failure's: the
@@ -1273,17 +1273,17 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
       });
 
       await page.waitForFunction(() => (
-        document.querySelector('.p-thread-column')?.textContent?.includes('a payout of 240.00 settled') === true
+        document.querySelector('[data-transcript]')?.textContent?.includes('a payout of 240.00 settled') === true
       ));
 
-      const thread = await page.$eval('.p-thread-column', (el) => el.textContent ?? '');
+      const thread = await page.$eval('[data-transcript]', (el) => el.textContent ?? '');
 
       expect(thread).not.toContain('reviewed 3 graded turns and changed nothing');
       expect(thread).not.toContain('refiner');
       // One card, not two: the count is the assertion, because a dropped frame
       // and a rendered-but-scrolled-away one read the same in a text search.
       expect(await page.$$eval(
-        '.p-thread-column button',
+        '[data-transcript] button',
         (buttons) => buttons.filter((button) => button.innerText.includes('settled') || button.innerText.includes('graded turns')).length,
       )).toBe(1);
 
@@ -1295,7 +1295,7 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
 /** Each row of `?frame=provenance` as a reader meets it: whose bubble, which card, and what each drained event says. */
 function readProvenance(page: Page) {
   return page.$$eval('[data-chat-row]', (rows) => Object.fromEntries(rows.map((row) => [row.getAttribute('data-chat-row') ?? '', {
-    bubble: row.querySelector('.p-user-bubble') !== null,
+    bubble: row.querySelector('[data-user-bubble]') !== null,
     card: row.querySelector('[data-signal-card]') !== null,
     systemEvent: row.querySelector('[data-system-event]')?.getAttribute('data-system-event') ?? null,
     advisor: row.querySelector('[data-advisor-severity]')?.getAttribute('data-advisor-severity') ?? null,
@@ -1336,7 +1336,7 @@ const HANDED = new Map([
 
 /** The loose cards in the workspace's thread, each by its state and the briefs it lists. */
 function threadCards(page: Page): Promise<{ state: string | null; briefs: string[] }[]> {
-  return page.$$eval('.p-thread-column [data-signal-card]', (cards) => cards.map((card) => ({
+  return page.$$eval('[data-transcript] [data-signal-card]', (cards) => cards.map((card) => ({
     state: card.getAttribute('data-signal-card'),
     briefs: [...card.querySelectorAll('[data-drained-event]')].map((event) => event.querySelector('[data-event-brief]')?.textContent ?? ''),
   })));
@@ -1360,7 +1360,7 @@ const webhookCard = (id: string, brief: string, state = 'pending') => ({
  */
 /** Where, in the thread's reading order, each of `needles` first appears: the index of the element that draws it. */
 function readingOrder(page: Page, needles: readonly string[]): Promise<number[]> {
-  return page.$$eval('.p-thread-column *', (all, wanted) => wanted.map((needle) => all.findIndex((el) => (el.textContent ?? '').includes(needle)
+  return page.$$eval('[data-transcript] *', (all, wanted) => wanted.map((needle) => all.findIndex((el) => (el.textContent ?? '').includes(needle)
     && ![...el.children].some((child) => (child.textContent ?? '').includes(needle)))), needles);
 }
 
@@ -1374,7 +1374,7 @@ const SPLICE = { brief: 'Translation job 4471 finished (de-DE)', before: 'Waitin
 /** How far the agent has got with the spliced card, as its mark says it and as its colour does. */
 function spliceDelivery(page: Page): Promise<{ state: string | null; tone: string | null } | null> {
   return page.evaluate(() => {
-    const mark = document.querySelector('[data-spliced-signal="sig-lilt"] [data-delivery], .p-thread-column [data-signal-card] [data-delivery]');
+    const mark = document.querySelector('[data-spliced-signal="sig-lilt"] [data-delivery], [data-transcript] [data-signal-card] [data-delivery]');
 
     if (mark === null) return null;
     const tone = ['p-warning', 'p-success'].find((name) => mark.classList.contains(name)) ?? null;
@@ -1394,11 +1394,11 @@ describe('an event spliced into a running answer', () => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 1600 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=splice-live`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('.p-thread-column');
+      await page.waitForSelector('[data-transcript]');
       const text = `Events arrived while you were working:\n- [webhook] from lilt: ${SPLICE.brief}`;
 
       await pushFrames(page, [{ type: 'signal_card', id: 'sig-lilt', state: 'pending', at: Date.now(), metadata: { kinuEvent: 'event_drain', kinuAuthor: 'harness' }, text }]);
-      await page.waitForFunction(() => document.querySelector('.p-thread-column [data-signal-card] [data-delivery="pending"]') !== null);
+      await page.waitForFunction(() => document.querySelector('[data-transcript] [data-signal-card] [data-delivery="pending"]') !== null);
       expect(await spliceDelivery(page)).toEqual({ state: 'pending', tone: 'p-warning' });
 
       await pushFrames(page, [{ type: 'signal_card', id: 'sig-lilt', state: 'shown', atStep: 1 }]);
@@ -1412,7 +1412,7 @@ describe('an event spliced into a running answer', () => {
       await page.waitForFunction(() => document.querySelector('[data-spliced-signal="sig-lilt"] [data-delivery="seen"]') !== null);
       expect(await spliceDelivery(page)).toEqual({ state: 'seen', tone: 'p-success' });
       // Once, in the answer: not a second loose card below it.
-      expect(await page.$$eval('.p-thread-column [data-signal-card]', (cards) => cards.length)).toBe(1);
+      expect(await page.$$eval('[data-transcript] [data-signal-card]', (cards) => cards.length)).toBe(1);
       await page.close();
     });
   });
@@ -1443,7 +1443,7 @@ describe('a chat\'s events', () => {
       const page = await newPage();
       await page.setViewport({ width: 1440, height: 2400 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&transcript=revert`, { waitUntil: 'networkidle0' });
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('routes/webhooks.ts') === true);
+      await page.waitForFunction(() => document.querySelector('[data-transcript]')?.textContent?.includes('routes/webhooks.ts') === true);
       // The fixture's two asks were written eight and six minutes ago.
       const now = await page.evaluate(() => Date.now());
 
@@ -1455,7 +1455,7 @@ describe('a chat\'s events', () => {
         { type: 'signal_card', id: 'sig-lilt', state: 'pending', at: now - 7 * 60e3 + 1, metadata: { kinuEvent: 'event_drain' },
           text: '- [webhook] from lilt: New Lilt chat activity\n- [webhook] from lilt: New Lilt chat activity' },
       ]);
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('New Lilt chat activity') === true);
+      await page.waitForFunction(() => document.querySelector('[data-transcript]')?.textContent?.includes('New Lilt chat activity') === true);
 
       const [first, between, card, second, after] = await readingOrder(page, [
         'Add the missing-binding regression test', 'between the two asks', 'New Lilt chat activity', 'Now move the webhook routes onto openDb', 'after every answer',
@@ -1490,7 +1490,7 @@ describe('a chat\'s events', () => {
       const page = await newPage();
       await page.setViewport({ width: 1440, height: 2400 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage&devices=none`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('.p-thread-column');
+      await page.waitForSelector('[data-transcript]');
       const handOff = 'anthropic/claude-sonnet-4 took over from opencode-go/muse-spark-1.3-contributor: provider stream reset';
 
       await pushFrames(page, [
@@ -1606,20 +1606,20 @@ describe('whose words a turn is', () => {
       const page = await newPage();
       await page.setViewport({ width: 1440, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
-      await page.waitForSelector('.p-thread-column');
+      await page.waitForSelector('[data-transcript]');
       const cardsBriefing = async (brief: string) => (await threadCards(page)).filter((card) => card.briefs.includes(brief));
 
       await pushFrames(page, [webhookCard('sig-life', 'a refund of 12.00 settled')]);
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('a refund of 12.00 settled') === true);
+      await page.waitForFunction(() => document.querySelector('[data-transcript]')?.textContent?.includes('a refund of 12.00 settled') === true);
       expect(await cardsBriefing('a refund of 12.00 settled')).toEqual([{ state: 'pending', briefs: ['a refund of 12.00 settled'] }]);
 
       await pushFrames(page, [{ type: 'signal_card', id: 'sig-life', state: 'shown' }]);
-      await page.waitForSelector('.p-thread-column [data-signal-card="shown"]');
+      await page.waitForSelector('[data-transcript] [data-signal-card="shown"]');
       expect(await cardsBriefing('a refund of 12.00 settled')).toEqual([{ state: 'shown', briefs: ['a refund of 12.00 settled'] }]);
 
       // Delivered again after it was shown: the same card, pending once more and saying the new words.
       await pushFrames(page, [webhookCard('sig-life', 'a refund of 12.00 settled twice')]);
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('settled twice') === true);
+      await page.waitForFunction(() => document.querySelector('[data-transcript]')?.textContent?.includes('settled twice') === true);
       expect(await cardsBriefing('a refund of 12.00 settled')).toEqual([]);
       expect(await cardsBriefing('a refund of 12.00 settled twice')).toEqual([{ state: 'pending', briefs: ['a refund of 12.00 settled twice'] }]);
 
@@ -1632,13 +1632,13 @@ describe('whose words a turn is', () => {
         { type: 'signal_card', id: 'sig-odd', state: 'elsewhere', text: 'odd', metadata: { kinuEvent: 'event_drain' } },
         webhookCard('sig-after', 'a payout of 3.00 settled'),
       ]);
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('a payout of 3.00 settled') === true);
+      await page.waitForFunction(() => document.querySelector('[data-transcript]')?.textContent?.includes('a payout of 3.00 settled') === true);
       expect(await cardsBriefing('a refund of 12.00 settled twice')).toEqual([]);
       expect((await threadCards(page)).length).toBe(before);
 
       // Cards keep arrival order, and a flood keeps the newest fifty.
       await pushFrames(page, Array.from({ length: 60 }, (_, at) => webhookCard(`sig-flood-${String(at)}`, `flood ${String(at).padStart(2, '0')}`)));
-      await page.waitForFunction(() => document.querySelector('.p-thread-column')?.textContent?.includes('flood 59') === true);
+      await page.waitForFunction(() => document.querySelector('[data-transcript]')?.textContent?.includes('flood 59') === true);
       const flood = (await threadCards(page)).flatMap((card) => card.briefs).filter((brief) => brief.startsWith('flood'));
       expect(flood).not.toBeEmpty();
       expect(flood).toEqual(Array.from({ length: flood.length }, (_, at) => `flood ${String(60 - flood.length + at).padStart(2, '0')}`));
@@ -2875,7 +2875,7 @@ describe('composer and message continuity at browser boundaries', () => {
 
         const measured = await page.evaluate(() => {
           const read = (selector: string) => {
-            const bubble = document.querySelector<HTMLElement>(`${selector} .p-user-bubble`);
+            const bubble = document.querySelector<HTMLElement>(`${selector} [data-user-bubble]`);
 
             return {
               clientWidth: bubble?.clientWidth ?? 0,
@@ -3135,12 +3135,12 @@ test('code keeps its syntax colors through streaming, scrolls sideways, and copi
         await page.goto(`${origin}/gallery.html?frame=chatcode`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('[data-chat-row="ca1"] code');
         await page.waitForFunction(() => document.fonts.status === 'loaded');
-        await page.waitForFunction(() => [...document.querySelectorAll('[data-chat-row="ca1"] .p-code')].every((block) => block.querySelectorAll('code span').length > 1));
+        await page.waitForFunction(() => [...document.querySelectorAll('[data-chat-row="ca1"] [data-code-block]')].every((block) => block.querySelectorAll('code span').length > 1));
 
         // Highlighted: a block's tokens are told apart by their ink.
         const inks = (blocks: Element[]) => blocks.map((block) => new Set([...block.querySelectorAll('code span')].map((token) => getComputedStyle(token).color)).size);
 
-        const chatFences = await page.$$eval('[data-chat-row="ca1"] .p-code', inks);
+        const chatFences = await page.$$eval('[data-chat-row="ca1"] [data-code-block]', inks);
 
         expect(chatFences.length).toBe(3);
 

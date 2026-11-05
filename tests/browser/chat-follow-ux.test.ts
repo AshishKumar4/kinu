@@ -63,7 +63,7 @@ describe('sending brings the chat to its newest row and follows the reply', () =
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       const pane = '[data-agent-pane="api-worker/main"]';
-      const chat = `${pane} .p-thread-column.overflow-y-auto`;
+      const chat = `${pane} [data-transcript].overflow-y-auto`;
 
       const below = (): Promise<number> => gapBelow(page, chat);
 

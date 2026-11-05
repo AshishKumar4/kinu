@@ -323,7 +323,7 @@ export function Composer({
 
       {attention}
 
-      <div className="p-composer relative">
+      <div className="p-composer relative" data-composer>
         {menu !== undefined && <SlashMenu menu={menu} />}
         {attachments && <AttachmentTray attachments={attachments} />}
 
