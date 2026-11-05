@@ -118,9 +118,7 @@ export function BackgroundWork({ workspace, agents, jobs, open, openWork }: {
   const idle = rows.length === 0 && running.length === 0;
 
   // The sheet goes with the last thing it listed, so work that comes after opens a closed pill.
-  useEffect(() => {
-    if (idle) setSheet(false);
-  }, [idle]);
+  if (idle && sheet) setSheet(false);
 
   if (idle) return null;
   const count = (state: Shown): number => rows.filter((row) => row.shown === state).length;

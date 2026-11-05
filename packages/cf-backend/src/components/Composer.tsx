@@ -307,9 +307,11 @@ export function Composer({
   const [stopping, setStopping] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const recoverLabel = RECOVER_LABEL[recovering ? "busy" : "idle"];
+
   // The runtime sends no stopped event; `streaming` going false confirms the stop.
-  useEffect(() => { if (!streaming) setStopping(false); }, [streaming]);
-  useEffect(() => { if (!stranded) setRecovering(false); }, [stranded]);
+  if (!streaming && stopping) setStopping(false);
+
+  if (!stranded && recovering) setRecovering(false);
   // Enter while a turn runs steers it; it is never a no-op.
   const menu = slash?.highlighted === undefined ? undefined : slash;
 

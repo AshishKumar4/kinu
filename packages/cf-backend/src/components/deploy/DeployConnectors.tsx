@@ -41,7 +41,7 @@ function Connector({ id, brand, title, copy, action, children }: {
 
 function External({ href, children }: { href: string; children: ReactNode }) {
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 t-public-item p-accent-fg hover:underline">
+    <a href={href} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 t-public-item p-link">
       {children}<ArrowSquareOutIcon size={14} />
     </a>
   );

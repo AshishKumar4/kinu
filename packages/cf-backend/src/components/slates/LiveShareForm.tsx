@@ -17,6 +17,7 @@ import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, type AccessOption } from "./ShareParts";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { Notice } from "@/components/ui/Notice";
 import { Group } from "@/components/ui/Group";
 import { Choices, type Choice } from "@/components/ui/Choices";
@@ -469,28 +470,18 @@ function AlwaysAllowed({ standing, graph, onWithdraw, disabled }: {
 
 /** The slate's standing approvals, read with the sheet, and each taken back from every share of it. */
 function useStanding(workspace: string, slate: string, failed: (chain: string) => void) {
-  const [standing, setStanding] = useState<readonly SharePreapproval[]>([]);
-
-  useEffect(() => {
-    let live = true;
-
-    detach(Effect.catchCause(
-      Effect.map(Effect.promise(() => readPreapprovals({ workspace, slate })), (read) => { if (live) setStanding(read.preapproved); }),
-      showing((chain) => { if (live) failed(chain); }),
-    ));
-
-    return () => { live = false; };
-  }, [workspace, slate, failed]);
+  const read = useCallback(async () => (await readPreapprovals({ workspace, slate })).preapproved, [workspace, slate]);
+  const { resource, set } = useAsyncResource(read);
 
   const withdraw = useCallback((entry: SharePreapproval) => detach(Effect.catchCause(
     Effect.map(
       Effect.promise(() => withdrawPreapproval({ workspace, slate, entry: { slate: entry.slate, namespace: entry.namespace, member: entry.member, root: entry.root } })),
-      (left) => setStanding(left.preapproved),
+      (left) => set(left.preapproved),
     ),
     showing(failed),
-  )), [workspace, slate, failed]);
+  )), [workspace, slate, failed, set]);
 
-  return { standing, withdraw };
+  return { standing: lastValue(resource) ?? [], unread: resource.status === "error" ? resource.message : null, withdraw };
 }
 
 /** The people typed in, and of them those who edit too; only people added by name edit: a link opens it for use alone. */
@@ -512,19 +503,13 @@ function usePeopleRoles(emails: string, visibility: LiveShareVisibility) {
 
 /** A shared slate runs only what its own folder builds alone: why its preview refuses it, when it does (`sharedBuildRefusal`). */
 function useSharedRefusal(rpc: WorkspaceRpc, slate: string): string | null {
-  const [refused, setRefused] = useState<string | null>(null);
+  const preview = useCallback(async () => {
+    const shown = await rpc("slate", [{ op: "preview", id: slate }]);
 
-  useEffect(() => {
-    let live = true;
-
-    detach(Effect.map(Effect.promise(() => rpc("slate", [{ op: "preview", id: slate }])), (shown) => {
-      if (live && !shown.ok && shown.reason === "bad_input") setRefused(shown.error);
-    }));
-
-    return () => { live = false; };
+    return !shown.ok && shown.reason === "bad_input" ? shown.error : null;
   }, [rpc, slate]);
 
-  return refused;
+  return lastValue(useAsyncResource(preview).resource);
 }
 
 /** Whether the people it is shared with may fork it: a fork is their own copy, on their own connections. */
@@ -656,7 +641,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   }, []);
 
   const { emailList, editing, editors, setRole } = usePeopleRoles(emails, visibility);
-  const { standing, withdraw } = useStanding(workspace, slate, setErr);
+  const { standing, unread, withdraw } = useStanding(workspace, slate, setErr);
 
   // The owner's access is approved at a revision of the slate: none before it has been opened once.
   const revision = graph?.revision ?? null;
@@ -770,7 +755,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
           }} />
         )}
         <AlwaysAllowed standing={standing} graph={graph} onWithdraw={withdraw} disabled={busy} />
-        <Failure message={err} />
+        <Failure message={err ?? unread} />
       </div>
       <div className="flex justify-end gap-2 border-t p-border pt-4">
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>

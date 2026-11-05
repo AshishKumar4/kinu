@@ -78,7 +78,7 @@ export function InstallDialog({ page, connected, onClose }: { page: BlueprintPag
                     <span className="t-body block p-text">{title} <span className="t-meta p-text-3">{need.access === "read" ? "to read" : "to read and write"}</span></span>
                   </span>
                   {has === true && <Status tone="success">Connected</Status>}
-                  {has === false && <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="t-meta shrink-0 p-accent-fg hover:underline">Connect</a>}
+                  {has === false && <a href={`${APP_ROUTES.plugins}?add=${need.connection ?? ""}`} className="t-meta shrink-0 p-link">Connect</a>}
                   {has === null && <span className="t-meta shrink-0 p-text-3" data-need-unread>Not checked yet</span>}
                 </li>
               );

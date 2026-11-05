@@ -477,9 +477,7 @@ export function ChangesPanel({ sets, source, onSource, now, file: initialFile = 
   }, [path]);
 
   // Out of notes, the list closes: a later first note must not cover the diff it is on.
-  useEffect(() => {
-    if (!noted) setNotesOpen(false);
-  }, [noted]);
+  if (!noted && notesOpen) setNotesOpen(false);
 
   if (set === undefined) return null;
 
