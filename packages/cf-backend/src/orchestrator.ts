@@ -288,6 +288,7 @@ import {
   type TerminalTurnParts,
 } from "@kinu.run/core";
 import { accountNamed } from './user/workspace-placement';
+import { RunWrites } from './run-events-routes';
 
 const READS_BY_STATEMENT = new WeakMap<TemplateStringsArray, readonly LiveRead[]>();
 
@@ -1219,6 +1220,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // A repair's question, read only: its calls' effects committed here, under the receipts each kept.
       receipts: async (turnId, runId, callIds) => remoteReceipts(this.boundSql, this.agentBound(actorId).handle, { turnId, runId }, callIds),
       observe: async (lines) => { await this.chatRooms.hostedRoom(actorId)?.observe(uiChunks(lines)); },
+      // Main's isolate holds a turn's run; a stream follows only those and this object's own.
+      runEventsWritten: async () => { if (actorId === this.actorHandle().actorId) this._runWrites?.ring(); },
       answerMetadata: (close, narration) => this.takeTurnSlates(actorId, close.turnId, narration),
       reportModelCall: async (report) => { this.reportModelCall(report); },
       getAuth: credentialReads.getAuth,
@@ -5796,6 +5799,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    *  isolate; any other (a branch head's, the workspace's own lanes) is this object's. */
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
     return await this.runRead(runId, opts, (isolate, snapshot) => isolate.runEvents(snapshot, runId, opts ?? null), getRunEvents);
+  }
+
+  private _runWrites: RunWrites | null = null;
+
+  /** Not @callable: serves the run-event stream. The count of run-event writes once it passes `seen`, or after `ms`; made
+   *  at a stream's first ask, so no write rings anything while none follows. */
+  async awaitRunWrites(seen: number, ms: number): Promise<number> {
+    if (this._runWrites === null) {
+      const writes = new RunWrites(REAL_CLOCK);
+
+      this._runWrites = writes;
+      this.eventRecorder.observe(() => { writes.ring(); });
+    }
+
+    return await this._runWrites.after(seen, ms);
   }
 
   /** Not @callable: serves the run-event routes. */

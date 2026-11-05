@@ -3,7 +3,7 @@ import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { Effect } from 'effect';
-import { attemptInItsWords, flight, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { attemptInItsWords, detachPromise, flight, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 import {
   encodeModelMessageValues, readAgentArchivePage,
   type InspectedWork,
@@ -240,6 +240,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
       sayToParent: (signal) => this.workspaceCalls.sayToParent(signal),
       receipts: (...args) => this.workspaceCalls.receipts(...args),
       logActivity: (lines) => this.workspaceCalls.logActivity(lines),
+      runEventsWritten: () => { detachPromise(() => this.workspaceCalls.runEventsWritten()); },
     });
     this.database.adopt(snapshot);
 

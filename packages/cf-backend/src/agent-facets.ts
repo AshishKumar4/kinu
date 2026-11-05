@@ -201,6 +201,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   advisorRead(call: AgentAdvisorRead) { return this.open(() => this.answers.advisorRead(call), call, 'executes'); }
   receipts(turnId: string, runId: string, callIds: readonly string[]) { return this.open(() => this.answers.receipts(turnId, runId, callIds)); }
   observe(lines: ReadableStream<Uint8Array>) { return this.open(() => this.answers.observe(lines)); }
+  runEventsWritten() { return this.open(() => this.answers.runEventsWritten()); }
   paceStep(bound: TurnBound, profile: ResolvedTurnProfile | null) { return this.open(() => this.answers.paceStep(bound, profile), bound, 'executes'); }
   answerMetadata(close: TurnBound, narration: readonly string[] | null) { return this.open(() => this.answers.answerMetadata(close, narration), close); }
   reportModelCall(report: ModelCallReport) { return this.open(() => this.answers.reportModelCall(report)); }

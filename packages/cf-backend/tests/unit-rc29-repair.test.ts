@@ -18,7 +18,7 @@ function unreachable(): never {
 
 const WORKSPACE = {
   agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, admitDelivery: unreachable, broadcast: unreachable,
-  turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable,
+  turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable, runEventsWritten: () => {},
 };
 
 /** The fixture's database, stamped as rc29 stamped it (its first line names the stamp). */

@@ -504,7 +504,7 @@ export function agentDatabase(workspace: Database, storageKey: string): Database
 
   agents.set(storageKey, db);
   databases.set(workspace, agents);
-  openAgentDatabase(contextOver(db, storageKey).storage, null, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, admitDelivery: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable });
+  openAgentDatabase(contextOver(db, storageKey).storage, null, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, admitDelivery: unreachable, broadcast: unreachable, turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable, runEventsWritten: () => {} });
 
   return db;
 }
@@ -758,6 +758,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         },
         advisorRead: (call) => host().advisorRead(call),
         receipts: (turnId, runId, callIds) => host().receipts(turnId, runId, callIds),
+        runEventsWritten: () => host().runEventsWritten(),
         observe: async (lines) => {
           const delayed = delayedObserve;
 

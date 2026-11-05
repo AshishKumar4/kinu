@@ -46,6 +46,7 @@ const unusedPort: AgentWorkspacePort = {
   cancelModelRelay: unused,
   sayToParent: unused,
   logActivity: unused,
+  runEventsWritten: unused,
   reportModelCall: unused,
 };
 

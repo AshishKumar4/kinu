@@ -14,7 +14,7 @@ function unreachable(): never {
 
 const WORKSPACE = {
   agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, admitDelivery: unreachable, broadcast: unreachable,
-  turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable,
+  turnInFlight: () => false, memory: unreachable, program: unreachable, sayToParent: unreachable, receipts: unreachable, logActivity: unreachable, runEventsWritten: () => {},
 };
 
 /** An agent database as a build before this one left it: a table this release removed, a column it dropped, and
