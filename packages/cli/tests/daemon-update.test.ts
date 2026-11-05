@@ -327,7 +327,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
 
   // SECURITY-devices C1 and L2: a hub could hand a signed older build back, an archive of any size, or one whose members
   // reach outside the device home. Each is refused before anything lands; the old daemon keeps the machine.
-  test('an older release, an endless download and an archive carrying a link each land nothing', async () => {
+  test('an older release, an endless download, a redirected one and an archive carrying a link each land nothing', async () => {
     const outcome = async (served: UpdateHub, stamp: string) => {
       const home = installedMachine(served.origin, stamp);
       const daemon = startDaemon(home, await releaseSigningEnv());
@@ -341,15 +341,18 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
       };
     };
 
-    const [older, endless, linked] = await Promise.all([
+    const [older, endless, redirected, linked] = await Promise.all([
       outcome(hub({ served: OLD, archive: await daemonArchive(DAEMON_FILES, OLD) }), NEW),
       outcome(hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), endless: true }), OLD),
+      // The signed bytes, but from where the hub's host sent the download: an update reads only the path it was named.
+      outcome(hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), redirected: true }), OLD),
       outcome(hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW, 'link') }), OLD),
     ]);
 
-    expect({ older, endless, linked }).toEqual({
+    expect({ older, endless, redirected, linked }).toEqual({
       older: { said: expect.stringContaining('older than the installed'), kept: true, downloads: 0 },
       endless: { said: expect.stringContaining('over 134217728 bytes'), kept: true, downloads: 1 },
+      redirected: { said: expect.stringContaining('redirect'), kept: true, downloads: 1 },
       linked: { said: expect.stringContaining('not a file or a directory'), kept: true, downloads: 1 },
     });
   });

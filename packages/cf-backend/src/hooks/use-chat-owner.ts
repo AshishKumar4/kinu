@@ -21,7 +21,7 @@ import {
 } from "@kinu.run/core";
 import { abandonTurn, abandonTurnIfOwner, admitTurn, newSendLatch } from "@kinu.run/core";
 import { terminalChatError, turnFailure, type ChatTurnError } from "@kinu.run/core";
-import { turnLiveness, SLATE_PUSH_EVENT, slatePushes, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
+import { MESSAGE_AMENDED_FRAME, turnLiveness, SLATE_PUSH_EVENT, slatePushes, TURN_CLAIM_FRAME, type TurnClaimState } from "@kinu.run/core";
 import { useSocketFrames, type SocketFrame } from "./socket-frames";
 import type { ConnectionStatus } from "./use-workspace-rpc";
 import type { SeedEdge } from "./use-chat-thread";
@@ -74,6 +74,9 @@ export interface WorkspaceExtension {
 const REVISITED_CHATS = 8;
 
 const revisited = new Map<string, UIMessage[]>();
+
+/** Hoisted, so a chat with no stamped rows keeps one map across renders. */
+const NO_AMENDED: ReadonlyMap<string, UIMessage> = new Map();
 
 function keepRevisited(actorKey: string, messages: UIMessage[]): void {
   revisited.delete(actorKey);
@@ -194,6 +197,8 @@ export function useChatOwner(target: KinuActorAddress, extension: RefObject<Work
   // The rows the room's newest window holds, a revisited chat's last ones until it lands: what a finished turn drew. A
   // turn a signal opened draws into the last row none of them is (`liveTailRow`).
   const [stored, setStored] = useState<ReadonlySet<string>>(() => new Set(lastShown?.map((message) => message.id)));
+  // Rows the room stamped after they ended, by id, latest stamp each: drawn over whichever copy the tab holds.
+  const [amended, setAmended] = useState<ReadonlyMap<string, UIMessage>>(NO_AMENDED);
 
   const clearProviderWait = useCallback(() => setProviderWait(null), []);
 
@@ -508,6 +513,8 @@ export function useChatOwner(target: KinuActorAddress, extension: RefObject<Work
       adoptPlan(msg.plan);
     } else if (msg.type === TURN_CLAIM_FRAME) {
       setTurnClaim(msg.claim);
+    } else if (msg.type === MESSAGE_AMENDED_FRAME) {
+      setAmended((rows) => new Map(rows).set(msg.message.id, msg.message));
     } else if (msg.type === SLATE_PUSH_EVENT) {
       // What an answer's page's server pushed, to each frame this chat draws it in.
       slatePushes.deliver(msg.page, msg.data);
@@ -756,6 +763,8 @@ export function useChatOwner(target: KinuActorAddress, extension: RefObject<Work
       seedEdge,
       /** The rows the room's newest window holds: a live turn's row is never one of them (`liveTailRow`). */
       stored,
+      /** Rows stamped after they ended, by id: each replaces the copy the tab holds (`use-chat-thread.ts`). */
+      amended,
       connectionStatus,
       /** Set when reconnecting cannot help (not this caller's workspace, or gone). The SDK owns the
        *  classification and clears it on open. */

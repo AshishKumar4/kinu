@@ -932,25 +932,20 @@ function listFilesAnswer(msg) {
 
   // Read where the view judged it, through its descriptor: a link swapped in for it lists nothing (L111 #2). A hub from
   // before paging names no page, and is answered whole only while the whole fits one page.
+  // Read only as far as the page and one more, which says whether another page follows: the skipped entries are counted,
+  // never held, so no listing holds more than a page however large the directory.
+  const limit = page.limit ?? protocol.listPageMaxEntries;
+
   return atJudged(view, dir, {}, (at) => at.list((entries) => {
-    if (page.limit !== undefined) return listPage(entries, offset, page.limit, (entry) => listEntry(view, dir, entry));
+    const shown = entries.slice(0, limit).map((entry) => listEntry(view, dir, entry));
 
-    if (entries.length > protocol.listPageMaxEntries) throw new Error(`listFiles of a directory over ${protocol.listPageMaxEntries} entries pages it`);
+    // One page in the order the filesystem yields it; `next` is where the page after starts, or null past the last.
+    if (page.limit !== undefined) return { entries: shown, next: entries.length > limit ? offset + limit : null };
 
-    return entries.map((entry) => listEntry(view, dir, entry));
-  }));
-}
+    if (entries.length > limit) throw new Error(`listFiles of a directory over ${protocol.listPageMaxEntries} entries pages it`);
 
-/**
- * One page of a directory, in the order the filesystem yields it: `next` is
- * the offset of the page after, or null past the last entry. The hub pages a
- * large directory so each answer stays under the socket's receive ceiling.
- */
-/** One page of a listing: `limit` entries from `offset`, each as `show` shows it, and where the next page starts. */
-function listPage(listed, offset, limit, show) {
-  const entries = listed.slice(offset, offset + limit).map(show);
-
-  return { entries, next: offset + limit < listed.length ? offset + limit : null };
+    return shown;
+  }, { skip: page.limit === undefined ? 0 : offset, take: limit + 1 }));
 }
 
 /**

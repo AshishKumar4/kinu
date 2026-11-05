@@ -198,10 +198,12 @@ export async function attachMachine(request: AttachMachineRequest): Promise<Atta
   const arrived = await machineArrives(account, registration.deviceId);
 
   if (!arrived) {
-    machine.stop();
+    const said = readDaemonLogTail(logPath);
+    // Put away as any machine is, its row and credentials with it: the caller never holds this one to tear it down.
+    const kept = await detachMachine(account, machine);
+
     throw new Error(`the machine ${name} (${registration.deviceId}) never reported connected `
-      + `within ${String(ARRIVAL_DEADLINE_MS)}ms — the daemon's own log: `
-      + `${readDaemonLogTail(logPath)}`);
+      + `within ${String(ARRIVAL_DEADLINE_MS)}ms — the daemon's own log: ${said}${kept === null ? '' : `; and it was not put away: ${kept}`}`);
   }
 
   return machine;

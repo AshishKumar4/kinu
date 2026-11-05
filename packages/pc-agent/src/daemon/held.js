@@ -27,6 +27,24 @@ function heldModule(load) {
     return error;
   }
 
+  /**
+   * A directory's entries from `next` (null past the last), only those of `window`: `skip` read and dropped, then at most
+   * `take` kept. A page holds its own entries and no others, however large the directory (audit 0916 M2).
+   */
+  function windowed(next, window = { skip: 0, take: Infinity }) {
+    const kept = [];
+
+    for (let seen = 0; kept.length < window.take; seen++) {
+      const entry = next();
+
+      if (entry === null) break;
+
+      if (seen >= window.skip) kept.push(entry);
+    }
+
+    return kept;
+  }
+
   /** The entry at the path `at`, through node:fs; `follow` 0 opens through a link in its last component. */
   function entryAt(at, follow = 0) {
     return {
@@ -35,7 +53,15 @@ function heldModule(load) {
       unlink: () => { fs.unlinkSync(at); },
       rmdir: () => { fs.rmdirSync(at); },
       stat: () => fs.lstatSync(at, { throwIfNoEntry: false }),
-      list: (read) => read(fs.readdirSync(at, { withFileTypes: true }).map((entry) => listed(entry.name, entry, () => fs.lstatSync(path.join(at, entry.name), { throwIfNoEntry: false })))),
+      list: (read, window) => {
+        const dir = fs.opendirSync(at);
+
+        try {
+          return read(windowed(() => dir.readSync(), window).map((entry) => listed(entry.name, entry, () => fs.lstatSync(path.join(at, entry.name), { throwIfNoEntry: false }))));
+        } finally {
+          dir.closeSync();
+        }
+      },
     };
   }
 
@@ -102,7 +128,7 @@ function heldModule(load) {
    * and keeping the names the held directory also has (2026-10-19, the macOS half) still told a command which names it
    * planted the linked directory shares. Refused, never read another way, when this system's libc cannot be bound.
    */
-  function namesIn(held, shown) {
+  function namesIn(held, shown, window) {
     let calls;
 
     try {
@@ -125,22 +151,22 @@ function heldModule(load) {
     }
 
     try {
-      const entries = [];
+      return windowed(() => {
+        for (;;) {
+          errno[0] = 0;
+          const entry = calls.readdir(dir);
 
-      for (;;) {
-        errno[0] = 0;
-        const entry = calls.readdir(dir);
+          if (entry === null) {
+            if (errno[0] !== 0) throw libcFailure(errno[0], 'readdir', shown);
 
-        if (entry === null) {
-          if (errno[0] !== 0) throw libcFailure(errno[0], 'readdir', shown);
+            return null;
+          }
 
-          return entries;
+          const name = calls.nameOf(entry);
+
+          if (name !== '.' && name !== '..') return { name, type: calls.typeOf(entry) };
         }
-
-        const name = calls.nameOf(entry);
-
-        if (name !== '.' && name !== '..') entries.push({ name, type: calls.typeOf(entry) });
-      }
+      }, window);
     } finally {
       calls.closedir(dir);
     }
@@ -151,8 +177,8 @@ function heldModule(load) {
    * read there by `statOf` only when it is asked (a page of a large folder stats its page alone), undefined once the
    * entry is gone. A kind the filesystem does not report is read from that stat.
    */
-  function listedIn(held, shown, statOf) {
-    return namesIn(held, shown).map(({ name, type }) => {
+  function listedIn(held, shown, statOf, window) {
+    return namesIn(held, shown, window).map(({ name, type }) => {
       let read = false;
       let stat;
 
@@ -214,13 +240,13 @@ function heldModule(load) {
       rmdir: named(entry.rmdir),
       stat: named(() => fs.lstatSync(at, { throwIfNoEntry: false })),
       // The directory is held by its own descriptor while it is read, so a link swapped in for it meanwhile reads nothing.
-      list: named((read) => {
+      list: named((read, window) => {
         const held = fs.openSync(at, O_RDONLY | O_DIRECTORY | O_NOFOLLOW);
 
         try {
           const through = `/proc/self/fd/${held}`;
 
-          return read(listedIn(held, shown, (child) => fs.lstatSync(`${through}/${child}`, { throwIfNoEntry: false })));
+          return read(listedIn(held, shown, (child) => fs.lstatSync(`${through}/${child}`, { throwIfNoEntry: false }), window));
         } finally {
           fs.closeSync(held);
         }
@@ -354,11 +380,11 @@ function heldModule(load) {
       rmdir: () => { ok(symbols.unlinkat(dir, bytes, DARWIN_AT_REMOVEDIR), 'rmdir'); },
       stat: () => lstatAt(dir, bytes, shown),
       // The directory is held by its own descriptor while it is read, so a link swapped in for it meanwhile reads nothing.
-      list: (read) => {
+      list: (read, window) => {
         const held = ok(openat(dir, bytes, O_RDONLY | O_DIRECTORY | O_NOFOLLOW, 0), 'open');
 
         try {
-          return read(listedIn(held, shown, (child) => lstatAt(held, Buffer.from(`${child}\0`), path.join(shown, child))));
+          return read(listedIn(held, shown, (child) => lstatAt(held, Buffer.from(`${child}\0`), path.join(shown, child)), window));
         } finally {
           fs.closeSync(held);
         }

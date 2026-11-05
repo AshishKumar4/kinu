@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as v from "valibot";
-import { ChatResponseFrameSchema, PositionCursorSchema, WorkspaceBroadcastSchema } from "@kinu.run/core";
+import { ChatResponseFrameSchema, MessageAmendedFrameSchema, PositionCursorSchema, WorkspaceBroadcastSchema } from "@kinu.run/core";
 import { tolerate, detachPromise } from "@kinu.run/core/obs";
 
 /** The socket's frames: the chat transport's own, and the workspace's broadcasts as core decodes them. */
@@ -15,6 +15,7 @@ const SocketMessageSchema = v.variant("type", [
   ChatResponseFrameSchema,
   // The server's answer to the SDK's resume probe, which it sends as each socket opens: a stream to rejoin, or none.
   v.looseObject({ type: v.picklist(["cf_agent_stream_resuming", "cf_agent_stream_resume_none"]) }),
+  MessageAmendedFrameSchema,
   WorkspaceBroadcastSchema,
 ]);
 

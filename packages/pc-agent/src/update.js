@@ -173,10 +173,13 @@ function releaseSignatureHolds(frame, publicKeyHex = releasePublicKey(process.en
   return verifyRelease(frame, publicKeyHex);
 }
 
-/** The body at `url`, read until `ARCHIVE_MAX_BYTES` and no further, redirects included: a hub or a host it sends the
- *  download to cannot fill this machine's memory or disk before the checksum is read (SECURITY-devices L2). */
+/** The body at `url`, read until `ARCHIVE_MAX_BYTES` and no further, and from that url alone: a hub cannot fill this
+ *  machine's memory or disk before the checksum is read, nor send the download on to a host of its choosing
+ *  (SECURITY-devices L2). */
 async function fetchBytes(fetchFn, url) {
-  const res = await fetchFn(url, { cache: 'no-store' });
+  const res = await fetchFn(url, { cache: 'no-store', redirect: 'error' }).catch((cause) => {
+    throw new Error(`download ${url}: refused, it answered a redirect or no answer`, { cause });
+  });
 
   if (!res.ok) throw new Error(`download ${url}: HTTP ${res.status}`);
 
