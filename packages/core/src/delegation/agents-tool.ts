@@ -445,10 +445,6 @@ function badInput(error: string): never {
   throw new KinuError('bad_input', error);
 }
 
-function unknownAgent(agent: string): never {
-  return badInput(`unknown agent "${agent}": check the roster with op:"list"`);
-}
-
 /** The mission scope for this call (a fresh child label when it declared a cap) and its charging port;
  *  null when there is no governor or scope. */
 function missionScope(
@@ -880,7 +876,7 @@ async function assignWork(deps: AgentsToolDeps, fields: AssignFields, { mode, to
     });
   }
 
-  return unknownAgent(fields.agent);
+  return badInput(`unknown agent "${fields.agent}": check the roster with op:"list"`);
 }
 
 /** A message to an agent, with no workstream handed over. Waking an agent is a spawn-shaped spend. */
@@ -901,7 +897,7 @@ async function messageAgent(deps: AgentsToolDeps, fields: MessageFields, { mode,
     return await peers.send({ agent, topic: sent.topic, message, mode });
   }
 
-  return unknownAgent(agent);
+  return badInput(`unknown agent "${agent}": check the roster with op:"list"`);
 }
 
 /** The caller's subtree and peers, or one agent's status: provenance, not addressing, so `knows` includes archived rows. */
