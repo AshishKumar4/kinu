@@ -2660,7 +2660,7 @@ describe('Files at every width it is drawn', () => {
   test('arrows move among tiles as the grid stands: beside in reading order, and up or down a row in the same column', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
-      const chosen = () => page.$eval('[data-files-entry][aria-selected="true"]', (tile) => tile.getAttribute('title'));
+      const chosen = () => page.$eval('[data-files-entry][aria-current="true"]', (tile) => tile.getAttribute('title'));
       await page.setViewport({ width: 1280, height: 900 });
       await page.goto(`${origin}/gallery.html?frame=files&inspector=480`, { waitUntil: 'networkidle0' });
 

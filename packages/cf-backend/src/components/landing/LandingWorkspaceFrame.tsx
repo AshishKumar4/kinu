@@ -458,7 +458,10 @@ export default function LandingWorkspaceFrame(): ReactElement {
         data-reads-pending={readsPending}
         data-movie-phase={discrete.phase}
         data-movie-settled={discrete.settled ? 'true' : 'false'}
+        // A picture of the product, not a place to work: one image to a reader, and nothing in it takes the focus.
+        role="img"
         aria-label="Kinu workspace interface preview"
+        inert
         className="p-workbench relative flex flex-col overflow-hidden rounded-b-2xl border p-border p-bg p-text text-left shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)] md:flex-row"
       >
         {/* Below md the app summons a drawer from its header; the frame has no header, so no rail there. */}
