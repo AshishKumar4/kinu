@@ -98,6 +98,56 @@ export const DECLARED = byFile([
     within: ['previewRpc'],
     reason: 'a design-system gallery fixture: its stub RPC refuses a method it does not stand in for, as an unknown RPC is refused',
   }],
+  ['packages/cf-backend/src/gallery-data.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
+  ['packages/cf-backend/src/gallery-shared.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
+  ['packages/cf-backend/src/gallery-stubs.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
+  ['packages/cf-backend/src/gallery-chat-frames.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
+  ['packages/cf-backend/src/gallery-workspace-frames.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
+  ['packages/cf-backend/src/gallery-swarm-frames.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
+  ['packages/cf-backend/src/gallery-account-frames.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
+  ['packages/cf-backend/src/gallery-sharing-frames.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
+  ['packages/cf-backend/src/gallery-activity-frames.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
+  ['packages/cf-backend/src/gallery-chrome-frames.tsx', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
+      + 'can photograph that failure state, and the page\'s own mount failure is rendered as the dev page\'s last word',
+  }],
   ['packages/cf-backend/src/gallery.tsx', {
     mechanisms: ['throw', 'catch', 'promise-rejection'],
     reason: 'the design-system gallery over mock data: each stub rejects as the backend it stands in for does, so a frame '
@@ -272,13 +322,29 @@ export const DECLARED = byFile([
       'gallery fixtures that mirror the Drive HTTP bodies'],
     ['packages/cf-backend/src/gallery-preview-tabs.tsx', ['answers', 'workerRpc'],
       'gallery fixtures typed as the workspace RPC answers they mirror'],
-    ['packages/cf-backend/src/gallery.tsx', ['GALLERY_ANSWERS', 'SLATE_ANSWERS', 'PAGE_TABLE_ANSWERS', 'approvalsRpc', 'send'],
+    ['packages/cf-backend/src/gallery-shared.tsx', ['GALLERY_ANSWERS', 'SLATE_ANSWERS', 'PAGE_TABLE_ANSWERS', 'send'],
+      'gallery fixtures typed as the workspace RPC answers they mirror, and the Agents SDK frame its socket replies in'],
+    ['packages/cf-backend/src/gallery-stubs.tsx', ['send'],
+      'gallery fixtures typed as the workspace RPC answers they mirror, and the Agents SDK frame its socket replies in'],
+    ['packages/cf-backend/src/gallery-workspace-frames.tsx', ['approvalsRpc'],
       'gallery fixtures typed as the workspace RPC answers they mirror, and the Agents SDK frame its socket replies in'],
     ['packages/cf-backend/src/gallery-slate-fallback.tsx', ['frameRpc'],
       'a gallery fixture that mirrors SlateHost.preview\'s answer'],
     ['packages/cf-backend/src/gallery-parts.tsx', ['previewRpc'],
       'a gallery fixture that mirrors the previewSlate RPC answer'],
-    ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'storedConfigFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'galleryAnnotationSave', 'previewSlate', 'slate', 'dismissPlanReview', 'galleryPlanDecided', 'setModel', 'setReasoningEffort', 'renameSubagentAgent', 'dismissSubagent', 'galleryCancelWork', 'galleryResolveConsent', 'renameExecutorFile', 'deleteExecutorFile', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
+    ['packages/cf-backend/src/gallery-data.tsx', ['data', 'slate'],
+      'gallery fixtures that mirror RPC, HTTP and model-test answers'],
+    ['packages/cf-backend/src/gallery-shared.tsx', ['data', 'savePlanReviewAnnotations', 'galleryAnnotationSave', 'previewSlate', 'slate', 'dismissPlanReview', 'galleryPlanDecided', 'setModel', 'setReasoningEffort', 'renameSubagentAgent', 'dismissSubagent', 'galleryCancelWork', 'galleryResolveConsent', 'renameExecutorFile', 'deleteExecutorFile', 'slateRpc'],
+      'gallery fixtures that mirror RPC, HTTP and model-test answers'],
+    ['packages/cf-backend/src/gallery-stubs.tsx', ['accountProfileFixture', 'storedConfigFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'slate'],
+      'gallery fixtures that mirror RPC, HTTP and model-test answers'],
+    ['packages/cf-backend/src/gallery-chat-frames.tsx', ['data', 'slate', 'PICKER_TEST_RESULTS', 'galleryModelTest'],
+      'gallery fixtures that mirror RPC, HTTP and model-test answers'],
+    ['packages/cf-backend/src/gallery-workspace-frames.tsx', ['renameExecutorFile', 'deleteExecutorFile', 'approvalsRpc', 'filesRpc'],
+      'gallery fixtures that mirror RPC, HTTP and model-test answers'],
+    ['packages/cf-backend/src/gallery-sharing-frames.tsx', ['slate'],
+      'gallery fixtures that mirror RPC, HTTP and model-test answers'],
+    ['packages/cf-backend/src/gallery-chrome-frames.tsx', ['data'],
       'gallery fixtures that mirror RPC, HTTP and model-test answers'],
     ['packages/cf-backend/src/hooks/use-workspace-reads.ts', ['dismissSubagent'],
       'the dismissSubagent RPC answer as the hook passes it on'],
