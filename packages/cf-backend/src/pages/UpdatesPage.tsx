@@ -12,7 +12,8 @@ import { Group } from "@/components/ui/Group";
 import { Surface } from "@/components/ui/Surface";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
-import { applyUpdate, NOT_OWNER, readUpdateOffer, readUpdateRun } from "@/lib/updates-api";
+import { applyUpdate, readUpdateOffer, readUpdateRun } from "@/lib/updates-api";
+import NotFoundPage from "@/pages/NotFoundPage";
 
 const RUN_POLL_MS = 2000;
 
@@ -55,7 +56,7 @@ function RunSteps({ run, restarting }: { run: DeploySnapshot; restarting: string
 export default function UpdatesPage() {
   const offerRead = useAsyncResource(readUpdateOffer);
   // A mid-run read failure is the Worker being replaced: the run on screen stays, its cause beside the restart notice.
-  const runRead = useAsyncResource(readUpdateRun, pollWhileGoing);
+  const runRead = useAsyncResource<DeploySnapshot | null>(readUpdateRun, pollWhileGoing);
   const held = lastValue(runRead.resource);
   const run = held !== null && held.steps.length > 0 ? held : null;
   const offer = lastValue(offerRead.resource);
@@ -70,6 +71,9 @@ export default function UpdatesPage() {
 
   const apply = (): void => start("apply", async () => runRead.set(await applyUpdate()));
 
+  // Only this deployment's owner has updates to read, and only where it installs its own.
+  if (offerRead.resource.status === "ready" && offerRead.resource.value === null) return <NotFoundPage />;
+
   return (
     <div className="mx-auto max-w-3xl space-y-6 px-6 py-8">
       <div>
@@ -79,9 +83,7 @@ export default function UpdatesPage() {
           that first put it here, with its own Cloudflare key.
         </p>
       </div>
-      {err !== null && (err.includes(NOT_OWNER)
-        ? <p className="t-body p-text-2" data-updates="not-owner">{NOT_OWNER}</p>
-        : <Notice tone="danger">{err}</Notice>)}
+      {err !== null && <Notice tone="danger">{err}</Notice>}
       {offer === null && err === null && <div className="flex justify-center py-16"><Loader size="base" /></div>}
       {offer !== null && (
         <section className="space-y-4" aria-label="This deployment's build">
