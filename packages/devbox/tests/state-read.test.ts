@@ -4,25 +4,18 @@ import { TestDevbox } from './support/test-devbox';
 import { expect, test } from 'bun:test';
 import { harness } from './support/devbox-harness';
 
-class TestBox extends TestDevbox<unknown> {
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-}
-
 const armed = (container: { readonly scheduleRows: readonly { readonly callback: string }[] }) =>
   container.scheduleRows.map(row => row.callback);
 
 test('reading the state of a box at rest, and of one whose object reset since, starts nothing', async () => {
-  const used = harness(TestBox);
+  const used = harness(TestDevbox);
   await used.box.devboxStartup();
   await used.box.stop();
   const startsBefore = used.container.startOptions.length;
   const resting = { state: (await used.box.devboxState()).running, starts: used.container.startOptions.length - startsBefore, armed: armed(used.container) };
 
   // The platform resets the object while its container is down; the successor's first event is the read.
-  const successor = new TestBox(used.state, used.env);
+  const successor = new TestDevbox(used.state, used.env);
   used.container.owner = successor;
   const reset = { state: (await successor.devboxState()).running, starts: used.container.startOptions.length - startsBefore, armed: armed(used.container) };
 

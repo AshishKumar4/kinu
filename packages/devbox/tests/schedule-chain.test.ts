@@ -6,7 +6,11 @@ import { describe, expect, test, vi } from 'bun:test';
 
 import { harness, wakeWhileArmed, type FakeSandbox } from './support/devbox-harness';
 
+// The ambient checkpoint tick is one of the chains these tests hold.
 class TestBox extends TestDevbox<unknown> {
+  protected override get ambientCheckpoints(): boolean {
+    return true;
+  }
 
   protected override get previewHost(): string | undefined {
     return 'preview.example';

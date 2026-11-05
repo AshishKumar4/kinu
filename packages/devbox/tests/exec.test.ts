@@ -21,16 +21,8 @@ const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}exec-`));
 
 afterAll(() => { rmSync(root, { recursive: true, force: true }); });
 
-class TestBox extends TestDevbox<unknown> {
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-}
-
-
 async function readyBox(exec: Container['exec'] = localExec) {
-  const { box } = harness(TestBox, undefined, exec);
+  const { box } = harness(TestDevbox, undefined, exec);
   await box.devboxStartup();
 
   return box;
@@ -95,7 +87,7 @@ describe('a command on the runtime\'s exec', () => {
     const launched = Promise.withResolvers<void>();
     const killing = Promise.withResolvers<void>();
 
-    const { box, container } = harness(TestBox, undefined, async (argv, options) => {
+    const { box, container } = harness(TestDevbox, undefined, async (argv, options) => {
       if (argv[3] === 'devbox-disk-stall') {
         const reading = `process 1 S 0 - tini\nprocess 500 ${disk === 'stalled' ? 'D' : 'S'} 1 read_extent_buffer_pages setsid\nroot /dev/vdc 27       16\n`;
 
@@ -196,7 +188,7 @@ describe('a command on the runtime\'s exec', () => {
     expect((await ran).exitCode).not.toBe(0);
   });
   test('a cancellation during readiness prevents the command from ever starting', async () => {
-    const { box, container } = harness(TestBox, undefined, localExec);
+    const { box, container } = harness(TestDevbox, undefined, localExec);
     const admission = gate();
     container.containerStartGate = admission;
     const cwd = mkdtempSync(join(root, 'pre-admission-'));
@@ -264,7 +256,7 @@ describe('one launch per id', () => {
 
   // D87: a caller with no use for an id mints none, and the box keeps nothing for it.
   test('without an id a command runs each time, and neither it nor a stream leaves a claim', async () => {
-    const { box, rows } = harness(TestBox, undefined, localExec);
+    const { box, rows } = harness(TestDevbox, undefined, localExec);
     await box.devboxStartup();
     const cwd = mkdtempSync(join(root, 'unclaimed-'));
     const command = 'echo ran >> effects; echo done';

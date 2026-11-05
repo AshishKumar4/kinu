@@ -90,8 +90,8 @@ export interface Fence {
 }
 
 /**
- * THE DECLARED FENCES. Four today, across the three subsystems the tier was built to
- * hammer, each named with the defect its absence shipped.
+ * THE DECLARED FENCES, across the subsystems the tier was built to hammer, each
+ * named with the defect its absence shipped.
  *
  * Adding a fence: name `file`, quote the guarded lines as `snippet`, write the
  * strip as `mutation`, and name the test that defends it. The gate itself

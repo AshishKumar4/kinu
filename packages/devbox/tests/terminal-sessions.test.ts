@@ -11,13 +11,6 @@ import { FIRST_SESSION, READS_TERMINAL, jobSessionId, jobSessionName, mergeSessi
 import { runToExit } from '../../test-utils/src/spawn';
 import { harness } from './support/devbox-harness';
 
-class SessionBox extends TestDevbox<unknown> {
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-}
-
 /** A record as tmux's `#{q:…}` writes it: a backslash before each space and backslash in a field, fields space-separated. */
 const row = (...fields: Array<string | number>) => fields.map((field) => String(field).replace(/[\\ ]/gu, '\\$&')).join(' ');
 
@@ -122,14 +115,14 @@ describe('the recorded sessions', () => {
 
 describe("the box's sessions", () => {
   test('a box that is not running is not woken to list them: the first session reads as left', async () => {
-    const { box, container } = harness(SessionBox);
+    const { box, container } = harness(TestDevbox);
 
     expect(await box.terminalSessions()).toEqual([{ ...FIRST_SESSION, open: false, running: null, last: null, ports: [], branch: null, needsInput: false }]);
     expect(container.sequence.includes('sessions')).toBe(false);
   });
 
   test('a running box reads them in one exec, and keeps the folder each was found in for its next start', async () => {
-    const { box, container } = harness(SessionBox);
+    const { box, container } = harness(TestDevbox);
     await box.devboxStartup();
     container.sessionsRead = { stdout: READ, stderr: '', exitCode: 0 };
 
@@ -143,7 +136,7 @@ describe("the box's sessions", () => {
   });
 
   test('a session opened, renamed and closed stays so; closing the last leaves a first one', async () => {
-    const { box, container } = harness(SessionBox);
+    const { box, container } = harness(TestDevbox);
     await box.devboxStartup();
 
     const opened = await box.openTerminalSession();
@@ -160,7 +153,7 @@ describe("the box's sessions", () => {
 
   // Review finding 1: a read wrote back the records it began with, over what changed while its exec ran.
   test('a read keeps every open, rename and close made while its exec ran, and the folder it found', async () => {
-    const { box, container } = harness(SessionBox);
+    const { box, container } = harness(TestDevbox);
     await box.devboxStartup();
     const kept = await box.openTerminalSession();
     const closing = await box.openTerminalSession();
@@ -181,7 +174,7 @@ describe("the box's sessions", () => {
   });
 
   test('a name that is empty or past 40 characters, and a session the box does not keep, are refused', async () => {
-    const { box } = harness(SessionBox);
+    const { box } = harness(TestDevbox);
 
     await expect(box.openTerminalSession('   ')).rejects.toMatchObject({ code: 'invalid-input' });
     await expect(box.renameTerminalSession(FIRST_SESSION.id, 'x'.repeat(41))).rejects.toMatchObject({ code: 'invalid-input' });
@@ -192,7 +185,7 @@ describe("the box's sessions", () => {
 // D95: an agent's job runs in a session of its own, listed beside the person's and marked as the agent's.
 describe("an agent's job", () => {
   test('is listed as a session named by what it runs, marked with its job, and the job names its session', async () => {
-    const { box } = harness(SessionBox);
+    const { box } = harness(TestDevbox);
     await box.devboxStartup();
 
     const { processId } = await box.startSupervised('npm run dev -- --port 5173', '/workspace');
@@ -203,7 +196,7 @@ describe("an agent's job", () => {
   });
 
   test('its session goes when the job is stopped, and closing its session stops the job', async () => {
-    const { box } = harness(SessionBox);
+    const { box } = harness(TestDevbox);
     await box.devboxStartup();
 
     const first = await box.startSupervised('npm run dev', '/workspace');
@@ -227,7 +220,7 @@ describe("an agent's job", () => {
 
   // Review finding 9: closing a stopped computer's job tab started the computer and ran the job again.
   test("closing its session on a stopped computer ends it there: nothing starts, and no later start runs it", async () => {
-    const { box, container } = harness(SessionBox);
+    const { box, container } = harness(TestDevbox);
     await box.devboxStartup();
     const { processId } = await box.startSupervised('npm run dev', '/workspace');
     await container.stop();
@@ -243,7 +236,7 @@ describe("an agent's job", () => {
 
   // Review of the computer process jobs, 2026-10-21: the job such a close ended was never told, and ran on forever.
   test("closing a job's session on a stopped computer tells its job it ended", async () => {
-    const { box, container, rows } = harness(SessionBox);
+    const { box, container, rows } = harness(TestDevbox);
     await box.devboxStartup();
     const { processId } = await box.startSupervised('npm run dev', '/workspace', {}, { job: 'bgjob-tab' });
     await container.stop();
@@ -267,7 +260,7 @@ describe('a stop', () => {
     let sequence: readonly string[] = [];
     let atCommit: readonly string[] = [];
 
-    class CommittingBox extends SessionBox {
+    class CommittingBox extends TestDevbox {
       protected override diskChain(ports: DiskChainPorts): DiskChain {
         const chain = super.diskChain(ports);
 
@@ -293,7 +286,7 @@ describe('a stop', () => {
   });
 
   test('then a session closed before the next start loses what was saved of it, before any attach can show it', async () => {
-    const { box, container } = harness(SessionBox);
+    const { box, container } = harness(TestDevbox);
     await box.devboxStartup();
     await container.stop();
 
@@ -308,15 +301,15 @@ describe('a stop', () => {
   });
 
   test('that cannot save the sessions still stops: they open fresh', async () => {
-    const saved = harness(SessionBox);
-    const unsaved = harness(SessionBox);
+    const saved = harness(TestDevbox);
+    const unsaved = harness(TestDevbox);
     await saved.box.devboxStartup();
     await unsaved.box.devboxStartup();
     unsaved.container.sessionsSave = { stdout: '', stderr: 'tmux: no server', exitCode: 1 };
 
     expect((await unsaved.box.quiesce()).kind).toBe((await saved.box.quiesce()).kind);
 
-    const gone = harness(SessionBox);
+    const gone = harness(TestDevbox);
     await gone.box.devboxStartup();
     gone.container.sessionsSave = 'gone';
 

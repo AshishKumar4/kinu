@@ -222,10 +222,6 @@
       "complexity": 27
     },
     {
-      "key": "scripts/pattern-inventory.ts#patternToken",
-      "complexity": 27
-    },
-    {
       "key": "tests/first-run/workspace-settings.first-run.ts#describe>liveTest>run",
       "complexity": 27
     },

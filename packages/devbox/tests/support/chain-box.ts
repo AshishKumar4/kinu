@@ -61,10 +61,6 @@ export interface ChainBox {
 /** The shipped policy with a test-length probe: nothing here is about budgets,
  *  and ambient checkpoints are off so a test's own commits are the only ones. */
 export class ChainTestBox extends TestDevbox<TestEnv> {
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-
   protected override diskChain(ports: DiskChainPorts): DiskChain {
     return modelChain(ports);
   }

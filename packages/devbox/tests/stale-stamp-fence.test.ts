@@ -16,13 +16,8 @@ const StampedBootIdSchema = v.string();
 /** Shipped policy with a short port probe so a parked attempt resolves fast; budgets stay
  *  default because the fence under test is not about budget exhaustion. */
 class TestBox extends TestDevbox<unknown> {
-
   protected override get previewHost(): string | undefined {
     return 'preview.example';
-  }
-
-  protected override get ambientCheckpoints(): boolean {
-    return false;
   }
 }
 

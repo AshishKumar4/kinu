@@ -25,10 +25,6 @@ const bytes = (text: string): Uint8Array => new TextEncoder().encode(text);
 const base64 = (text: string): string => Buffer.from(text).toString('base64');
 
 class TestBox extends TestDevbox<unknown> {
-  protected override get ambientCheckpoints(): boolean {
-    return false;
-  }
-
   protected override get digestJournal(): string {
     return journal;
   }

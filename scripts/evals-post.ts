@@ -9,8 +9,11 @@ import { deploymentOf } from './infra-manifest';
 import { REPO_ROOT as ROOT } from './repo-root';
 
 
-/** Light deploy-driver post-steps use the workstation's serialized 4G scope, never uncapped local work. */
-export const LOCAL_CHECK = '/mnt/local/kinu/bin/local-check.sh';
+/** Light deploy-driver post-steps use the workstation's serialized 4G scope, never uncapped local work, where the
+ *  workstation has one (`KINU_LOCAL_CHECK`); elsewhere a step runs as itself. */
+export const LOCAL_CHECK = process.env['KINU_LOCAL_CHECK'] ?? '/mnt/local/kinu/bin/local-check.sh';
+
+const LOCAL_SCOPE = existsSync(LOCAL_CHECK) ? [LOCAL_CHECK] : [];
 
 /** A step that waits on the network (a deployment, Cloudflare's logs, a model's diagnosis or review): a 4G scope of its
  *  own, never the shared check lock, which serializes short local checks and stops one at ten minutes, mid-answer for a
@@ -123,7 +126,7 @@ export async function processEvals(run: EvalRun, items: readonly TrialItem[], ou
 
     if (origin !== undefined) env['KINU_EVAL_ORIGIN'] = origin;
 
-    const child = Bun.spawn([...network ? NETWORK_SCOPE : [LOCAL_CHECK], process.execPath, ...argv], { cwd: ROOT,
+    const child = Bun.spawn([...network ? NETWORK_SCOPE : LOCAL_SCOPE, process.execPath, ...argv], { cwd: ROOT,
       env, stdout: 'pipe', stderr: 'pipe' });
 
     const chunks: string[] = [];
