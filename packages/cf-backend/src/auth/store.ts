@@ -13,16 +13,16 @@ import type { AuthIdentity } from './session';
 import type { OAuthProviderId } from '@kinu.run/core/identity';
 import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { AdmittedBrowserSession, UserDO } from '../user/user-do';
-import { UNPLACED, type WorkspacePlacement } from '../user/workspace-placement';
 import type { BrowserSessionIdentity } from '../user/sessions';
 import type { ObjectNamespace } from '@kinu.run/core';
-import { objectNamed, randomToken, sha256Hex } from '@kinu.run/core';
+import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
 import { KinuError, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { sanitizeReturnTo } from '@kinu.run/core';
+import { accountNamed, UNPLACED, type WorkspacePlacement } from '../user/workspace-placement';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -277,7 +277,7 @@ export async function revokeSession<Id>(env: AuthStoreEnv<Id>, token: string): P
 
 /** The one authority on which of a user's sessions are live. */
 function sessionAuthority<Id>(env: AuthStoreEnv<Id>, userId: string): SessionAuthority {
-  return objectNamed(env.UserDO, userId);
+  return accountNamed(env.UserDO, userId);
 }
 
 function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number, placement: WorkspacePlacement): Effect.Effect<AuthIdentity, KinuError> {
@@ -298,7 +298,7 @@ function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: 
     const userId = accountIdFor(env, email);
 
     // The account's first reach, which makes its object where every provider answers.
-    const stored = yield* Effect.promise(async () => env.UserDO.get(env.UserDO.idFromName(userId), { locationHint: placement })
+    const stored = yield* Effect.promise(async () => accountNamed(env.UserDO, userId, placement)
       .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined));
 
     return {

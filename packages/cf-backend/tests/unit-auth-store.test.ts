@@ -48,8 +48,8 @@ function setupEnv() {
     },
   };
 
-  // Where each reach asked the account's object to run, were it the one that makes it.
-  const hints: (string | undefined)[] = [];
+  // Where the first reach of each account asked its object to run: the reach that makes it.
+  const hints = new Map<string, string | undefined>();
 
   return {
     kv,
@@ -61,8 +61,8 @@ function setupEnv() {
       AUTH_KV: kv,
       UserDO: {
         idFromName: (name) => name,
-        get: (_id, options) => {
-          hints.push(options?.locationHint);
+        get: (id, options) => {
+          if (!hints.has(id)) hints.set(id, options?.locationHint);
 
           return userDO;
         },
@@ -113,8 +113,7 @@ describe('the browser auth store', () => {
     await createSession(env, profile('google', 'g-1', 'hk@example.com'), placementFor({ continent: 'AS', longitude: '114.17' }));
     await createSession(env, profile('google', 'g-2', 'sf@example.com'), placementFor({ continent: 'NA', longitude: '-122.4' }));
 
-    // The reach that makes the object carries the hint; every later reach finds it where it is.
-    expect(hints.filter((hint) => hint !== undefined)).toEqual(['weur', 'wnam']);
+    expect([...hints.values()]).toEqual(['weur', 'wnam']);
   });
 
   test('the same verified email is the same Kinu user across providers', async () => {

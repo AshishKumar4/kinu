@@ -1,7 +1,6 @@
 /** Model menu and connectable-provider catalog for HTTP clients. The provider registry is the
  *  source of truth for models; models.dev for which providers a BYO key can connect. */
 import {
-  objectNamed,
   catalogCredKey, fastCandidatesOf, formatModelSpec, listModelsDevProviders, modelsDevCompatBaseURL, testModel,
   type CatalogShelf, type ModelMenuResponse, type ModelMenuEntry, type ModelTestResult, type ModelsDevProviderInfo, type ProviderCatalogEntry,
 } from '@kinu.run/core';
@@ -9,6 +8,7 @@ import { createAgentProviderRegistry, userCredentials, type UserCredentialClient
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
+import { accountNamed } from './workspace-placement';
 
 export interface AvailableModelsEnv<Id> extends ProviderEnv {
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
@@ -38,7 +38,7 @@ export async function listAvailableModels<Id>(
 ): Promise<ModelMenuResponse> {
   const { registry, deps } = createAgentProviderRegistry({
     env,
-    userDO: userCredentials(() => objectNamed(env.UserDO, userId), caller),
+    userDO: userCredentials(() => accountNamed(env.UserDO, userId), caller),
     fetch,
     catalogShelf: colocatedCatalogShelf,
   });
@@ -86,7 +86,7 @@ function buildProviderCatalog(
 export async function listProviderCatalog<Id>(
   env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
 ): Promise<ProviderCatalogEntry[]> {
-  const { registry, deps } = createAgentProviderRegistry({ env, userDO: userCredentials(() => objectNamed(env.UserDO, userId), caller), fetch });
+  const { registry, deps } = createAgentProviderRegistry({ env, userDO: userCredentials(() => accountNamed(env.UserDO, userId), caller), fetch });
 
   const [providers, keys] = await Promise.all([
     listModelsDevProviders({ fetch }),

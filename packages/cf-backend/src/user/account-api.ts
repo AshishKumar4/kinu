@@ -6,7 +6,7 @@
 import { Effect } from 'effect';
 import { Hono, type Context } from 'hono';
 import * as v from 'valibot';
-import { authoredRefusal, settle } from '@kinu.run/core/obs';
+import { authoredRefusal, detach, settle } from '@kinu.run/core/obs';
 import { err, json, JsonValueSchema, safeJson, SecretPositionSchema, type ObjectNamespace, type ProviderEnv, type UserCaller } from '@kinu.run/core';
 import { internalCaller, KINU_LISTINGS, type ControlSecretEnv } from '@kinu.run/core/control-plane';
 import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
@@ -23,7 +23,7 @@ import { rawParam, type FamilyEnv } from '../api/context';
 /** Every UserDO call these routes make. */
 type AccountApiAuthority = CloudWorkspaceRegistry & Pick<
   UserDO,
-  'listCredentials' | 'setCredential' | 'testModel' | 'deleteCredential' | 'requestWorkspaceRemoval' | 'listDevices'
+  'listCredentials' | 'setCredential' | 'testModel' | 'cancelModelTest' | 'deleteCredential' | 'requestWorkspaceRemoval' | 'listDevices'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
   | 'listActiveWorkspaces' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay' | 'slateAiSpend'
   | 'getConfig' | 'setConfig' | 'claimConfig' | 'getProfile' | 'userMcp_connectedPresets'
@@ -168,8 +168,20 @@ accountApi.post('/models/test', async (c) => {
 
   if (!body) return err(400, 'spec (string) required');
 
-  // Made from the account's object, placed where every provider answers, not from wherever this Worker runs.
-  return json({ body: await c.get('account').stub.testModel(c.get('owner'), body.spec) });
+  // Made from the account's object, placed where every provider answers, not from wherever this Worker runs; a request
+  // that ends first stops it there.
+  const { stub } = c.get('account');
+  const owner = c.get('owner');
+  const testId = crypto.randomUUID();
+  const cancel = () => { detach(Effect.promise(async () => stub.cancelModelTest(owner, testId))); };
+
+  c.req.raw.signal.addEventListener('abort', cancel, { once: true });
+
+  try {
+    return json({ body: await stub.testModel(owner, body.spec, testId) });
+  } finally {
+    c.req.raw.signal.removeEventListener('abort', cancel);
+  }
 });
 
 accountApi.get('/usage', async (c) => json({ body: await readUserAccountUsage({

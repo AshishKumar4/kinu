@@ -30,6 +30,7 @@ import type {
 } from '@kinu.run/core/control-plane';
 import type { IndexFeedSink } from './index-feed';
 import type { ObjectNamespace } from '@kinu.run/core';
+import { accountNamed } from '../user/workspace-placement';
 
 /** Panels show a recent window; history has its own cursored route on the workspace. */
 const DETAIL_WINDOW = 25;
@@ -181,7 +182,7 @@ async function usersList(c: ControlContextOf): Promise<Response> {
   const { env, caller } = c.get('control');
   const page = await controlPlaneStub(env).listUsers(caller, pageQuery(new URL(c.req.url)));
   const owner = await ownerCaller(env);
-  const read = await Promise.allSettled(page.items.map((row) => objectNamed(env.UserDO, row.userId).limits_account(owner)));
+  const read = await Promise.allSettled(page.items.map((row) => accountNamed(env.UserDO, row.userId).limits_account(owner)));
 
   const items = page.items.map((row, index) => {
     const limits = read[index];
@@ -376,7 +377,7 @@ function handleUserDetail<Id>(control: ControlContext<Id>, userId: string, url: 
     const reconcile = yield* reconcileRoster(env, caller, userId, request.cursor === undefined);
     const workspaces = yield* Effect.promise(() => stub.listWorkspaces(caller, request, { userId, includeRemoved: true }));
     // Its class, suspension and each limit read now in its own object: the list's mirror holds the class alone.
-    const limits = yield* Effect.promise(async () => objectNamed(env.UserDO, userId).limits_account(await ownerCaller(env)));
+    const limits = yield* Effect.promise(async () => accountNamed(env.UserDO, userId).limits_account(await ownerCaller(env)));
 
     return json({ body: { user, workspaces, reconcile, limits, viewer: admin.email } });
   });
@@ -414,7 +415,7 @@ type RosterRead =
 function readRoster<Id>(env: ControlEnv<Id>, userId: string): Effect.Effect<RosterRead> {
   return Effect.catchCause(Effect.gen(function* () {
     const owner = yield* Effect.promise(() => ownerCaller(env));
-    const workspaces: RosterWorkspace[] = yield* Effect.promise(() => objectNamed(env.UserDO, userId).listActiveWorkspaces(owner));
+    const workspaces: RosterWorkspace[] = yield* Effect.promise(() => accountNamed(env.UserDO, userId).listActiveWorkspaces(owner));
 
     return { status: 'ok', workspaces } satisfies RosterRead;
   }), (failed) => Effect.sync((): RosterRead => {

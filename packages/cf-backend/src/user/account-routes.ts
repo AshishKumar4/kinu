@@ -9,13 +9,13 @@ import * as v from 'valibot';
 import type { UserDO } from './user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 import {
-  objectNamed,
   confirmsAccountDelete,
   EXPERIENCE_KINDS,
   err, json, safeJson,
   type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
+import { accountNamed } from './workspace-placement';
 
 const DeleteConfirm = v.object({ confirm: v.string() });
 
@@ -39,7 +39,7 @@ interface AccountVariables extends ApiVariables {
 type AccountEnv = FamilyEnv<AccountRoutesEnv<unknown>, AccountVariables>;
 
 function account(c: Context<AccountEnv>): AccountAuthority {
-  return objectNamed(c.env.UserDO, c.get('identity').userId);
+  return accountNamed(c.env.UserDO, c.get('identity').userId);
 }
 
 export const accountRoutes = new Hono<AccountEnv>();

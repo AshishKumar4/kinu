@@ -18,8 +18,8 @@ import {
 } from '@kinu.run/core/identity';
 import type { UserDO } from '../user/user-do';
 import type { ApiVariables, FamilyEnv } from '../api/context';
-import { placementFor } from '../user/workspace-placement';
 import type { ObjectNamespace } from '@kinu.run/core';
+import { accountNamed, placementFor } from '../user/workspace-placement';
 
 type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
   | 'builtinAdmissible' | 'builtinCreateInvite' | 'builtinInvitedEmail' | 'builtinIsOwner' | 'builtinIssueChallenge' | 'builtinPasskeyAccount'
@@ -297,7 +297,7 @@ async function resetTo<Id>(env: BuiltinAuthEnv<Id>, request: Request, reset: Omi
   if (current === null) return resetRefused(reset.grant);
   const ended = current.generation + 1;
 
-  await objectNamed(env.UserDO, current.userId).raiseCredentialFloor(caller, ended);
+  await accountNamed(env.UserDO, current.userId).raiseCredentialFloor(caller, ended);
   const account = await accounts(env).builtinApplyReset(caller, { ...reset, ended });
 
   if (account === null) return resetRefused(reset.grant);

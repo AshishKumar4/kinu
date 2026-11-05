@@ -287,6 +287,7 @@ import {
   type HandedOffTurn, type CompletedTurn, type OpenedAt, type TerminalEffectTable, type TerminalTurnFacts,
   type TerminalTurnParts,
 } from "@kinu.run/core";
+import { accountNamed } from './user/workspace-placement';
 
 const READS_BY_STATEMENT = new WeakMap<TemplateStringsArray, readonly LiveRead[]>();
 
@@ -6142,7 +6143,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         // Prepared first, then the run's word read again with nothing awaited before the viewer's account is called.
         tool: async (viewer, call, admit) => this.viewerAccount(viewer.userId, admit, async (account, caller) => account.slatePartTool(caller, call)),
         ai: async (viewer, call, admit) => this.viewerAccount(viewer.userId, admit, async (account, caller) => account.slatePartAi(caller, call)),
-        consented: async (viewer, calls) => objectNamed(this.env.UserDO, viewer.userId).slatePartConsented(await ownerCaller(this.env), calls),
+        consented: async (viewer, calls) => accountNamed(this.env.UserDO, viewer.userId).slatePartConsented(await ownerCaller(this.env), calls),
       },
       forgetPicture: async (slate) => {
         await this.pictures.forget(this.name, slate, this.env.SLATE_PICTURES);
@@ -6246,7 +6247,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     admit();
 
-    return send(objectNamed(this.env.UserDO, userId), caller);
+    return send(accountNamed(this.env.UserDO, userId), caller);
   }
 
   async releaseSlatePart(viewer: PartViewer, continuation: string): Promise<boolean> {

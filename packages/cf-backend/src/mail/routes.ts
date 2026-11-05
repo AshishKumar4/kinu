@@ -26,6 +26,7 @@ import type { UserDO } from '../user/user-do';
 import type { WorkspaceVariables } from '../api/workspace';
 import type { MailboxDO } from './mailbox-do';
 import type { MailNameDO } from './mailname-do';
+import { accountNamed } from '../user/workspace-placement';
 
 type MailboxReach = Pick<MailboxDO, 'open' | 'boxes' | 'list' | 'thread' | 'update' | 'draft' | 'send' | 'setWake'>;
 
@@ -69,7 +70,7 @@ async function mayCreate(c: MailContext): Promise<boolean> {
 
   if (c.env.MAIL_ACCOUNTS === 'everyone' || isListedOperator(c.env, email)) return true;
 
-  return await objectNamed(c.env.UserDO, userId).limits_class(await ownerCaller(c.env)) === 'invited';
+  return await accountNamed(c.env.UserDO, userId).limits_class(await ownerCaller(c.env)) === 'invited';
 }
 
 const mailbox = (c: MailContext): MailboxReach => objectNamed(c.env.MAILBOX, c.get('identity').userId);
@@ -79,7 +80,7 @@ function handToAssistant(c: MailContext): Effect.Effect<void> {
   const { userId } = c.get('identity');
 
   return attempt({ doing: 'giving the assistant the owner\'s mail', otherwise: 'unavailable' }, async () => {
-    const assistant = await installedAssistant(objectNamed(c.env.UserDO, userId), await ownerCaller(c.env));
+    const assistant = await installedAssistant(accountNamed(c.env.UserDO, userId), await ownerCaller(c.env));
 
     if (assistant !== null) await objectNamed(c.env.OrchestratorAgent, assistant).readOwnerMail();
   }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('mail.assistant_unlinked', failure, {}); })));
