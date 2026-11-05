@@ -1389,7 +1389,7 @@ export {
 
 export { type ExplorationRecord, type Floor, type ObjectiveIdentity, type PublicationState, type VerifierFault } from './types/objective';
 
-export { NAMED_SWARM_PRESETS, SWARM_CARRIES, SWARM_SCORES, SWARM_UNITS } from './types/swarm';
+export { NAMED_SWARM_PRESETS, type SwarmCarry, type SwarmScore, type SwarmUnit } from './types/swarm';
 
 // Bench harness: pure math; the runner lives in scripts/bench.ts.
 export {
