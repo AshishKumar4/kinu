@@ -15,8 +15,8 @@ export interface LexicalHit {
   readonly endLine: number;
   readonly score: number;
   readonly snippet: string;
-  /** When its note was last written, as indexed. */
-  readonly writtenAt?: number;
+  /** When its note was last written, as indexed; undefined where nothing dates it. */
+  readonly writtenAt?: number | undefined;
 }
 
 export interface HybridHit {
