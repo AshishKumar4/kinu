@@ -91,6 +91,6 @@ export interface MemorySearchResult {
 	endLine: number;
 	snippet: string;
 	score: number;
-	/** When its note was last written, as indexed. */
+	/** When its note was last written, where the reader knows. */
 	writtenAt?: number;
 }

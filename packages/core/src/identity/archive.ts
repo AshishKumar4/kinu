@@ -50,7 +50,6 @@ const EXCLUDED_TABLES = {
   // Derived from the notes the archive carries: the next open indexes them.
   memory_note_chunks: true,
   memory_note_files: true,
-  memory_note_times: true,
   // Folded from the run events the archive carries, up to a rowid a restore renumbers: the next read folds them again.
   agent_figure_folds: true,
   memory_projection_updates: true,

@@ -224,7 +224,7 @@ describe('hybridSearch', () => {
     const rehydrate = async () => {
       reads++;
 
-      return 'should not run';
+      return { text: 'should not run' };
     };
 
     const out = await hybridSearch('user tz', async () => [], createNoopVectorStore(), { facts: () => facts.all(), rehydrate });

@@ -77,6 +77,26 @@ export function parseMemoryNotes(content: string): MemoryNote[] {
   return notes;
 }
 
+/**
+ * When the lines of a note file through `endLine` were written, as the file itself says: the date stamped on the last
+ * note heading at or above it (`appendMemoryNote`), at day precision. Null where no heading above is stamped.
+ */
+export function noteDateAt(content: string, endLine: number): number | null {
+  const lines = content.split('\n').slice(0, endLine);
+
+  for (let at = lines.length - 1; at >= 0; at--) {
+    const line = lines[at] ?? '';
+
+    if (!/^#{2,3}\s/u.test(line)) continue;
+    const [when] = HEADING_STAMP.exec(line)?.[1].split('·').map((part) => part.trim()) ?? [];
+    const time = when === undefined ? Number.NaN : Date.parse(when);
+
+    if (Number.isFinite(time)) return time;
+  }
+
+  return null;
+}
+
 /** The notes the agent kept, oldest first, as the sleep-time pass folds them into facts. */
 export async function memoryNotes(memory: Pick<Memory, 'read'>): Promise<MemoryNote[]> {
   return parseMemoryNotes(await memory.read(MEMORY_PATH) ?? '');

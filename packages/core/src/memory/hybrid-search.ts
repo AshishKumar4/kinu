@@ -39,7 +39,7 @@ export interface HybridHit {
 export type LexicalSearchFn = (query: string, limit: number) => Promise<LexicalHit[]>;
 
 /** A semantic hit's canonical text and its note's write time, read back. */
-export interface RehydratedSnippet {
+interface RehydratedSnippet {
   readonly text: string;
   readonly writtenAt?: number;
 }

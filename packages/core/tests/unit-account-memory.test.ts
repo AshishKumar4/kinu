@@ -146,7 +146,7 @@ function recordingAccount(facts: Fact[]): AccountMemory & { readonly proposed: A
   return {
     proposed,
     facts: async () => facts,
-    searchNotes: async (query) => (query.includes('invoice') ? [{ id: 'acn_1', text: 'Invoices go to accounts@example.com', score: 0.7 }] : []),
+    searchNotes: async (query) => (query.includes('invoice') ? [{ id: 'acn_1', text: 'Invoices go to accounts@example.com', score: 0.7, at: 0 }] : []),
     propose: async (proposal) => {
       proposed.push(proposal);
 

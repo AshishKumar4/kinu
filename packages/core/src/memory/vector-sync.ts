@@ -9,7 +9,7 @@ import { type CheckpointFiles, type Memory } from '../types/primitives';
 import { type VectorStore } from './vector-store';
 
 import { readTailWithVfsOps } from '../vfs/mounts';
-import { MEMORY_DIR } from './note';
+import { MEMORY_DIR, noteDateAt } from './note';
 import { scrubSecrets } from '../safety/secret-patterns';
 import type { MemoryStore, NoteStamp } from "@kinu.run/agent-utils/memory";
 import { diagnostics, KinuError, settle, toKinuError } from "../obs/index";
@@ -76,8 +76,26 @@ export function adaptMemory(
     }
   };
 
+  /** When a note's lines through `endLine` were written: the stamp of its note heading, else its file's last change. */
+  const writtenAt = async (path: string, content: Promise<string | null>, endLine: number): Promise<number | undefined> =>
+    noteDateAt(await content ?? '', endLine) ?? (await files.stat(path, { follow: false }))?.mtimeMs;
+
+  /** Each hit dated, each file read once. */
+  const dated = async <Hit extends { readonly path: string; readonly endLine: number }>(hits: readonly Hit[]): Promise<Hit[]> => {
+    const reads = new Map<string, Promise<string | null>>();
+
+    return await Promise.all(hits.map(async (hit) => {
+      const content = reads.get(hit.path) ?? store.readFile(hit.path);
+
+      reads.set(hit.path, content);
+      const at = await writtenAt(hit.path, content, hit.endLine);
+
+      return at === undefined ? hit : { ...hit, writtenAt: at };
+    }));
+  };
+
   const memory: Memory = {
-    chunk: async (id) => (await store.chunksByIds([id]))[0] ?? null,
+    chunk: async (id) => (await dated(await store.chunksByIds([id])))[0] ?? null,
     // Memory text is kept scrubbed (`memory/scrub.ts`).
     write: (path, content) => store.writeFile(path, scrubSecrets(content)),
     append: (path, content) => store.appendToFile(path, scrubSecrets(content)),
@@ -85,7 +103,7 @@ export function adaptMemory(
       return settle(Effect.gen(function* () {
         const note = yield* keptNote(store, files, path);
         // A note that is gone, or is no file, leaves the index with its chunks; an emptied one indexes to none.
-        yield* Effect.promise(() => (note === null ? store.forgetFile(path) : store.indexFile(path, note.content, note.stamp, note.writtenAt)));
+        yield* Effect.promise(() => (note === null ? store.forgetFile(path) : store.indexFile(path, note.content, note.stamp)));
 
         if (vectors === undefined) return;
 
@@ -105,7 +123,7 @@ export function adaptMemory(
     async search(query, limit) {
       await refresh();
 
-      return store.search(query, limit, async (path) => memory.index(path));
+      return await dated(await store.search(query, limit, async (path) => memory.index(path)));
     },
     // A note that moved is taken in before it is read, as a search takes it in.
     async read(path) {
@@ -148,12 +166,10 @@ async function stale(files: VFS, path: string, indexed: NoteStamp | undefined): 
   return regular(stat) ? indexed !== stampOf(stat) : indexed !== undefined;
 }
 
-/** A note as the index takes it: its text, the stamp it is indexed at (null: read again at the next search), and when
- *  its file was last written. */
+/** A note as the index takes it: its text, and the stamp it is indexed at (null: read again at the next search). */
 interface IndexedNote {
   readonly content: string;
   readonly stamp: NoteStamp;
-  readonly writtenAt: number;
 }
 
 /**
@@ -175,12 +191,12 @@ async function settledNote(store: MemoryStore, files: VFS, path: string): Promis
       const bytes = new TextEncoder().encode(content);
 
       return {
-        content, stamp: after.revision !== undefined || changedAt < Date.now() - RACY_MS ? stampOf(after) : null, writtenAt: after.mtimeMs,
+        content, stamp: after.revision !== undefined || changedAt < Date.now() - RACY_MS ? stampOf(after) : null,
         observed: before.revision === undefined ? { kind: 'read', bytes } : { kind: 'read', bytes, revision: before.revision },
       };
     }
 
-    if (attempt === SETTLE_ATTEMPTS) return content === null ? null : { content, stamp: null, writtenAt: Date.now(), observed: null };
+    if (attempt === SETTLE_ATTEMPTS) return content === null ? null : { content, stamp: null, observed: null };
   }
 }
 
@@ -200,7 +216,7 @@ function keptNote(store: MemoryStore, files: VFS & CheckpointFiles, path: string
 
     if (kept === note.content) return note;
 
-    if (note.observed === null) return { content: kept, stamp: null, writtenAt: note.writtenAt };
+    if (note.observed === null) return { content: kept, stamp: null };
     const { observed } = note;
 
     const written = yield* Effect.tryPromise({ try: () => writeConditionally(files, path, new TextEncoder().encode(kept), observed), catch: (cause) => cause }).pipe(
@@ -210,11 +226,11 @@ function keptNote(store: MemoryStore, files: VFS & CheckpointFiles, path: string
       Effect.catch((cause) => Effect.die(cause)),
     );
 
-    if (!written) return { content: kept, stamp: null, writtenAt: note.writtenAt };
+    if (!written) return { content: kept, stamp: null };
     const rewritten = yield* Effect.promise(() => settledNote(store, files, path));
 
     // Written again since: indexed scrubbed and unstamped, so the next read takes the file in again.
-    return rewritten === null || rewritten.content === kept ? rewritten : { content: scrubSecrets(rewritten.content), stamp: null, writtenAt: rewritten.writtenAt };
+    return rewritten === null || rewritten.content === kept ? rewritten : { content: scrubSecrets(rewritten.content), stamp: null };
   });
 }
 

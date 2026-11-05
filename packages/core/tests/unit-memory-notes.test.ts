@@ -7,7 +7,9 @@ import { createWorkspaceBundle, createMemoryMemory, createTestRuntime } from './
 import { MemoryStore, type IndexedChunk } from '@kinu.run/agent-utils/memory';
 import { adaptMemory, backfillMemoryVectors, forgetMemoryVectors } from '../src/memory/vector-sync';
 import { hybridSearch, memorySnippetRehydrator } from '../src/memory/hybrid-search';
-import { createNoopVectorStore, type VectorStore } from '../src/memory/vector-store';
+import type { VectorStore } from '../src/memory/vector-store';
+import { searchMemoryHits } from '../src/memory/memory-search';
+import { isoDate } from '../src/utils/date';
 import { appendMemoryNote, memoryIndexPath, parseMemoryNotes, readMemoryTail } from '../src/memory/note';
 import type { Memory } from '../src/types/primitives';
 
@@ -211,24 +213,20 @@ async function memoryWritablePath(memory: Memory, vfs: VFS): Promise<string> {
 }
 
 describe('recall ranks by age and by difference', () => {
-  /** A real note index over the workspace's files, its notes written `ageDays` ago as the indexer read their files. */
+  /** A workspace's memory, each note written in its own file under a heading stamped `ageDays` ago, as the memory tool
+   *  stamps one, then searched as a turn's recall searches. */
   async function notes(entries: ReadonlyArray<{ readonly path: string; readonly text: string; readonly ageDays: number }>) {
     const { rt, workspace } = createTestRuntime();
     const indexed = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
-    const now = Date.now();
 
     indexed.ensureSchema();
+    const memory = adaptMemory(indexed, workspace.vfs);
 
     for (const entry of entries) {
-      await indexed.writeFile(entry.path, entry.text);
-      await indexed.indexFile(entry.path, entry.text, null, now - entry.ageDays * 86_400_000);
+      await memory.write(entry.path, `### Note (${isoDate(Date.now() - entry.ageDays * 86_400_000)})\n${entry.text}\n`);
     }
 
-    const lexical = async (query: string, limit: number) => (await indexed.search(query, limit, async () => {})).map((hit) => ({
-      id: `${hit.path}:${hit.startLine}-${hit.endLine}`, ...hit,
-    }));
-
-    return { search: (query: string, finalK: number) => hybridSearch(query, lexical, createNoopVectorStore(), { finalK, now }) };
+    return { search: async (query: string, limit: number) => (await searchMemoryHits(memory, null, query, { limit })).hits };
   }
 
   test('of two notes that match alike, the one written this week outranks one from months ago', async () => {
