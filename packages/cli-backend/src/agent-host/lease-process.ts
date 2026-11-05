@@ -1,7 +1,8 @@
 import process from 'node:process';
 import * as v from 'valibot';
 import type { LeaseProcess } from '@kinu.run/core';
-import { toKinuError } from '@kinu.run/core/obs';
+import { settleSync, toKinuError, type KinuError } from '@kinu.run/core/obs';
+import { Effect, Result } from 'effect';
 import { hostGenerationReader } from '../process-generation';
 
 const ProcessSignalFailureSchema = v.looseObject({ code: v.optional(v.string()) });
@@ -22,28 +23,28 @@ export function osLeaseProcess(pid: number): LeaseProcess {
 
       if (probe?.state === 'read') return probe.identity === holder.generation;
 
-      return probe?.state === 'absent' ? false : pidRuns(holder.pid);
+      if (probe?.state === 'absent') return false;
+
+      return settleSync(pidRuns(holder.pid));
     },
   };
 }
 
 /** ESRCH means gone; EPERM means a live process this caller cannot signal. */
-function pidRuns(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
+function pidRuns(pid: number): Effect.Effect<boolean, KinuError> {
+  const signalled = Result.try(() => { process.kill(pid, 0); });
 
-    return true;
-  } catch (error) {
-    const errno = v.safeParse(ProcessSignalFailureSchema, error);
-    const code = errno.success ? errno.output.code : undefined;
+  if (Result.isSuccess(signalled)) return Effect.succeed(true);
+  const errno = v.safeParse(ProcessSignalFailureSchema, signalled.failure);
+  const code = errno.success ? errno.output.code : undefined;
 
-    if (code === 'ESRCH') return false;
+  if (code === 'ESRCH') return Effect.succeed(false);
 
-    if (code === 'EPERM') return true;
-    throw toKinuError({
-      doing: `test whether process ${String(pid)} is still running`,
-      cause: error,
-      otherwise: 'unavailable',
-    });
-  }
+  if (code === 'EPERM') return Effect.succeed(true);
+
+  return Effect.fail(toKinuError({
+    doing: `test whether process ${String(pid)} is still running`,
+    cause: signalled.failure,
+    otherwise: 'unavailable',
+  }));
 }

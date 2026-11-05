@@ -1,6 +1,6 @@
 import { wrapDatabase } from '@kinu.run/core/identity';
-import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
-import { Effect } from 'effect';
+import { KinuError, settle, settleSync, toKinuError } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { Database } from 'bun:sqlite';
@@ -114,18 +114,19 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   if (!purpose) return settle(Effect.fail(new KinuError('bad_input', 'Mission required.')));
 
   if (input.mode === 'cloud') {
-    const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
+    return settle(Effect.gen(function* () {
+      const auth = yield* resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
+      const agent = yield* Effect.promise(() => createCloudAgent(auth.origin, auth.token, cloudCreateInput(input, purpose)));
 
-    const agent = await createCloudAgent(auth.origin, auth.token, cloudCreateInput(input, purpose));
+      yield* Effect.promise(() => upsertAgentConfig({
+        name: agent.name,
+        mode: 'cloud',
+        displayName: agent.displayName,
+        cloudName: agent.name,
+      }));
 
-    await upsertAgentConfig({
-      name: agent.name,
-      mode: 'cloud',
-      displayName: agent.displayName,
-      cloudName: agent.name,
-    });
-
-    return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name };
+      return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name } satisfies CreatedCliAgent;
+    }));
   }
 
   const name = input.name;
@@ -157,59 +158,57 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   discardPartialWorkspace(partial);
   const db = new Database(partial, { create: true });
 
-  try {
-    db.exec('PRAGMA journal_mode = WAL');
-    // The slug (`workspace_identity.name`) addresses the workspace; the title heads SOUL.md and MEMORY.md.
-    const rt = await createWorkspace(db, { name, title: displayName, purpose, home: workspaceHome(db) });
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const agentConfig = rt.actor.config;
+  return settle(Effect.gen(function* () {
+    // A failed build closes the database and removes its partial. A partial that cannot be removed blocks recreating
+    // this name, so that failure says both.
+    yield* Effect.catchCause(Effect.promise(async () => {
+      db.exec('PRAGMA journal_mode = WAL');
+      // The slug (`workspace_identity.name`) addresses the workspace; the title heads SOUL.md and MEMORY.md.
+      const rt = await createWorkspace(db, { name, title: displayName, purpose, home: workspaceHome(db) });
+      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+      const agentConfig = rt.actor.config;
 
-    if (input.model) agentConfig.setModel(input.model);
+      if (input.model) agentConfig.setModel(input.model);
 
-    if (input.reasoningEffort) agentConfig.setReasoningEffort(input.reasoningEffort);
-    // The origin decides whether the title policy may ever rename this agent.
-    agentConfig.setDisplayNameOrigin(displayName, input.nameOrigin ?? 'user');
+      if (input.reasoningEffort) agentConfig.setReasoningEffort(input.reasoningEffort);
+      // The origin decides whether the title policy may ever rename this agent.
+      agentConfig.setDisplayNameOrigin(displayName, input.nameOrigin ?? 'user');
 
-    if (input.role && input.role !== DEFAULT_ROLE_ID) {
-      changeRoleAsOwner({
-        config: agentConfig, envelope: await loadActiveProfile(), to: input.role, active: DEFAULT_ROLE_ID,
+      if (input.role && input.role !== DEFAULT_ROLE_ID) {
+        changeRoleAsOwner({
+          config: agentConfig, envelope: await loadActiveProfile(), to: input.role, active: DEFAULT_ROLE_ID,
+        });
+      }
+
+      // Checkpoint before publishing; the close below then removes the empty sidecars, so the rename moves one file
+      // and the next open makes fresh ones. It stays WAL: a DELETE file had the daemon's first open and the command's
+      // race to switch it, and SQLite answers that race with BUSY without waiting out the busy timeout.
+      db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    }), (failed) => Effect.gen(function* () {
+      db.close();
+      yield* Effect.try({
+        try: () => discardPartialWorkspace(partial),
+        catch: (cleanupError) => new KinuError('io', `creating workspace "${name}" failed and its partial database at ${partial} could not be removed`, {
+          cause: new AggregateError([Cause.squash(failed), cleanupError]),
+        }),
       });
-    }
 
-    // Checkpoint before publishing; the close below then removes the empty sidecars, so the rename moves one file
-    // and the next open makes fresh ones. It stays WAL: a DELETE file had the daemon's first open and the command's
-    // race to switch it, and SQLite answers that race with BUSY without waiting out the busy timeout.
-    db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
-  } catch (error) {
+      return yield* Effect.failCause(failed);
+    }));
     db.close();
+    // Publication. A crash before the ref below is written leaves a database with no folder, which every open refuses.
+    renameSync(partial, dbPath);
+    // Any sidecar left under the partial name belongs to a name that no longer exists.
+    discardPartialWorkspace(partial);
 
-    // Cleanup failures propagate: an unremovable partial blocks recreating this name.
-    try {
-      discardPartialWorkspace(partial);
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        `creating workspace "${name}" failed and its partial database at ${partial} could not be removed`,
-        { cause: error },
-      );
-    }
+    yield* Effect.promise(() => placeLocalWorkspace({ name, cwd, workspaceId }));
+    ensureLocalDaemonRunning();
 
-    throw error;
-  }
-
-  db.close();
-  // Publication. A crash before the ref below is written leaves a database with no folder, which every open refuses.
-  renameSync(partial, dbPath);
-  // Any sidecar left under the partial name belongs to a name that no longer exists.
-  discardPartialWorkspace(partial);
-
-  await placeLocalWorkspace({ name, cwd, workspaceId });
-  ensureLocalDaemonRunning();
-
-  return {
-    name, displayName, mode: 'local', purpose, model: input.model ?? tier?.model,
-    dbPath, cwd, workspaceId, peers,
-  };
+    return {
+      name, displayName, mode: 'local', purpose, model: input.model ?? tier?.model,
+      dbPath, cwd, workspaceId, peers,
+    } satisfies CreatedCliAgent;
+  }));
 }
 
 /** Join the virtual workspace here with no name, mission or role: inherits a peer's mission, gets a stable
@@ -300,13 +299,11 @@ function nameTaken(name: string, dbPath: string, held: { cwd?: string; workspace
   return `Workspace "${name}" already exists at ${dbPath}.${placement} Choose another name.`;
 }
 
-async function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth: boolean): Promise<{ origin: string; token: string }> {
-  try {
-    return requireAuthConfig();
-  } catch (err) {
-    if (!allowInteractiveAuth || !process.stdin.isTTY || !process.stdout.isTTY) throw err;
-    await authCommand({ origin });
+/** The stored session; where none is usable and a person is at the terminal, `kinu auth` first. */
+function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth: boolean): Effect.Effect<{ origin: string; token: string }, KinuError> {
+  const session = Effect.try({ try: requireAuthConfig, catch: (cause) => toKinuError({ doing: 'reading the CLI session', cause, otherwise: 'denied' }) });
 
-    return requireAuthConfig();
-  }
+  return Effect.catch(session, (failed) => (allowInteractiveAuth && process.stdin.isTTY && process.stdout.isTTY
+    ? Effect.andThen(Effect.promise(() => authCommand({ origin })), session)
+    : Effect.fail(failed)));
 }

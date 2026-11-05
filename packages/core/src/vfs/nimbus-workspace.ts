@@ -30,7 +30,8 @@ import * as v from 'valibot';
 import { walkedPath, WORKSPACE_ROOT } from './workspace-path';
 import { FORK_PIN_PREFIX } from '../identity/fork';
 import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
-import { diagnostics, KinuError, toKinuError } from '../obs/index';
+import { diagnostics, flight, KinuError, settle, toKinuError } from '../obs/index';
+import { Cause, Effect } from 'effect';
 import { atVfsPath } from './errno';
 import type { VfsMount, WorkspacePrincipal } from './mounts';
 import type { CompositeVFS } from '@nimbus-sh/core/vfs/composite.js';
@@ -73,40 +74,6 @@ function workspaceFiles(open: () => Promise<SqliteFiles>, cwd: string): Workspac
   };
 }
 
-/**
- * The session user's view, the shell process's own, so every write passes the lease check a command's does. A path is
- * the view's as a process's is: a relative one from its directory, and `..` taken by the walk, after a link, never
- * collapsed first. An empty path is that directory, as on every other plane of this file. A write makes its parent
- * directories first.
- */
-function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceFiles {
-  const named = (path: string): string => (path === '' ? '.' : path);
-
-  const at = async <T>(path: string, syscall: string, call: (fs: WorkspaceFs, path: string) => Awaitable<T>): Promise<T> => {
-    const { fs } = await open();
-
-    return atVfsPath(fs.resolve(named(path)), syscall, () => call(fs, named(path)));
-  };
-
-  return {
-    readFile: (path) => at(path, 'open', (fs, name) => fs.readFile(name)),
-    writeFile: (path, data) => at(path, 'open', async (fs, name) => {
-      const absolute = fs.resolve(name);
-
-      await fs.mkdir(absolute.slice(0, absolute.lastIndexOf('/')) || '/', { recursive: true });
-
-      return fs.writeFile(name, data);
-    }),
-    readdir: (path) => at(path, 'scandir', (fs, name) => fs.readdir(name)),
-    stat: (path, options) => at(path, options?.follow === false ? 'lstat' : 'stat', (fs, name) => fs.stat(name, options)),
-    readlink: (path) => at(path, 'readlink', (fs, name) => fs.readlink(name)),
-    unlink: (path) => at(path, 'unlink', (fs, name) => fs.unlink(name)),
-    mkdir: (path, opts) => at(path, 'mkdir', (fs, name) => fs.mkdir(name, opts)),
-    removeRecursive: (path) => at(path, 'rm', (fs, name) => fs.removeRecursive(name)),
-    rename: (oldPath, newPath) => at(oldPath, 'rename', (fs, name) => fs.rename(name, named(newPath))),
-    readRange: (path, offset, length) => at(path, 'read', (fs, name) => fs.readRange(name, offset, length)),
-  };
-}
 
 /**
  * The store as `cred` (default the session user) sees it, with no mount, relative paths from `home`: an actor's own state.
@@ -201,7 +168,6 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const mountTables = new Map<string, readonly VfsMount[]>();
   const tableFor: ShellMountTable = (principal) => (principal.cred === null ? null : mountTables.get(principalKey(principal.cred, principal.actor)) ?? null);
   let shellMountPoints: ShellMounts | undefined;
-  let booting: Promise<NimbusWorkspace> | undefined;
 
   // The substrate loads at the workspace's first operation, not at module evaluation (f8c0f9e1f), and is compiled then
   // (b179dead9).
@@ -211,11 +177,9 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     return await NimbusWorkspace.create(creation);
   };
 
-  const boot = async (): Promise<NimbusWorkspace> => {
+  const boot = async (generationNow: number): Promise<NimbusWorkspace> => {
     // Boot revokes append writers at or below `generation * PID_GEN_STRIDE`, so the pid base must be
     // this generation.
-    const generationNow = takeWorkspaceGeneration(opts);
-
     processes.setPidBase(generationNow * PID_GEN_STRIDE);
 
     let creation: NimbusCreation = {
@@ -284,32 +248,52 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     return workspace;
   };
 
-  const open = async (): Promise<NimbusWorkspace> => {
-    const attempt = (booting ??= boot());
+  // One boot, joined by every operation; a boot that fails is told once and forgotten, so the next operation boots
+  // afresh instead of re-awaiting a cached failure for the isolate's life.
+  const booted = flight(() => Effect.flatMap(takeWorkspaceGeneration(opts), (generationNow) => Effect.promise(async () => boot(generationNow))).pipe(
+    Effect.tapCause((cause) => Effect.sync(() => {
+      diagnostics.failure('workspace.boot_failed', toKinuError({ doing: 'boot the Nimbus workspace', cause: Cause.squash(cause), otherwise: 'unavailable' }));
+    })),
+  ), { keep: 'success' });
 
-    try {
-      return await attempt;
-    } catch (cause) {
-      // The first waiter to see this attempt fail clears it, so the next call boots afresh instead of
-      // re-awaiting a cached rejection for the isolate's life; a newer attempt stays cached.
-      if (booting === attempt) {
-        booting = undefined;
-        diagnostics.failure(
-          'workspace.boot_failed',
-          toKinuError({ doing: 'boot the Nimbus workspace', cause, otherwise: 'unavailable' }),
-        );
-      }
+  const named = (path: string): string => (path === '' ? '.' : path);
 
-      throw cause;
-    }
+  // The call, once the workspace has booted; a boot that failed fails it in its own words.
+  const at = <T>(path: string, syscall: string, call: (fs: WorkspaceFs, path: string) => Awaitable<T>): Effect.Effect<T, KinuError> => Effect.flatMap(
+    booted(), ({ fs }) => Effect.promise(async () => atVfsPath(fs.resolve(named(path)), syscall, () => call(fs, named(path)))),
+  );
+
+  /**
+   * The session user's view, the shell process's own, so every write passes the lease check a command's does. A path is
+   * the view's as a process's is: a relative one from its directory, and `..` taken by the walk, after a link, never
+   * collapsed first. An empty path is that directory, as on every other plane of this file. A write makes its parent
+   * directories first.
+   */
+  const vfs: WorkspaceFiles = {
+    readFile: (path) => settle(at(path, 'open', (fs, name) => fs.readFile(name))),
+    writeFile: (path, data) => settle(at(path, 'open', async (fs, name) => {
+      const absolute = fs.resolve(name);
+
+      await fs.mkdir(absolute.slice(0, absolute.lastIndexOf('/')) || '/', { recursive: true });
+
+      return fs.writeFile(name, data);
+    })),
+    readdir: (path) => settle(at(path, 'scandir', (fs, name) => fs.readdir(name))),
+    stat: (path, options) => settle(at(path, options?.follow === false ? 'lstat' : 'stat', (fs, name) => fs.stat(name, options))),
+    readlink: (path) => settle(at(path, 'readlink', (fs, name) => fs.readlink(name))),
+    unlink: (path) => settle(at(path, 'unlink', (fs, name) => fs.unlink(name))),
+    mkdir: (path, made) => settle(at(path, 'mkdir', (fs, name) => fs.mkdir(name, made))),
+    removeRecursive: (path) => settle(at(path, 'rm', (fs, name) => fs.removeRecursive(name))),
+    rename: (oldPath, newPath) => settle(at(oldPath, 'rename', (fs, name) => fs.rename(name, named(newPath)))),
+    readRange: (path, offset, length) => settle(at(path, 'read', (fs, name) => fs.readRange(name, offset, length))),
   };
 
-  // One supervisor for this filesystem so no two shells share a pid; `open` sets its pid base.
+  // One supervisor for this filesystem so no two shells share a pid; the boot sets its pid base.
   const processes = new SessionProcessSupervisor();
 
 
   return {
-    vfs: workspaceVfs(open),
+    vfs,
     onFilesChanged(listener) {
       fileListeners.add(listener);
 
@@ -322,18 +306,14 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
       return () => { if (mountTables.get(key) === mounts) mountTables.delete(key); };
     },
-    async namespace(principal) {
-      return (await open()).filesystem.vfs.as(principal?.cred ?? CRED_SESSION_USER, principal?.actor);
+    namespace(principal) {
+      return settle(Effect.map(booted(), (workspace) => workspace.filesystem.vfs.as(principal?.cred ?? CRED_SESSION_USER, principal?.actor)));
     },
-    async privileged() {
-      const workspace = await open();
-
-      return { root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs };
+    privileged() {
+      return settle(Effect.map(booted(), (workspace) => ({ root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs })));
     },
-    async session() {
-      const workspace = await open();
-
-      return {
+    session() {
+      return settle(Effect.map(booted(), (workspace) => ({
         workspace,
         shell: workspace.shell,
         vfs: workspace.vfs,
@@ -343,32 +323,34 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         sql: opts.sql,
         // Bound to the origin workspace, where the dispatch table was built.
         supervisorOp: (envelope: SupervisorOpEnvelope) => workspace.supervisorOp(envelope),
-      };
+      })));
     },
-    async destroy() { (await open()).destroy(); },
+    destroy() { return settle(Effect.map(booted(), (workspace) => { workspace.destroy(); })); },
   };
 }
 
 const GENERATION_TABLE = 'kinu_workspace_generation';
 
 /** One past the persisted generation, in one write transaction (ADR W1). */
-function takeWorkspaceGeneration(opts: Pick<WorkspaceOptions, 'sql' | 'transactions' | 'generation'>): number {
+function takeWorkspaceGeneration(opts: Pick<WorkspaceOptions, 'sql' | 'transactions' | 'generation'>): Effect.Effect<number, KinuError> {
   const adopted = generation(opts.generation);
 
-  if (adopted !== 0) return adopted;
+  if (adopted !== 0) return Effect.succeed(adopted);
   const transactions = opts.transactions.storage;
 
-  if (transactions === undefined) throw new KinuError('unsupported', 'a workspace takes its generation in a transaction, and this host has none');
+  if (transactions === undefined) return Effect.fail(new KinuError('unsupported', 'a workspace takes its generation in a transaction, and this host has none'));
 
-  const next = transactions.transactionSync(() => {
-    opts.sql.exec(`INSERT INTO ${GENERATION_TABLE} (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1`);
+  return Effect.sync(() => {
+    const next = transactions.transactionSync(() => {
+      opts.sql.exec(`INSERT INTO ${GENERATION_TABLE} (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1`);
 
-    return v.parse(v.pipe(v.number(), v.integer(), v.minValue(1)), Number([...opts.sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)][0]?.value));
+      return v.parse(v.pipe(v.number(), v.integer(), v.minValue(1)), Number([...opts.sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)][0]?.value));
+    });
+
+    assumeGeneration(opts.generation, next);
+
+    return next;
   });
-
-  assumeGeneration(opts.generation, next);
-
-  return next;
 }
 
 export interface WorkspaceGeneration {

@@ -28,7 +28,8 @@ import type { ProvidersLane } from './owned-model-services';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
-import { diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { attempt, diagnostics, KinuError, settle, settleLogged, toKinuError } from "@kinu.run/core/obs";
+import { Effect, Result } from "effect";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { DESKTOP_SIZE, WATCH_SHEET } from "@kinu.run/devbox/desktop";
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from "./computer-size";
@@ -155,12 +156,15 @@ const COMPUTER_SIZES = {
   defaultSize: DEFAULT_BOX_SIZE,
 };
 
-async function userCallerFor(actor: ActorRuntimeIdentity): Promise<UserCaller> {
-  const workspaceToken = actor.capabilityToken();
+/** Read as each call runs: the token may be issued after the runtime is built. */
+function userCallerOf(actor: ActorRuntimeIdentity): Effect.Effect<UserCaller, KinuError> {
+  return Effect.suspend(() => {
+    const workspaceToken = actor.capabilityToken();
 
-  if (!workspaceToken) throw new Error('This workspace has not been issued a capability token yet.');
-
-  return { workspaceToken };
+    return workspaceToken
+      ? Effect.succeed({ workspaceToken })
+      : Effect.fail(new KinuError('unavailable', 'This workspace has not been issued a capability token yet.'));
+  });
 }
 
 /** Both methods are on `ORCHESTRATOR_RPC_SURFACE` via `AGENT_RPC_ACCESS`; fetched together in one round trip. */
@@ -184,11 +188,11 @@ interface RootApprovalClient {
   getShellApprovalGrants(): Promise<{ grants: readonly ApprovalGrant[] }>;
 }
 
-function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCredentialSource | null {
+function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity, caller: () => Promise<UserCaller>): UserCredentialSource | null {
   const userId = actor.ownerUserId();
   const namespace: RuntimeUserDONamespace = env.UserDO;
 
-  return userId ? userCredentials(() => objectNamed(namespace, userId), () => userCallerFor(actor)) : null;
+  return userId ? userCredentials(() => objectNamed(namespace, userId), caller) : null;
 }
 
 export type CFRuntime = AgentRuntime & {
@@ -298,18 +302,21 @@ export function createCFRuntime(
   const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }, async () => ({})));
 
   // One binding for every lane of this actor; each call reads its route, the judge's, the fast tier's or reflection's.
+  // The UserDO hears this actor as its workspace's capability token.
+  const asCaller = userCallerOf(actor);
+
   const modelLanes = profileLaneComponents({
-    agent, env, actor, resolveProfile: hooks.resolveProfile, report: hooks.reportModelCall, providers: hooks.providers, accounts: hooks.accounts,
+    agent, env, actor, caller: () => settle(asCaller), resolveProfile: hooks.resolveProfile, report: hooks.reportModelCall, providers: hooks.providers, accounts: hooks.accounts,
     refusals: hooks.refusals,
     modelOperations: hooks.modelOperations,
   });
 
   // The one required lane: `AgentRuntime.llm` is not optional.
-  const noProfile = async (): Promise<never> => {
-    throw new Error('reflection model lane has no active profile');
-  };
+  const noProfile = Effect.fail(new KinuError('unavailable', 'reflection model lane has no active profile'));
 
-  const llm: RoutedLLM = modelLanes === undefined ? { complete: noProfile, object: noProfile } : createRoutedModelLane(actor.actor, 'reflection', modelLanes);
+  const llm: RoutedLLM = modelLanes === undefined
+    ? { complete: () => settle(noProfile), object: () => settle(noProfile) }
+    : createRoutedModelLane(actor.actor, 'reflection', modelLanes);
 
   const schedule = createRealSchedule(access, sql, actor.actor);
 
@@ -409,61 +416,64 @@ export function createCFRuntime(
   let sandboxHandle: SandboxHandle | null = null;
 
   if (env.KinuDevbox) {
-    try {
-      const sdk = env.KinuDevbox.getByName(sandboxId);
+    const devbox = env.KinuDevbox;
 
-      // Egress is configured before the container runs anything, not in `onStart` (too late): until then its web
-      // requests reach no vault, so no placeholder is spent. Only the owning workspace configures.
-      const handle = adaptCloudflareSandbox(sdk, async () => {
-        hooks.boxUse.used = true;
-        const userId = actor.ownerUserId();
+    const registered = Result.try({
+      try: () => {
+        const sdk = devbox.getByName(sandboxId);
 
-        if (!userId) return;
-        await sdk.configureEgress({ workspaceName: actor.workspaceName, ownerUserId: userId });
-        // Unread, the box keeps its last default.
-        const [accountSize] = await Promise.allSettled([ownerComputerSize(env, actor)]);
+        // Egress is configured before the container runs anything, not in `onStart` (too late): until then its web
+        // requests reach no vault, so no placeholder is spent. Only the owning workspace configures.
+        const handle = adaptCloudflareSandbox(sdk, async () => {
+          hooks.boxUse.used = true;
+          const userId = actor.ownerUserId();
 
-        if (accountSize.status === 'fulfilled') await sdk.useDefaultSize(accountSize.value);
-        else diagnostics.failure('computer.account_size_unread', toKinuError({
-          doing: "reading the owner's computer size", cause: accountSize.reason, otherwise: 'unavailable',
-        }), { sandboxId });
+          if (!userId) return;
+          await sdk.configureEgress({ workspaceName: actor.workspaceName, ownerUserId: userId });
+          // Unread, the box keeps its last default.
+          const [accountSize] = await Promise.allSettled([ownerComputerSize(env, actor)]);
+
+          if (accountSize.status === 'fulfilled') await sdk.useDefaultSize(accountSize.value);
+          else diagnostics.failure('computer.account_size_unread', toKinuError({
+            doing: "reading the owner's computer size", cause: accountSize.reason, otherwise: 'unavailable',
+          }), { sandboxId });
+        },
+        // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
+        env.AUTH_KV && previewSuffix !== undefined ? { exposures: sandboxPreviewExposures(env.AUTH_KV, sandboxId), zone: previewSuffix } : null,
+        {
+          portsMoved: async () => {
+            hooks.liveReadsMoved?.(['getExposedPorts']);
+            await hooks.servingMoved();
+          },
+          drivers: hooks.boxUse.drivers,
+        });
+
+        sandboxHandle = handle;
+        executionRouter.register(createSandboxExecutor(handle, {
+          previewHostSuffix: previewSuffix,
+          activated: () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts']),
+          sizes: COMPUTER_SIZES,
+          shells: machineShells,
+          // The box's desktop has one driver at a time; each of the workspace's agents drives as itself.
+          desktop: { driver: actor.actor.actorId, screen: { ...DESKTOP_SIZE, sheet: WATCH_SHEET } },
+          environment: access.commandEnvironment,
+          // Each process it starts is a job of the actor's, which its box's word on the process's end settles.
+          processJobs: {
+            adopt: async (request) => await hooks.jobs().adopt(request),
+            ended: (jobId) => hooks.processEnds().ended(jobId),
+            state: (jobId) => hooks.processEnds().state(jobId),
+          },
+        }));
+        diagnostics.event('computer.executor_registered', {
+          sandboxId,
+          previews: previewSuffix ?? '',
+        });
       },
-      // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
-      env.AUTH_KV && previewSuffix !== undefined ? { exposures: sandboxPreviewExposures(env.AUTH_KV, sandboxId), zone: previewSuffix } : null,
-      {
-        portsMoved: async () => {
-          hooks.liveReadsMoved?.(['getExposedPorts']);
-          await hooks.servingMoved();
-        },
-        drivers: hooks.boxUse.drivers,
-      });
+      catch: (cause) => toKinuError({ doing: 'registering the computer executor', cause, otherwise: 'unavailable' }),
+    });
 
-      sandboxHandle = handle;
-      executionRouter.register(createSandboxExecutor(handle, {
-        previewHostSuffix: previewSuffix,
-        activated: () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts']),
-        sizes: COMPUTER_SIZES,
-        shells: machineShells,
-        // The box's desktop has one driver at a time; each of the workspace's agents drives as itself.
-        desktop: { driver: actor.actor.actorId, screen: { ...DESKTOP_SIZE, sheet: WATCH_SHEET } },
-        environment: access.commandEnvironment,
-        // Each process it starts is a job of the actor's, which its box's word on the process's end settles.
-        processJobs: {
-          adopt: async (request) => await hooks.jobs().adopt(request),
-          ended: (jobId) => hooks.processEnds().ended(jobId),
-          state: (jobId) => hooks.processEnds().state(jobId),
-        },
-      }));
-      diagnostics.event('computer.executor_registered', {
-        sandboxId,
-        previews: previewSuffix ?? '',
-      });
-    } catch (err) {
-      diagnostics.failure('computer.executor_registration_failed', toKinuError({
-        doing: 'registering the computer executor',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { sandboxId });
+    if (Result.isFailure(registered)) {
+      diagnostics.failure('computer.executor_registration_failed', registered.failure, { sandboxId });
       executionRouter.register(createSandboxExecutor());
     }
   } else {
@@ -475,7 +485,7 @@ export function createCFRuntime(
 
   const deviceTransportOptions: HubDeviceTransportOpts = {
     hub: () => userDOStubFor(env, actor),
-    caller: () => userCallerFor(actor),
+    caller: () => settle(asCaller),
     agentName: actor.workspaceName,
     actorId: actor.actor.actorId,
     cliCwd: cliCwdForDevice,
@@ -486,75 +496,54 @@ export function createCFRuntime(
 
   const deviceTransport = createHubDeviceTransport(deviceTransportOptions);
 
-  const startupWork: Promise<void> = (async () => {
-    await Promise.all([
-      (async (): Promise<void> => {
-        try {
-          await backfillMemoryVectors(memoryStore, vectorStore);
-        } catch (cause) {
-          diagnostics.failure('memory.vector_backfill_detached_failed', toKinuError({
-            doing: 'backfilling semantic-memory vectors at runtime construction',
-            cause,
-            otherwise: 'unavailable',
-          }), { workspace: actor.workspaceName });
-        }
-      })(),
-      (async (): Promise<void> => {
-        try {
-          await deviceTransport.refreshStatus();
-        } catch (cause) {
-          diagnostics.failure('device.status_warmup_failed', toKinuError({
-            doing: 'warming the device hub presence at runtime construction',
-            cause,
-            otherwise: 'unavailable',
-          }), { workspace: actor.workspaceName });
-        }
-      })(),
-    ]);
-  })();
+  // Each warm-up's failure is logged, never thrown: the runtime serves without either.
+  const startupWork: Promise<void> = Promise.all([
+    settleLogged(
+      'memory.vector_backfill_detached_failed',
+      { doing: 'backfilling semantic-memory vectors at runtime construction', otherwise: 'unavailable' },
+      () => backfillMemoryVectors(memoryStore, vectorStore),
+      { workspace: actor.workspaceName },
+    ),
+    settleLogged(
+      'device.status_warmup_failed',
+      { doing: 'warming the device hub presence at runtime construction', otherwise: 'unavailable' },
+      async () => { await deviceTransport.refreshStatus(); },
+      { workspace: actor.workspaceName },
+    ),
+  ]).then(() => undefined);
 
   // Scoped to the directory named at `kinu connect` unless the device's Sandbox switch is off. A failed
   // hub read is rethrown with its cause, never answered as null. Answers are per machine.
-  const deviceScope = async (
-    field: 'consentedRoot' | 'deviceHome',
-    deviceId: string | undefined,
-  ): Promise<string | null> => {
+  const deviceScope = (field: 'consentedRoot' | 'deviceHome', deviceId: string | undefined): Effect.Effect<string | null, KinuError> => {
+    const cwd = cliCwdForDevice();
+
+    if (cwd !== null) return Effect.succeed(cwd);
     const hub = userDOStubFor(env, actor);
 
-    if (!hub) return null;
+    if (!hub) return Effect.succeed(null);
+    const doing = "reading the device's consented directory";
 
-    try {
-      const status = await hub.deviceRuntimeStatus(await userCallerFor(actor));
-
+    return Effect.flatMap(Effect.mapError(asCaller, (cause) => toKinuError({ doing, cause, otherwise: 'unavailable' })), (caller) => attempt({ doing, otherwise: 'unavailable' }, async () => {
+      const status = await hub.deviceRuntimeStatus(caller);
       const device = deviceId === undefined ? soleLiveDevice(status.devices) : status.devices?.find((entry) => entry.id === deviceId);
 
       return device?.[field] ?? null;
-    } catch (cause) {
-      throw toKinuError({
-        doing: "reading the device's consented directory",
-        cause,
-        otherwise: 'unavailable',
-      });
-    }
+    }));
   };
 
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
-    consentedRoot: async (deviceId) => cliCwdForDevice() ?? await deviceScope('consentedRoot', deviceId),
-    deviceHome: async (deviceId) => cliCwdForDevice() ?? await deviceScope('deviceHome', deviceId),
-    scope: async (deviceId) => {
+    consentedRoot: (deviceId) => settle(deviceScope('consentedRoot', deviceId)),
+    deviceHome: (deviceId) => settle(deviceScope('deviceHome', deviceId)),
+    scope: (deviceId) => {
       const hub = userDOStubFor(env, actor);
 
-      if (!hub) return 'root';
+      if (!hub) return Promise.resolve('root');
+      const doing = "reading the device's file-view scope";
 
-      try {
-        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId)).scope;
-      } catch (cause) {
-        throw toKinuError({
-          doing: "reading the device's file-view scope",
-          cause,
-          otherwise: 'unavailable',
-        });
-      }
+      return settle(Effect.flatMap(Effect.mapError(asCaller, (cause) => toKinuError({ doing, cause, otherwise: 'unavailable' })), (caller) => attempt(
+        { doing, otherwise: 'unavailable' },
+        async () => (await hub.getDeviceFileView(caller, actor.workspaceName, deviceId)).scope,
+      )));
     },
   }, machineShells));
 
@@ -566,7 +555,7 @@ export function createCFRuntime(
     ...(modelLanes !== undefined && {
       modelLanes,
       decide: decisionPortOf(createDecisionPort({
-        run: decisionRunOf({ env, userDO: userCredentialSourceFor(env, actor) }),
+        run: decisionRunOf({ env, userDO: userCredentialSourceFor(env, actor, () => settle(asCaller)) }),
         model: async () => (await modelLanes.resolveProfile()).decisionModel,
         report: hooks.reportModelCall,
         refusals: hooks.refusals,
@@ -627,26 +616,21 @@ function buildVectorStore(
     return createNoopVectorStore();
   }
 
-  try {
-    const store = createCloudflareVectorStore({
-      index: vectorizeBinding,
-      embedder,
-      // Shared index across workspaces: scope every write and query to this one.
-      namespace: actor.workspaceName,
-    });
+  const built = Result.try({
+    // Shared index across workspaces: scope every write and query to this one.
+    try: () => createCloudflareVectorStore({ index: vectorizeBinding, embedder, namespace: actor.workspaceName }),
+    catch: (cause) => toKinuError({ doing: 'constructing the Vectorize memory store', cause, otherwise: 'unavailable' }),
+  });
 
-    diagnostics.event('vector.store_registered', { namespace: actor.workspaceName });
-
-    return store;
-  } catch (err) {
-    diagnostics.failure('vector.store_construction_failed', toKinuError({
-      doing: 'constructing the Vectorize memory store',
-      cause: err,
-      otherwise: 'unavailable',
-    }), { namespace: actor.workspaceName });
+  if (Result.isFailure(built)) {
+    diagnostics.failure('vector.store_construction_failed', built.failure, { namespace: actor.workspaceName });
 
     return createNoopVectorStore();
   }
+
+  diagnostics.event('vector.store_registered', { namespace: actor.workspaceName });
+
+  return built.success;
 }
 
 
@@ -659,6 +643,7 @@ interface ProfileLaneOptions {
   readonly agent: AgentHost;
   readonly env: Env;
   readonly actor: ActorRuntimeIdentity;
+  readonly caller: () => Promise<UserCaller>;
   readonly resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined;
   readonly report: ModelCallSink;
   readonly modelOperations: ModelOperationSink;
@@ -679,12 +664,12 @@ function profileLaneComponents(options: ProfileLaneOptions): ModelLaneComponents
     // Which credential pays a spec; the app title a registry sends is no part of it. Each call builds its registry, so
     // a provider connected since applies.
     attemptOf: (spec) => {
-      const agent = options.providers({ credentials: userCredentialSourceFor(options.env, options.actor), appTitle: 'Kinu', accounts: options.accounts });
+      const agent = options.providers({ credentials: userCredentialSourceFor(options.env, options.actor, options.caller), appTitle: 'Kinu', accounts: options.accounts });
 
       return agent.registry.attemptFor(agent.normalizeSpecSync(spec), agent.deps);
     },
     llm: (route) => routedLlm((serving) => {
-      const registry = options.providers({ credentials: userCredentialSourceFor(options.env, options.actor), appTitle: `Kinu (${route.source})`, accounts: options.accounts });
+      const registry = options.providers({ credentials: userCredentialSourceFor(options.env, options.actor, options.caller), appTitle: `Kinu (${route.source})`, accounts: options.accounts });
 
       return bindRoute({
         normalize: (spec) => registry.normalizeSpecSync(spec),

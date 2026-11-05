@@ -11,8 +11,8 @@ import { boundRunEventQuery, RUN_EVENT_LIMIT_MAX, type RunEventType, type Stored
 import * as v from 'valibot';
 import { resumeIndexFromLastEventId } from '@kinu.run/core';
 import { waitOn, type Clock } from "@kinu.run/core";
-import { Cause, Effect } from 'effect';
-import { diagnostics, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
+import { Cause, Effect, Exit } from 'effect';
+import { diagnostics, hold, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import { rawParam, type FamilyEnv } from './api/context';
 import type { WorkspaceVariables } from './api/workspace';
 
@@ -173,7 +173,7 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
         heartbeatAt = clock.now();
       };
 
-      try {
+      const streamed = await hold(Effect.promise(async () => {
         // Pages drain back to back; an empty one means caught up. The client's EventSource auto-reconnects with Last-Event-ID.
         for (;;) {
           const page = await stub.getRunEventText(runId, { since: cursor + 1, limit: RUN_EVENT_LIMIT_MAX });
@@ -197,15 +197,15 @@ function streamRunEvents(options: RunEventStreamOptions): Response {
         }
 
         if (!cancelled) controller.close();
-      } catch (cause) {
-        if (!cancelled) {
-          const error = toKinuError({ doing: 'streaming the durable run-event log', cause, otherwise: 'unavailable' });
-          diagnostics.failure('http.run_events_failed', error, { source: 'stream' });
-          controller.enqueue(encoder.encode(
-            `event: error\ndata: ${JSON.stringify({ error: renderThrownChain({ cause: error }) })}\n\n`,
-          ));
-          controller.close();
-        }
+      }));
+
+      if (Exit.isFailure(streamed) && !cancelled) {
+        const error = toKinuError({ doing: 'streaming the durable run-event log', cause: Cause.squash(streamed.cause), otherwise: 'unavailable' });
+        diagnostics.failure('http.run_events_failed', error, { source: 'stream' });
+        controller.enqueue(encoder.encode(
+          `event: error\ndata: ${JSON.stringify({ error: renderThrownChain({ cause: error }) })}\n\n`,
+        ));
+        controller.close();
       }
     },
     cancel() {

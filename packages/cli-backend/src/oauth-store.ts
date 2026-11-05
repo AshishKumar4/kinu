@@ -23,6 +23,8 @@ import {
 } from '@kinu.run/core';
 import { registrationOf, revokeSession } from '../../pc-agent/src/chatgpt.js';
 import { readConfigFile, updateConfigFile, type KinuConfig, type LocalOAuthSession } from './config-file';
+import { KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 
 type StoredLogin = LocalOAuthSession;
 
@@ -57,12 +59,10 @@ export function isOAuthLoginKey(key: string): boolean {
   return ISSUERS.has(baseCredentialKey(key));
 }
 
-function issuerOf(key: string): OAuthIssuer {
+function issuerOf(key: string): Effect.Effect<OAuthIssuer, KinuError> {
   const issuer = ISSUERS.get(baseCredentialKey(key));
 
-  if (issuer === undefined) throw new Error(`${key} is not a subscription login`);
-
-  return issuer;
+  return issuer === undefined ? Effect.fail(new KinuError('bad_input', `${key} is not a subscription login`)) : Effect.succeed(issuer);
 }
 
 export interface LocalOAuthStore {
@@ -87,26 +87,30 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
     },
 
     has(key: string): boolean {
-      return heldLogin(credentialIn(readConfigFile(configPath), key));
+      return settleSync(Effect.map(issuerOf(key), (issuer) => heldLogin(credentialIn(readConfigFile(configPath), key, issuer))));
     },
 
-    async getAuth(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null> {
-      const issuer = issuerOf(key);
-      const credential = credentialIn(readConfigFile(configPath), key);
+    getAuth(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null> {
+      return settle(Effect.gen(function* () {
+        const issuer = yield* issuerOf(key);
+        const credential = credentialIn(readConfigFile(configPath), key, issuer);
 
-      if (!credential?.accessToken) return null;
-      const rejected = authOpts?.rejected;
-      const refused = rejected !== undefined && refusedLogin(issuer.headers(credential), rejected);
+        if (!credential?.accessToken) return null;
+        const rejected = authOpts?.rejected;
+        const refused = rejected !== undefined && refusedLogin(issuer.headers(credential), rejected);
 
-      const usable = await usableLogin({
-        issuer: issuer.renewal, credential, refused, renew: () => renewUnderLock(configPath, key, credential, opts.fetch),
-      });
+        const usable = yield* Effect.promise(() => usableLogin({
+          issuer: issuer.renewal, credential, refused, renew: () => renewUnderLock(configPath, { key, issuer }, credential, opts.fetch),
+        }));
 
-      return usable === null ? null : { headers: issuer.headers(usable), credentialKey: key };
+        return usable === null ? null : { headers: issuer.headers(usable), credentialKey: key };
+      }));
     },
 
-    async save(key: string, credential: OAuthCredential): Promise<void> {
-      await updateConfigFile(configPath, (config) => { replaceLogin(config, key, credentialToConfig(credential)); });
+    save(key: string, credential: OAuthCredential): Promise<void> {
+      return settle(Effect.flatMap(issuerOf(key), (issuer) => Effect.promise(() => updateConfigFile(configPath, (config) => {
+        replaceLogin(config, key, issuer, credentialToConfig(credential));
+      }))));
     },
   };
 }
@@ -116,14 +120,12 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
  *  Only the login on disk renews, so a sign-out the wait let in is not undone. */
 function renewUnderLock(
   configPath: string,
-  key: string,
+  { key, issuer }: { readonly key: string; readonly issuer: OAuthIssuer },
   original: OAuthCredential,
   fetchFn?: typeof fetch,
 ): Promise<LoginRenewal> {
-  const issuer = issuerOf(key);
-
   return updateConfigFile(configPath, async (config): Promise<LoginRenewal> => {
-    const latest = credentialIn(config, key);
+    const latest = credentialIn(config, key, issuer);
 
     if (latest?.refreshToken === undefined) return 'revoked';
 
@@ -131,8 +133,8 @@ function renewUnderLock(
     const renewal = await rotateLogin(key, `refreshing the ${issuer.section} login`, () => issuer.renewal.refresh(latest, fetchFn));
 
     // A spent refresh token is retired, so no later call submits it again and the login reads as signed out.
-    if (renewal === 'revoked') replaceLogin(config, key, signedOutLogin(issuer, latest.metadata));
-    else if (!('failed' in renewal)) replaceLogin(config, key, credentialToConfig(renewal));
+    if (renewal === 'revoked') replaceLogin(config, key, issuer, signedOutLogin(issuer, latest.metadata));
+    else if (!('failed' in renewal)) replaceLogin(config, key, issuer, credentialToConfig(renewal));
 
     return renewal;
   });
@@ -159,10 +161,9 @@ export interface ChatGptSignOut {
  */
 export function signOutChatGptLogin(configPath: string, account: string, opts: { revoke: boolean; fetch?: typeof fetch }): Promise<ChatGptSignOut> {
   const key = accountCredentialKey(CHATGPT_CRED_KEY, account);
-  const issuer = issuerOf(key);
 
-  return updateConfigFile(configPath, async (config): Promise<ChatGptSignOut> => {
-    const login = loginIn(config, key);
+  return settle(Effect.flatMap(issuerOf(key), (issuer) => Effect.promise(() => updateConfigFile(configPath, async (config): Promise<ChatGptSignOut> => {
+    const login = loginIn(config, key, issuer);
 
     if (login === undefined) return { removed: false };
     const registration = registrationOf(login.metadata);
@@ -171,15 +172,14 @@ export function signOutChatGptLogin(configPath: string, account: string, opts: {
       ? undefined
       : await revokeSession({ clientId: registration.clientId, refreshToken: login.refreshToken, ...(opts.fetch !== undefined && { fetch: opts.fetch }) });
 
-    replaceLogin(config, key, signedOutLogin(issuer, login.metadata));
+    replaceLogin(config, key, issuer, signedOutLogin(issuer, login.metadata));
 
     return { removed: login.accessToken !== undefined || login.refreshToken !== undefined, ...(revocation !== undefined && { unconfirmed: revocation.unconfirmed }) };
-  });
+  }))));
 }
 
 /** Replaces one login in `config`, or removes it (null); the section's other logins and keys stay as they were. */
-function replaceLogin(config: KinuConfig, key: string, login: StoredLogin | null): void {
-  const { section } = issuerOf(key);
+function replaceLogin(config: KinuConfig, key: string, { section }: OAuthIssuer, login: StoredLogin | null): void {
   const account = accountOf(key);
   const stored = config.providers?.[section] ?? {};
   const { accessToken: _access, refreshToken: _refresh, expiresAt: _expires, metadata: _metadata, accounts, ...rest } = stored;
@@ -195,15 +195,15 @@ function replaceLogin(config: KinuConfig, key: string, login: StoredLogin | null
   config.providers = Object.keys(next).length === 0 ? providers : { ...providers, [section]: next };
 }
 
-function loginIn(config: KinuConfig, key: string): StoredLogin | undefined {
+function loginIn(config: KinuConfig, key: string, issuer: OAuthIssuer): StoredLogin | undefined {
   const account = accountOf(key);
-  const stored = config.providers?.[issuerOf(key).section];
+  const stored = config.providers?.[issuer.section];
 
   return account === MAIN_ACCOUNT ? stored : stored?.accounts?.[account];
 }
 
-function credentialIn(config: KinuConfig, key: string): OAuthCredential | null {
-  const login = loginIn(config, key);
+function credentialIn(config: KinuConfig, key: string, issuer: OAuthIssuer): OAuthCredential | null {
+  const login = loginIn(config, key, issuer);
 
   if (!login?.accessToken) return null;
 

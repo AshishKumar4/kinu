@@ -2653,7 +2653,7 @@ export {
 
 export {
   type StoppableWaitOptions,
-  waitForAnswer,
+  untilAnswered,
 } from './utils/wait';
 
 export {

@@ -15,13 +15,13 @@ import {
   type ChatProtocolEvent,
 } from 'agents/chat';
 import type { UIMessage, UIMessageChunk } from 'ai';
-import { Effect } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
 import * as v from 'valibot';
 import {
   JsonObjectSchema, JsonValueSchema, newestOpener, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
   UIMessageSchema, type SentWords, type ChatTransport, type ChatWindow, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies,
 } from '@kinu.run/core';
-import { attempt, attemptInItsWords, diagnostics, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
+import { attempt, attemptInItsWords, diagnostics, hold as holdExit, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
 export type ChatSocket = Pick<Connection, 'id' | 'send' | 'readyState' | 'close'>;
 
@@ -298,7 +298,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   constructor(readonly wire: ChatWire) {}
 
   /** Runs `step` after every step before it has released the order; it releases on its `release`, or on its end. */
-  private inOrder(step: (release: () => void) => Promise<void>): Promise<void> {
+  private inOrder<A>(step: (release: () => void) => Promise<A>): Promise<A> {
     const held = Promise.withResolvers<void>();
     const before = this.intake;
 
@@ -450,12 +450,14 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     const event = parseProtocolMessage(raw);
 
     if (event === null) return false;
-    await this.handle(connection, event);
+    const fault = await this.handle(connection, event);
 
-    return true;
+    // A fault the loop did not answer is its caller's to see.
+    return settle(fault === null ? Effect.succeed(true) : Effect.die(fault));
   }
 
-  private async handle(connection: ChatSocket, event: ChatProtocolEvent): Promise<void> {
+  /** A fault the frame met that nothing answered, or null. */
+  private async handle(connection: ChatSocket, event: ChatProtocolEvent): Promise<Error | null> {
     switch (event.type) {
       case 'stream-resume-request':
         // `idle` is load-bearing: the hook keeps waiting on a probe answered with anything weaker.
@@ -463,23 +465,20 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId: event.probeId }));
         }
 
-        return;
+        return null;
 
       case 'stream-resume-ack':
         await this.replay(connection, event.id);
 
-        return;
+        return null;
 
-      case 'chat-request': {
-        if (event.init.method === 'POST') await this.inOrder((admitted) => this.admitChatRequest(event.id, event.init.body, admitted));
-
-        return;
-      }
+      case 'chat-request':
+        return event.init.method === 'POST' ? this.inOrder((admitted) => this.admitChatRequest(event.id, event.init.body, admitted)) : null;
 
       case 'cancel':
         await this.interrupt();
 
-        return;
+        return null;
 
       // The SDK's clear is a frame with no answer; Main's Clear is the `clearConversation` RPC, refused while a turn runs.
       case 'clear':
@@ -487,25 +486,28 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       case 'tool-approval':
       case 'messages':
         diagnostics.event('chat.protocol_frame_ignored', { frame: event.type });
+
+        return null;
     }
   }
 
   /** One send per message the loop does not hold, asked by id in one crossing; answered only once the landing is decided.
-   *  Every request ends in exactly one terminal frame: its turn's, or this method's, whatever failed. */
-  private async admitChatRequest(requestId: string, body: string | undefined, admitted: () => void): Promise<void> {
+   *  Every request ends in exactly one terminal frame: its turn's, or this method's, whatever failed. A fault the loop
+   *  did not answer, which wrote nothing, is returned for its caller to see. */
+  private async admitChatRequest(requestId: string, body: string | undefined, admitted: () => void): Promise<Error | null> {
     const parsed = body === undefined ? null : v.safeParse(v.pipe(v.string(), v.parseJson(), ChatRequestBodySchema), body);
 
     if (parsed === null || !parsed.success) {
       this.done(requestId);
 
-      return;
+      return null;
     }
 
     if (parsed.output.trigger === 'regenerate-message') {
       admitted();
       await this.retryRequest(requestId, parsed.output.messages);
 
-      return;
+      return null;
     }
 
     // A message that opens a turn hands the request to it: that turn's `turn-end` closes it. Every other
@@ -514,7 +516,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     const taken: string[] = [];
     const release = (): void => { for (const id of taken) if (id !== opener) this.requests.delete(id); };
 
-    try {
+    const sent = await holdExit(Effect.promise(async () => {
       const asked = parsed.output.messages.filter((message) => message.role === 'user');
       const unseen = new Set(await this.wire.unseen([...new Set(asked.map((message) => message.id))]));
 
@@ -525,7 +527,10 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         if (await this.wire.send({ ...chatInput(message), id: message.id }, admitted) === 'turn') opener = message.id;
       }
-    } catch (cause) {
+    }));
+
+    if (Exit.isFailure(sent)) {
+      const cause = Cause.squash(sent.cause);
       release();
       const refused = cause instanceof KinuError ? cause : toKinuError({ doing: 'taking a chat message', cause, otherwise: 'io' });
       // A Stop handed the words back, which is no failure: the request ends plainly, and its tab reads where they went
@@ -535,14 +540,14 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       if (opener === null) this.done(requestId, handedBack ? {} : { error: refusalOf(refused).error });
 
       // The loop refused and wrote nothing; anything else is a fault its caller must see.
-      if (!handedBack && !(cause instanceof KinuError)) throw new Error('the loop failed to take a client message', { cause });
-
-      return;
+      return !handedBack && !(cause instanceof KinuError) ? new Error('the loop failed to take a client message', { cause }) : null;
     }
 
     release();
 
     if (opener === null) this.done(requestId, taken.length === 0 ? {} : { landed: 'mid-turn' });
+
+    return null;
   }
 
   /** The Retry of the newest turn the client shows: its stream answers under this request once the agent takes it. */
@@ -732,12 +737,12 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   }
 
   /** Held for a reconnecting tab and broadcast; a continuation renews from the turn's parts, keeping one answer id. */
-  async observe(stream: ReadableStream<UIMessageChunk>): Promise<void> {
+  observe(stream: ReadableStream<UIMessageChunk>): Promise<void> {
     const live = this.live;
 
-    if (live === null) return;
+    if (live === null) return Promise.resolve();
 
-    try {
+    const relaying = attempt({ doing: 'relaying the answer stream to the connected clients', otherwise: 'io' }, async () => {
       for await (const chunk of stream) {
         // The provider's own words: the sender's chat would keep them as its error, and the turn's classified
         // failure follows as the frame that ends it.
@@ -780,11 +785,9 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
           this.wire.replies?.feed(live.turnId, chunk.delta);
         }
       }
-    } catch (cause) {
-      this.degradeRelay(live, toKinuError({
-        doing: 'relaying the answer stream to the connected clients', cause, otherwise: 'io',
-      }));
-    }
+    });
+
+    return settle(Effect.catch(relaying, (failure) => Effect.sync(() => { this.degradeRelay(live, failure); })));
   }
 
   /** A tab told to resume a stream that will not grow again hears it end, so its resume settles. */

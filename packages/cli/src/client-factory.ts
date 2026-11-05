@@ -1,4 +1,6 @@
 import type { InvocationSurface } from '@kinu.run/core';
+import { KinuError, settle } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
 import { requireAuthConfig, resolveLocalAgent } from './config';
 import type { AgentTarget } from './agent-target';
 import type { AgentClient } from './agent-client';
@@ -24,7 +26,9 @@ export async function createAgentClient(
   surface: InvocationSurface = 'interactive',
 ): Promise<AgentClient> {
   if (target.mode === 'cloud') {
-    rejectLocalLlmFlags(opts);
+    const refused = localLlmFlagRefusal(opts);
+
+    if (refused !== null) return settle(Effect.fail(new KinuError('bad_input', refused)));
     const auth = requireAuthConfig();
 
     return await withLearningFlag(new CloudAgentClient({
@@ -58,15 +62,12 @@ async function withLearningFlag(client: AgentClient, opts: AgentClientFlags): Pr
   return client;
 }
 
-function rejectLocalLlmFlags(opts: AgentClientFlags): void {
+/** Why a cloud target refuses these flags, or null. */
+function localLlmFlagRefusal(opts: AgentClientFlags): string | null {
   if (opts.model) {
-    throw new Error(
-      '--model is a session override for local workspaces only.\n' +
-      '  Change a cloud workspace with: kinu model <workspace> <spec> (or /model in chat).',
-    );
+    return '--model is a session override for local workspaces only.\n'
+      + '  Change a cloud workspace with: kinu model <workspace> <spec> (or /model in chat).';
   }
 
-  if (opts.baseUrl || opts.auth) {
-    throw new Error('--base-url and --auth apply to local workspaces only.');
-  }
+  return opts.baseUrl || opts.auth ? '--base-url and --auth apply to local workspaces only.' : null;
 }
