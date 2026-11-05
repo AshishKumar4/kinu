@@ -508,7 +508,7 @@ async function measureWalked(newPage: Gallery['newPage'], origin: string): Promi
   }
 }
 
-const LONG = '.p-thread-column.overflow-y-auto';
+const LONG = '[data-transcript].overflow-y-auto';
 
 /**
  * Every frame the page renders while `drive` runs, read in the page as it is presented: each rendering step is read

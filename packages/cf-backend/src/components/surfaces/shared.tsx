@@ -64,7 +64,7 @@ export function CodeBlock({ children, className, wrap = false }: { children: str
     ? resource.value.html : null;
 
   return (
-    <div className={`p-code p-code-block my-2${wrap ? " p-code-wrap" : ""}`}>
+    <div data-code-block className={`p-code p-code-block my-2${wrap ? " p-code-wrap" : ""}`}>
       <div className="t-meta t-mono p-code-head flex items-center justify-between gap-2 px-3 py-1">
         <span className="truncate font-mono">{lang || "code"}</span>
         <CopyText value={code} />

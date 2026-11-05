@@ -856,11 +856,11 @@ const FEEDBACK_OFFERED = `document.querySelector('#chat [data-message-feedback]'
 /** The focused element's ring and the composer's edge: a field drawn into the composer shows focus on the composer. */
 const FOCUS_READ = `(() => {
   const focused = document.activeElement;
-  const composer = focused?.closest('.p-composer') ?? document.querySelector('#chat .p-composer');
+  const composer = focused?.closest('[data-composer]') ?? document.querySelector('#chat [data-composer]');
   return {
     outline: focused === null ? '' : getComputedStyle(focused).outlineStyle,
     edge: composer === null ? '' : getComputedStyle(composer).borderTopColor,
-    inComposer: focused !== null && focused.closest('.p-composer') !== null,
+    inComposer: focused !== null && focused.closest('[data-composer]') !== null,
   };
 })()`;
 
@@ -2386,7 +2386,7 @@ const COMPOSER_NOTICE_TONES = `[...document.querySelectorAll('#chat [data-compos
 const DRAFT = `document.querySelector('#chat textarea')?.value ?? ''`;
 
 /** The words in a message bubble of the chat: a person's message the chat draws. */
-const SHOWN_AS_MESSAGE = (words: string): string => `[...document.querySelectorAll('#chat .p-user-bubble')].some((bubble) => (bubble.textContent ?? '').includes(${JSON.stringify(words)}))`;
+const SHOWN_AS_MESSAGE = (words: string): string => `[...document.querySelectorAll('#chat [data-user-bubble]')].some((bubble) => (bubble.textContent ?? '').includes(${JSON.stringify(words)}))`;
 
 /** Presses the chat's Stop where it is drawn, as a person's click does; false when no Stop is drawn. */
 const PRESS_STOP = `(() => {

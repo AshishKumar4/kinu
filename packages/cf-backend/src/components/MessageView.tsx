@@ -606,7 +606,7 @@ export const MessageView = memo(function MessageView({
       return (
         <Fragment key={key}>
           <div data-said {...(isTailPart ? { "data-live-indicator": "text" } : {})}
-            className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
+            data-streaming={isTailPart ? "" : undefined} className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
             <AnswerText text={t} place={{ messageId: message.id, stored: tail === null, chat: answerSlates }} />
           </div>
           <PartPictures part={part} size="full" />

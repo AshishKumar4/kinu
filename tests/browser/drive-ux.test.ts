@@ -635,7 +635,7 @@ describe('the Drive', () => {
         expect(await page.$('[data-drive-viewer] [data-files-edit]')).toBeNull();
 
         // Its front matter reads as the YAML it is, the first block, rather than as a paragraph under a rule.
-        const firstBlock = await page.$eval('[data-drive-viewer] [data-files-preview-body] .p-code', (block) => block.textContent ?? '');
+        const firstBlock = await page.$eval('[data-drive-viewer] [data-files-preview-body] [data-code-block]', (block) => block.textContent ?? '');
 
         expect(firstBlock).toContain('name: audit-implementation');
 

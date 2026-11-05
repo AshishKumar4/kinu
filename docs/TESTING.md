@@ -346,7 +346,7 @@ A green suite says the tests pass, not that they would notice a change. Three pr
 | Program | Names the line | Runs where | Verdict |
 |---|---|---|---|
 | `bun run gate:mutation-fences` | a human, in `FENCES` | deploy tier, every run | gate: the owning test must go red |
-| `bun run sweep:mutation` | a human, in `mutation-sweep.catalogue.ts` | on request | reports survivors |
+| `bun run sweep:mutation` (the pilot's `--catalogue`) | a human, in `mutation-sweep.catalogue.ts` | on request | reports survivors |
 | `bun scripts/nightly-sweeps.ts run <rev> mutation` | nobody. Generated from the syntax tree | nightly on armada, four parts | reports survivors |
 
 `gate:mutation-fences` re-proves the four declared fences. A fence whose owning test stays green once the fence is stripped is a guard nothing defends. Its green output states the hole it cannot close: a fence nobody declared.
@@ -357,7 +357,7 @@ A green suite says the tests pass, not that they would notice a change. Three pr
 
 The pilot searches. A human reads each survivor and decides whether it is an equivalent mutant or a missing assertion; a missing assertion gets pinned as a fence, and the gate re-proves it on every deploy. A survivor never fails a build. A mutation part is red only when the run could not be made (no worktree, no modules, or a baseline that was already red).
 
-The pilot mutates source in place and refuses to run in the main checkout. The reason is measured and recorded in `mutation-sweep.ts`: a sandbox copy resolves `@kinu.run/*` through the donor `node_modules` to the pristine package, so two thirds of a mutant's own defenders would never see it. So each nightly part makes a detached worktree inside its own container and runs `setup-worktree.sh` in it; the container goes with the part.
+The pilot mutates source in place and refuses to run in the main checkout. The reason is measured and recorded in `mutation-pilot.ts`: a sandbox copy resolves `@kinu.run/*` through the donor `node_modules` to the pristine package, so two thirds of a mutant's own defenders would never see it. So each nightly part makes a detached worktree inside its own container and runs `setup-worktree.sh` in it; the container goes with the part.
 
 ## Test hygiene
 
