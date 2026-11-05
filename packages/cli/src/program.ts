@@ -59,7 +59,9 @@ export function buildProgram(): Command {
     .description('Create and chat with self-evolving agent workspaces')
     .version(VERSION, '-v, --version')
     .helpOption('-h, --help', 'Show help for this command')
-    .addHelpCommand(false);
+    .addHelpCommand(false)
+    // A subcommand may then hand everything after its operands on untouched (`executors`).
+    .enablePositionalOptions();
 
   const llmOpts = (cmd: Command) => cmd
     .option(`${MODEL_OPTION_FLAG} <id>`, 'Model ID (env: KINU_MODEL)')
@@ -227,9 +229,12 @@ export function buildProgram(): Command {
     .helpGroup(RUNNING)
     .description('List a workspace\'s executors, or run a command in one')
     .option('--json', 'Print raw JSON')
-    // The command's own flags (`uname -a`) are its words, not this command's options.
-    .allowUnknownOption()
-    .action(executorsCommand);
+    // Past the workspace, every word is the command's own (`curl -s --json …`), never this command's options; a
+    // listing's own --json there is still read as it.
+    .passThroughOptions()
+    .action((name: string, executor: string | undefined, command: string[], opts: { json?: boolean }) => (executor === '--json' && command.length === 0
+      ? executorsCommand(name, undefined, [], { ...opts, json: true })
+      : executorsCommand(name, executor, command, opts)));
 
   program
     .command('stop <name>')

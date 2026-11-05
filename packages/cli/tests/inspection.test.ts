@@ -212,6 +212,16 @@ describe("CLI inspection commands", () => {
 
     expect({ exitCode: flagged.exitCode, stdout: flagged.stdout, said: flagged.stderr.split("no-such-entry").length - 1 }).toEqual({ exitCode: 2, stdout: "", said: 1 });
 
+    // Even a flag this command also has: past the executor, it is the command's.
+    const tail = await runToExit([process.execPath, cliBin, "executors", "localtest", "workspace", "printf", "%s", "--json"], {
+      cwd: invokedFrom, env: { ...process.env, KINU_HOME: home },
+    });
+
+    expect({ exitCode: tail.exitCode, stdout: tail.stdout }).toEqual({ exitCode: 0, stdout: "--json" });
+    const listed = await runToExit([process.execPath, cliBin, "executors", "localtest", "--json"], { cwd: invokedFrom, env: { ...process.env, KINU_HOME: home } });
+
+    expect(Array.isArray(JSON.parse(listed.stdout))).toBe(true);
+
     // Without its ref the workspace has no folder, and the command runs nowhere.
     writeFileSync(join(home, "config.json"), JSON.stringify({ agents: {} }));
     const folderless = await run("pwd");
@@ -335,6 +345,12 @@ describe("CLI inspection commands", () => {
       } });
 
       expect(run.exitCode).toBe(1);
+
+      const json = await runCli(["jobs", "cloudtest", "cancel", "no-such-job", "--json"], { home, env: {
+        KINU_TOKEN: "ptc_test", KINU_ORIGIN: `http://localhost:${server.port}`,
+      } });
+
+      expect(json.exitCode).toBe(1);
     } finally {
       await server.stop(true);
     }

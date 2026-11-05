@@ -17,7 +17,6 @@ describe('a cloud create names the workspace only when the owner did', () => {
       import { createCliAgent } from './packages/cli/src/agent-create.ts';
       const sent = [];
       globalThis.fetch = async (input, init) => {
-        if (init?.method !== 'POST') return Response.json([]);
         const body = JSON.parse(String(init?.body));
         sent.push({ url: String(input), body });
 
@@ -45,10 +44,10 @@ describe('a cloud create of a name the account already holds', () => {
 
     const result = await runToExit(['bun', '-e', `
       import { createCliAgent } from './packages/cli/src/agent-create.ts';
-      globalThis.fetch = async (input, init) => {
-        const jarvis = { name: 'jarvis', displayName: 'jarvis', createdAt: 1, lastVisited: 1 };
+      globalThis.fetch = async (_input, init) => {
+        const { name } = JSON.parse(String(init?.body));
 
-        return Response.json(init?.method === 'POST' ? jarvis : [jarvis]);
+        return Response.json({ name, displayName: name, createdAt: 1, lastVisited: 1, ...(name === 'jarvis' && { existed: true }) }, { status: name === 'jarvis' ? 200 : 201 });
       };
       const made = await createCliAgent({ name: 'fresh', purpose: 'p', mode: 'cloud' });
       const held = await createCliAgent({ name: 'jarvis', purpose: 'p', mode: 'cloud' });

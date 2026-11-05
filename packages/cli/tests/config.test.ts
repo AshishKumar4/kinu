@@ -111,6 +111,35 @@ describe("CLI config safety", () => {
     }
   });
 
+  test("a stored sign-in that names no deployment is never sent to the one whose launcher runs the CLI", async () => {
+    const seen: string[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        seen.push(new URL(request.url).pathname);
+
+        return new Response(null, { status: 404 });
+      },
+    });
+
+    try {
+      const home = scratchDir("cli-launcher-origin-stored");
+      writeFileSync(join(home, "config.json"), JSON.stringify({ accessToken: "ptc_stored", tokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString() }));
+      const { KINU_ORIGIN: _ambient, KINU_TOKEN: _token, ...inherited } = process.env;
+
+      const env: NodeJS.ProcessEnv = {
+        ...inherited, KINU_HOME: home, KINU_LAUNCHER_ORIGIN: `http://127.0.0.1:${String(server.port)}`, NO_COLOR: "1",
+      };
+
+      await runToExit([process.execPath, "packages/cli/bin/cli.ts", "whoami"], { cwd: resolve(__dirname, "../../.."), env });
+
+      expect(seen).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("kinu auth lists the account's CLI sessions and revokes one or all of them; a bare revoke or another origin ends none", async () => {
     const hash = "a".repeat(64);
     const seen: string[] = [];

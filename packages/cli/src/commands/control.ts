@@ -119,16 +119,9 @@ export function modelCommand(name: string, spec: string | undefined, opts: Contr
   }));
 }
 
-/** A cancel that stopped nothing (no running job by that id) says so, and the command fails. */
+/** A cancel that stopped nothing (no running job by that id) says so; its caller fails the command. */
 function saidCancelled(job: string, ok: boolean): void {
-  if (ok) {
-    console.log(`${OK('cancelled')} ${job}`);
-
-    return;
-  }
-
-  console.log(`${WARN('nothing cancelled')} ${job} is not a running job`);
-  process.exitCode = 1;
+  console.log(ok ? `${OK('cancelled')} ${job}` : `${WARN('nothing cancelled')} ${job} is not a running job`);
 }
 
 /** What the default tier runs the workspace on: a cloud workspace's as it says itself (its account's tier), a local
@@ -470,8 +463,8 @@ export function jobsCommand(name: string, action: string | undefined, id: string
           args: [job],
         }));
 
-        present({ id: job, ...cancelled }, opts, () =>
-          saidCancelled(job, cancelled.ok));
+        if (!cancelled.ok) process.exitCode = 1;
+        present({ id: job, ...cancelled }, opts, () => saidCancelled(job, cancelled.ok));
 
         return;
       }
@@ -493,8 +486,9 @@ export function jobsCommand(name: string, action: string | undefined, id: string
     if (cancelling) {
       const job = yield* required(id, 'job id');
       const cancelled = yield* Effect.promise(() => cancelLocalJob(target.localName, job, liveDaemonPid()));
-      present({ id: job, ...cancelled }, opts, () =>
-        saidCancelled(job, cancelled.ok));
+
+      if (!cancelled.ok) process.exitCode = 1;
+      present({ id: job, ...cancelled }, opts, () => saidCancelled(job, cancelled.ok));
 
       return;
     }

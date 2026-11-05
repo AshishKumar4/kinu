@@ -299,7 +299,8 @@ export function requireStoredAuthConfig(): LocalCloudSession {
 
 /** The deployment a stored sign-in was made at (`kinu auth` saves it), which alone may receive its token. */
 export function storedSessionOrigin(config: KinuConfig): string {
-  return (config.origin ?? defaultOrigin()).replace(/\/+$/, '');
+  // A sign-in saved with no origin predates saving it, and was made at kinu.run: never handed to another deployment.
+  return (config.origin ?? KINU_RUN_ORIGIN).replace(/\/+$/, '');
 }
 
 /** The stored session, refused where `KINU_ORIGIN` names another deployment: its token goes to its own alone. */

@@ -43,7 +43,8 @@ export function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequest<Id
         env, userId, userDO, caller: await ownerCaller(env), input, placement: placementFor(request.cf),
       }));
 
-      return json({ body: entry }, { status: 201 });
+      // An existing name answers with that workspace, unchanged: a retry is idempotent, and says nothing was made.
+      return json({ body: entry }, { status: entry.existed === true ? 200 : 201 });
     }), (failed) => Effect.gen(function* () {
       const cause = Cause.squash(failed);
       const error = authoredRefusal({ doing: 'creating this workspace', cause });
