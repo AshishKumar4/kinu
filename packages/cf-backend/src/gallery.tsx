@@ -110,7 +110,7 @@ import {
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubagentHistory, ownerAsks,
   DEFAULT_FILES_VIEW, FILES_PAGE_ENTRIES, FILES_VIEW_CONFIG_KEY, parseDeviceTier, seekPage, shownEntries, sortDirEntries, SubagentInspectionRequestSchema,
-  type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
+  type AdvisorSeverity, type AgentStatus, type KinuEvent, type JsonObject, type JsonValue, type SlateOperation, type PlanReview, type ReviewAnnotation,
   type OwedIntent, type PlanReviewDecision, type ProfileCatalogEnvelope, type SlateSummary, type SubagentInspectionRequest, type SubagentInspectionResult, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry } from "@kinu.run/core";
@@ -1307,6 +1307,8 @@ function rosterRead(search: URLSearchParams): Promise<Response> {
  *  registry no longer holds; the shell, and a pointer resting on a workspace, wake it ahead of its open
  *  (hooks/use-wake-ahead.ts). */
 const GALLERY_POSTS: readonly (readonly [RegExp, () => Response])[] = [
+  // A share frame's standing approvals: none before its first share.
+  [/^\/api\/shared\/live\/preapprovals$/, () => fixtureJson({ slate: "issue-triage", revision: "r2", preapproved: frame === "sharedialog-first" ? [] : STANDING })],
   [/^\/api\/user\/workspaces\/[^/]+\/touch$/, () => touchFixture()],
   [/^\/api\/workspaces\/[^/]+\/wake$/, () => new Response(null, { status: 204 })],
 ];
@@ -6114,20 +6116,37 @@ const STANDING: SharePreapproval[] = [
 /** A shared slate whose own files do not build alone: its preview refuses it, in the server's words. */
 const SHARED_REFUSAL = sharedBuildRefusal("issue-triage");
 
+/** The slate's own reads, as its workspace answers them: `first` is its first share, before anyone has it. */
+function shareAnswers(first: boolean): WorkspaceAnswers {
+  const reads: Partial<Record<SlateOperation["op"], JsonValue>> = {
+    graph: v.parse(JsonValueSchema, SHARE_GRAPH),
+    liveShares: v.parse(JsonValueSchema, first ? [] : [LIVE_SHARE, TEAM_SHARE]),
+    history: { versions: [{ id: "v1a8f3k2mz9q" }, { id: "v2k9q1c7xw4m" }], next: null },
+    shares: [{ id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] }],
+    inspect: v.parse(JsonValueSchema, BLUEPRINT_INSPECTION),
+    ...(first && { preview: { url: SLATE_GALLERY_URL, port: 8789, sized: false } }),
+  };
+
+  return {
+    ...WORK_ANSWERS,
+    slate: (operation) => {
+      const value = reads[operation.op];
+
+      if (value !== undefined) return { ok: true, value };
+
+      // The shared slate's own preview refuses as it would for its viewers.
+      return { ok: false, ...refusalOf(new KinuError("bad_input", operation.op === "preview" ? SHARED_REFUSAL : `This frame answers no slate ${operation.op}.`)) };
+    },
+  };
+}
+
 /** Live mode with capability graph and one public share, or blueprint mode at inspection (`sharedialog-blueprint`). */
-/** `first`: the slate's first share, before anyone has it, which asks what they start with. */
 function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint"; first?: boolean }) {
+  const rpc = useMemo(() => answeringRpc(shareAnswers(first)), [first]);
 
   return (
     <div className="h-screen p-bg p-text">
-      <ShareSlateDialog workspace="api-worker" slate="issue-triage" title="Issue triage" rpc={workRpc} onClose={() => {}}
-        fixture={{
-          mode,
-          live: first ? { graph: SHARE_GRAPH, liveShares: [] } : { graph: SHARE_GRAPH, liveShares: [LIVE_SHARE, TEAM_SHARE], refused: SHARED_REFUSAL, preapproved: STANDING },
-          blueprint: { versions: ["v1a8f3k2mz9q", "v2k9q1c7xw4m"], inspection: BLUEPRINT_INSPECTION, shares: [
-            { id: "k7Qm2pV9xRt3aB4c", slate: "issue-triage", publication: "p1", createdAt: NOW - 3 * 864e5, revokedAt: null, users: ["pat@example.com"] },
-          ] },
-        }} />
+      <ShareSlateDialog workspace="api-worker" slate="issue-triage" title="Issue triage" rpc={rpc} onClose={() => {}} opensOn={mode} />
     </div>
   );
 }
@@ -6136,9 +6155,12 @@ function ShareDialogFrame({ mode, first = false }: { mode: "live" | "blueprint";
 function BlueprintFrame() {
   const signedOut = new URLSearchParams(location.search).get("viewer") === "signedout";
 
+  STUB.set(`/api/shared/blueprint/${encodeURIComponent(BLUEPRINT_ID)}`, v.parse(JsonObjectSchema, BLUEPRINT_VIEW));
+  STUB.set("/api/auth/me", { user: signedOut ? null : { email: "me@example.com", signedInWith: "Google" } });
+
   return (
     <Routes>
-      <Route path="/shared/blueprint/:id" element={<BlueprintPage fixture={BLUEPRINT_VIEW} viewer={signedOut ? null : "me@example.com"} />} />
+      <Route path="/shared/blueprint/:id" element={<BlueprintPage />} />
     </Routes>
   );
 }

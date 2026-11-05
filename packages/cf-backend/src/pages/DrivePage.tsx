@@ -20,7 +20,7 @@ import {
   workspaceRoute,
 } from "@kinu.run/core";
 import { detach, diagnostics, showing, toKinuError, settle } from "@kinu.run/core/obs";
-import { useMediaQuery } from "@/hooks/use-media-query";
+import { WIDE_QUERY, useMediaQuery } from "@/hooks/use-media-query";
 import { ToolPage } from "@/components/ui/PageHeader";
 import { NavRow } from "@/components/ui/NavRow";
 import {
@@ -146,7 +146,7 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
   tab: DriveTab; path: string; shown: DriveListing | null; places: readonly DriveTab[]; unseen: boolean;
 }) {
   // Drawn only from `lg`; the tree in it reads nothing while it is not drawn.
-  const drawn = useMediaQuery("(min-width: 1024px)");
+  const drawn = useMediaQuery(WIDE_QUERY);
   const listings = useFolderWay(drawn && tab === "mine", path, shown);
 
   if (!drawn) return null;
@@ -180,7 +180,7 @@ function DriveColumn({ tab, path, shown, places, unseen }: {
 /** Below `lg`, the places as the row under the bar; with one place there is nothing to switch. */
 /** Below `lg`, where the places column is not drawn, the places are the tool's row under its header. */
 function PlacesRow({ tab, places, unseen }: { tab: DriveTab; places: readonly DriveTab[]; unseen: boolean }) {
-  const column = useMediaQuery("(min-width: 1024px)");
+  const column = useMediaQuery(WIDE_QUERY);
 
   if (column || places.length < 2) return null;
 

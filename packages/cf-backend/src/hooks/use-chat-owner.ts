@@ -110,17 +110,10 @@ export interface ProviderWaitShown {
   readonly retries?: number;
 }
 
-export function useChatOwner(target: string | KinuActorAddress | undefined, extension: RefObject<WorkspaceExtension | null> | null) {
-  const workspace = typeof target === "string" ? target : target?.workspace;
-  const subagent = typeof target === "string" ? undefined : target?.subagent;
+export function useChatOwner(target: KinuActorAddress, extension: RefObject<WorkspaceExtension | null> | null) {
+  const { workspace, subagent } = target;
 
-  const actorAddress = useMemo<KinuActorAddress>(() => {
-    const address: KinuActorAddress = { workspace: workspace === undefined || workspace === "" ? "default" : workspace };
-
-    if (subagent) address.subagent = subagent;
-
-    return address;
-  }, [workspace, subagent]);
+  const actorAddress = useMemo<KinuActorAddress>(() => (subagent ? { workspace, subagent } : { workspace }), [workspace, subagent]);
 
   const actorKey = useMemo(
     () => JSON.stringify([actorAddress.workspace, subagent ?? null]),

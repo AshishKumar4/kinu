@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { CheckCircleIcon, ChatCircleDotsIcon, NotePencilIcon, TrashIcon } from "@phosphor-icons/react";
@@ -241,6 +241,7 @@ function PlanHeaderActions({ comments, unread, panelOpen, onToggle, mode, onMode
   );
 }
 
+/** Keyed by its caller on the plan and its revision: a new revision opens fresh, its notes read again. */
 export default function PlanReviewView({ plan, rpc, readOnly = false, agentName = "Kinu", owedIntents }: PlanReviewViewProps) {
   const [notes, setNotes] = useState<ReviewAnnotation[]>(() => notesOf(plan));
   const [selected, setSelected] = useState<string | null>(null);
@@ -279,14 +280,6 @@ export default function PlanReviewView({ plan, rpc, readOnly = false, agentName 
       return false;
     }
   }), [planId, planKey, planRevision, rpc]);
-
-  useEffect(() => {
-    setNotes(notesOf(plan));
-    setSelected(null);
-    setPanelOpen(false);
-    setSaving(false);
-    setError(null);
-  }, [plan?.id, plan?.revision]);
 
   const editable = !readOnly && plan?.status === "pending";
   const decisionOwed = decisionOwedFor(owedIntents, plan?.id);

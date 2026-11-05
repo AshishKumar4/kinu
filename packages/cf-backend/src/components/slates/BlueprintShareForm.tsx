@@ -26,12 +26,6 @@ export function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unk
   }));
 }
 
-export interface BlueprintFixture {
-  versions: string[];
-  inspection: BlueprintInspection;
-  shares: SlateShareRecord[];
-}
-
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
@@ -41,7 +35,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending, fixture }: {
+export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onListingPending }: {
   workspace: string;
   slate: string;
   rpc: WorkspaceRpc;
@@ -49,13 +43,12 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
   /** The dialog owns the busy state so its backdrop stops dismissing mid-write. */
   onBusy: (busy: boolean) => void;
   onListingPending?: () => void;
-  fixture?: BlueprintFixture;
 }) {
-  const [versions, setVersions] = useState<string[] | null>(fixture?.versions ?? null);
-  const [version, setVersion] = useState<string | null>(fixture?.versions.at(-1) ?? null);
+  const [versions, setVersions] = useState<string[] | null>(null);
+  const [version, setVersion] = useState<string | null>(null);
   const [include, setInclude] = useState<Set<string> | null>(null);
-  const [inspection, setInspection] = useState<BlueprintInspection | null>(fixture?.inspection ?? null);
-  const [shares, setShares] = useState<SlateShareRecord[]>(fixture?.shares ?? []);
+  const [inspection, setInspection] = useState<BlueprintInspection | null>(null);
+  const [shares, setShares] = useState<SlateShareRecord[]>([]);
   const [emails, setEmails] = useState("");
   const [busy, setBusyState] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -63,7 +56,6 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
   const setBusy = useCallback((next: boolean) => { setBusyState(next); onBusy(next); }, [onBusy]);
 
   useEffect(() => {
-    if (fixture !== undefined) return;
     let live = true;
 
     const versionIds = async (): Promise<string[]> => {
@@ -86,16 +78,16 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
     }), showing((chain) => { if (live) setErr(chain); })));
 
     return () => { live = false; };
-  }, [fixture, rpc, slate]);
+  }, [rpc, slate]);
 
   // Every choice re-inspects: the warnings describe exactly the bytes that would ship.
   useEffect(() => {
-    if (fixture !== undefined || version === null) return;
+    if (version === null) return;
     let live = true;
     detach(Effect.catchCause(Effect.map(Effect.promise(() => rpc("slate", [{ op: "inspect", id: slate, version, include: include === null ? undefined : [...include] }])), (result) => { if (live) setInspection(answered(result, BlueprintInspectionSchema)); }), showing((chain) => { if (live) setErr(chain); })));
 
     return () => { live = false; };
-  }, [fixture, rpc, slate, version, include]);
+  }, [rpc, slate, version, include]);
 
   const topLevel = inspection === null ? [] : [...new Set(inspection.entries.map((entry) => entry.path.split("/")[0] ?? entry.path))];
   const includes = (name: string) => include === null ? true : include.has(name);

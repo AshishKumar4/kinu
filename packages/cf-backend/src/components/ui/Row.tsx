@@ -49,7 +49,7 @@ export function Row({ tile, title, meta, status, control, action, below, selecte
 }
 
 /** The `+` of an addable row: a 28 ghost square in the row's last cell, on the x of a connected row's ⋯. */
-export const ROW_ACTION = "p-row-action";
+const ROW_ACTION = "p-row-action";
 
 /** The row's own small press at its end (a ⋯'s place): `+` to add, × to cancel. */
 export function RowAction({ type = "button", ...rest }: Omit<ComponentProps<"button">, "className">) {
