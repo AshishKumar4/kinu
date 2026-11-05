@@ -85,6 +85,6 @@
     "packages/core/src/strategy/fanin.ts#catch": 1,
     "packages/core/src/utils/markdown-frontmatter.ts#error-class": 1,
     "packages/core/src/utils/send-admission.ts#promise-rejection": 1,
-    "packages/core/src/vfs/context-plane.ts#throw": 23
+    "packages/core/src/vfs/context-plane.ts#throw": 14
   }
 }
