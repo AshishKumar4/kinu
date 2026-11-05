@@ -42,7 +42,10 @@ const loading = (page: ReactNode): ReactNode => (
   <Suspense fallback={<div className="flex h-full items-center justify-center"><Loader size="base" /></div>}>{page}</Suspense>
 );
 
-/** The route on screen: the one socket answers as the assistant on Home and as its own workspace elsewhere. */
+/** The assistant's own pages (its Activity): its chat and socket, as on Home. */
+const ASSISTANT_PATH = "/workspace/personal-assistant";
+
+/** The route on screen: the one socket answers as the assistant on Home and its own pages, and as its own workspace elsewhere. */
 let onScreen = "";
 
 /** Mounted before the routes, so a page's chat is seeded before it opens its socket: Home is the assistant's morning. */
@@ -52,7 +55,7 @@ function Seeder({ transcript }: { transcript: (name: string) => void }) {
   if (pathname !== onScreen) {
     onScreen = pathname;
 
-    if (pathname === APP_ROUTES.home) seedGalleryChat(ASSISTANT_THREAD);
+    if (pathname === APP_ROUTES.home || pathname.startsWith(ASSISTANT_PATH)) seedGalleryChat(ASSISTANT_THREAD);
     else if (pathname.startsWith("/workspace/")) transcript("longturn");
   }
 
@@ -112,7 +115,7 @@ function WholeApp({ transcript }: { transcript: (name: string) => void }) {
 export function appFrame(base: SocketCall, transcript: (name: string) => void) {
   const assistant = assistantRpc(base);
 
-  serveGalleryRpc(<T,>(method: string, args?: unknown[]): Promise<T> => (onScreen === APP_ROUTES.home ? assistant<T>(method, args) : base<T>(method, args)));
+  serveGalleryRpc(<T,>(method: string, args?: unknown[]): Promise<T> => (onScreen === APP_ROUTES.home || onScreen.startsWith(ASSISTANT_PATH) ? assistant<T>(method, args) : base<T>(method, args)));
   installExploreFixture();
   installMailPageFixture();
   installGalleryFixture("whole", EXPLORE_LISTINGS);

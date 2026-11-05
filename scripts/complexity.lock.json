@@ -11,7 +11,7 @@
     },
     {
       "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 53
+      "complexity": 5
     },
     {
       "key": "packages/devbox/bench/worker.ts#fetch",
@@ -242,11 +242,11 @@
       "complexity": 26
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
+      "key": "packages/cf-backend/src/gallery-stubs.tsx#mcpServersFixture",
       "complexity": 26
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#settingsSectionsFixture",
+      "key": "packages/cf-backend/src/gallery-stubs.tsx#settingsSectionsFixture",
       "complexity": 26
     },
     {
@@ -342,7 +342,7 @@
       "complexity": 25
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#assign",
+      "key": "packages/cf-backend/src/gallery-stubs.tsx#assign",
       "complexity": 25
     },
     {
