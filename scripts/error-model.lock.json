@@ -29,8 +29,6 @@
     "packages/cli/src/cloud-agent-client.ts#catch": 6,
     "packages/cli/src/cloud-agent-client.ts#throw": 11,
     "packages/cli/src/local-agent-client.ts#throw": 4,
-    "packages/compaction/src/extension.ts#catch": 1,
-    "packages/compaction/src/extension.ts#throw": 1,
     "packages/core/src/cli/bun-runtime.ts#throw": 1,
     "packages/core/src/delegation/agents-tool.ts#catch": 2,
     "packages/core/src/delegation/agents-tool.ts#throw": 18,
@@ -90,8 +88,6 @@
     "packages/core/src/strategy/fanin.ts#catch": 1,
     "packages/core/src/utils/markdown-frontmatter.ts#error-class": 1,
     "packages/core/src/utils/send-admission.ts#promise-rejection": 1,
-    "packages/core/src/vfs/context-plane.ts#throw": 23,
-    "packages/test-utils/src/llm.ts#throw": 1,
-    "packages/test-utils/src/runtime.ts#throw": 1
+    "packages/core/src/vfs/context-plane.ts#throw": 23
   }
 }
