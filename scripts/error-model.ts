@@ -572,6 +572,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     const parsed = parse(file, text);
     const runners = new Set<string>();
     const syncRunners = new Set<string>();
+    const settleNames = new Set<string>();
     const flightNames = new Set<string>();
     const detachNames = new Set<string>();
 
@@ -589,6 +590,8 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
           runners.add(specifier.local.name);
 
           if (specifier.imported.name === 'settleSync') syncRunners.add(specifier.local.name);
+
+          if (specifier.imported.name === 'settle') settleNames.add(specifier.local.name);
 
           if (specifier.imported.name === 'detach') detachNames.add(specifier.local.name);
         }
@@ -670,7 +673,8 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
 
       const callback = holder.raw.type === 'ReturnStatement' ? holder : { parent: holder };
 
-      if (syncRunners.has(raw.callee.name) ? platformCallback(callback, 'transactionSync') : platformCallback(callback, 'blockConcurrencyWhile')) {
+      if ((syncRunners.has(raw.callee.name) && platformCallback(callback, 'transactionSync'))
+        || (settleNames.has(raw.callee.name) && platformCallback(callback, 'blockConcurrencyWhile'))) {
         bridges.push(site);
 
         return;
