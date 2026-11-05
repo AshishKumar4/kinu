@@ -246,11 +246,11 @@
       "complexity": 26
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#mcpServersFixture",
+      "key": "packages/cf-backend/src/gallery-stubs.tsx#mcpServersFixture",
       "complexity": 26
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#settingsSectionsFixture",
+      "key": "packages/cf-backend/src/gallery-stubs.tsx#settingsSectionsFixture",
       "complexity": 26
     },
     {
@@ -346,7 +346,7 @@
       "complexity": 25
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#assign",
+      "key": "packages/cf-backend/src/gallery-stubs.tsx#assign",
       "complexity": 25
     },
     {

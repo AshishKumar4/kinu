@@ -282,12 +282,33 @@ function DoneRows({ done }: { done: readonly Done[] }) {
   ));
 }
 
+/** A log with something in it: its filter, then each part the filter shows. */
+function LogBody({ log }: { log: Log }) {
+  const [shown, setShown] = useState<Shown>("all");
+  const show = (part: Shown): boolean => shown === "all" || shown === part;
+
+  return (
+    <>
+      <Segmented label="Show" value={shown} onChange={setShown} segments={[
+        { id: "all", label: "All" },
+        { id: "waiting", label: "Needs you", ...(log.waiting.length > 0 && { count: log.waiting.length }) },
+        { id: "coming", label: "Upcoming", ...(log.coming.length > 0 && { count: log.coming.length }) },
+        { id: "done", label: "Done" },
+      ]} />
+      {show("done") && log.now.length > 0 && <Section id="now" title="Now"><NowRows running={log.now} /></Section>}
+      {show("waiting") && log.waiting.length > 0 && <Section id="waiting" title="Needs you" count={log.waiting.length}><WaitingRows waiting={log.waiting} /></Section>}
+      {show("waiting") && shown === "waiting" && log.waiting.length === 0 && <p className="t-body p-text-3">Nothing waits on you.</p>}
+      {show("coming") && log.coming.length > 0 && <Section id="coming" title="Upcoming"><ComingRows coming={log.coming} /></Section>}
+      {show("done") && <DoneRows done={log.done} />}
+      {show("done") && log.done.length > 0 && <p className="t-meta text-center p-text-3">{countOf(log.done.length, "thing")} done in two days · <button type="button" className="p-link">Show earlier</button></p>}
+    </>
+  );
+}
+
 /** The log at a workspace's Activity, where the shipped one stands. */
 function ActivityLogMockup({ workspace, title }: { workspace: string; title: string }) {
   const state = stateIn(useLocation().search);
   const log = logFor(state);
-  const [shown, setShown] = useState<Shown>("all");
-  const show = (part: Shown): boolean => shown === "all" || shown === part;
 
   return (
     <Page fill back={{ to: workspaceRoute(workspace), label: `Back to ${title}` }} icon={<ClockCounterClockwiseIcon size={18} />} title="Activity" data-activity-log={state}>
@@ -296,22 +317,7 @@ function ActivityLogMockup({ workspace, title }: { workspace: string; title: str
       {log !== null && log.done.length === 0 && log.coming.length === 0 && log.now.length === 0 && (
         <Empty icon={ClockCounterClockwiseIcon} title="Nothing yet">What its agents do, and what they will do next, shows here as it happens.</Empty>
       )}
-      {log !== null && (log.done.length > 0 || log.coming.length > 0 || log.now.length > 0) && (
-        <>
-          <Segmented label="Show" value={shown} onChange={setShown} segments={[
-            { id: "all", label: "All" },
-            { id: "waiting", label: "Needs you", ...(log.waiting.length > 0 && { count: log.waiting.length }) },
-            { id: "coming", label: "Upcoming", ...(log.coming.length > 0 && { count: log.coming.length }) },
-            { id: "done", label: "Done" },
-          ]} />
-          {show("done") && log.now.length > 0 && <Section id="now" title="Now"><NowRows running={log.now} /></Section>}
-          {show("waiting") && log.waiting.length > 0 && <Section id="waiting" title="Needs you" count={log.waiting.length}><WaitingRows waiting={log.waiting} /></Section>}
-          {show("waiting") && shown === "waiting" && log.waiting.length === 0 && <p className="t-body p-text-3">Nothing waits on you.</p>}
-          {show("coming") && log.coming.length > 0 && <Section id="coming" title="Upcoming"><ComingRows coming={log.coming} /></Section>}
-          {show("done") && <DoneRows done={log.done} />}
-          {show("done") && log.done.length > 0 && <p className="t-meta text-center p-text-3">{countOf(log.done.length, "thing")} done in two days · <button type="button" className="p-link">Show earlier</button></p>}
-        </>
-      )}
+      {log !== null && (log.done.length > 0 || log.coming.length > 0 || log.now.length > 0) && <LogBody log={log} />}
     </Page>
   );
 }
