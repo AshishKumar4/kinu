@@ -13,6 +13,7 @@ import type { AuthIdentity } from './session';
 import type { OAuthProviderId } from '@kinu.run/core/identity';
 import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { AdmittedBrowserSession, UserDO } from '../user/user-do';
+import { UNPLACED, type WorkspacePlacement } from '../user/workspace-placement';
 import type { BrowserSessionIdentity } from '../user/sessions';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { objectNamed, randomToken, sha256Hex } from '@kinu.run/core';
@@ -187,10 +188,12 @@ export function parseSessionTokenUserId(token: string): string | null {
   return match?.[1] ?? null;
 }
 
-export function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile): Promise<BrowserSession> {
+/** `placement`: where the account's object runs if this sign-in is the one that makes it (`placementFor` of the
+ *  sign-in's request; a sign-in from nowhere known, as a test's, is placed as an unknown place is). */
+export function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, placement: WorkspacePlacement = UNPLACED): Promise<BrowserSession> {
   return settle(Effect.gen(function* () {
     const now = Date.now();
-    const identity = yield* resolveIdentity(env, profile, now);
+    const identity = yield* resolveIdentity(env, profile, now, placement);
     const token = `ps_${identity.userId}_${randomToken(48)}`;
     const tokenHash = sha256Hex(token);
     const expiresAt = now + SESSION_TTL_MS;
@@ -277,7 +280,7 @@ function sessionAuthority<Id>(env: AuthStoreEnv<Id>, userId: string): SessionAut
   return objectNamed(env.UserDO, userId);
 }
 
-function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number): Effect.Effect<AuthIdentity, KinuError> {
+function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number, placement: WorkspacePlacement): Effect.Effect<AuthIdentity, KinuError> {
   return Effect.gen(function* () {
     const email = profile.email.trim().toLowerCase();
 
@@ -294,7 +297,8 @@ function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: 
 
     const userId = accountIdFor(env, email);
 
-    const stored = yield* Effect.promise(async () => sessionAuthority(env, userId)
+    // The account's first reach, which makes its object where every provider answers.
+    const stored = yield* Effect.promise(async () => env.UserDO.get(env.UserDO.idFromName(userId), { locationHint: placement })
       .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined));
 
     return {

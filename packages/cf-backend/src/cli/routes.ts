@@ -59,7 +59,7 @@ const DeviceRegistrationRequestSchema = v.object({
 
 export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWorkspaceRegistry & Pick<
   UserDO,
-  'revokeCliTokenHash' | 'listCliTokens' | 'revokeAllCliTokens'
+  'revokeCliTokenHash' | 'listCliTokens' | 'revokeAllCliTokens' | 'testModel'
   | 'listAccessTokens' | 'mintAccessToken' | 'revokeAccessToken'
   | 'issueCliAgentConnectTicket' | 'registerDevice'
   | 'hasWorkspace' | 'workspaceAdmission' | 'requestWorkspaceRemoval' | 'listDevices' | 'listActiveWorkspaces'

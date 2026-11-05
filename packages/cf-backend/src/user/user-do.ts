@@ -58,6 +58,8 @@ import { GitHubHooks, type GitHubHookAsk } from './github-hooks';
 import { UserWorkspaces, type WorkspaceAdmission, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
 import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
+import { testAvailableModel } from './available-models';
+import type { ModelTestResult } from '@kinu.run/core';
 import {
   EffectApprovals, SlateConsentSchema, SlateConsentStore, partAiCall, partCallVerdict, resolvePartCall,
   type PartAiAnswer, type PartConnectionAnswer, type SlateAiRoute, type SlateConsent,
@@ -340,6 +342,14 @@ export class UserDO extends Agent<Env> {
    * A slate's `workspace.ai` call for this account's own personal part: run with this account's
    * own catalog, credentials and spend (`slate-ai-account.ts`), never the slate owner's.
    */
+  /** Settings' test of a model and its key, made from this object: it runs where every provider answers
+   *  (`workspace-placement.ts`), and the Worker in front of it runs wherever the person is. */
+  async testModel(caller: UserCaller, spec: string): Promise<ModelTestResult> {
+    await this.requireTier(caller, 'credentials.model');
+
+    return testAvailableModel({ env: this.env, account: () => this, caller, spec, signal: new AbortController().signal });
+  }
+
   async slateAi(caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
     await this.requireTier(caller, 'credentials.model');
 

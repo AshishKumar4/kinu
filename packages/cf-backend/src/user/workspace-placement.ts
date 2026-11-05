@@ -1,6 +1,7 @@
-// Where a new workspace's object runs: a region every model provider serves, near whoever made it. An object runs where
-// it was first reached and never moves, and one first reached from Asia with no hint, or with `apac`, can run in Hong
-// Kong, where Anthropic and OpenAI refuse every call (PLATFORM_CATALOG `do.placement.location_hint`).
+// Where a new workspace's or account's object runs: a region every model provider serves, near whoever made it. An object
+// runs where it was first reached and never moves, and one first reached from Asia with no hint, or with `apac`, can run
+// in Hong Kong, where Anthropic and OpenAI refuse every call (PLATFORM_CATALOG `do.placement.location_hint`). An account's
+// object is first reached by its first sign-in; one made before 2026-11-05 stays where that sign-in put it.
 import * as v from 'valibot';
 
 /** The location hints whose data centers are all in countries the providers serve; never `apac`. */

@@ -100,17 +100,18 @@ export async function listProviderCatalog<Id>(
   );
 }
 
-export async function testAvailableModel<Id>(input: {
-  readonly env: AvailableModelsEnv<Id>;
-  readonly userId: string;
+/** Tests `spec` with the account's own credentials, read from `account`, the account's object, by the call that makes it. */
+export async function testAvailableModel(input: {
+  readonly env: ProviderEnv;
+  readonly account: () => UserCredentialClient;
   readonly caller: UserCaller;
   readonly spec: string;
   readonly signal: AbortSignal;
 }): Promise<ModelTestResult> {
-  const { env, userId, caller } = input;
+  const { env, caller } = input;
 
   const registry = createAgentProviderRegistry({
-    env, userDO: userCredentials(() => objectNamed(env.UserDO, userId), caller), fetch, catalogShelf: colocatedCatalogShelf,
+    env, userDO: userCredentials(input.account, caller), fetch, catalogShelf: colocatedCatalogShelf,
   });
 
   return testModel({ spec: input.spec, resolve: (spec, affinity) => registry.resolveModel(spec, affinity), signal: input.signal });

@@ -18,6 +18,7 @@ import {
 } from '@kinu.run/core/identity';
 import type { UserDO } from '../user/user-do';
 import type { ApiVariables, FamilyEnv } from '../api/context';
+import { placementFor } from '../user/workspace-placement';
 import type { ObjectNamespace } from '@kinu.run/core';
 
 type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
@@ -66,7 +67,7 @@ async function reserve<Id>(env: BuiltinAuthEnv<Id>, attempt: readonly AttemptBuc
 }
 
 async function signedIn<Id>(env: BuiltinAuthEnv<Id>, request: Request, profile: OAuthProfile, returnTo: string): Promise<Response> {
-  const session = await createSession(env, profile);
+  const session = await createSession(env, profile, placementFor(request.cf));
   const headers = new Headers({ 'cache-control': 'no-store' });
 
   headers.append('set-cookie', sessionCookie(session));
