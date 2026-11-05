@@ -251,7 +251,8 @@ test("a retirement its Mailbox did not answer is asked again by the deletion, wh
   await user.userDO.registerWorkspace(owner, 'ledger');
   await user.userDO.requestWorkspaceRemoval(owner, 'ledger', OWNER);
 
-  for (let alarm = 0; alarm < 3 && user.mailRetired.length === 0; alarm++) {
+  // Each alarm runs the deletion's job as the platform's would, until its retirement lands.
+  while (user.mailRetired.length === 0) {
     user.db.run("UPDATE cf_agents_jobs SET time = 0 WHERE id LIKE 'workspace-deletion:%'");
     await user.userDO.alarm();
   }
