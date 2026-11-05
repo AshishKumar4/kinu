@@ -509,11 +509,12 @@ describe('the CLI session inventory', () => {
 
   test('a bearer\'s check answers the admission of the workspace its request names, and only for a good bearer', async () => {
     const { harness, owner, device } = await account();
+    const forged = `${device.token.slice(0, -1)}${device.token.endsWith('x') ? 'y' : 'x'}`;
 
     const answers = [
       await harness.userDO.verifyCliToken(owner, device.token, 'workspace-a'),
       await harness.userDO.verifyCliToken(owner, device.token, 'not-a-workspace'),
-      await harness.userDO.verifyCliToken(owner, `${device.token.slice(0, -1)}x`, 'workspace-a'),
+      await harness.userDO.verifyCliToken(owner, forged, 'workspace-a'),
     ];
 
     expect(answers.map((answer) => ({ ok: answer.ok, admitted: answer.admission === undefined ? 'unasked' : answer.admission !== null })))
