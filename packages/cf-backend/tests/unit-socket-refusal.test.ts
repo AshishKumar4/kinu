@@ -41,30 +41,13 @@ function closingSocket() {
   return { socket, sent, closed };
 }
 
-test('two frames refused together: one answer, one close, and nothing thrown', async () => {
-  const user = createTestUserDO();
-  const asked: (() => void)[] = [];
-  const bothAsked = Promise.withResolvers<void>();
-
-  users.push(user);
-  // Each frame's check waits until both are asked: they are refused together, as a deleted workspace's were.
-  user.userDO.verifySocketSession = async () => {
-    const { promise, resolve } = Promise.withResolvers<void>();
-
-    asked.push(resolve);
-
-    if (asked.length === 2) bothAsked.resolve();
-    await promise;
-
-    return { live: false };
-  };
-
+async function gate(user: TestUserDO, onMessage: ClientHandlers['onMessage']) {
   const owner = await testOwner();
   const unreached = async (): Promise<never> => { throw new Error('a refused frame reaches nothing past the gate'); };
 
-  const base: ClientHandlers = { onMessage: unreached, onConnect: unreached, onClose: unreached, onRequest: unreached };
+  const base: ClientHandlers = { onMessage, onConnect: unreached, onClose: unreached, onRequest: unreached };
 
-  const handlers = gatedClientHandlers({
+  return gatedClientHandlers({
     storageRefusal: () => undefined,
     runtimeRefusal: () => null,
     terminalFor: async () => null,
@@ -81,15 +64,63 @@ test('two frames refused together: one answer, one close, and nothing thrown', a
     caller: async () => owner,
     workspace: () => 'refused-together',
   }, base);
+}
 
+const rpc = (id: string) => JSON.stringify({ type: 'rpc', id, method: 'awaitSend', args: ['m1'] });
+
+test('two frames refused together: one answer, one close, and nothing thrown', async () => {
+  const user = createTestUserDO();
+  const asking = Promise.withResolvers<void>();
+  const answer = Promise.withResolvers<void>();
+
+  users.push(user);
+  // The check waits until both frames are in: they are refused together, as a deleted workspace's were.
+  user.userDO.verifySocketSession = async () => {
+    asking.resolve();
+    await answer.promise;
+
+    return { live: false };
+  };
+
+  const handlers = await gate(user, async () => { throw new Error('a refused frame reaches nothing past the gate'); });
   const { socket, sent, closed } = closingSocket();
-  const rpc = (id: string) => JSON.stringify({ type: 'rpc', id, method: 'awaitSend', args: ['m1'] });
   const handled = [handlers.onMessage(socket, rpc('first')), handlers.onMessage(socket, rpc('second'))];
 
-  await bothAsked.promise;
-
-  for (const answer of asked) answer();
+  await asking.promise;
+  answer.resolve();
 
   expect(await Promise.allSettled(handled)).toEqual([{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }]);
   expect({ answered: sent.length, closed: closed.length }).toEqual({ answered: 1, closed: 1 });
+});
+
+test("a burst of frames asks the account once whether its session is live, and a revocation refuses the next frame", async () => {
+  const user = createTestUserDO();
+  let live = true;
+  let asked = 0;
+  const answer = Promise.withResolvers<void>();
+
+  users.push(user);
+
+  user.userDO.verifySocketSession = async () => {
+    asked += 1;
+    await answer.promise;
+
+    return { live };
+  };
+
+  let passed = 0;
+  const handlers = await gate(user, async () => { passed += 1; });
+  const { socket, closed } = closingSocket();
+  // Binary frames, as a shell's keystrokes come: the gate passes them straight to the actor once their check holds.
+  const burst = ['a', 'b', 'c', 'd', 'e'].map((id) => handlers.onMessage(socket, new TextEncoder().encode(id)));
+
+  answer.resolve();
+  await Promise.all(burst);
+  const burstAsked = asked;
+
+  // Revoked once the burst's check settled: the next frame's check is asked afresh, and refuses it.
+  live = false;
+  await handlers.onMessage(socket, new TextEncoder().encode('after'));
+
+  expect({ burstAsked, passed, asked, closed: closed.length }).toEqual({ burstAsked: 1, passed: 5, asked: 2, closed: 1 });
 });
