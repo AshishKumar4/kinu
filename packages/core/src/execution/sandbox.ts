@@ -3,7 +3,7 @@ import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 
 import * as v from 'valibot';
 import { abortedBeforeStart } from '@kinu.run/agent-utils';
-import { Effect } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
 import { commandTool, ExecutorPortSchema, type ExecutorTool, type ExecutorToolResult } from './types';
 import { shellCall } from './command-call';
@@ -13,8 +13,8 @@ import type { CheckpointFiles, OutputSink, VfsDigestWrite } from '../types/primi
 import { JOB_STAMP_ENV, newJobId, type AdoptsJobs } from '../types/jobs';
 import { currentWorkMode } from './work-mode';
 import { commandAnswer, ExecPartsSchema, type ExecOutcome } from './exec-result';
-import { classifyErrorCode, KinuError, refusalOf, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
-import { isVfsError, isVfsErrorCode, syscallError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { classifyErrorCode, KinuError, refusalOf, settle, tolerated, toKinuError, type Refusal } from '../obs/index';
+import { isVfsError, isVfsErrorCode, syscallError, type VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { parseInput, projectJsonValue, type JsonValue } from '../utils/json';
@@ -818,94 +818,80 @@ export function sandboxFiles(
   /** The digest writes this plane holds answers for: the guest keeps each answer until a later write names it here. */
   const settled: string[] = [];
 
-  const serving = async <T>(path: string, syscall: string, op: () => Promise<T>): Promise<T> => {
-    try {
-      return await ownerComputerCall(() => through(op));
-    } catch (cause) {
-      if (!(cause instanceof Error)) throw cause;
+  /** The call through the owner's computer access; a failure the guest names by its errno is that errno, any other
+   *  failure is what it was. */
+  const serving = <T>(path: string, syscall: string, op: () => Promise<T>): Effect.Effect<T, VfsError> => Effect.catchCause(
+    Effect.promise(async () => ownerComputerCall(() => through(op))),
+    (cause) => {
+      const thrown = Cause.squash(cause);
+      const code = thrown instanceof Error ? errnoOf(thrown) : null;
 
-      const code = errnoOf(cause);
+      return code === null ? Effect.failCause(cause) : Effect.fail(syscallError(code, syscall, path, { cause: thrown, ...(thrown instanceof KinuError && { detail: thrown.message }) }));
+    },
+  );
 
-      if (code === null) throw cause;
-
-      throw syscallError(code, syscall, path, { cause, ...(cause instanceof KinuError && { detail: cause.message }) });
-    }
-  };
+  const exited = (path: string, syscall: string, r: { readonly exitCode?: number | null; readonly stderr: string }): Effect.Effect<void, VfsError> => ((r.exitCode ?? 0) === 0
+    ? Effect.void
+    : Effect.fail(syscallError('EIO', syscall, path, { detail: r.stderr.trim() || undefined })));
 
   return {
-    async readFile(path) {
-      const result = await serving(path, 'open', () => handle.readFile(path, { encoding: 'base64' }));
+    readFile(path) {
+      return settle(Effect.flatMap(serving(path, 'open', () => handle.readFile(path, { encoding: 'base64' })), (result) => {
+        if (result.exitCode != null && result.exitCode !== 0) {
+          return Effect.fail(syscallError('ENOENT', 'open', path, { detail: `no such file or directory (exit ${result.exitCode})` }));
+        }
 
-      if (result.exitCode != null && result.exitCode !== 0) {
-        throw syscallError('ENOENT', 'open', path, { detail: `no such file or directory (exit ${result.exitCode})` });
-      }
-
-      return result.encoding === 'base64' ? base64ToBytes(result.content ?? '') : new TextEncoder().encode(result.content ?? '');
+        return Effect.succeed(result.encoding === 'base64' ? base64ToBytes(result.content ?? '') : new TextEncoder().encode(result.content ?? ''));
+      }));
     },
 
     /** Bounded window via `dd` + base64; the SDK's `readFile` has no offset/length. Bounds validated before use. */
-    async readRange(path, offset, length) {
+    readRange(path, offset, length) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-        throw syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' });
+        return settle(Effect.fail(syscallError('EIO', 'read', path, { detail: 'range offset and length must be positive safe integers' })));
       }
 
-      const r = await serving(path, 'read', () => handle.exec(
+      return settle(Effect.flatMap(serving(path, 'read', () => handle.exec(
         `set -o pipefail; dd if=${shellQuote(path)} bs=1 skip=${String(offset)} count=${String(length)} status=none | base64 -w 0`,
-      ));
-
-      if ((r.exitCode ?? 0) !== 0) {
-        throw syscallError('EIO', 'read', path, { detail: r.stderr.trim() || undefined });
-      }
-
-      return base64ToBytes(r.stdout);
+      )), (r) => Effect.as(exited(path, 'read', r), base64ToBytes(r.stdout))));
     },
 
-    async writeFileIfDigest(path, data, expected) {
+    writeFileIfDigest(path, data, expected) {
       // One name for every send: a retry after a lost reply is answered what the guest did the first time.
       const operation = crypto.randomUUID();
       // Each earlier write this plane has an answer for, or gave up on: its answer goes with this send.
       const retiring = settled.splice(0);
 
-      let answered = false;
-
-      try {
-        const answer = await serving(path, 'open', () => handle.writeFileIfDigest({ path, contentBase64: bytesToBase64(data), expected, operation, settled: retiring }));
-
-        answered = true;
-
-        return answer;
-      } finally {
-        // A send with no answer may not have reached the guest: the next one names those again.
-        if (!answered) settled.push(...retiring);
-        settled.push(operation);
-      }
+      return settle(serving(path, 'open', () => handle.writeFileIfDigest({ path, contentBase64: bytesToBase64(data), expected, operation, settled: retiring })).pipe(
+        Effect.onExit((exit) => Effect.sync(() => {
+          // A send with no answer may not have reached the guest: the next one names those again.
+          if (Exit.isFailure(exit)) settled.push(...retiring);
+          settled.push(operation);
+        })),
+      ));
     },
 
-    async writeFile(path, data) {
-      await serving(path, 'open', () => handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }));
+    writeFile(path, data) {
+      return settle(Effect.asVoid(serving(path, 'open', () => handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }))));
     },
 
-    async readdir(path) {
-      const result = await serving(path, 'scandir', () => handle.listFiles(path, { recursive: false }));
-
-      return result.files.map(entry => ({ name: entry.name, type: direntType(entry.type), stat: statOf(entry) }));
+    readdir(path) {
+      return settle(Effect.map(serving(path, 'scandir', () => handle.listFiles(path, { recursive: false })), (result) => result.files.map(entry => ({
+        name: entry.name, type: direntType(entry.type), stat: statOf(entry),
+      }))));
     },
 
-    async stat(path, options) {
-      const stat = await tolerateAsync(() => serving(path, options?.follow === false ? 'lstat' : 'stat', () => handle.statFile(path, options)), 'enoent');
-
-      return stat === undefined ? null : statOf(stat);
+    stat(path, options) {
+      return settle(Effect.map(
+        tolerated(serving(path, options?.follow === false ? 'lstat' : 'stat', () => handle.statFile(path, options)), 'enoent'),
+        (stat) => (stat === undefined ? null : statOf(stat)),
+      ));
     },
 
-    async unlink(path) { await serving(path, 'unlink', () => handle.deleteFile(path)); },
+    unlink(path) { return settle(Effect.asVoid(serving(path, 'unlink', () => handle.deleteFile(path)))); },
 
-    async mkdir(path, opts) {
-      const r = await serving(path, 'mkdir', () => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`));
-
-      if ((r.exitCode ?? 0) !== 0) {
-        throw syscallError('EIO', 'mkdir', path, { detail: r.stderr.trim() || undefined });
-      }
+    mkdir(path, opts) {
+      return settle(Effect.flatMap(serving(path, 'mkdir', () => handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`)), (r) => exited(path, 'mkdir', r)));
     },
-
   };
 }
