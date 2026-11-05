@@ -1235,7 +1235,7 @@ export { recallForTurn, type RecallSources } from './memory/turn-recall';
 // Memory writes
 export { memoryBytes } from './memory/note';
 
-export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail } from './memory/note';
+export { appendMemoryNote, MEMORY_PATH, memoryNotes, parseMemoryNotes, readMemoryTail } from './memory/note';
 
 export {
   ConversationSearchStore, ensureIndexTables, invalidateConversationSearchIndex,

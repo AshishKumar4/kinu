@@ -187,7 +187,7 @@ describe('hybridSearch', () => {
       const rehydrate = memorySnippetRehydrator(memory);
       const hit: VectorSearchHit = { ...chunk, score: 1 };
       await expect(rehydrate(hit)).rejects.toThrow('transient read');
-      await expect(rehydrate(hit)).resolves.toBe('line1');
+      await expect(rehydrate(hit)).resolves.toEqual({ text: 'line1' });
     });
 
   test('failed canonical reads are unavailable, while verified deletions are an empty answer', async () => {

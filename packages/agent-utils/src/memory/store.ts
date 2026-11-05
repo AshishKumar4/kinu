@@ -157,7 +157,9 @@ export class MemoryStore {
 					VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash})
 				`;
 				void this.sql`INSERT INTO memory_note_chunks_fts (rowid, text) SELECT rowid, ${chunk.text} FROM memory_note_chunks WHERE id = ${id}`;
-				delta.upserted.push({ id, path, startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text, hash: chunk.hash });
+				delta.upserted.push({
+					id, path, startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text, hash: chunk.hash, ...(writtenAt !== null && { writtenAt }),
+				});
 			}
 
 			for (const [id] of existingMap) {

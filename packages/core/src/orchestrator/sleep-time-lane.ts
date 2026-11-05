@@ -11,6 +11,7 @@ import {
   type SleepTimeUpdate, type SleepTimeWindow,
 } from '../memory/sleep-time-compute';
 import { AccountProposalSchema, type AccountMemory } from '../memory/account';
+import type { MemoryNote } from '../memory/note';
 import { attempt, diagnostics, settle, type KinuError } from '../obs/index';
 import type { SessionTranscript } from '../session/transcript';
 import type { RawSqlExec, RoutedLLM, SqlExecutor } from '../types/primitives';
@@ -22,6 +23,9 @@ const PROCESSED = 'sleep_time';
 const SETTLED_AT = 'settled';
 
 const CLOSED_AT = 'closed';
+
+/** How many of the agent's notes a pass has folded into facts: its instant holds the count, not a time. */
+const NOTES_FOLDED = 'notes_folded';
 
 /**
  * One pass at a time over an actor's facts, whichever trigger starts it, each reading its window under the lock: an idle
@@ -77,6 +81,8 @@ export interface SleepTimeLaneDeps {
    * only: the CLI has no account's user object, so it leaves this unset (`scripts/capability-parity.lock.json`).
    */
   readonly account?: () => AccountMemory | undefined;
+  /** The notes the agent kept (`memory/note.ts`), oldest first, folded into facts as they come; absent, none are read. */
+  readonly notes?: () => Promise<readonly MemoryNote[]>;
 }
 
 function idleReason(window: SleepTimeWindow | null): string {
@@ -270,8 +276,11 @@ export class SleepTimeLane {
           })),
         );
 
+      const kept = stored === undefined ? yield* this.keptNotes() : null;
+
       const update = stored ?? (yield* attempt({ doing: 'compressing the recent turns into agent facts', otherwise: 'unavailable' }, () => runSleepTimeCompute(this.deps.llm(), {
         turns: window.turns,
+        ...(kept !== null && { notes: kept.fresh }),
         currentFacts: this.deps.facts.all()
           .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
           .map((fact) => ({ key: fact.key, value: fact.value, confidence: fact.confidence })),
@@ -288,6 +297,8 @@ export class SleepTimeLane {
       // One commit, so a replay never repeats a prefix: the workspace's facts, and the account proposals it owes.
       const summary = this.deps.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.deps.facts, update);
+
+        if (kept !== null) this.markCount(NOTES_FOLDED, kept.total);
 
         for (const [index, proposal] of proposals.entries()) {
           void this.deps.sql`INSERT INTO account_proposal_outbox (delivery, proposal_json)
@@ -350,6 +361,33 @@ export class SleepTimeLane {
 
       if (owed.length > 0) diagnostics.event('memory.account_proposed', { workspace: this.deps.workspace, owed: owed.length });
     })));
+  }
+
+  /** The notes not yet folded: past the count the last pass folded, or all of them once the notes were rewritten
+   *  shorter. A read that fails costs the pass its notes, never its turns. */
+  private keptNotes(): Effect.Effect<{ readonly fresh: readonly MemoryNote[]; readonly total: number } | null> {
+    const read = this.deps.notes;
+
+    if (read === undefined) return Effect.succeed(null);
+
+    return attempt({ doing: "reading the agent's notes the pass folds into facts", otherwise: 'io' }, read).pipe(
+      Effect.map((notes) => {
+        const folded = this.instant(NOTES_FOLDED) ?? 0;
+
+        return { fresh: folded <= notes.length ? notes.slice(folded) : notes, total: notes.length };
+      }),
+      Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('memory.notes_read_failed', failure, { workspace: this.deps.workspace });
+
+        return null;
+      })),
+    );
+  }
+
+  private markCount(mark: string, count: number): void {
+    this.deps.actor.assertCurrent();
+    void this.deps.sql`INSERT INTO sleep_time_marks (actor_id, mark, at) VALUES (${this.deps.actor.actorId}, ${mark}, ${count})
+      ON CONFLICT(actor_id, mark) DO UPDATE SET at = excluded.at`;
   }
 
   private finish(key: string): void {

@@ -77,6 +77,11 @@ export function parseMemoryNotes(content: string): MemoryNote[] {
   return notes;
 }
 
+/** The notes the agent kept, oldest first, as the sleep-time pass folds them into facts. */
+export async function memoryNotes(memory: Pick<Memory, 'read'>): Promise<MemoryNote[]> {
+  return parseMemoryNotes(await memory.read(MEMORY_PATH) ?? '');
+}
+
 /** Walks the filesystem so the size matches the files the user can open, not the storage encoding. */
 export async function memoryBytes(vfs: VFS, dir = 'memory'): Promise<number> {
   if (!await exists(vfs, dir)) return 0;
