@@ -36,6 +36,16 @@ const TIME_WORDINGS = ["ships", "one"] as const;
 
 type TimeWording = (typeof TIME_WORDINGS)[number];
 
+/** A phone's workspace tabs: as they ship (the workspace's narrows to "U."), or each keeps its name and the strip scrolls. */
+const PHONE_TABS = ["ships", "whole"] as const;
+
+type PhoneTabs = (typeof PHONE_TABS)[number];
+
+/** The "whole" proposal, the gallery's own: on a phone no tab narrows below its name; the strip scrolls, its edges fading. */
+const PHONE_TABS_WHOLE = `@media (max-width: 767px) {
+  :root[data-phone-tabs="whole"] .p-bar-tab { flex-shrink: 0; min-width: 0; }
+}`;
+
 /** Kumo's parts as Kinu restyles them with `!important`, as it ships, or as Kumo draws them (audit #27). */
 const KUMO_LOOKS = ["ships", "own"] as const;
 
@@ -61,6 +71,7 @@ export interface Design {
   readonly activity: ActivityViewName;
   readonly times: TimeWording;
   readonly kumo: KumoLook;
+  readonly phoneTabs: PhoneTabs;
 }
 
 const MODES = ["light", "dark"] as const satisfies readonly ThemeMode[];
@@ -87,6 +98,7 @@ function readDesign(): Design {
     activity: oneOf(params.get("activity"), ACTIVITY_VIEWS, "ships"),
     times: oneOf(params.get("times"), TIME_WORDINGS, "ships"),
     kumo: oneOf(params.get("kumo"), KUMO_LOOKS, "ships"),
+    phoneTabs: oneOf(params.get("phoneTabs"), PHONE_TABS, "ships"),
   };
 }
 
@@ -171,6 +183,7 @@ function apply(design: Design): void {
   else root.dataset.background = design.background;
 
   wearKumoOwn(design.kumo === "own");
+  root.dataset.phoneTabs = design.phoneTabs;
 }
 
 /** Every switch is a parameter of the address, so a reload and the phone window open on the same design. */
@@ -200,6 +213,10 @@ export function useDesign(): Design {
 /** Once, before the app mounts: the faces' rules in the head and the design the address names on the page. */
 export function startDesign(): void {
   installChatFaces();
+  const tabs = document.createElement("style");
+  tabs.dataset.galleryPhoneTabs = "";
+  tabs.textContent = PHONE_TABS_WHOLE;
+  document.head.appendChild(tabs);
   apply(current);
 }
 
@@ -266,6 +283,11 @@ const ACTIVITY_WHY: Record<ActivityViewName, string> = {
   log: "One log for the workspace: now, what needs you, what is coming, and everything done, by its agent, helpers, jobs and watches.",
 };
 
+const PHONE_TABS_WHY: Record<PhoneTabs, string> = {
+  ships: "As it ships: on a phone the workspace's tab narrows first, down to its first letter (\"U.\").",
+  whole: "Each tab keeps its whole name, as the open one already does; the strip scrolls sideways, its edges fading.",
+};
+
 const KUMO_WHY: Record<KumoLook, string> = {
   ships: "Kinu's restyle: index.css's `!important` declarations on Kumo's select, popover, tooltip, meter, copy field, composer model and landing tabs.",
   own: "Kumo's own: those declarations taken out, and nothing else changed. What differs is all they do; what does not is safe to delete.",
@@ -277,7 +299,7 @@ const TIMES_WHY: Record<TimeWording, string> = {
 };
 
 function summary(design: Design): string {
-  return [LOOK_NAMES[design.look], design.mode, `${CHAT_FACES[design.font].label} (${design.scope})`, `background ${design.background}`, design.device, `activity ${design.activity}`, `times ${design.times}`, `kumo ${design.kumo}`].join(" · ");
+  return [LOOK_NAMES[design.look], design.mode, `${CHAT_FACES[design.font].label} (${design.scope})`, `background ${design.background}`, design.device, `activity ${design.activity}`, `times ${design.times}`, `kumo ${design.kumo}`, `phone tabs ${design.phoneTabs}`].join(" · ");
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -337,6 +359,9 @@ export function DesignBar() {
           <p className="p-meta p-text-3" data-design-why="times">{TIMES_WHY[design.times]}</p>
           <Choice label="Kumo's parts" value={design.kumo} options={KUMO_LOOKS} name={(kumo) => (kumo === "own" ? "Kumo's own" : "As it ships")} onPick={(kumo) => setDesign({ kumo })} />
           <p className="p-meta p-text-3" data-design-why="kumo">{KUMO_WHY[design.kumo]}</p>
+          <Choice label="Tabs on a phone" value={design.phoneTabs} options={PHONE_TABS} name={(tabs) => (tabs === "whole" ? "Names whole" : "As it ships")}
+            onPick={(phoneTabs) => setDesign({ phoneTabs, device: "phone" })} />
+          <p className="p-meta p-text-3" data-design-why="phone-tabs">{PHONE_TABS_WHY[design.phoneTabs]}</p>
         </Section>
         <Section title="Go to">
           <div className="flex flex-wrap gap-1">
