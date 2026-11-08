@@ -1,7 +1,7 @@
 // Defends: a logo a model wrote reaching the page with anything that runs or reaches out, a logo lost to a
-// recoverable slip in its markup, and a new workspace that never asks for its logo.
+// recoverable slip in its markup, and two workspaces made for one purpose drawn alike.
 import { describe, expect, test } from 'bun:test';
-import { declareTerminalRoster, drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_CREATED_EVENT } from '../src/index';
+import { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg } from '../src/index';
 
 const svg = (body: string) => `<svg viewBox="0 0 64 64" width="64" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
 
@@ -51,32 +51,6 @@ describe('a drawn logo, rebuilt from the allowlist', () => {
     );
     expect(sanitizeWorkspaceLogoSvg('I cannot draw that.')).toBeNull();
     expect(sanitizeWorkspaceLogoSvg(svg('<g><defs></defs></g>'))).toBeNull();
-  });
-});
-
-describe('the logo a new workspace owes', () => {
-  const facts = (completed: boolean): Parameters<typeof declareTerminalRoster>[0] => ({
-    messageId: 'genesis-1', status: completed ? 'completed' : 'error', workMode: 'build', continuity: 'conversation', completed,
-    userText: 'Keep the shop fast', assistantText: '', scopedTurn: {}, recordedAt: 1, evolutionEnabled: false,
-  });
-
-  /** The workspace's agent's turn that answered the workspace's creation. */
-  const genesis = (mission: string | null): Parameters<typeof declareTerminalRoster>[1] => ({
-    role: { kind: 'workspace', mission, event: WORKSPACE_CREATED_EVENT },
-    turn: { userMessage: 'q', assistantResponse: 'a', toolCalls: [], durationMs: 1, steps: 1, hadError: false, feedback: null, turnId: 'genesis-1', origin: 'user' },
-    reachableTools: [],
-  });
-
-  test('is owed by the first turn however it ended, from the mission or else the owner\'s words', () => {
-    for (const completed of [true, false]) {
-      expect(declareTerminalRoster(facts(completed), genesis('Run the storefront')).filter((effect) => effect.name === 'workspace_logo'))
-        .toEqual([{ name: 'workspace_logo', scope: 'genesis-1', lane: 'detached', input: { subject: 'Run the storefront' } }]);
-    }
-
-    expect(declareTerminalRoster(facts(true), genesis(null)).find((effect) => effect.name === 'workspace_logo')?.input)
-      .toEqual({ subject: 'Keep the shop fast' });
-    expect(declareTerminalRoster(facts(true), { ...genesis('Run the storefront'), role: { kind: 'workspace', mission: 'Run the storefront', event: null } })
-      .some((effect) => effect.name === 'workspace_logo')).toBe(false);
   });
 });
 

@@ -363,7 +363,7 @@ describe('two real turns over the HTTP model seam', () => {
     const driver = () => env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('close-driver'));
     const held = await driver().heldCloseWorkspace();
 
-    // The answer is in and the inline effects ran; the close is held on the logo, still in flight.
+    // The answer is in; the close the creation owes is held on the logo, still in flight.
     expect(held.parkedLogo).toBe(true);
     expect(held.answers).toBe(1);
     expect(held.busy).toContain('a terminal close');
