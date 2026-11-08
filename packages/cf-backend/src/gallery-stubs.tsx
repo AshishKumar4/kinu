@@ -739,7 +739,7 @@ function welcomeMailFixture(path: string, method: string, body: BodyInit | null 
   if (frame !== "welcome" || !path.startsWith("/api/user/mail/")) return null;
 
   if (path === "/api/user/mail/boxes") {
-    return fixtureJson({ enabled: !WELCOME_MAIL_OFF, domain: WELCOME_MAIL_OFF ? null : "kinu.run", address: welcomeAddress, canCreate: !WELCOME_MAIL_OFF && welcomeAddress === null, boxes: [] });
+    return fixtureJson({ enabled: !WELCOME_MAIL_OFF, domain: WELCOME_MAIL_OFF ? null : "kinu.run", address: welcomeAddress, canCreate: !WELCOME_MAIL_OFF && welcomeAddress === null, boxes: [], archived: [] });
   }
 
   if (path.startsWith("/api/user/mail/address?")) return fixtureJson(galleryUsername(new URLSearchParams(path.split("?")[1]).get("username") ?? ""));

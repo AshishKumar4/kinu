@@ -3,10 +3,10 @@ import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearch
 import { Loader } from "@/components/ui/Loader";
 import { Button, ICON_ON_PHONE, buttonClass } from "@/components/ui/Button";
 import { EnvelopeSimpleIcon, MagnifyingGlassIcon, NotePencilIcon, SparkleIcon } from "@phosphor-icons/react";
-import { APP_ROUTES, MAIL_VIEWS, PERSONAL_ASSISTANT_ID, suggestedMailUsername, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
+import { APP_ROUTES, MAIL_VIEWS, PERSONAL_ASSISTANT_ID, suggestedMailUsername, type MailArchivedBox, type MailBox, type MailListing, type MailView } from "@kinu.run/core";
 import { exploreWorkspaceHref } from "@/components/explore/ExploreCard";
 import { ImportantMailRow } from "@/components/mail/ImportantMailRow";
-import { MAIL_VIEW_LABEL, MailRow, mailBoxLabel } from "@/components/mail/MailRow";
+import { MAIL_VIEW_LABEL, MailRow, archivedBoxLabel, mailBoxLabel } from "@/components/mail/MailRow";
 import { MailThreadReader } from "@/components/mail/MailThreadReader";
 import { Compose } from "@/components/mail/MailEditor";
 import { ToolPage } from "@/components/ui/PageHeader";
@@ -60,7 +60,7 @@ interface Inbox {
   readonly drafts: number;
 }
 
-function mailLocation(params: URLSearchParams, boxes: readonly MailBox[], splat: string | undefined) {
+function mailLocation(params: URLSearchParams, boxes: readonly Pick<MailBox, "address" | "path">[], splat: string | undefined) {
   const view = MAIL_VIEWS.find((name) => name === params.get("view")) ?? "important";
   const address = params.get("address");
   const path = params.get("path") ?? boxes.find((box) => box.address === address || box.path === address)?.path;
@@ -71,8 +71,23 @@ function mailLocation(params: URLSearchParams, boxes: readonly MailBox[], splat:
   return { view, path, query, before, opened };
 }
 
-function ThreadList({ resource, view, boxes, path, owner, reading, onOpen, onRetry }: {
-  resource: AsyncResource<Inbox>; view: MailView; boxes: readonly MailBox[]; path: string | undefined;
+/** `named`: the name of the box a thread reached, where a list spans more than one. */
+/** Where Compose starts: the chosen box where one is chosen and may send, else the first. */
+function composeFrom(boxes: readonly MailBox[], path: string | undefined): string {
+  return (boxes.find((box) => box.path === path) ?? boxes[0])?.path ?? "";
+}
+
+/** A deleted workspace's box, chosen: its mail stays here, under the archived workspace (docs/MAIL.md §2). */
+function ArchivedNote({ box }: { box: MailArchivedBox | undefined }) {
+  if (box === undefined) return null;
+
+  return <p data-mail-archived={box.path} className="t-body px-4 pt-3 p-text-2">
+    {mailBoxLabel(box)} was deleted, so its address is retired. Its mail stays here, under the archived workspace.
+  </p>;
+}
+
+function ThreadList({ resource, view, boxes, named, owner, reading, onOpen, onRetry }: {
+  resource: AsyncResource<Inbox>; view: MailView; boxes: readonly MailBox[]; named: (path: string) => string | undefined;
   owner: string; reading: string | null; onOpen: (id: string) => void; onRetry: () => void;
 }) {
   const loaded = lastValue(resource);
@@ -88,7 +103,7 @@ function ThreadList({ resource, view, boxes, path, owner, reading, onOpen, onRet
 
         return view === "important"
           ? <ImportantMailRow key={thread.id} open={reading === thread.id} onOpen={() => onOpen(thread.id)} mail={{ thread: thread.id, from: { name: from?.name ?? from?.address ?? "", address: from?.address ?? "" }, to: box?.address ?? "", subject: thread.subject, reason: thread.important ?? "", at: thread.at, unread: thread.unread }} />
-          : <MailRow key={thread.id} thread={thread} open={reading === thread.id} onOpen={() => onOpen(thread.id)} owner={owner} drafts={view === "drafts"} box={path === undefined && box?.kind !== "person" ? box : undefined} />;
+          : <MailRow key={thread.id} thread={thread} open={reading === thread.id} onOpen={() => onOpen(thread.id)} owner={owner} drafts={view === "drafts"} box={named(thread.path)} />;
       })}
       {threads.length === 0 && <p className="t-body px-4 py-8 text-center p-text-3">Nothing here.</p>}
     </div>}
@@ -111,7 +126,8 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   const location = useLocation();
   const navigate = useNavigate();
   const route = useParams();
-  const { view, path, query: routedQuery, before, opened } = mailLocation(params, account.boxes, route["*"]);
+  const { view, path, query: routedQuery, before, opened } = mailLocation(params, [...account.boxes, ...account.archived], route["*"]);
+  const retired = account.archived.find((box) => box.path === path);
   const navigationType = useNavigationType();
   const [query, setQuery] = useState(routedQuery);
   const [composing, setComposing] = useState(false);
@@ -144,6 +160,17 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
   const loaded = lastValue(inbox.resource);
   const threads = loaded?.listing.threads ?? [];
   const reading = opened ?? (roomy && !waiting ? threads[0]?.id ?? null : null);
+
+  // Across every box, each thread's own; one box chosen, none. The person's box is the page's own.
+  const named = (threadPath: string): string | undefined => {
+    if (path !== undefined) return undefined;
+    const box = account.boxes.find((each) => each.path === threadPath);
+
+    if (box !== undefined) return box.kind === "person" ? undefined : mailBoxLabel(box);
+    const gone = account.archived.find((each) => each.path === threadPath);
+
+    return gone === undefined ? undefined : archivedBoxLabel(gone);
+  };
 
   const at = (changes: Record<string, string | null>): void => {
     const next = new URLSearchParams(location.search);
@@ -188,7 +215,10 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
 
   const addresses = (
     <div className="w-40 shrink-0" data-mail-address><Select label="Address" size="sm" className="!h-7 w-full" value={path ?? "*"} onChange={(next) => at({ path: next === "*" ? null : next, address: null })}
-      options={[{ value: "*", label: "All addresses" }, ...account.boxes.map((box) => ({ value: box.path, label: mailBoxLabel(box) }))]} /></div>
+      options={[
+        { value: "*", label: "All addresses" }, ...account.boxes.map((box) => ({ value: box.path, label: mailBoxLabel(box) })),
+        ...account.archived.map((box) => ({ value: box.path, label: archivedBoxLabel(box) })),
+      ]} /></div>
   );
 
   // A tool: its views and search in a row under its header, as Workspaces' filters are; the list a full-height column with
@@ -199,10 +229,11 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
 >
       <section className={`min-w-0 overflow-y-auto p-border lg:w-[var(--layout-tool-list)] lg:shrink-0 lg:border-r ${opened === null ? "flex-1 lg:flex-none" : "hidden lg:block"}`}>
         {navigation.error !== null && <p role="alert" className="t-body px-4 pt-3 p-danger">{navigation.error}</p>}
+        <ArchivedNote box={retired} />
         {waiting ? <div data-mail-no-assistant className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
           <p className="t-body p-text-2">No assistant yet</p><Button variant="primary" size="md" onClick={() => setInstalling(true)}>Set up your assistant</Button>
         </div> : <>
-          <ThreadList resource={inbox.resource} view={view} boxes={account.boxes} path={path} owner={owner} reading={reading} onOpen={choose} onRetry={inbox.reload} />
+          <ThreadList resource={inbox.resource} view={view} boxes={account.boxes} named={named} owner={owner} reading={reading} onOpen={choose} onRetry={inbox.reload} />
           {loaded !== null && <div className="flex justify-between gap-2 px-2 py-2">
             {before !== undefined && <Button variant="ghost" size="sm" onClick={() => at({ before: null })}>Newest</Button>}
             {threads.length === 50 && <Button variant="ghost" size="sm" className="ml-auto" onClick={() => at({ before: String(threads.at(-1)?.at) })}>Older</Button>}
@@ -211,10 +242,10 @@ function MailInbox({ account, owner }: { account: MailBoxes; owner: string }) {
       </section>
       {reading !== null && (
         <div className={`min-w-0 flex-1 overflow-y-auto p-5 sm:p-8 ${opened === null ? "hidden lg:block" : ""}`}>
-          <MailThreadReader id={reading} boxes={account.boxes} owner={owner} drafts={view === "drafts"} onBack={back} onChanged={inbox.reload} />
+          <MailThreadReader id={reading} boxes={account.boxes} archived={account.archived} owner={owner} drafts={view === "drafts"} onBack={back} onChanged={inbox.reload} />
         </div>
       )}
-      {composing && <Compose boxes={account.boxes} initialPath={path ?? account.boxes[0]?.path ?? ""} onClose={() => setComposing(false)} onSaved={inbox.reload} />}
+      {composing && <Compose boxes={account.boxes} initialPath={composeFrom(account.boxes, path)} onClose={() => setComposing(false)} onSaved={inbox.reload} />}
       {installing && <InstallAssistant address={account.address ?? ""} onClose={() => setInstalling(false)} />}
     </ToolPage>
   );

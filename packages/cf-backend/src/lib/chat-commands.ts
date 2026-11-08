@@ -21,6 +21,8 @@ export interface ChatCommandHandles {
   readonly setMode: (mode: WorkMode) => void;
   /** Sends `words` as a message, in `mode` where one is named; false when the chat could not take them. */
   readonly send: (words: string, mode?: WorkMode) => boolean;
+  /** Holds `words` until the running turn ends, or sends them now with none; false when the chat could not take them. */
+  readonly queue: (words: string) => boolean;
   /** The draft as sent, which a command that takes words clears once they are taken. */
   readonly draft: string;
   readonly setDraft: (draft: string) => void;
@@ -69,6 +71,14 @@ export function chatCommands(at: ChatCommandHandles): ComposerCommand[] {
 
         if (text === "") at.setDraft("");
         else sent(at, text, "plan");
+      }),
+    },
+    {
+      ...slashCommand("/queue", "/queue <text>"),
+      takesWords: true,
+      run: (words) => Effect.sync(() => {
+        if (words === "") at.say("Type what to send after this turn: /queue <text>.");
+        else if (at.queue(words)) at.setDraft("");
       }),
     },
     {

@@ -117,6 +117,39 @@ describe('Mail', () => {
     });
   });
 
+  // docs/MAIL.md §2: a deleted workspace retires its addresses; its mail stays in the account's box, under the archived workspace.
+  test("a deleted workspace's box stays listed apart: its kept mail is found and read there, and nothing is written from it", async () => {
+    await withGallery(async (gallery) => {
+      const page = await open(gallery, '&view=all');
+      const kept = { path: 'release-notes', address: 'release-notes.ashish@kinu.run', workspace: 'release-notes' };
+
+      await page.waitForSelector('[data-mail-list] [data-mail-thread="t-release"]');
+      expect(await page.$('[data-mail-archived]')).toBeNull();
+      // Chosen by the workspace it names, whatever the page calls it.
+      await page.click('[aria-label="Address"]');
+      await page.waitForFunction((name) => [...document.querySelectorAll('[role="option"]')].some((option) => option.checkVisibility() && option.textContent?.includes(name)), {}, kept.workspace);
+
+      for (const option of await page.$$('[role="option"]')) {
+        if (await option.evaluate((node, name) => node.checkVisibility() && (node.textContent ?? '').includes(name), kept.workspace)) {
+          await option.click();
+          break;
+        }
+      }
+
+      await page.waitForFunction(() => document.querySelectorAll('[data-mail-list] [data-mail-thread]').length === 1);
+      expect(await rows(page)).toEqual(['t-release']);
+      expect(await page.$eval('[data-mail-archived]', (note) => note.getAttribute('data-mail-archived'))).toBe(kept.path);
+      await reader(page, 't-release');
+      expect(await page.$('[data-mail-reader="t-release"] [data-mail-reply]')).toBeNull();
+      expect((await calls(page)).some((call) => call.method === 'GET' && call.path.includes(`path=${kept.path}`))).toBe(true);
+
+      await page.click('[data-mail-compose]');
+      await page.waitForSelector('[aria-label="From"]');
+      expect(await page.$eval('[aria-label="From"]', (trigger) => trigger.textContent ?? '')).not.toContain(kept.address);
+      await page.close();
+    });
+  });
+
   test('opening a deep-linked thread marks it read and replies from that box, not the person', async () => {
     await withGallery(async (gallery) => {
       const page = await open(gallery, '&view=all&thread=t-dana');

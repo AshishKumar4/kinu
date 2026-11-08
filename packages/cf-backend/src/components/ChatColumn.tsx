@@ -27,6 +27,7 @@ import type { ConversationUiState } from "@/hooks/use-conversation-ui-state";
 import type { useFileDrop } from "@/hooks/use-file-drop";
 import type { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useSteerActions } from "@/hooks/use-steer-actions";
+import { useQueuedSends } from "@/hooks/use-queued-sends";
 import { useOpeningMessage } from "@/components/workspaces/NewChatView";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { DropHint } from "@/components/ui/FilePicker";
@@ -273,6 +274,15 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
 
   useOpeningMessage(extras.opening === true && state.connectionStatus === "connected", sendWords);
 
+  const queued = useQueuedSends({ live, send: (words) => sendWords(words, []), draft: ui.draft, setDraft: ui.setDraft });
+  const { stopped } = queued;
+
+  // A Stop hands back what /queue held as well as what the turn did not read.
+  const halt = useCallback(() => {
+    stopped();
+    stop();
+  }, [stopped, stop]);
+
   // A branch beside the running turn is the owner's send too.
   const { onBranch } = extras;
 
@@ -289,9 +299,9 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
   const commands = useChatCommands({
     draft: ui.draft, own: extras.commands, send,
     chat: {
-      history: chat.readAll, name: as?.displayName, label, stop, draft: ui.draft.trim(),
+      history: chat.readAll, name: as?.displayName, label, stop: halt, draft: ui.draft.trim(),
       setModel: state.setModel, setEffort: state.setReasoningEffort, mode: ui.mode, setMode: ui.setMode, setDraft: ui.setDraft,
-      send: (words, mode) => sendWords(words, [], mode), live, branchBeside: branch,
+      send: (words, mode) => sendWords(words, [], mode), queue: queued.queue, live, branchBeside: branch,
     },
   });
 
@@ -329,7 +339,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
         </PhaseLinesAsk.Provider></AskedQuestionsContext.Provider>
       </ErrorBoundary>
 
-      {!input && <ViewOnlyBar running={live} onStop={stop} />}
+      {!input && <ViewOnlyBar running={live} onStop={halt} />}
       {input && <div className="p-composer-dock">
         <Composer
           textareaRef={inputRef}
@@ -341,7 +351,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
           disabled={state.connectionStatus !== "connected"}
           liveness={state.liveness}
           onRecover={state.recoverTurn}
-          onStop={stop}
+          onStop={halt}
           {...(branch !== undefined && { onBranch: secretGuard.guarded("branch", () => { branch(ui.draft.trim(), ui.draft.trim()); }) })}
           attention={<>{secretGuard.offer}{attention}</>}
           float={extras.float}
@@ -363,6 +373,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
             ...searchCredits,
             ...providerWait,
             ...(steerNotice ? [steerNotice] : []),
+            ...queued.notices,
           ]}
         />
       </div>}

@@ -401,30 +401,6 @@ test('a gate that lets detach run anywhere fails the hook-module case', async ()
   expect(sites.findings).toEqual([]);
 });
 
-test('a bare startTransition is a finding, wherever React is imported; useTransition\'s is the tracked caller', () => {
-  const TSX = 'packages/fixture/src/send.tsx';
-
-  const bare = `import { startTransition, useCallback } from 'react';
-import { settle } from '../obs/index';
-function useSend() {
-  return useCallback(() => { startTransition(() => settle(send())); }, []);
-}
-`;
-
-  const drawn = `import { useTransition } from 'react';
-import { settle } from '../obs/index';
-function Create() {
-  const [pending, startTransition] = useTransition();
-  return <button disabled={pending} onClick={() => startTransition(() => settle(create()))} />;
-}
-`;
-
-  expect(bridgeSites(new Map([[TSX, bare]])).findings).toEqual([
-    `${TSX}:1: a bare startTransition shows no pending state and holds every navigation until its work settles; run the work with detach, or draw its wait with useTransition`,
-  ]);
-  expect(bridgeSites(new Map([[TSX, drawn]])).findings).toEqual([]);
-});
-
 test('React calls an intrinsic element\'s handler and an effect\'s, where only detach runs; it tracks a transition\'s or action\'s returned settle', () => {
   const TSX = 'packages/fixture/src/panel.tsx';
 

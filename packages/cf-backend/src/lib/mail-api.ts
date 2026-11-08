@@ -2,7 +2,7 @@
 import * as v from "valibot";
 import { Effect } from "effect";
 import { KinuError, settle } from "@kinu.run/core/obs";
-import { MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_WAKES, type MailBox, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing, type MailThreadSummary, type MailThreadView } from "@kinu.run/core";
+import { MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_WAKES, type MailArchivedBox, type MailBox, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing, type MailThreadSummary, type MailThreadView } from "@kinu.run/core";
 import { request } from "./http";
 
 const ImportantMailSchema = v.object({
@@ -36,8 +36,16 @@ const BoxSchema = v.object({
   workspace: v.nullable(v.string()), actorId: v.nullable(v.string()), wake: v.picklist(MAIL_WAKES),
 }) satisfies v.GenericSchema<unknown, MailBox>;
 
-/** `domain`: the deployment's mail domain, null where mail is off. `canCreate`: the person has no address and may create one. */
-const BoxesSchema = v.object({ enabled: v.boolean(), domain: v.nullable(v.string()), address: v.nullable(v.string()), canCreate: v.boolean(), boxes: v.array(BoxSchema) });
+const ArchivedBoxSchema = v.object({
+  path: v.string(), address: v.string(), kind: v.picklist(MAIL_BOX_KINDS), workspace: v.string(), retiredAt: v.number(),
+}) satisfies v.GenericSchema<unknown, MailArchivedBox>;
+
+/** `domain`: the deployment's mail domain, null where mail is off. `canCreate`: the person has no address and may create one.
+ *  `archived`: the boxes of workspaces since deleted, their mail kept (docs/MAIL.md §2). */
+const BoxesSchema = v.object({
+  enabled: v.boolean(), domain: v.nullable(v.string()), address: v.nullable(v.string()), canCreate: v.boolean(), boxes: v.array(BoxSchema),
+  archived: v.array(ArchivedBoxSchema),
+});
 
 const UsernameSchema = v.object({ username: v.string(), available: v.boolean(), refusal: v.nullable(v.picklist(["invalid", "reserved", "taken"])) });
 

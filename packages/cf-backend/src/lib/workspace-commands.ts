@@ -6,6 +6,7 @@ import { Cause, Effect } from "effect";
 import { APP_ROUTES, COMPACTED, DEFAULT_ROLE_ID, describeTakePick, hasComparableTakes, slashCommand, type AlternateTakeSet, type CompactOutcome, type ConversationMessage, type SurfaceKind, type TakePickOutcome, workspaceRoute } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 import type { ComposerCommand } from "@/components/SlashMenu";
+import type { ComposerNotice } from "@/components/Composer";
 import { settingsPath } from "@/components/SettingsRail";
 
 export interface WorkspaceCommandHandles {
@@ -23,8 +24,13 @@ export interface WorkspaceCommandHandles {
   readonly walkBack: (id: string) => void;
   readonly show: (surface: SurfaceKind) => void;
   readonly go: (path: string) => Effect.Effect<void>;
-  /** Says what a command did, or why it did nothing (the default). */
-  readonly say: (words: string, tone?: "info") => void;
+  /** Says what a command did, or why it did nothing (the default); `detail` is what the notice says once opened. */
+  readonly say: (words: string, tone?: "info", detail?: ComposerNotice["detail"]) => void;
+  /** The tools this chat's agent has: built in (whether this turn's tool set wires each) and crafted. */
+  readonly tools: () => Promise<{
+    readonly builtIn: readonly { readonly name: string; readonly summary: string; readonly wired: boolean }[];
+    readonly crafted: readonly { readonly name: string; readonly description: string }[];
+  }>;
   /** The agent's active role, and choosing another, which applies from its next turn. */
   readonly role: { readonly current: () => Promise<string | null>; readonly choose: (id: string) => Promise<string> };
   /** The newest turn's alternate takes, if any; opening their comparison, and picking one. */
@@ -70,6 +76,36 @@ function takesCommand(at: WorkspaceCommandHandles): ComposerCommand {
   };
 }
 
+/** `/fork` and `/undo` walk back to just before the n-th of the owner's own messages from the newest, the newest by
+ *  default; a steer joined a turn, not its own. */
+function walkBackCommand(at: WorkspaceCommandHandles, name: "/fork" | "/undo"): ComposerCommand {
+  return {
+    ...slashCommand(name, `${name} [n]`),
+    run: (count) => Effect.catchCause(Effect.flatMap(Effect.promise(async () => at.history?.() ?? []), (rows) => Effect.sync(() => {
+      const back = count === "" ? 1 : Number(count);
+      const sent = rows.filter((row) => row.role === "user" && row.steered !== true);
+      const id = Number.isInteger(back) && back > 0 ? sent.at(-back)?.id : undefined;
+
+      if (id === undefined) at.say(`This chat has ${String(sent.length)} of your messages to walk back before; "${count}" names none of them.`);
+      else at.walkBack(id);
+    })), (failed) => Effect.sync(() => { at.say(`Could not read this chat's history: ${renderThrownChain({ cause: Cause.squash(failed) })}`); })),
+  };
+}
+
+/** `/tools` names each tool the agent can use and what it is for, as the CLI lists them. */
+function toolsCommand(at: WorkspaceCommandHandles): ComposerCommand {
+  return {
+    ...slashCommand("/tools"),
+    run: () => told(at, "list the tools", async () => {
+      const { builtIn, crafted } = await at.tools();
+      const wired = builtIn.filter((tool) => tool.wired);
+      const facts = [...wired.map((tool) => [tool.name, tool.summary] as const), ...crafted.map((tool) => [tool.name, tool.description] as const)];
+
+      at.say(`${String(facts.length)} tools: ${String(wired.length)} built in, ${String(crafted.length)} crafted.`, "info", { facts });
+    }),
+  };
+}
+
 export function workspaceCommands(at: WorkspaceCommandHandles): ComposerCommand[] {
   const settings = workspaceRoute(at.workspace, "settings");
 
@@ -87,20 +123,12 @@ export function workspaceCommands(at: WorkspaceCommandHandles): ComposerCommand[
       }),
     },
     { ...slashCommand("/rename", "/rename <name>"), run: at.rename },
-    {
-      ...slashCommand("/fork", "/fork [n]"),
-      // The n-th of the owner's own messages from the newest, the newest by default; a steer joined a turn, not its own.
-      run: (count) => Effect.catchCause(Effect.flatMap(Effect.promise(async () => at.history?.() ?? []), (rows) => Effect.sync(() => {
-        const back = count === "" ? 1 : Number(count);
-        const sent = rows.filter((row) => row.role === "user" && row.steered !== true);
-        const id = Number.isInteger(back) && back > 0 ? sent.at(-back)?.id : undefined;
-
-        if (id === undefined) at.say(`This chat has ${String(sent.length)} of your messages to walk back before; "${count}" names none of them.`);
-        else at.walkBack(id);
-      })), (failed) => Effect.sync(() => { at.say(`Could not read this chat's history: ${renderThrownChain({ cause: Cause.squash(failed) })}`); })),
-    },
+    walkBackCommand(at, "/fork"),
+    // The walk-back offers the files' restore wherever the device keeps their checkpoints.
+    walkBackCommand(at, "/undo"),
     roleCommand(at),
     takesCommand(at),
+    toolsCommand(at),
     { ...slashCommand("/status"), run: show("Agent") },
     { ...slashCommand("/refine"), run: show("Agent") },
     { ...slashCommand("/tree"), run: show("Swarms") },
