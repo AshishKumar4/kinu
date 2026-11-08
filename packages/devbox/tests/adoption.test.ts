@@ -152,6 +152,28 @@ test('a configuration refused for now leaves the claim to adopt again, and its r
     .toEqual({ first: false, ready: true, opened: [], asked: [] });
 });
 
+// Home, 2026-11-06: a refusal told the owner once a retry; told once, it stays told across the object's resets, and
+// only an attached box ends it.
+test('a configuration refused for now across cold adoptions tells the owner once, and an adopted box ends it', async () => {
+  const { container, successor, evict } = await evictedWitnessed();
+  const refused = () => new DevboxError('not-ready', 'the intercept is not up yet');
+  const attach = async (box: ChainTestBox) => (await box.devboxIncidentReasons()).filter((row) => row.stage === 'attach').length;
+
+  container.trustFaults.push(refused());
+  await successor.devboxState();
+  const again = evict();
+  container.trustFaults.push(refused());
+  await again.devboxState();
+  const told = await attach(again);
+  const adopted = evict();
+  const ready = (await adopted.devboxState()).ready;
+  const later = evict();
+  container.trustFaults.push(refused());
+  await later.devboxState();
+
+  expect({ told, ready, after: await attach(later) }).toEqual({ told: 1, ready: true, after: 2 });
+});
+
 test('a start whose hook gets no answer from the running container fails into recovery rather than restoring over it', async () => {
   const { container, successor } = await evictedWitnessed();
   // Every read of the boot id this start makes goes unanswered.
