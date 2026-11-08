@@ -547,6 +547,7 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
                   workspace: agentId, say, clear: () => { setClearingMain(true); }, compact: async () => state.rpc("compactConversation", []), show, go: (path) => Effect.promise(async () => navigate(path)),
                   history: chat.readAll,
                   walkBack: setRevertFor,
+                  tools: async () => state.rpc("getToolDescriptions", []),
                   rename: (name) => Effect.catchCause(Effect.asVoid(Effect.promise(async () => state.rpc("renameMainChat", [name]))),
                     (failed) => Effect.sync(() => { say(`Could not rename this chat: ${readFailureText({ cause: Cause.squash(failed) })}`); })),
                   role: {

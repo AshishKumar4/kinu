@@ -2281,3 +2281,66 @@ describe('the composer while a turn runs and under a status row', () => {
     });
   });
 });
+
+// 1025-slash: /queue holds words in the tab until the running turn ends, as the CLI's queue does, and a Stop hands them
+// back instead of sending them behind it.
+describe('/queue sends after the running turn', () => {
+  /** The workspace page with every send held until `gallery:settle-send`, and where words went: a turn of their own (the
+   *  transport) or the workspace's send, which opens the next turn when none runs. */
+  async function held(newPage: () => Promise<Page>, origin: string) {
+    const page = await newPage();
+    await page.setViewport({ width: 1280, height: 900 });
+    await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('[data-composer-root] textarea:not([disabled])');
+    await page.evaluate(() => { document.documentElement.dataset.galleryChatHold = '1'; });
+
+    const went = (words: string) => page.evaluate((said) => [document.documentElement.dataset.galleryChatSent ?? '', document.documentElement.dataset.galleryMidTurnSends ?? '']
+      .some((place) => place.includes(said)), words);
+
+    const composer = () => page.evaluate(() => ({
+      draft: document.querySelector<HTMLTextAreaElement>('[data-composer-root] textarea')?.value ?? '',
+      held: document.querySelector('[data-queued-sends]')?.getAttribute('data-queued-sends') ?? null,
+    }));
+
+    const submit = async (words: string): Promise<void> => {
+      await page.type('[data-composer-root] textarea', words);
+      await page.keyboard.press('Enter');
+    };
+
+    // A turn runs, and words are queued behind it.
+    await submit('Read the api Worker logs from the last hour');
+    await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]');
+    await submit('/queue Then open a fix branch');
+    await page.waitForSelector('[data-queued-sends="1"]');
+
+    return { page, went, composer };
+  }
+
+  test('held while the turn runs, they go once it ends', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const { page, went, composer } = await held(newPage, origin);
+
+      expect({ went: await went('Then open a fix branch'), ...await composer() }).toEqual({ went: false, draft: '', held: '1' });
+      await page.evaluate(() => { window.dispatchEvent(new CustomEvent('gallery:settle-send', { detail: { at: 0 } })); });
+      await page.waitForFunction(() => [document.documentElement.dataset.galleryChatSent ?? '', document.documentElement.dataset.galleryMidTurnSends ?? '']
+        .some((place) => place.includes('Then open a fix branch')));
+      expect((await composer()).held).toBeNull();
+      await page.close();
+    });
+  });
+
+  test('a Stop hands what was held back to the draft, and the turn\'s end sends nothing', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const { page, went, composer } = await held(newPage, origin);
+
+      await page.click('[data-composer-root] button[aria-label="Stop this turn"]');
+      await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('[data-composer-root] textarea')?.value.includes('Then open a fix branch') === true);
+      await page.evaluate(() => { window.dispatchEvent(new CustomEvent('gallery:settle-send', { detail: { at: 0 } })); });
+      // The turn has ended, and the frame after it, where a release would have gone, has painted.
+      await page.waitForSelector('[data-composer-root] button[aria-label="Stop this turn"]', { hidden: true });
+      await page.evaluate(() => new Promise((painted) => { requestAnimationFrame(() => { requestAnimationFrame(painted); }); }));
+      expect({ went: await went('Then open a fix branch'), held: (await composer()).held }).toEqual({ went: false, held: null });
+      await page.close();
+    });
+  });
+});
