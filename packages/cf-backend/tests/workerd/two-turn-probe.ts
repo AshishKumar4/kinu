@@ -1962,13 +1962,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await fetch('http://probe-control.invalid/queue/arrived');
     const parked = (await this.probeLog()).calls.find(drawsLogoCall);
 
-    // No deadline: the turn is the model's, and the fake answers it at once.
-    while ((await target.chatHistoryPage()).items.every((message) => message.role !== 'assistant')) {
-      const tick = Promise.withResolvers<void>();
-
-      setTimeout(tick.resolve, 50);
-      await tick.promise;
-    }
+    // The turn answers on its own model call; the logo's close stays held.
+    await target.mainQuiet();
 
     return {
       workspace,
