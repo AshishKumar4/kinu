@@ -608,6 +608,8 @@ describe('capability provisioning', () => {
   test('a re-mint supersedes the old secret and keeps admission', async () => {
     const harness = await setupWorkspaces();
     await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-model' });
+    // A workspace that lost its identity (its storage reset) presents none, and holds none.
+    harness.installed.delete(WORKSPACE);
     await harness.userDO.ensureWorkspaceCapability(WORKSPACE, null);
     const reminted = present(harness.installed.get(WORKSPACE), 'the re-minted workspace capability token');
 
