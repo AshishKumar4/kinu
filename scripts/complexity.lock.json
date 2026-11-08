@@ -334,10 +334,6 @@
       "complexity": 25
     },
     {
-      "key": "packages/cf-backend/src/pages/MailPage.tsx#MailInbox",
-      "complexity": 25
-    },
-    {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useCallback#31",
       "complexity": 25
     },

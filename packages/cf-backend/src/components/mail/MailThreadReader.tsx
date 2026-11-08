@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@/components/ui/Loader";
 import { ArrowSquareOutIcon, CaretLeftIcon, TrashIcon, TrayIcon } from "@phosphor-icons/react";
-import type { MailBox, MailThreadSummary, MailThreadView } from "@kinu.run/core";
+import type { MailArchivedBox, MailBox, MailThreadSummary, MailThreadView } from "@kinu.run/core";
 import { Menu, type MenuItem } from "@/components/ui/Menu";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
@@ -9,14 +9,15 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { readMailThread, updateMailThread } from "@/lib/mail-api";
 import { MailMessage } from "./MailMessage";
 import { ReplyBox } from "./MailEditor";
-import { mailBoxLabel } from "./MailRow";
+import { archivedBoxLabel, mailBoxLabel } from "./MailRow";
 import { SendToWorkspace } from "./SendToWorkspace";
 import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
 import { Notice } from "@/components/ui/Notice";
 
-export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }: {
-  id: string; boxes: readonly MailBox[]; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
+/** `archived`: the boxes of deleted workspaces, whose kept mail is read here and answered from nowhere. */
+export function MailThreadReader({ id, boxes, archived, owner, drafts, onBack, onChanged }: {
+  id: string; boxes: readonly MailBox[]; archived: readonly MailArchivedBox[]; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
 }) {
   const load = useCallback(async (): Promise<MailThreadView> => {
     const mail = await readMailThread(id);
@@ -37,9 +38,19 @@ export function MailThreadReader({ id, boxes, owner, drafts, onBack, onChanged }
       {mail === null && <Button variant="ghost" size="sm" className="mb-3 lg:hidden" data-mail-back onClick={onBack} icon={<CaretLeftIcon size={14} />}>Mail</Button>}
       {resource.status === "loading" && <div role="status" aria-label="Loading thread"><Loader /></div>}
       {resource.status === "error" && <LoadFailure what="this thread" message={resource.message} onRetry={reload} />}
-      {mail !== null && <Reader key={`${id}:${String(drafts)}`} mail={mail} box={boxes.find((box) => box.path === mail.thread.path)} owner={owner} drafts={drafts} onBack={onBack} onChanged={reload} />}
+      {mail !== null && <Reader key={`${id}:${String(drafts)}`} mail={mail} box={boxes.find((box) => box.path === mail.thread.path)}
+        retired={archived.find((box) => box.path === mail.thread.path)} owner={owner} drafts={drafts} onBack={onBack} onChanged={reload} />}
     </div>
   );
+}
+
+/** The box a thread reached, as its chips name it: its address, and who reads it there (none for a box gone unnamed). */
+function readerChips(path: string, box: MailBox | undefined, retired: MailArchivedBox | undefined) {
+  if (box?.kind === "person") return { address: box.address, reader: box.workspace === null ? "no assistant yet" : "Kinu" };
+
+  if (box !== undefined) return { address: box.address, reader: mailBoxLabel(box) };
+
+  return retired === undefined ? { address: path, reader: null } : { address: retired.address, reader: archivedBoxLabel(retired) };
 }
 
 /** A thread's menu: one in Trash is restored; any other is sent to a workspace or deleted. */
@@ -52,8 +63,8 @@ function threadMenu(thread: MailThreadSummary, change: (trashed: boolean) => voi
   ];
 }
 
-function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
-  mail: MailThreadView; box: MailBox | undefined; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
+function Reader({ mail, box, retired, owner, drafts, onBack, onChanged }: {
+  mail: MailThreadView; box: MailBox | undefined; retired: MailArchivedBox | undefined; owner: string; drafts: boolean; onBack: () => void; onChanged: () => void;
 }) {
   const { thread } = mail;
   const messages = mail.messages.filter((message) => message.sendState !== "draft");
@@ -70,9 +81,7 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
 
   const menu = threadMenu(thread, change, () => setHanding(true));
 
-  let reader = box === undefined ? "" : mailBoxLabel(box);
-
-  if (box?.kind === "person") reader = box.workspace === null ? "no assistant yet" : "Kinu";
+  const { address, reader } = readerChips(thread.path, box, retired);
 
   return (
     <article data-mail-reader={thread.id} aria-busy={busy !== null} className="min-w-0 max-w-[var(--layout-reader)] space-y-4">
@@ -83,8 +92,8 @@ function Reader({ mail, box, owner, drafts, onBack, onChanged }: {
           {busy === null && <Menu name="Thread" items={menu} className="relative shrink-0" />}
         </div>
         <div className="flex flex-wrap gap-2">
-          <Chip><span className="truncate t-mono">{box?.address ?? thread.path}</span></Chip>
-          {box !== undefined && <Chip><span className="truncate">{reader}</span></Chip>}
+          <Chip><span className="truncate t-mono">{address}</span></Chip>
+          {reader !== null && <Chip><span className="truncate">{reader}</span></Chip>}
         </div>
       </header>
       {thread.important !== null && <p data-mail-why className="t-body p-text-2">{thread.important}</p>}

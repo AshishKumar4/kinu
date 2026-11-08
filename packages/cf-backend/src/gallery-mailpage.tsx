@@ -1,7 +1,7 @@
 /** The production Mail page, reading and writing the HTTP fixture made from the approved wireframe's mail. */
 import { Route, Routes, useParams } from "react-router-dom";
 import * as v from "valibot";
-import { importantMail, MAIL_VIEWS, type MailBox, type MailListing, type MailMessageView, type MailThreadSummary, type MailThreadView } from "@kinu.run/core";
+import { importantMail, MAIL_VIEWS, type MailArchivedBox, type MailBox, type MailListing, type MailMessageView, type MailThreadSummary, type MailThreadView } from "@kinu.run/core";
 import Layout from "@/components/layout";
 import MailPage from "@/pages/MailPage";
 import { ADDRESSES, OWNER, THREADS } from "@/gallery-mail";
@@ -38,6 +38,11 @@ export function installMailPageFixture(): void {
 
   const boxFor = (id: string): MailBox => boxes[ADDRESSES.findIndex((box) => box.id === id)];
 
+  /** A workspace the owner deleted: its box retired, its mail kept under it (docs/MAIL.md §2). */
+  const archived: MailArchivedBox[] = [{
+    path: "release-notes", address: "release-notes.ashish@kinu.run", kind: "workspace", workspace: "release-notes", retiredAt: Date.now() - 3 * 86_400_000,
+  }];
+
   const threads = new Map<string, MailThreadView>(THREADS.map((thread) => {
     const box = boxFor(thread.box);
 
@@ -66,6 +71,20 @@ export function installMailPageFixture(): void {
       trashedAt: thread.trashed ?? null, draft: thread.draft !== undefined, outgoing: thread.mail.some((mail) => mail.sent !== undefined),
     }, messages }];
   }));
+
+  const retiredAt = archived[0].retiredAt - 86_400_000;
+
+  const retiredMail: MailMessageView = {
+    id: "m-release-1", threadId: "t-release", direction: "in", from: { name: "Cloudflare Workers", address: "noreply@notify.cloudflare.com" },
+    to: [{ name: null, address: archived[0].address }], cc: [], deliveredTo: archived[0].address, subject: "Your Worker kinu-release-notes was deployed",
+    at: retiredAt, verified: true, auth: null, woke: null, text: "kinu-release-notes deployed version 4f1c2a9 to release-notes.kinu.run.", html: null,
+    attachments: [], writtenBy: null, sendState: null, read: true,
+  };
+
+  threads.set("t-release", { thread: {
+    id: "t-release", path: archived[0].path, subject: retiredMail.subject, from: [retiredMail.from], snippet: retiredMail.text, sender: retiredMail.from,
+    at: retiredAt, count: 1, unread: false, verified: true, attachments: false, important: null, trashedAt: null, draft: false, outgoing: false,
+  }, messages: [retiredMail] });
 
   const calls: { method: string; path: string; body: unknown }[] = [];
   let written = 0;
@@ -127,8 +146,8 @@ export function installMailPageFixture(): void {
 
   /** The person's account and boxes, as /boxes answers them. */
   const accountAnswer = () => (enabled
-    ? { enabled, domain: "kinu.run", address, canCreate: address === null && params.get("account") === "new", boxes: address === null ? [] : boxes }
-    : { enabled, domain: null, address: null, canCreate: false, boxes: [] });
+    ? { enabled, domain: "kinu.run", address, canCreate: address === null && params.get("account") === "new", boxes: address === null ? [] : boxes, archived: address === null ? [] : archived }
+    : { enabled, domain: null, address: null, canCreate: false, boxes: [], archived: [] });
 
   /** The newest few Important threads, as the footer and Home read them. */
   const importantAnswer = (limit: number) => {

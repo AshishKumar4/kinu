@@ -1,5 +1,5 @@
 import { PaperclipIcon, ShieldWarningIcon } from "@phosphor-icons/react";
-import type { MailBox, MailThreadSummary, MailView } from "@kinu.run/core";
+import type { MailArchivedBox, MailBox, MailThreadSummary, MailView } from "@kinu.run/core";
 import { Avatar } from "@/components/ui/Avatar";
 import { MAIL_ROW, mailTime } from "./ImportantMailRow";
 import { mailExcerpt } from "./MailMessage";
@@ -10,7 +10,8 @@ import { Pressable } from "@/components/ui/Pressable";
 /** Each view's name, as the page's views and lists say it. */
 export const MAIL_VIEW_LABEL: Record<MailView, string> = { important: "Important", all: "All", sent: "Sent", drafts: "Drafts", trash: "Trash" };
 
-export function mailBoxLabel(box: MailBox): string {
+/** A box as its name is said: a live one, or one of a workspace since deleted. */
+export function mailBoxLabel(box: Pick<MailBox, "kind" | "path" | "address" | "workspace">): string {
   if (box.kind === "person") return box.address;
 
   if (box.kind === "agent") return `${box.path.split(".")[0]} · ${box.workspace ?? box.path.split(".").slice(1).join(".")}`;
@@ -18,8 +19,14 @@ export function mailBoxLabel(box: MailBox): string {
   return box.workspace ?? box.path;
 }
 
+/** A deleted workspace's box: retired, its mail kept under the archived workspace (docs/MAIL.md §2). */
+export function archivedBoxLabel(box: MailArchivedBox): string {
+  return `${mailBoxLabel(box)} · archived`;
+}
+
+/** `box`: the name of the box it reached, where the list spans more than one. */
 export function MailRow({ thread, open, box, drafts, owner, onOpen }: {
-  thread: MailThreadSummary; open: boolean; box: MailBox | undefined; drafts: boolean; owner: string; onOpen: () => void;
+  thread: MailThreadSummary; open: boolean; box: string | undefined; drafts: boolean; owner: string; onOpen: () => void;
 }) {
   const participants = thread.from.map((party) => party.address.toLowerCase() === owner.toLowerCase() && thread.verified ? "You" : party.name ?? party.address).join(", ");
   const who = participants === "" ? "Draft" : participants;
@@ -39,7 +46,7 @@ export function MailRow({ thread, open, box, drafts, owner, onOpen }: {
           {thread.subject || "(No subject)"}{thread.count > 1 && <span className="p-text-3"> · {thread.count}</span>}
         </span>
         <span className="t-meta flex min-w-0 items-baseline gap-2 p-text-3">
-          {box !== undefined && <span className="max-w-36 shrink-0"><Chip><span className="truncate">{mailBoxLabel(box)}</span></Chip></span>}
+          {box !== undefined && <span className="max-w-36 shrink-0"><Chip><span className="truncate">{box}</span></Chip></span>}
           {thread.attachments && <PaperclipIcon size={11} className="shrink-0 self-center" aria-label="Attachment" />}
           <span className={`truncate ${drafts ? "p-warning" : ""}`}>{mailExcerpt(thread.snippet)}</span>
         </span>
