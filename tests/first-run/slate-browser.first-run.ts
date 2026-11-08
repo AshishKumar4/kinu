@@ -7,6 +7,7 @@ import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { executorWords } from '../../evals/src/session';
 
 const SUITE = 'First-run · slate-browser';
 
@@ -69,7 +70,7 @@ export class Slate extends SlateObject {
 }
 END`));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + executorWords(setup));
         const goals: EvalSubgoal[] = [];
 
         for (const engine of ['chrome', 'kitesurf'] as const) {

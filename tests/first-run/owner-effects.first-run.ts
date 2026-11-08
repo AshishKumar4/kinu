@@ -11,6 +11,7 @@ import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunR
 import { turnOnMyAccess } from './my-access';
 import { shareHost } from './share-entry';
 import { webHeaders } from '../../evals/src/workspace-roster';
+import { executorWords } from '../../evals/src/session';
 
 const SUITE = 'First-run · owner-effects';
 
@@ -68,7 +69,7 @@ export class Slate extends SlateObject {
 }
 END`));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + executorWords(setup));
 
         // A share is cut from what the owner's own calls reached: run the write once, then take the owner's mark back.
         await session.slateOp({ op: 'call', id: SLATE, method: 'mark', args: [] });

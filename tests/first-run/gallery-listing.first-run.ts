@@ -13,6 +13,7 @@ import {
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
 import { openBrowser } from '../../evals/src/browser';
+import { executorWords } from '../../evals/src/session';
 
 const SUITE = 'First-run · gallery-listing';
 
@@ -122,7 +123,7 @@ export class Slate extends SlateObject {
 }
 END`));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + executorWords(setup));
 
         // What the slate reaches is what its owner's calls recorded: the MCP call is refused here, and recorded all the same.
         await session.slateOp({ op: 'call', id: SLATE, method: 'look', args: [] });

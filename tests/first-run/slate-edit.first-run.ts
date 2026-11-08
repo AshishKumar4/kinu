@@ -15,7 +15,7 @@ import { evalWorkspaceName, type EvalObservation, type EvalSubgoal } from '@kinu
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { turnOnMyAccess } from './my-access';
 import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
-import { openPublicSession, type KinuPublicSession } from '../../evals/src/session';
+import { executorWords, openPublicSession, type KinuPublicSession } from '../../evals/src/session';
 
 const SUITE = 'First-run · slate-edit';
 
@@ -181,7 +181,7 @@ describe(SUITE, () => {
         const identity: PublicWebIdentity = { ...plan.identity, account: 'devices' };
         const setup = v.parse(Exec, await session.execute('workspace', PROBE_SOURCE));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + executorWords(setup));
         const first = answered(await session.slateOp({ op: 'call', id: SLATE, method: 'word', args: [] }));
         const { email } = v.parse(Profile, await (await fetch(`${plan.origin}/api/user/profile`, { headers: webHeaders(identity) })).json());
 

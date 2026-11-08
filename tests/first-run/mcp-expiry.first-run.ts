@@ -14,6 +14,7 @@ import { SCRIPTED_MCP_TOOL } from '../../scripts/scripted-mcp';
 import { SCRIPTED_MCP_OAUTH_PATH } from '../../scripts/scripted-mcp-oauth';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
+import { executorWords } from '../../evals/src/session';
 
 const SUITE = 'First-run · mcp-expiry';
 
@@ -96,7 +97,7 @@ export class Slate extends SlateObject {
 }
 END`));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + executorWords(setup));
 
         /** Signs the OAuth server in as a person would from its row: a sign-in begun for a run of the page's own, the
          *  authorize link (with the tiers' key), then the product's callback as the owner, which ends on the finish

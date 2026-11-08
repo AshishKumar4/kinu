@@ -12,7 +12,7 @@ import { LiveShareCreatedSchema, liveSharePagePath, slatePartFramePath } from '@
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { openBrowser, signedInPage } from '../../evals/src/browser';
 import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
-import type { KinuPublicSession, PublicSessionPlan } from '../../evals/src/session';
+import { executorWords, type KinuPublicSession, type PublicSessionPlan } from '../../evals/src/session';
 
 const SUITE = 'First-run · slate-parts-viewer';
 
@@ -77,7 +77,7 @@ END`;
 async function authoredSlate(session: KinuPublicSession, partPath: string): Promise<string | null> {
   const setup = v.parse(Exec, await session.execute('workspace', slateFiles(partPath)));
 
-  if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the viewer parts slate: ' + (setup.error ?? setup.stdout ?? ''));
+  if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the viewer parts slate: ' + executorWords(setup));
   const answered = await session.slateOp({ op: 'preview', id: SLATE });
   const preview = v.safeParse(PreviewAnswer, answered);
 

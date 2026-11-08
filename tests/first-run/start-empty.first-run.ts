@@ -10,6 +10,7 @@ import { JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.r
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
 import { shareHost } from './share-entry';
+import { executorWords } from '../../evals/src/session';
 
 const SUITE = 'First-run · start-empty';
 
@@ -60,7 +61,7 @@ export class Slate extends SlateObject {
 }
 END`));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + executorWords(setup));
 
         // The owner's own use leaves its slate holding state.
         await session.slateOp({ op: 'call', id: SLATE, method: 'bump', args: [] });

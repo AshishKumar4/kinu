@@ -13,7 +13,7 @@ import { safeJsonParse, slatePartFramePath } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { openBrowser, signedInPage } from '../../evals/src/browser';
 import { webHeaders, type PublicWebIdentity } from '../../evals/src/workspace-roster';
-import type { KinuPublicSession, PublicSessionPlan } from '../../evals/src/session';
+import { executorWords, type KinuPublicSession, type PublicSessionPlan } from '../../evals/src/session';
 
 const SUITE = 'First-run · slate-parts';
 
@@ -201,7 +201,7 @@ describe(SUITE, () => {
       async run({ session, plan, budget }) {
         const setup = v.parse(Exec, await session.execute('workspace', slateFiles(session.workspace)));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the parts slate: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the parts slate: ' + executorWords(setup));
 
         const email = await accountEmail(plan.origin, plan.identity);
         // A build that cannot read the part's declaration has no page to walk: it says why at once.

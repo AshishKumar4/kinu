@@ -404,6 +404,12 @@ export const ExecutorCommandSchema = v.object({
 /** One command's answer on an executor, as the Env pane receives it. */
 export type PublicExecutorResult = v.InferOutput<typeof ExecutorCommandSchema>;
 
+/** What a command's answer says in words: its refusal's own, else its error, else what it printed. A refusal the
+ *  executor returns comes with an empty stdout, and one it throws with `error`: the refusal names both. */
+export function executorWords(result: PublicExecutorResult): string {
+  return result.refusal?.error ?? result.error ?? [result.stderr, result.stdout].filter((part) => part !== undefined && part !== '').join('\n');
+}
+
 /** The parked-command rows `listDeferredApprovals` serves — the needs-you
  *  queue's own shape (`core/src/safety/deferred-approval.ts`), narrowed to what
  *  a caller can decide on: which command, where it would run, and whether it is
