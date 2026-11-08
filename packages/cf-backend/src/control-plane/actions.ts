@@ -10,7 +10,7 @@ import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
-import { mailUsernameRefusal, objectNamed, ownerCaller } from '@kinu.run/core';
+import { mailUsernameRefusal, ownerCaller } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import type { IndexFeedSink } from './index-feed';
 import { controlPlaneStub, type ControlPlaneEnv } from './stub';
@@ -21,7 +21,6 @@ import { accountIdFor } from '../auth/store';
 import type { SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { accountNamed } from '../user/workspace-placement';
-import type { MailNameDO, MailNameReturn } from '../mail/mailname-do';
 
 /** A UserDO name; it makes the workspace name beside it an address rather than a guess. */
 export const UserIdSchema = v.pipe(v.string(), v.regex(/^[a-f0-9]{32}$/));
@@ -154,7 +153,8 @@ export function describeAction(action: ControlAction): ActionIdentity {
     case 'account.unsuspend':
       return { operation, targetKind: 'account', target: action.userId };
     case 'account.address_return':
-      return { operation, targetKind: 'address', target: `${action.label}/${action.email}` };
+      // The address alone: the account is named in the detail, which forgetting it rewrites (control-plane store `forgetUser`).
+      return { operation, targetKind: 'address', target: action.label };
     case 'invite.email':
       return { operation, targetKind: 'invite', target: action.email };
     case 'invite.link':
@@ -209,12 +209,11 @@ export type ActionRegistry = Pick<UserDO,
 >;
 
 /** The control plane as the account actions reach it: its index feed, and the accounts list's mirror and invite links. */
-type ActionControlPlane = IndexFeedSink & Pick<ControlPlaneDO, 'noteAccountStanding' | 'createInvite'>;
+type ActionControlPlane = IndexFeedSink & Pick<ControlPlaneDO, 'noteAccountStanding' | 'createInvite' | 'returnAddress'>;
 
 export interface ActionEnv<Id> extends ControlPlaneEnv<Id, ActionControlPlane>, SignInDeclarationEnv {
   OrchestratorAgent: ObjectNamespace<Id, ActionTarget>;
   UserDO: ObjectNamespace<Id, ActionRegistry>;
-  MAILNAME: ObjectNamespace<Id, Pick<MailNameDO, 'returnTo'>>;
 }
 
 /**
@@ -261,7 +260,7 @@ async function accountAction<Id>(env: ActionEnv<Id>, action: AccountAction, oper
   }
 
   if (action.action === 'account.address_return') {
-    const returned = await objectNamed(env.MAILNAME, action.label).returnTo(accountIdFor(env, action.email));
+    const returned = await plane.returnAddress(operator.caller, action.label, accountIdFor(env, action.email));
 
     if (returned === 'returned') return { outcome: 'ok', detail: `${action.label} is ${action.email}'s to take again in Mail`, reason: 'ok', affected: 1 };
 
@@ -282,11 +281,11 @@ async function accountAction<Id>(env: ActionEnv<Id>, action: AccountAction, oper
   return { outcome: 'ok', detail: `${userId} is ${now.class}${now.suspended === null ? '' : ', suspended'}`, reason: 'ok', affected: 1 };
 }
 
-const ADDRESS_NOT_RETURNED: Readonly<Record<Exclude<MailNameReturn, 'returned'>, string>> = {
+const ADDRESS_NOT_RETURNED = {
   unclaimed: 'No account has held that address; they can take it in Mail.',
   held: 'An account holds that address now.',
   retired_from_another: 'That address was retired from another account.',
-};
+} as const;
 
 async function controlAction<Id>(env: ActionEnv<Id>, action: Exclude<ControlAction, AccountAction>): Promise<ActionOutcome> {
   if (action.action === 'workspace.remove') {

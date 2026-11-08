@@ -174,6 +174,22 @@ describe('mail on a subdomain of its zone, each address by a rule of its own', (
     expect((await env.MAIL_RULES_FAKE.state()).addresses).toEqual([]);
   });
 
+  // Owner, 2026-11-08: a person whose account was deleted signs in again as the same account and takes their address back.
+  it('routes a retired address again once the account it was retired from claims it, which no other account can', async () => {
+    await priyaOpened('reclaim', 'u-priya-7');
+    await mailbox('u-priya-7').deleteBox('u-priya-7');
+
+    expect((await env.MAIL_RULES_FAKE.state()).addresses).toEqual([]);
+    expect(await refusalOf(async () => mailbox('u-dana-7').open({ userId: 'u-dana-7', email: 'dana@northwind.io', username: 'reclaim', assistant: null }))).toMatchObject({
+      code: 'denied', message: expect.stringContaining('"reclaim" is taken.'),
+    });
+
+    await priyaOpened('reclaim', 'u-priya-7');
+
+    expect((await env.MAIL_RULES_FAKE.state()).addresses).toEqual([`reclaim@${DOMAIN}`]);
+    expect(await name('reclaim').lookup()).toMatchObject({ user_id: 'u-priya-7' });
+  });
+
   it("deletes every rule under the account's root as the account is, and never disables the zone's routing", async () => {
     await priyaOpened('praman', 'u-priya-3');
     await mailbox('u-priya-3').readableBy(caller('triage'));

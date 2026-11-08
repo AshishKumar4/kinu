@@ -203,6 +203,12 @@ function harness(options: World = {}): Harness {
 
       return await store.createInvite(sql, createdBy, Date.now());
     },
+    // A retired label, as an earlier account deletion left it: handed back.
+    async returnAddress(caller: PresentedCaller) {
+      await gate(caller, 'accounts.write');
+
+      return 'returned' as const;
+    },
   };
 
   const emptyListStub = (workspace: string, method: string) => async () => {
@@ -360,8 +366,6 @@ function harness(options: World = {}): Harness {
     ControlPlaneDO: namespace(() => controlPlane),
     OrchestratorAgent: namespace(workspaceStub),
     UserDO: namespace(userStub),
-    // A retired label's object, as one an earlier account deletion left: it hands the label back.
-    MAILNAME: namespace(() => ({ returnTo: async () => 'returned' as const })),
     MonitorDO: namespace(() => ({
       async listIncidents() {
         return [{ probe: 'health', detail: 'not 200', openedAt: 1, alertedAt: null, failures: 3 }];

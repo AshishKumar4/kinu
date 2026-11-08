@@ -9,7 +9,7 @@
 import { getAgentByName, type AgentContext } from 'agents';
 import { ownerCaller, sandboxIdForWorkspace, sandboxPreviewExposures, type WorkspaceOverview } from '@kinu.run/core';
 import { initSlateLiveShareTables, initSlateShareTables, SlateLiveShareStore, SlateShareStore } from '@kinu.run/core/slates';
-import { internalCaller } from '@kinu.run/core/control-plane';
+import { adminControlToken, internalCaller } from '@kinu.run/core/control-plane';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ControlPlaneDO } from '../../src/control-plane/control-plane-do';
@@ -383,7 +383,7 @@ const AUDIT_COLUMNS = ['actor_user', 'actor_email', 'target', 'detail'] as const
 export class CensusControlPlaneDO extends ControlPlaneDO {
   /** An operator's action, as the control plane's action route runs it once the attempt is audited. */
   async operatorAction(action: ControlAction): Promise<ActionOutcome> {
-    return await runControlAction(this.env, action, { email: 'ops@kinu.run', caller: await internalCaller(this.env) });
+    return await runControlAction(this.env, action, { email: 'ops@kinu.run', caller: await adminControlToken(this.env) });
   }
 
   /** Priya in the fleet's index: her user and workspace rows, her feedback with its screenshot, an operator's audit
