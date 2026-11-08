@@ -268,6 +268,10 @@ const RUNNING_SIZE_KEY = 'devbox:running-size';
 
 const START_REFUSED_KEY = 'devbox:start-refused';
 
+/** The refusal the owner was last told of while the box waits to start: one card a refusal, across retries and
+ *  activations alike, until a start succeeds or the owner asks again. */
+const ATTACH_TOLD_KEY = 'devbox:attach-told';
+
 const DISK_STATE_KEY = 'devbox:disk-chain';
 
 /** A loopback Durable Object namespace's tag in `ctx.exports`; an entrypoint's stub answers any property as an RPC (D85). */
@@ -613,7 +617,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     this.#restoration = claim.settled;
     const [configured] = await Promise.allSettled([this.configureContainer(true)]);
 
-    if (configured.status === 'fulfilled') return adoption;
+    if (configured.status === 'fulfilled') {
+      // Adopted and configured, not settled here: a box an earlier activation attached ended the refusal it was told of.
+      if (claim.settled.phase !== 'unattached') this.ctx.storage.kv.delete(ATTACH_TOLD_KEY);
+
+      return adoption;
+    }
+
     // Refused as a start's configuration is (D94, D47): the container is the same either way.
     const refused = { cause: configured.reason };
 
@@ -952,6 +962,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   start(): Promise<void> {
     return settle(this.#reopening(Effect.suspend(() => {
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
+      this.ctx.storage.kv.delete(ATTACH_TOLD_KEY);
 
       return this.#startContainer();
     })));
@@ -1279,6 +1290,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   async #settle(restoration: Restoration): Promise<void> {
     const generation = this.#generation;
 
+    // A box that attached, by whatever path, ended the refusal it was told of.
+    if (restoration.phase === 'attached' || restoration.phase === 'repair') this.ctx.storage.kv.delete(ATTACH_TOLD_KEY);
+
     if (restoration.phase !== 'unstarted') {
       // A park keeps the deploy it was made under (D94).
       await this.ctx.storage.put(SETTLED_KEY, restoration.phase === 'unattached' && !restoration.retry ? { ...restoration, version: this.#version() } : restoration);
@@ -1605,6 +1619,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       this.#refused = undefined;
       this.ctx.storage.kv.delete(START_REFUSED_KEY);
+      this.ctx.storage.kv.delete(ATTACH_TOLD_KEY);
       // `golden` means the box's own snapshot was missing: its restore rebuilds from the backup, the slow start.
       this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation), source: source?.kind ?? 'running' });
     }));
@@ -1646,13 +1661,17 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         this.#deleteSchedule(STARTUP_CALLBACK);
       }
     } else {
-      const repeated = this.#refused?.generation === generation && this.#refused.reason === reason;
+      const told = `[${isCapacityRefusal(failed) ? 'no room' : failure} -> retry] ${reason}`;
 
       this.#refused = { generation, reason };
 
       // A start the platform keeps refusing says so once, not once a retry (Home, 2026-11-06: an "Attach failed" card a
-      // second while the account had no container to give).
-      if (!repeated) await this.#record('attach', `[${isCapacityRefusal(failed) ? 'no room' : failure} -> retry] ${reason}`);
+      // second while the account had no container to give), nor once an activation: what was told is stored.
+      if (this.ctx.storage.kv.get(ATTACH_TOLD_KEY) !== told) {
+        // Issued in the turn that writes the incident and its delivery row: all three are committed, or none.
+        this.ctx.storage.kv.put(ATTACH_TOLD_KEY, told);
+        await this.#record('attach', told);
+      }
 
       if (this.#owns(generation)) await this.armAlarm(STARTUP_CALLBACK, 1);
     }
@@ -1747,6 +1766,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  in-flight attempt state-inert: no readiness, attach failure, release or destroy. */
   #invalidateGeneration(recoveryFlight?: Flight): void {
     this.#generation += 1;
+    // A new identity's refusals are a new episode.
+    this.ctx.storage.kv.delete(ATTACH_TOLD_KEY);
     this.#flights.startup = recoveryFlight === undefined
       ? undefined
       : { generation: this.#generation, run: recoveryFlight.run, since: recoveryFlight.since };
@@ -2524,6 +2545,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         const restarted = yield* attempted('not-ready', Effect.gen({ self: this }, function* () {
           if (this.#unready() === undefined) return true;
           this.ctx.storage.kv.delete(START_REFUSED_KEY);
+          this.ctx.storage.kv.delete(ATTACH_TOLD_KEY);
           yield* Effect.promise(() => this.#settle({ phase: 'unstarted' }));
           yield* this.#startContainer();
 
@@ -3492,8 +3514,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     reason: string,
     extra?: { readonly processId?: string; readonly port?: number; readonly job?: string; readonly exitCode?: number },
   ): Promise<void> {
-    await recordIncident(this.ctx.storage, stage, reason, extra);
-    await this.armAlarm(INCIDENT_CALLBACK, Math.ceil(incidentRetryDelayMs(0) / 1000));
+    // The incident and its delivery row are issued in one synchronous turn, so the platform commits both or neither.
+    await Promise.all([
+      recordIncident(this.ctx.storage, stage, reason, extra),
+      this.armAlarm(INCIDENT_CALLBACK, Math.ceil(incidentRetryDelayMs(0) / 1000)),
+    ]);
   }
 
   #requireStorage(): DevboxStorage {

@@ -203,13 +203,31 @@ test('a golden start the platform refuses for want of room loses no golden, and 
 // Home, 2026-11-06: while the account had no container to give, each one-second retry wrote another "Attach failed"
 // card into the owner's chat, labelled unclassified.
 test('a start the platform keeps refusing for want of room tells the owner once, as no room', async () => {
-  const { box, container } = fresh([1, 2, 3].map(() => ({ kind: 'ready', id: 'golden-1', tools: PIN })));
+  const { box, container, evict } = fresh([1, 2, 3, 4].map(() => ({ kind: 'ready', id: 'golden-1', tools: PIN })));
   container.containerUnavailable = new Error('Account resource limit exceeded');
 
-  for (const _retry of [1, 2, 3]) await Promise.allSettled([box.devboxStartup()]);
-  const attach = (await box.devboxIncidentReasons()).filter((row) => row.stage === 'attach').map((row) => row.reason);
+  for (const _retry of [1, 2]) await Promise.allSettled([box.devboxStartup()]);
+  // A deploy resets the object mid-refusal; it retries with nothing in memory.
+  const after = evict();
+
+  for (const _retry of [1, 2]) await Promise.allSettled([after.devboxStartup()]);
+  const attach = (await after.devboxIncidentReasons()).filter((row) => row.stage === 'attach').map((row) => row.reason);
 
   expect(attach).toEqual([expect.stringMatching(/^\[no room -> retry\] .*Account resource limit exceeded/u)]);
+});
+
+test('a refusal after a box attached is a new episode the owner is told of again', async () => {
+  const { box, container } = fresh([1, 2, 3].map(() => ({ kind: 'ready', id: 'golden-1', tools: PIN })));
+  container.containerUnavailable = new Error('Account resource limit exceeded');
+  await Promise.allSettled([box.devboxStartup()]);
+  container.containerUnavailable = undefined;
+  await box.devboxStartup();
+  // The platform reclaims the attached box's container, and its restart is refused again.
+  await container.stop();
+  container.containerUnavailable = new Error('Account resource limit exceeded');
+  await Promise.allSettled([box.devboxStartup()]);
+
+  expect((await box.devboxIncidentReasons()).filter((row) => row.stage === 'attach')).toHaveLength(2);
 });
 
 test('a box with its own snapshot wakes it, asks no golden, and keeps the pinned tools it holds', async () => {
