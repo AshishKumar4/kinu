@@ -2190,7 +2190,8 @@ async function walkToTools(page: Page, origin: string): Promise<void> {
 
     if (pressed === 8) throw new Error(`setup never reached its tools step; it shows ${step}`);
     await pressButton(page, 'button', await page.$('[data-mail-not-now]') === null ? 'Next' : 'Not now');
-    await onSetup(page, `setup past its ${step} step`, `${shown} !== ${JSON.stringify(step)}`);
+    // A step changing passes through no step at all (its page suspended): only another step is past this one.
+    await onSetup(page, `setup past its ${step} step`, `![null, ${JSON.stringify(step)}].includes(${shown})`);
   }
 }
 
