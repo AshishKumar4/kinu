@@ -75,9 +75,9 @@ interface HeldGate {
   readonly release: ReturnType<typeof Promise.withResolvers<void>>;
 }
 
-/** Armed by `/queue/hold`: the first `probe-queue` call, or every call numbered `from` onward until
- *  `/queue/release`. `arrived` resolves on the first call actually held. */
-let heldRequest: { readonly gate: HeldGate; readonly from: number } | null = null;
+/** Armed by `/queue/hold`: the first `probe-queue` call, or every call numbered `from` onward, or (`logo`) only a
+ *  workspace logo's drawing, until `/queue/release`. `arrived` resolves on the first call actually held. */
+let heldRequest: { readonly gate: HeldGate; readonly from: number; readonly logo: boolean } | null = null;
 
 /** The parity hold (`/parity/hold`): `first` parks the opening call; `partial` streams one text delta
  *  of the tool-answering step then parks with the body open. Released by `/parity/release`. */
@@ -230,6 +230,8 @@ async function holdQueuedCall(model: string): Promise<void> {
   const hold = heldRequest;
 
   if (hold === null || log.filter((call) => call.model === model).length < hold.from) return;
+
+  if (hold.logo && log.at(-1)?.users.some((message) => message.startsWith('Design the logo')) !== true) return;
   hold.gate.arrived.resolve();
   await hold.gate.release.promise;
 }
@@ -752,8 +754,8 @@ const MODEL_CONTROLS: ReadonlyArray<readonly [string, (url: URL, request: Reques
 async function probeControl(url: URL, request: Request): Promise<Response> {
   if (url.pathname === '/queue/hold' && request.method === 'POST') {
     const raw = await request.text();
-    const spec = v.parse(v.looseObject({ from: v.optional(v.number()) }), raw === '' ? {} : JSON.parse(raw));
-    heldRequest = { gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }, from: spec.from ?? 1 };
+    const spec = v.parse(v.looseObject({ from: v.optional(v.number()), logo: v.optional(v.boolean()) }), raw === '' ? {} : JSON.parse(raw));
+    heldRequest = { gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }, from: spec.from ?? 1, logo: spec.logo === true };
 
     return Response.json({ ok: true });
   }

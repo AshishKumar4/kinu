@@ -199,8 +199,9 @@ describe('two real turns over the HTTP model seam', () => {
 
     expect(held).toBeNull();
     expect([settled === null, settled === 'missing', settled === 'indeterminate']).toEqual([false, false, false]);
-    // The work read follows the same claim: running while this activation holds it, and owed no more once settled.
-    expect(heldWork.map(({ kind, phase, attempt, why }) => ({ kind, phase, attempt, why })))
+    // The work read follows the same claim: running while this activation holds it, and owed no more once settled. The
+    // logo the creation owes waits beside it, held at the same model.
+    expect(heldWork.filter((work) => work.kind === 'turn').map(({ kind, phase, attempt, why }) => ({ kind, phase, attempt, why })))
       .toEqual([{ kind: 'turn', phase: 'running', attempt: 1, why: null }]);
     expect(settledWork).toEqual([]);
   });
@@ -363,7 +364,7 @@ describe('two real turns over the HTTP model seam', () => {
     const driver = () => env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('close-driver'));
     const held = await driver().heldCloseWorkspace();
 
-    // The answer is in and the inline effects ran; the close is held on the logo, still in flight.
+    // The answer is in; the close the creation owes is held on the logo, still in flight.
     expect(held.parkedLogo).toBe(true);
     expect(held.answers).toBe(1);
     expect(held.busy).toContain('a terminal close');

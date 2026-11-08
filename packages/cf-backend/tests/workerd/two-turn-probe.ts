@@ -1950,17 +1950,20 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   /**
-   * A fresh workspace's genesis answers, then its terminal close is held open: the logo, a detached effect drawn by the
-   * turn's own model, is the second call and parks. Read just before the activation dies.
+   * A fresh workspace's genesis answers while the close its creation owes is held open: the logo, a detached effect
+   * drawn by the workspace's own model, parks. Read once the turn answered, just before the activation dies.
    */
   async heldCloseWorkspace(): Promise<HeldClose> {
     const { target, workspace } = await this.claimQueueWorkspace('close');
 
-    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 2 }) });
+    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ logo: true }) });
 
     if (!(await target.beginGenesisTurn()).started) throw new Error('close probe genesis did not start');
     await fetch('http://probe-control.invalid/queue/arrived');
-    const parked = (await this.probeLog()).calls.at(-1);
+    const parked = (await this.probeLog()).calls.find(drawsLogoCall);
+
+    // The turn answers on its own model call; the logo's close stays held.
+    await target.mainQuiet();
 
     return {
       workspace,

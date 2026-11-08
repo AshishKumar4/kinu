@@ -247,7 +247,7 @@ export {
   WORKSPACE_ADDRESS_MAX,
 } from './identity/naming';
 
-export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, WORKSPACE_LOGO_SYSTEM_PROMPT } from './identity/logo';
+export { drawWorkspaceLogo, sanitizeWorkspaceLogoSvg, workspaceLogoSubject, WORKSPACE_LOGO_SYSTEM_PROMPT } from './identity/logo';
 
 export { WORKSPACE_TITLE_MAX, workspaceDisplayTitle, workspaceTitleDraft, workspaceTitleProblem } from './read-models/workspace-title';
 

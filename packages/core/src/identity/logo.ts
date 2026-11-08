@@ -2,6 +2,7 @@
 
 import { decodeEntities, XML_ENTITIES } from '../utils/text';
 import { fnv1a32Hex } from '../utils/fnv1a';
+import { isPlaceholderMission } from './soul';
 
 const WORKSPACE_LOGO_MAX_BYTES = 8_192;
 
@@ -320,6 +321,19 @@ function workspaceLogoPrompt(subject: string, look: WorkspaceLogoLook): string {
     '',
     `Workspace:\n${subject.slice(0, 1200)}`,
   ].join('\n');
+}
+
+/**
+ * What a workspace's one logo is drawn from: its mission once it states one, else the owner's own words, as a turn of
+ * theirs opens on them. Null until either exists: an event's text is nobody's subject.
+ */
+export function workspaceLogoSubject(
+  mission: string | null, turn?: { readonly event: string | null; readonly userText: string },
+): string | null {
+  if (mission !== null && !isPlaceholderMission(mission)) return mission;
+  const words = turn?.event === null ? turn.userText.trim() : '';
+
+  return words === '' ? null : words;
 }
 
 /** Workspace `name`'s logo for `subject`; model errors propagate, a refused drawing is null, and the monogram stays. */

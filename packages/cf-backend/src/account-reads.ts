@@ -77,8 +77,8 @@ export class AccountReads {
   /** Names, hosts and placeholders only: a value this workspace's agents may read is asked for at each use. */
   private readonly heldSecrets = new HeldRead<GrantedSecrets>();
 
-  /** The account's name and email, read at the first command; none for an account with no profile. */
-  private readonly heldAuthor = new HeldRead<CommitAuthor | null>();
+  /** The account's name and email, read at its first use; none for an account with no profile. */
+  private readonly heldProfile = new HeldRead<{ readonly displayName: string | null; readonly email: string } | null>();
 
   constructor(private readonly host: AccountReadsHost) {}
 
@@ -173,11 +173,23 @@ export class AccountReads {
     }));
   }
 
-  private author(): Promise<CommitAuthor | null> {
-    return this.heldAuthor.get(() => this.ask(async (stub, caller) => {
+  private async author(): Promise<CommitAuthor | null> {
+    const profile = await this.profile();
+
+    return profile === null ? null : { name: profile.displayName ?? profile.email, email: profile.email };
+  }
+
+  /** The name the owner gave their account, as people their shares refuse are told it; null where they gave none, and
+   *  never their email. */
+  async ownerName(): Promise<string | null> {
+    return (await this.profile())?.displayName ?? null;
+  }
+
+  private profile(): Promise<{ readonly displayName: string | null; readonly email: string } | null> {
+    return this.heldProfile.get(() => this.ask(async (stub, caller) => {
       const profile = await stub.getProfile(caller);
 
-      return profile === null ? null : { name: profile.displayName ?? profile.email, email: profile.email };
+      return profile === null ? null : { displayName: profile.displayName ?? null, email: profile.email };
     }));
   }
 

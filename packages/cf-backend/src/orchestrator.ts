@@ -168,7 +168,7 @@ import {
   measuredAt, readWorkspaceAgents, recordAgentFigures, reportedAgentFigures, type AgentFigures, type AgentAnswer, type CompactOutcome, type ConversationTurnPair, type PanelAgent, type AgentConfigStore, type AskingAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, turnTags,
-  missionOf, summarizeSoul, workspaceGenesisSignal, isPlaceholderMission, drawWorkspaceLogo,
+  missionOf, summarizeSoul, workspaceGenesisSignal, isPlaceholderMission, drawWorkspaceLogo, workspaceLogoSubject,
   // Recovery has no live turn, so the owed answer is read from the transcript.
   type PromptIdentity, UNTITLED_WORKSPACE_NAME,
   checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore, deviceFileCheckpoints,
@@ -488,6 +488,9 @@ async function reachedIn<A>(
 
 /** The evolution lane's `fibers` row name. */
 const EVOLUTION_LANE_FIBER = 'evolution:settle';
+
+/** The sequence the workspace's one logo is owed under: the workspace's own, so a settled claim answers every later ask. */
+const WORKSPACE_LOGO_TRANSITION = { turnId: 'workspace-logo', messageId: 'workspace-logo' } as const;
 
 /** What a call already holds when it builds an agent's own tools again: its ledgers, and the store operations its other
  *  projections run, which the tools project rather than serving their own. */
@@ -7068,6 +7071,25 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       ],
     });
     this.turnBranches.retire(settled.turnId);
+    const subject = workspaceLogoSubject(missionOf(this.getSoulText()), settled);
+
+    // Whatever turn settles first, and however it ended: the creation's own claim may be gone with a failed start.
+    if (subject !== null) {
+      await settleLogged('turn.logo_unowed', { doing: "owing the workspace's logo", otherwise: 'unavailable' }, () => this.oweLogo(subject), { workspace: this.name });
+    }
+  }
+
+  /** The workspace's one logo, owed by its own sequence rather than a turn's, so it is drawn once whichever turn came
+   *  first and however it ended; claimed once per workspace, asked once per activation. */
+  private logoClaimed = false;
+
+  private async oweLogo(subject: string): Promise<void> {
+    if (this.logoClaimed) return;
+    await this.terminal.settle({
+      transition: WORKSPACE_LOGO_TRANSITION,
+      declare: () => [{ name: 'workspace_logo', scope: 'workspace', lane: 'detached', input: { subject } }],
+    });
+    this.logoClaimed = true;
   }
 
   /** Built per use: the actor handle and the fast lane are this activation's. Main's conversation is its isolate's. */
@@ -7149,7 +7171,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
           const unreachable = await this.titlingRefusal();
 
           if (unreachable !== null) return { status: 'owed', detail: unreachable };
-          await this.drawLogo(subject);
+          // A logo already there (Regenerate's, or one drawn before this sequence existed) is the one it keeps.
+          await this.drawLogo(subject, { replace: false });
 
           return { status: 'completed' };
         },
@@ -9382,7 +9405,15 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       shareEntry: (share) => liveShareEntryPage(this.env, this.name, share),
       kv: this.env.AUTH_KV,
       budget: () => this.budget,
-      ownerTitle: async () => this.safeDisplayName(),
+      // A refusal or a consent page is not failed for a name: an account that does not answer leaves it unnamed.
+      ownerName: async () => {
+        let name: string | null = null;
+
+        await settleLogged('share.owner_name_unread', { doing: "reading the owner's name for a share's visitor", otherwise: 'unavailable' },
+          async () => { name = await this.account.ownerName(); }, { workspace: this.name });
+
+        return name;
+      },
       ownerUserId: () => this.getOwnerUserId(),
       viewerKey: (share, userId) => shareViewerKey(this.env, share, userId),
       // `owner` shares' effects wait on the owner in the workspace's one queue, as every parked action does.
@@ -9769,16 +9800,17 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     const mission = missionOf(await this.loadSoulText());
     const subject = mission === null || isPlaceholderMission(mission) ? await this.workspaceTitle() ?? this.name : mission;
 
-    return { drawn: await this.drawLogo(subject), refusal: null };
+    return { drawn: await this.drawLogo(subject, { replace: true }), refusal: null };
   }
 
-  private async drawLogo(subject: string): Promise<boolean> {
+  /** `replace`: Regenerate's, over the logo there; the owed drawing keeps one already there. */
+  private async drawLogo(subject: string, { replace }: { readonly replace: boolean }): Promise<boolean> {
     const svg = await drawWorkspaceLogo(await this.oneShotOn('logo'), { subject, name: this.name });
 
     if (svg === null) return false;
     const { stub, caller } = await this.userHub();
 
-    return (await stub.setWorkspaceLogo(caller, this.name, svg)).drawn;
+    return (await stub.setWorkspaceLogo(caller, this.name, svg, replace)).drawn;
   }
 
   /** The owner's title for the workspace, trimmed; the owner's object refuses one `workspaceTitleProblem` names. */
@@ -9809,6 +9841,12 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     // The send admits the turn before its first await; only the wait is detached.
     const sent = this.workspaceAgentDeliveries().signals.send(signal);
     this.detachOwned(logged('genesis.turn_failed', { doing: "taking the workspace's first turn", otherwise: 'unavailable' }, async () => { await this.keepAliveWhile(() => sent); }, { workspace: this.name }));
+    // Owed by the creation, not its turn: a message that took the turn's place, or a turn that never opened, loses none.
+    const subject = workspaceLogoSubject(missionOf(await this.loadSoulText()));
+
+    if (subject !== null) {
+      await settleLogged('genesis.logo_unowed', { doing: "owing the workspace's logo", otherwise: 'unavailable' }, () => this.oweLogo(subject), { workspace: this.name });
+    }
 
     return { started: true };
   }

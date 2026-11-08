@@ -89,7 +89,7 @@ const TERMINAL_EFFECT_NAMES = [
   // Detached: its reflection is a model call that waits on no reply; the row is its one owner, retried and parked.
   'turn_lessons',
   'sleep_time', 'auto_title',
-  // Detached; a refused drawing completes and the monogram stays.
+  // Detached, owed once per workspace (its own sequence, not a turn's); a refused drawing completes and the monogram stays.
   'workspace_logo',
   'parent_report',
   // Detached: a hire's report of its turn, decided by the workspace that holds its hirer's roster once the answer

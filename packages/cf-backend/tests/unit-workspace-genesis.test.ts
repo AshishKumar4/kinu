@@ -4,7 +4,8 @@ import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  RunEventRecorder, SIGNAL_ID_METADATA_KEY, TERMINAL_EFFECT_RETRY_CEILING_MS, WORKSPACE_CREATED_EVENT, renderSoulMarkdown, summarizeSoul,
+  RunEventRecorder, SIGNAL_ID_METADATA_KEY, TERMINAL_EFFECT_RETRY_CEILING_MS, WORKSPACE_CREATED_EVENT, renderSoulMarkdown, sanitizeWorkspaceLogoSvg,
+  summarizeSoul,
 } from '@kinu.run/core';
 import { MockLanguageModelV3 } from 'ai/test';
 import { createTestUserDO, testOwner } from './helpers/user-do';
@@ -203,8 +204,9 @@ describe('the workspace takes its own first turn', () => {
   });
 });
 
-/** #18: only the genesis turn's `auto_title` row may replace the 'auto' stand-in, across ledger retries. */
-describe('the genesis turn names the workspace over its stand-in', () => {
+/** #18: only the genesis turn's `auto_title` row may replace the 'auto' stand-in, across ledger retries. 1108-logo: every
+ *  workspace is drawn one logo, whatever turn ran first and however it ended. */
+describe('a new workspace is named over its stand-in and drawn its one logo', () => {
   afterEach(() => { setSystemTime(); });
 
   const STAND_IN = 'Audit the OAuth callback flow';
@@ -214,7 +216,11 @@ describe('the genesis turn names the workspace over its stand-in', () => {
     outputTokens: { total: 1, text: 1, reasoning: undefined },
   };
 
-  async function createdWorkspace(nameOrigin: 'auto' | 'user') {
+  /** Each drawing a model makes looks apart, so the logo a workspace kept says which drawing it was. */
+  const drawn = (nth: number) => `<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="20" fill="${nth === 1 ? '#F6B57C' : '#7CB5F6'}"/></svg>`;
+
+  /** As creation leaves it, before its first turn; `capable: false` is one whose capability is not in yet. */
+  async function createdWorkspace(nameOrigin: 'auto' | 'user', { mission = MISSION, capable = true }: { mission?: string | null; capable?: boolean } = {}) {
     const user = createTestUserDO();
     const owner = await testOwner();
     const workspace = 'quiet-maple-a1b2c3d4';
@@ -224,8 +230,9 @@ describe('the genesis turn names the workspace over its stand-in', () => {
 
     if (capability === undefined) throw new Error('the workspace has no capability');
     const harness = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId: '0123456789abcdef0123456789abcdef' });
-    await harness.agent.installWorkspaceCapability(capability);
-    await harness.agent.setSoul(renderSoulMarkdown({ name: STAND_IN, mission: MISSION }));
+
+    if (capable) await harness.agent.installWorkspaceCapability(capability);
+    await harness.agent.setSoul(renderSoulMarkdown({ name: STAND_IN, ...(mission !== null && { mission }) }));
     const namingCalls: string[] = [];
     const drawingCalls: string[] = [];
 
@@ -233,10 +240,10 @@ describe('the genesis turn names the workspace over its stand-in', () => {
       doGenerate: async (options) => {
         // The logo's call, told apart by its prompt.
         if (JSON.stringify(options.prompt).includes('Design the logo')) {
-          drawingCalls.push('drawing');
+          drawingCalls.push(JSON.stringify(options.prompt));
 
           return {
-            content: [{ type: 'text', text: '<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="20" fill="#F6B57C"/></svg>' }],
+            content: [{ type: 'text', text: drawn(drawingCalls.length) }],
             finishReason: { unified: 'stop', raw: undefined }, usage: USAGE, warnings: [],
           };
         }
@@ -252,7 +259,7 @@ describe('the genesis turn names the workspace over its stand-in', () => {
       },
     });
 
-    return { user, owner, workspace, harness, namingCalls, drawingCalls };
+    return { user, owner, workspace, harness, capability, namingCalls, drawingCalls };
   }
 
   test('a failed naming call is retried by the ledger, and a later turn asks no model', async () => {
@@ -291,13 +298,13 @@ describe('the genesis turn names the workspace over its stand-in', () => {
     await turns.settle({ messageId: 'a-genesis', text: 'ok' });
     await joinHarnessFibers();
 
-    expect(drawingCalls).toEqual(['drawing']);
+    expect(drawingCalls).toHaveLength(1);
     const [entry] = (await user.userDO.listWorkspaces(owner)).entries;
     expect(entry?.logo).toBe('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><circle cx="32" cy="32" r="20" fill="#F6B57C"/></svg>');
 
     await turns.run('What did you find?');
     await joinHarnessFibers();
-    expect(drawingCalls).toEqual(['drawing']);
+    expect(drawingCalls).toHaveLength(1);
     harness.db.close();
     user.close();
   });
@@ -313,6 +320,82 @@ describe('the genesis turn names the workspace over its stand-in', () => {
 
     expect(namingCalls).toEqual([]);
     expect(await user.userDO.getWorkspaceTitle(owner, workspace)).toEqual({ displayName: STAND_IN, nameOrigin: 'user' });
+    harness.db.close();
+    user.close();
+  });
+
+  /** The logo the owner's roster shows for the one workspace, as the registry keeps it. */
+  const logoShown = async (user: ReturnType<typeof createTestUserDO>, owner: Awaited<ReturnType<typeof testOwner>>) =>
+    (await user.userDO.listWorkspaces(owner)).entries[0]?.logo ?? null;
+
+  test('a message that takes the genesis turn\'s place still leaves the workspace its logo, drawn once from its mission', async () => {
+    const { user, owner, harness, drawingCalls } = await createdWorkspace('user');
+    const turns = chatSessionTurns(harness.agent);
+
+    await turns.prepare({ messages: [{ role: 'user', content: 'Summarize the incident timeline first.' }] });
+    expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
+    await turns.settle({ messageId: 'a-first', text: 'ok' });
+    await joinHarnessFibers();
+
+    expect((await turnsRun(harness)).map((turn) => turn.provenance.kinuEvent)).toEqual([undefined]);
+    expect(drawingCalls).toHaveLength(1);
+    expect(drawingCalls[0]).toContain('Audit the OAuth callback flow');
+    expect(await logoShown(user, owner)).toBe(sanitizeWorkspaceLogoSvg(drawn(1)));
+
+    await turns.run('What did you find?');
+    await joinHarnessFibers();
+    expect(drawingCalls).toHaveLength(1);
+    harness.db.close();
+    user.close();
+  });
+
+  test('a workspace made without a mission is drawn from the owner\'s first words, once', async () => {
+    const { user, owner, harness, drawingCalls } = await createdWorkspace('user', { mission: null });
+    const turns = chatSessionTurns(harness.agent);
+
+    expect(await harness.agent.beginGenesisTurn()).toEqual({ started: false });
+    await turns.run('Watch the Workers release notes and tell me what changes for our deploys.');
+    await joinHarnessFibers();
+
+    expect(drawingCalls).toHaveLength(1);
+    expect(drawingCalls[0]).toContain('Watch the Workers release notes');
+    expect(await logoShown(user, owner)).toBe(sanitizeWorkspaceLogoSvg(drawn(1)));
+
+    await turns.run('And what changed for Durable Objects?');
+    await joinHarnessFibers();
+    expect(drawingCalls).toHaveLength(1);
+    harness.db.close();
+    user.close();
+  });
+
+  test('a creation whose first turn fails still draws its logo, once the workspace can reach its account', async () => {
+    const { user, owner, harness, capability, drawingCalls } = await createdWorkspace('user', { capable: false });
+
+    // Without its capability the workspace reaches no account: its first turn fails as it opens, and the logo waits.
+    expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
+    await harness.agent.harnessAgentsIdle();
+    await joinHarnessFibers();
+    expect(drawingCalls).toEqual([]);
+
+    await harness.agent.installWorkspaceCapability(capability);
+    setSystemTime(new Date(Date.now() + TERMINAL_EFFECT_RETRY_CEILING_MS));
+    await harness.agent.terminalRetryPass();
+    await joinHarnessFibers();
+
+    expect(drawingCalls).toHaveLength(1);
+    expect(await logoShown(user, owner)).toBe(sanitizeWorkspaceLogoSvg(drawn(1)));
+    harness.db.close();
+    user.close();
+  });
+
+  test('a logo already there is the one kept: the drawing a turn owes never replaces Regenerate\'s', async () => {
+    const { user, owner, harness } = await createdWorkspace('user', { mission: null });
+
+    expect(await harness.agent.regenerateWorkspaceLogo()).toEqual({ drawn: true, refusal: null });
+    await chatSessionTurns(harness.agent).run('Triage the open GitHub issues on the kinu repo.');
+    await joinHarnessFibers();
+
+    expect(await logoShown(user, owner)).toBe(sanitizeWorkspaceLogoSvg(drawn(1)));
     harness.db.close();
     user.close();
   });

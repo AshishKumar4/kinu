@@ -599,8 +599,8 @@ export class UserDO extends Agent<Env> {
     return this.workspaces.setWorkspaceDisplayName(caller, name, displayName, origin);
   }
 
-  setWorkspaceLogo(caller: UserCaller, name: string, svg: string): ReturnType<UserWorkspaces['setWorkspaceLogo']> {
-    return this.workspaces.setWorkspaceLogo(caller, name, svg);
+  setWorkspaceLogo(caller: UserCaller, name: string, svg: string, replace: boolean): ReturnType<UserWorkspaces['setWorkspaceLogo']> {
+    return this.workspaces.setWorkspaceLogo(caller, name, svg, replace);
   }
 
   getWorkspaceTitle(caller: UserCaller, name: string): ReturnType<UserWorkspaces['getWorkspaceTitle']> {

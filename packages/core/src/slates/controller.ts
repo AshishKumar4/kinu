@@ -116,8 +116,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   sharesChanged?(): Promise<'current' | 'pending'>;
   /** A live share of `slate` started or stopped: its server's authority changed, so its running app ends. */
   shareChanged?(slate: string): Promise<void>;
-  /** How the workspace's owner is named to people a share refuses: absent, "Its owner". */
-  ownerTitle?(): Promise<string>;
+  /** The name the workspace's owner gave their account, as people a share refuses are told it; absent or null, "its owner". */
+  ownerName?(): Promise<string | null>;
   /** Where `owner` shares' effects wait for the owner, and how a share's open ones retire with it; `only`, those of one
    *  standing approval's shape, as its owner takes it back. */
   readonly ownerEffects?: OwnerEffects & { retire(slate: string, only?: Omit<SharePreapproval, 'revision'>): void };
@@ -191,7 +191,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
       generation: (slate) => this.live.generation(slate),
       ...(ports.ownerEffects !== undefined && { ownerEffects: ports.ownerEffects }),
       ...(ports.toolContract !== undefined && { toolContract: ports.toolContract.bind(ports) }),
-    }, async () => (await ports.ownerTitle?.()) ?? 'Its owner');
+    }, async () => (await ports.ownerName?.()) ?? 'its owner');
     this.processes = new SlateProcesses({
       workspace: ports.workspace, builds: this.builds, pages: new EphemeralSlates(ports.sql), apps: ports.apps,
       resolve: (cred, id) => ports.resolve(cred, id),

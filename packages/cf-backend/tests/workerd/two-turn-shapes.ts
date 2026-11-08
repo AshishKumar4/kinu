@@ -503,7 +503,7 @@ export interface KillJourney {
   readonly claimOutcome: string | null;
 }
 
-/** A genesis turn answered and its close held open on the parked logo call, read just before the activation dies. */
+/** A genesis turn answered while the logo its workspace's creation owes is held open on its parked call, read just before the activation dies. */
 export interface HeldClose {
   readonly workspace: string;
   readonly parkedLogo: boolean;

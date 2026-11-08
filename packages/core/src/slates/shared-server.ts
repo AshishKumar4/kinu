@@ -17,6 +17,7 @@ import type { SlateEffectVerdict } from '../safety/deferred-approval';
 import { sha256Hex } from '../safety/argument-digest';
 import type { SlateInvocation } from './surface';
 import type { SlateCaller } from './caller';
+import { AGENT_ASK_MEMBER, shareMemberRefusal } from './members';
 
 /** Where a shared server's effects wait for its owner, how a send takes the approval, and how its run settles it. */
 export interface OwnerEffects {
@@ -86,14 +87,25 @@ function payloadOf(call: Pick<ServerCall, 'args'>): JsonValue {
   return plainData(call.args.length === 1 ? call.args[0] ?? null : [...call.args]);
 }
 
-/** Why a slate shared for each person's own access lends nothing, and who can change that. */
-function ownAccessRefusal(slate: string, owner: string): KinuError {
-  return new KinuError('denied', `Slate ${slate} is shared for each person's own access, so its server uses no one's connections. `
-    + `${owner} can turn on My access in its share sheet; each person's own data shows in their own parts.`);
+/** Why an app shared for each person's own access lends nothing, and what its owner can change, said to whoever opened it. */
+function ownAccessRefusal(owner: string): KinuError {
+  return new KinuError('denied', `This shared app runs on each visitor's own access, so it uses nothing of ${owner}'s. `
+    + `${owner.charAt(0).toUpperCase()}${owner.slice(1)} can let it use theirs: in its share settings, set "It runs with" to My access.`);
+}
+
+/** Why a member only the owner's own app reaches is refused on a shared one, however it is shared; null for any other. */
+function ownerOnlyRefusal(address: ServerCall['address'], owner: string): KinuError | null {
+  if (address.namespace === 'agent' && address.member === AGENT_ASK_MEMBER) {
+    return new KinuError('denied', `This app's chat goes to ${owner}'s own agent, which answers only in Kinu itself, never on a shared link.`);
+  }
+
+  const refusal = shareMemberRefusal(address);
+
+  return refusal === null ? null : new KinuError('denied', refusal);
 }
 
 export class SharedServers {
-  constructor(private readonly deps: SharedServerDeps, private readonly owner: () => Promise<string> = async () => 'Its owner') {}
+  constructor(private readonly deps: SharedServerDeps, private readonly owner: () => Promise<string> = async () => 'its owner') {}
 
   /** What the slate's server acts with now. */
   authorityOf(slate: string): ServerAuthority {
@@ -154,7 +166,7 @@ export class SharedServers {
    * Why the call is beyond the shared servers on its way now (lends nothing, or does not reach it); null if within. A
    * fenced call (`ServerCall.fence`) is first held to the sharing its process and request began under.
    */
-  beyond(call: Pick<ServerCall, 'slate' | 'chain' | 'address' | 'fence'>, owner = 'Its owner'): KinuError | null {
+  beyond(call: Pick<ServerCall, 'slate' | 'chain' | 'address' | 'fence'>, owner = 'its owner'): KinuError | null {
     const stale = call.fence === undefined ? null : this.lineage(call.slate, call.fence.lineage, call.fence.record);
 
     if (stale !== null) return stale;
@@ -179,7 +191,7 @@ export class SharedServers {
   private stillUnbounded(call: ServerCall): Effect.Effect<null, KinuError> {
     return Effect.gen({ self: this }, function* () {
       yield* this.fenced(call);
-      const now = this.weigh(call, 'Its owner');
+      const now = this.weigh(call, 'its owner');
 
       if (now.kind === 'refused') return yield* now.error;
 
@@ -198,7 +210,7 @@ export class SharedServers {
   private sendNow(call: ServerCall, origin: string, approval: string | null, root: Readonly<Record<string, string>>): Effect.Effect<ApprovalSpend | null, KinuError> {
     return Effect.gen({ self: this }, function* () {
       yield* this.fenced(call);
-      const now = this.weigh(call, 'Its owner', root);
+      const now = this.weigh(call, 'its owner', root);
 
       if (now.kind === 'refused') return yield* now.error;
 
@@ -222,12 +234,16 @@ export class SharedServers {
     const [origin] = servers;
 
     if (origin === undefined) return { kind: 'unbounded' };
+    // First: no sharing of any server on its way lends it, so turning one to the owner's access would not either.
+    const ownerOnly = ownerOnlyRefusal(call.address, owner);
+
+    if (ownerOnly !== null) return { kind: 'refused', error: ownerOnly };
 
     for (const { slate, authority } of servers) {
       if (authority.kind === 'none') return { kind: 'refused', error: this.lendsNothing(slate, owner) };
 
       if (authority.kind === 'grant' && grantAdmits(authority.grant, call.slate, call.address.namespace, call.address.member) === null) {
-        return { kind: 'refused', error: new KinuError('denied', `Slate ${slate} is shared with the owner's access, which does not reach ${call.address.namespace}.${call.address.member}`) };
+        return { kind: 'refused', error: new KinuError('denied', `This shared app runs on ${owner}'s access, which does not reach ${call.address.namespace}.${call.address.member}: ${owner} can add it in its share settings`) };
       }
     }
 
@@ -245,11 +261,11 @@ export class SharedServers {
 
     const edited = shares.find((share) => share.editedBy !== undefined)?.editedBy;
 
-    if (shares.some((share) => share.mode === 'own')) return ownAccessRefusal(slate, owner);
+    if (shares.some((share) => share.mode === 'own')) return ownAccessRefusal(owner);
 
     return edited === undefined
-      ? new KinuError('denied', `Slate ${slate} changed since its owner approved what it reaches: it acts on their access again once they approve it`)
-      : new KinuError('denied', `${edited}'s change to slate ${slate} is awaiting ${owner}'s review: it acts on their access again once they approve it`);
+      ? new KinuError('denied', `This shared app (${slate}) changed since ${owner} approved what it uses: it works again once they approve it`)
+      : new KinuError('denied', `${edited}'s change to this shared app (${slate}) waits for ${owner}'s review: it works again once they approve it`);
   }
 
   /** The owner asked about one exact effect of the shared server `origin`: its approval's id, or the refusal it waits on. */

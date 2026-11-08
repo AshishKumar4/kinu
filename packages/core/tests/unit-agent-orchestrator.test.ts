@@ -400,15 +400,12 @@ describe('AgentOrchestrator — the settle’s claimable parts', () => {
       }
     });
 
-    test("the turn that answered a workspace's creation names and draws it however it ended; no other turn draws it", () => {
+    test("the turn that answered a workspace's creation names it however it ended", () => {
       for (const status of ['completed', 'error'] as const) {
         const effects = owed(workspace(WORKSPACE_CREATED_EVENT), { status, completed: status === 'completed' });
 
         expect(named(effects, 'auto_title')).toEqual([{ subject: 'Keep billing honest', standIn: true }]);
-        expect(named(effects, 'workspace_logo')).toEqual([{ subject: 'Keep billing honest' }]);
       }
-
-      expect(named(owed(workspace(null)), 'workspace_logo')).toEqual([]);
     });
   });
 

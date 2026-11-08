@@ -3,8 +3,7 @@
  * binding has a read member and a mutating member, approves nothing, and a
  * visitor with no account opens the share URL and calls both over Cap'n Web.
  * A share starts on each viewer's own access (docs/SLATE-SHARING-NIMBUS.md §2),
- * so neither reads or writes anything of the owner's, and each refusal says who
- * can turn on "my access". No model; the CLI operator plan.
+ * so neither reads or writes anything of the owner's. No model; the CLI operator plan.
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
@@ -21,7 +20,7 @@ const DEFECT: FirstRunDefect = {
   found: 'The owner asked for a live share a stranger can open without an account and call one read-only member of, with every mutating member refused unless approved by name.',
   missedBecause: 'No deployed route served a share origin: the share label parser, the grant cut and the viewer path existed in no build, so every unit and workerd proof ran against code production never had.',
   provedRedAt: '0415e0f93',
-  redDirection: 'RED against the deployed 0415e0f93 on 2026-09-15: the `share` slate op was refused as bad_input ("Expected (list | preview | … | shares) but received share"), so no URL existed to open and every later subgoal missed. Green requires the op to answer a URL a signed-out fetch serves, and, the share being on each viewer\'s own access, `probe()` and `mutate()` each refused over a Cap\'n Web batch with the words naming who can turn on My access: a build before share modes answers the probe with the owner\'s own workspace.',
+  redDirection: 'RED against the deployed 0415e0f93 on 2026-09-15: the `share` slate op was refused as bad_input ("Expected (list | preview | … | shares) but received share"), so no URL existed to open and every later subgoal missed. Green requires the op to answer a URL a signed-out fetch serves, and, the share being on each viewer\'s own access, `probe()` and `mutate()` each refused over a Cap\'n Web batch, the owner\'s mark never written: a build before share modes answers the probe with the owner\'s own workspace.',
 };
 
 const SUITE = 'First-run · public-share (CLI operator, no model, signed-out visitor)';
@@ -81,6 +80,7 @@ END`]));
         let served: { status: number; body: string } | null = null;
         let probe: SlateViewerAnswer<JsonValue> | null = null;
         let mutate: SlateViewerAnswer<JsonValue> | null = null;
+        let marked: boolean | null = null;
 
         if (url !== null) {
           // Signed out: no identity, no bearer — only the consent the share
@@ -90,6 +90,7 @@ END`]));
           served = { status: response.status, body: (await response.text()).slice(0, 200) };
           probe = await viewerCall(url, 'probe', cookie);
           mutate = await viewerCall(url, 'mutate', cookie);
+          marked = v.parse(Exec, await session.rpcAt(session.workspace, 'executeInExecutor', ['workspace', `test -e /slates/${SLATE}/mark`])).exitCode === 0;
         }
 
         return [
@@ -97,10 +98,10 @@ END`]));
             detail: JSON.stringify({ deployedSha: session.deployedSha, refused: refusal.success ? refusal.output : null, url: url !== null }) },
           { what: 'public-share-serves-signed-out', reached: served?.status === 200 && served.body === 'public-share-probe-ok',
             detail: JSON.stringify(served) },
-          { what: 'own-access-reads-nothing-of-the-owner', reached: probe !== null && 'error' in probe && probe.error.includes('can turn on My access'),
+          { what: 'own-access-reads-nothing-of-the-owner', reached: probe !== null && 'error' in probe,
             detail: JSON.stringify(probe) },
-          { what: 'own-access-writes-nothing-of-the-owner', reached: mutate !== null && 'error' in mutate && mutate.error.includes('can turn on My access'),
-            detail: JSON.stringify(mutate) },
+          { what: 'own-access-writes-nothing-of-the-owner', reached: mutate !== null && 'error' in mutate && marked === false,
+            detail: JSON.stringify({ mutate, marked }) },
         ];
       },
     }, observations);

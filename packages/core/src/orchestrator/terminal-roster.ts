@@ -179,8 +179,6 @@ export function declareTerminalRoster(
 
   const naming = autoTitleEffect(facts, actor);
 
-  owed.push(...logoEffect(facts, actor));
-
   // Below is completed-Build only, except a new workspace's naming, which is owed however its first turn ended.
   if (!completed || facts.workMode === 'plan') {
     if (naming?.standIn === true) owed.push(naming.effect);
@@ -339,15 +337,6 @@ function completedBuildEffects(
   if (naming !== null) owed.push(naming);
 
   return owed;
-}
-
-/** Owed by a new workspace's first turn. */
-function logoEffect(facts: TerminalTurnFacts, actor: TerminalActor): OwedEffect[] {
-  const { role } = actor;
-
-  if (role.kind !== 'workspace' || role.event !== WORKSPACE_CREATED_EVENT) return [];
-
-  return [{ name: 'workspace_logo', scope: facts.messageId, lane: 'detached', input: { subject: autoTitleInput({ mission: role.mission }, facts.userText).subject } }];
 }
 
 function autoTitleEffect(

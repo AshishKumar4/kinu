@@ -181,15 +181,14 @@ it("a listed share is told to the Gallery when listed, when its slate builds ane
   expect(await probe().told()).toEqual([created.share.id]);
 });
 
-it("shared on each viewer's own access, the slate's server uses no one's connections, and says who can change that", async () => {
+it("shared on each viewer's own access, the slate's server uses no one's connections", async () => {
   const probe = subject('own-access-share');
   await probe.start();
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share([], 'own')).value);
   const refused = await probe.viewerRefusals(created.share.handle, CLAIM);
 
-  // The owner's file is the owner's: the server refuses to read or write it for anyone, and names the way to "My access".
-  expect(refused.probe).toContain('can turn on My access');
-  expect(refused.mutate).toContain('can turn on My access');
+  // The owner's file is the owner's: the server refuses to read or write it for anyone.
+  expect([refused.probe, refused.mutate]).not.toContain('mutate answered');
 });
 
 it("a mutating member is granted by approval only, and on its owner's access each call of it waits for the owner's word", async () => {

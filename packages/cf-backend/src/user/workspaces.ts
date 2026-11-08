@@ -687,8 +687,9 @@ export class UserWorkspaces {
     }));
   }
 
-  // Sanitized again at this boundary.
-  async setWorkspaceLogo(caller: UserCaller, name: string, svg: string): Promise<{ drawn: boolean }> {
+  /** Sanitized again at this boundary. `replace`: Regenerate's, over the logo there; else one already there is kept, so
+   *  a workspace's owed drawing never replaces the logo it has. `drawn`: this drawing is the logo now. */
+  async setWorkspaceLogo(caller: UserCaller, name: string, svg: string, replace: boolean): Promise<{ drawn: boolean }> {
     const resolved = await this.host.requireTier(caller, 'workspaces.rename_self');
     validateWorkspaceName(name);
 
@@ -699,11 +700,18 @@ export class UserWorkspaces {
 
       const kept = sanitizeWorkspaceLogoSvg(svg);
 
-      if (kept === null) this.host.sqlx(`DELETE FROM workspace_logos WHERE name = ?`, name);
-      else this.host.sqlx(`INSERT OR REPLACE INTO workspace_logos (name, svg) VALUES (?, ?)`, name, kept);
-      this.rosterChanged(name);
+      if (kept === null) return { drawn: false };
 
-      return { drawn: kept !== null };
+      const stored = this.host.sqlx(
+        replace
+          ? `INSERT OR REPLACE INTO workspace_logos (name, svg) VALUES (?, ?) RETURNING name`
+          : `INSERT INTO workspace_logos (name, svg) VALUES (?, ?) ON CONFLICT (name) DO NOTHING RETURNING name`,
+        name, kept,
+      ).length > 0;
+
+      if (stored) this.rosterChanged(name);
+
+      return { drawn: stored };
     }));
   }
 
