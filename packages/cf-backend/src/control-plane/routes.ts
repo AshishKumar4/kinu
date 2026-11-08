@@ -49,6 +49,7 @@ type ControlPlaneReach = IndexFeedSink & Pick<ControlPlaneDO,
   | 'settleAudit'
   | 'noteAccountStanding'
   | 'createInvite'
+  | 'returnAddress'
 >;
 
 type ControlTarget = ActionTarget & Pick<OrchestratorAgent,

@@ -265,6 +265,13 @@ export class ControlPlaneDO extends DurableObject<Env> {
     return await cpStore.createInvite(this.store, createdBy, Date.now());
   }
 
+  /** A retired address made `userId`'s to take again (`MailNameDO.returnTo`), as an operator's account action asks. */
+  async returnAddress(caller: PresentedCaller, label: string, userId: string) {
+    await this.gate(caller, 'accounts.write');
+
+    return await this.env.MAILNAME.get(this.env.MAILNAME.idFromName(label)).returnTo(userId);
+  }
+
   /** Spends an invite link for the signed-in `userId` the Worker's route names. */
   async redeemInvite(caller: PresentedCaller, token: string, userId: string): ReturnType<typeof cpStore.redeemInvite> {
     await this.gate(caller, 'invite.redeem');

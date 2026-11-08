@@ -35,7 +35,7 @@ export interface MailRoutesEnv extends OwnerCapabilityEnv {
   readonly MAIL_ACCOUNTS?: string;
   readonly MAIL_ALIASES?: string;
   readonly CONTROL_PLANE_ADMINS?: string;
-  readonly MAILNAME: ObjectNamespace<unknown, Pick<MailNameDO, 'lookup' | 'claim'>>;
+  readonly MAILNAME: ObjectNamespace<unknown, Pick<MailNameDO, 'standing' | 'claim'>>;
   readonly MAILBOX: ObjectNamespace<unknown, MailboxReach>;
   readonly UserDO: ObjectNamespace<unknown, Pick<UserDO, 'getConfig' | 'listActiveWorkspaces' | 'limits_class'>>;
   readonly OrchestratorAgent: ObjectNamespace<unknown, Pick<OrchestratorAgent, 'readOwnerMail'>>;
@@ -116,9 +116,10 @@ async function usernameRefusal(c: MailContext, username: string): Promise<'inval
 
   // The deployment's own addresses are its config's; a mistaken config keeps every name until it is fixed.
   if (aliases === 'malformed' || aliases.has(username)) return 'reserved';
-  const holder = await objectNamed(c.env.MAILNAME, username).lookup();
+  const standing = await objectNamed(c.env.MAILNAME, username).standing(c.get('identity').userId);
 
-  if (holder !== null) return holder.user_id === c.get('identity').userId ? null : 'taken';
+  // Theirs: held by them, or retired from them as their account was deleted, which signing in again lets them take back.
+  if (standing !== 'unclaimed') return standing === 'theirs' ? null : 'taken';
 
   // The name an address reaches (`privacy` → `ashish`) is its operators' to hold: anyone holding it reads the deployment's mail.
   return [...aliases.values()].includes(username) && !isListedOperator(c.env, c.get('identity').email) ? 'reserved' : null;

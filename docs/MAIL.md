@@ -438,9 +438,12 @@ CREATE TABLE IF NOT EXISTS mail_name (
 );
 ```
 
-A claimed label routes mail. Nothing renames or retires one yet: a former username's routing and a retired label's
-refusal are designed (a rename touches no row in the Mailbox), and their states were dropped with the 2026-10-20 schema
-consolidation until something writes them.
+A claimed label routes mail. Deleting an account retires its label: the row stays with an empty `user_id`, so it routes
+nothing and no other account can claim it, and the object keeps the account it was retired from in its own key-value
+storage (`mail:retired-from`). That account alone may claim it again: its id is its sign-in email's, so the same person
+signing in again takes their address back (owner, 2026-11-08). A label retired before that record existed is handed
+back by an operator from the control plane's Accounts page (`account.address_return`), to the account the operator
+names; one held, never claimed, or retired from another account is refused. Nothing renames a label yet.
 
 **Who may have an address:**
 

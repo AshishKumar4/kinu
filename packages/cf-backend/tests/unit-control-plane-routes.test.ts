@@ -203,6 +203,12 @@ function harness(options: World = {}): Harness {
 
       return await store.createInvite(sql, createdBy, Date.now());
     },
+    // A retired label, as an earlier account deletion left it: handed back.
+    async returnAddress(caller: PresentedCaller) {
+      await gate(caller, 'accounts.write');
+
+      return 'returned' as const;
+    },
   };
 
   const emptyListStub = (workspace: string, method: string) => async () => {
@@ -678,6 +684,7 @@ describe('mutations', () => {
       { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' },
       { action: 'workspace.remove', userId: USER_ID, workspace: 'alpha', confirm: 'alpha' },
       { action: 'workspace.turn_read', userId: USER_ID, workspace: 'alpha', turnId: 't', reason: 'incident' },
+      { action: 'account.address_return', email: 'me@ashishkumarsingh.com', label: 'ashish' },
       { action: 'nonsense' },
     ];
 
@@ -692,7 +699,7 @@ describe('mutations', () => {
     expect(store.listPendingAudit(h.sql)).toEqual([]);
     expect(new Set(rows.map((row) => row.operation))).toEqual(new Set([
       'job_cancel', 'job_retry', 'job_dismiss', 'jobs_clear',
-      'approvals_decide', 'shell_grants_revoke', 'workspace_remove', 'workspace_turn_read', 'action_rejected',
+      'approvals_decide', 'shell_grants_revoke', 'workspace_remove', 'workspace_turn_read', 'account_address_return', 'action_rejected',
     ]));
     h.close();
   });
