@@ -1,6 +1,6 @@
 import { askedBy } from "@/components/QuestionCard";
 import { Effect, Cause } from 'effect';
-import { startTransition, useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useParams, useLocation, Link, Navigate, useMatch, useNavigate, useSearchParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
@@ -313,12 +313,12 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
   const dropped = state.connectionStatus === "disconnected";
 
   useEffect(() => {
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    detach(Effect.catchCause(Effect.gen(function* () {
       const taken = yield* Effect.promise(async () => touchWorkspace(agentId));
-
+    
       if (!taken) onGone(agentId);
       reportSide("visit", null);
-    }), sideFailed("visit"))));
+    }), sideFailed("visit")));
   }, [agentId, dropped, onGone, reportSide, sideFailed]);
 
   // Steer-as-Branch: runs the draft as a parallel head while the live turn continues.
@@ -328,12 +328,12 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
     if (!t || !live || ui.mode === "plan") return;
     setBranchNotice(null);
     // Clear the draft only once the branch is accepted, and only if it was not edited meanwhile.
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    detach(Effect.catchCause(Effect.gen(function* () {
       const result = yield* Effect.promise(async () => state.rpc("branchTurn", [t]));
-
+    
       if (result.accepted) ui.updateDraft((current) => current.trim() === draft ? "" : current);
       else setBranchNotice(result.reason ?? "Branching is unavailable right now.");
-    }), showing(setBranchNotice))));
+    }), showing(setBranchNotice)));
   }, [ui.mode, live, state]);
 
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.

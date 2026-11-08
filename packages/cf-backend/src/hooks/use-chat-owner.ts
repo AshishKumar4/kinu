@@ -1,6 +1,5 @@
 /** One chat's connection and conversation: its socket, its transcript and sends, and the opening it reads. */
 import { useState, useCallback, useEffect, useRef, useMemo, type RefObject } from "react";
-import { flushSync } from "react-dom";
 import { useAgent } from "agents/react";
 import { Cause, Effect } from "effect";
 import {
@@ -464,8 +463,8 @@ export function useChatOwner(target: KinuActorAddress, extension: RefObject<Work
     const aborting = sendLatch.current.owner;
     const landing = [...unlanded.current.values()];
 
-    // Drawn with the Stop itself, never after it: Stop is pressed inside a transition, and the SDK's status is not.
-    if (landing.length > 0) flushSync(() => { setStopsLanding((stops) => stops + 1); });
+    // Drawn with the Stop press itself.
+    if (landing.length > 0) setStopsLanding((stops) => stops + 1);
 
     // The latch is released and the jobs read whether or not the abort was answered; its failure is the caller's.
     return settle(Effect.ensuring(Effect.asVoid(Effect.promise(() => Promise.all([stop(), rpc("cancelCurrentWork", [])]))), Effect.gen(function* () {

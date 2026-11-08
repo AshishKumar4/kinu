@@ -1,8 +1,8 @@
 /** What the owner and the branches added to a conversation's turns: a rating per answer, and the takes of a turn. */
 import { Cause, Effect } from "effect";
-import { startTransition, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { AlternateTakeSet, TakePickOutcome } from "@kinu.run/core";
-import { settle } from "@kinu.run/core/obs";
+import { detach } from "@kinu.run/core/obs";
 import { readFailureText } from "@kinu.run/core";
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 
@@ -36,18 +36,18 @@ export function useTurnAnnotations({ rpc, connected, live, settledBranches, repo
 
   useEffect(() => {
     if (!connected) return;
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    detach(Effect.catchCause(Effect.gen(function* () {
       setFeedback(yield* Effect.promise(async () => rpc("listTurnFeedback", [])));
       report("feedback", null);
-    }), failed("feedback"))));
+    }), failed("feedback")));
   }, [connected, rpc, report, failed]);
 
   useEffect(() => {
     if (!connected || live) return;
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    detach(Effect.catchCause(Effect.gen(function* () {
       setTakes(yield* Effect.promise(async () => rpc("listAlternateTakes", [])));
       report("takes", null);
-    }), failed("takes"))));
+    }), failed("takes")));
   }, [connected, live, rpc, settledBranches, report, failed]);
 
   const rate = useCallback(async (messageId: string, rating: Rating | null) => {
