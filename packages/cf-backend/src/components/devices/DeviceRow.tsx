@@ -1,7 +1,6 @@
 import { Button } from "@/components/ui/Button";
 import { Effect } from 'effect';
 import { useState, type KeyboardEvent } from "react";
-import { startTransition } from "react";
 import {
   DesktopTowerIcon, PencilSimpleIcon, TrashIcon,
 } from "@phosphor-icons/react";
@@ -11,7 +10,7 @@ import {
 } from "@/lib/user-api";
 import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode } from "@kinu.run/core";
-import { chainOf, detach, settle, showing } from "@kinu.run/core/obs";
+import { chainOf, detach, showing } from "@kinu.run/core/obs";
 import { Row, RowTile } from "@/components/ui/Row";
 import { Menu } from "@/components/ui/Menu";
 import { Chip } from "@/components/ui/Chip";
@@ -71,14 +70,14 @@ export function DeviceRow({
         <Button size="sm" disabled={acknowledging}
           onClick={() => {
             setAcknowledging(true);
-            startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+            detach(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
               yield* Effect.promise(async () => onAcknowledge());
             }), showing((chain) => {
               // A rejection escaping `onError` still leaves the row visibly unacknowledged.
               onError(`Could not acknowledge the device warning: ${chain}`);
             })), Effect.sync(() => {
               setAcknowledging(false);
-            }))));
+            })));
           }}>
           {acknowledging ? "Acknowledging…" : "Acknowledge"}
         </Button>}>

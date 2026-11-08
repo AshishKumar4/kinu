@@ -4,7 +4,7 @@
  * are placed once they hold something, and the column holds the title even when My stuff is the only place.
  */
 import { Cause, Effect, Result } from 'effect';
-import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import {
@@ -19,7 +19,7 @@ import {
   type SkillFileRefusal,
   workspaceRoute,
 } from "@kinu.run/core";
-import { attempt, detach, diagnostics, settle, showing } from "@kinu.run/core/obs";
+import { attempt, detach, diagnostics, showing } from "@kinu.run/core/obs";
 import { WIDE_QUERY, useMediaQuery } from "@/hooks/use-media-query";
 import { ToolPage } from "@/components/ui/PageHeader";
 import { NavRow } from "@/components/ui/NavRow";
@@ -218,10 +218,10 @@ function DriveHead({ tab, path, subtitle }: { tab: DriveTab; path: string; subti
 function useSeeingShared(seeing: boolean, reread: () => void, fail: (chain: string) => void): void {
   useEffect(() => {
     if (!seeing) return;
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    detach(Effect.catchCause(Effect.gen(function* () {
       yield* Effect.promise(markSharedSeen);
       reread();
-    }), showing(fail))));
+    }), showing(fail)));
   }, [seeing, reread, fail]);
 }
 
@@ -678,19 +678,19 @@ function useTransfers(path: string, listing: AsyncResourceControl<DriveListing>)
     const drop = (): void => setTransfers((rows) => rows.filter((row) => row.id !== id));
 
     setTransfers((rows) => [...rows, { ...sending, id, status: "uploading", progress: 0, stop: () => abort.abort() }]);
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    detach(Effect.catchCause(Effect.gen(function* () {
       yield* Effect.promise(async () => work({ signal: abort.signal, progress: (share) => change({ progress: share }) }));
       change({ status: "landed" });
       reload();
     }), (failed) => {
       // Storage past its limit is the limit's dialog, and the tile goes: nothing of the file landed.
       if (offerRefusal({ cause: Cause.squash(failed) }, { file: { name: sending.name, size: sending.size } })) return Effect.sync(drop);
-
+    
       return showing((chain) => {
         if (abort.signal.aborted) drop();
         else change({ status: "failed", error: chain, stop: drop });
       })(failed);
-    })));
+    }));
   }, [reload, offerRefusal]);
 
   // Landed: leaves once the listing holds what it landed as, and is forgotten then, so a later delete cannot bring it back.
@@ -746,9 +746,9 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     transfer({ folder: path, name, size, lands: name }, (watch) => uploadFolder(path, picks, watch));
   };
 
-  const background = (work: () => Promise<void>): void => {
-    startTransition(() => settle(Effect.catchCause(Effect.promise(work), showing(setNotice))));
-  };
+  const background = useCallback((work: () => Promise<void>): void => {
+    detach(Effect.catchCause(Effect.promise(work), showing(setNotice)));
+  }, []);
 
   // Entered as its link's visitor enters it, through the page that hands this account its ticket.
   const openLive = (row: SharedRow): void => {

@@ -1693,3 +1693,30 @@ describe('the home creation form, as a browser submits it', () => {
     });
   });
 });
+
+// The owner, 2026-11-04: "unable to open any other kinu views sometimes while on a chat". A send's landing is known only
+// when its turn ends; run as a transition, React held every navigation behind it, the sidebar's included.
+describe('a turn the chat is waiting on never holds the app on its page', () => {
+  test('sent and still running, the sidebar opens the page it names', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+
+      try {
+        await page.setViewport({ width: 1440, height: 900 });
+        await page.goto(`${origin}/gallery.html?frame=workspaceshell`, { waitUntil: 'networkidle0' });
+        await page.waitForSelector('[data-composer-root] textarea:not([disabled])');
+        await page.evaluate(() => { document.documentElement.dataset.galleryChatHold = '1'; });
+        await page.type('[data-composer-root] textarea', 'Read the api Worker logs from the last hour');
+        await page.click('[data-composer-root] button[aria-label="Send"]');
+        await page.waitForFunction(() => document.documentElement.dataset.galleryChatSends === '1');
+
+        await page.click('[data-rail] nav[aria-label="Primary"] a[href="/workspaces"]');
+        // Held behind the turn, the chat stays and this waits out the row.
+        await page.waitForSelector('[data-gallery-blank]');
+        expect(await page.$('[data-composer-root]')).toBeNull();
+      } finally {
+        await page.close();
+      }
+    });
+  });
+});

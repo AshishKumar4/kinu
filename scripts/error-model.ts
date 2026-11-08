@@ -526,6 +526,10 @@ const DETACH_DROPS_PENDING = 'detach in a transition or action returns nothing R
 
 const DETACH_ONLY_AT_REACT = 'detach runs only where its caller never awaits: a timer, a listener, or a function a component hands out';
 
+/** React entangles every later transition with a pending async one, the router's navigations included, so a bare
+ *  transition run for its effect held the app on its page until the effect settled (a turn's whole send, 2026-11-08). */
+const BARE_TRANSITION = 'a bare startTransition shows no pending state and holds every navigation until its work settles; run the work with detach, or draw its wait with useTransition';
+
 /** A Hono app's registrations: each takes its handlers after the path. */
 const ROUTE_METHODS: readonly string[] = ['get', 'post', 'put', 'delete', 'patch', 'options', 'all', 'use', 'on'];
 
@@ -589,6 +593,11 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
 
     walk(parsed.root, (node) => {
       const { raw } = node;
+
+      if (raw.type === 'ImportDeclaration' && raw.source.value === 'react' && raw.specifiers.some((specifier) => specifier.type === 'ImportSpecifier'
+        && specifier.imported.type === 'Identifier' && specifier.imported.name === 'startTransition')) {
+        findings.push(`${file}:${String(parsed.lineAt(node.start))}: ${BARE_TRANSITION}`);
+      }
 
       if (raw.type !== 'ImportDeclaration' || !isFailureModule(file, raw.source.value)) return;
 

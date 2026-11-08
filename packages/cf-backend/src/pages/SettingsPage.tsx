@@ -1,6 +1,6 @@
 import { Effect, Cause } from 'effect';
 import { SaveBar } from "@/components/ui/SaveBar";
-import { startTransition, useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { Button, buttonClass } from "@/components/ui/Button";
@@ -26,7 +26,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { WorkspaceLogo } from "@/components/ui/Marks";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import { renderThrownChain, settle } from '@kinu.run/core/obs';
+import { detach, renderThrownChain } from '@kinu.run/core/obs';
 import { useLabelledStep } from '@/hooks/use-labelled-step';
 import type { WorkspaceRpc } from "@/lib/workspace-rpc";
 import { downloadWorkspaceArchive } from "@/lib/workspace-archive";
@@ -169,15 +169,15 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
 
   // A failed field is recorded in place rather than given a value Save could write over the stored setting.
   const loadRpcFields = useCallback((): void => {
-    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+    detach(Effect.catchCause(Effect.gen(function* () {
       const [mode, evolution] = yield* Effect.promise(async () => Promise.allSettled([
         rpc("getShellApprovalMode", []),
         rpc("getEvolutionConfig", []),
       ]));
-
+    
       if (mode.status === "rejected") failApproval({ cause: mode.reason });
       else hydrateApproval(mode.value?.mode ?? "strict");
-
+    
       if (evolution.status === "rejected") failAdvisor({ cause: evolution.reason });
       else hydrateAdvisor({
         advisorEnabled: evolution.value?.advisorEnabled ?? false,
@@ -186,7 +186,7 @@ export function WorkspaceSettings({ workspace: agentId, title, titleDraft, logo,
     }), (failed) => Effect.sync(() => {
       const cause = Cause.squash(failed);
       failApproval({ cause }); failAdvisor({ cause });
-    }))));
+    })));
   }, [
     rpc, hydrateApproval, failApproval,
     hydrateAdvisor, failAdvisor,
