@@ -90,11 +90,59 @@ const EXA_DIRECT: DirectSearchApi = {
  */
 const EXA: WebSearchProviderEntry = { label: 'Exa', cloudflare: true, direct: EXA_DIRECT };
 
-/** Linkup: 3.17 through Cloudflare, 32 answerable, 26 current, junk in 21; $5.00 per 1,000. */
-const LINKUP: WebSearchProviderEntry = { label: 'Linkup', cloudflare: true, direct: null };
+/**
+ * Linkup's own search (docs.linkup.so search reference, read 2026-11-08) with the person's key: its docs set no most
+ * results. A result that is no web page (an image) is passed over. Its refusal says why in `error.message` (401
+ * `UNAUTHORIZED` "Unauthorized action", measured 2026-11-08).
+ */
+const LINKUP_DIRECT: DirectSearchApi = {
+  keyPage: 'https://app.linkup.so',
+  maxResults: Number.POSITIVE_INFINITY,
+  request: ({ query, limit, key }) => ({
+    url: 'https://api.linkup.so/v1/search',
+    init: {
+      method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ q: query, depth: 'standard', outputType: 'searchResults', maxResults: limit }),
+    },
+  }),
+  answer: v.pipe(
+    v.object({ results: v.array(v.object({ type: v.string(), url: v.string(), name: v.optional(v.nullable(v.string())), content: v.optional(v.nullable(v.string())) })) }),
+    v.transform(({ results }): SearchAnswer => ({
+      hits: results.filter((hit) => hit.type === 'text').map((hit) => ({ url: hit.url, title: hit.name ?? undefined, snippet: hit.content ?? undefined })),
+    })),
+  ),
+  refusal: v.pipe(v.object({ error: v.object({ message: v.string() }) }), v.transform(({ error }) => error.message)),
+};
 
-/** Ceramic.ai, the API's own default: 1.72 through Cloudflare, 11 answerable, junk in 18; $0.25 per 1,000. */
-const CERAMIC: WebSearchProviderEntry = { label: 'Ceramic', cloudflare: true, direct: null };
+/** Linkup: 3.17 through Cloudflare, 32 answerable, 26 current, junk in 21; $5.00 per 1,000. Also with the person's key. */
+const LINKUP: WebSearchProviderEntry = { label: 'Linkup', cloudflare: true, direct: LINKUP_DIRECT };
+
+/**
+ * Ceramic's own search (docs.ceramic.ai/api-reference/search, read 2026-11-08) with the person's key: 1 to 20 results,
+ * each with its `description`. Its refusal says why in `detail` (401 `invalid_api_key` "Invalid authentication
+ * token.", measured 2026-11-08).
+ */
+const CERAMIC_DIRECT: DirectSearchApi = {
+  keyPage: 'https://platform.ceramic.ai/keys',
+  maxResults: 20,
+  request: ({ query, limit, key }) => ({
+    url: 'https://api.ceramic.ai/search',
+    init: { method: 'POST', headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' }, body: JSON.stringify({ query, maxResults: limit }) },
+  }),
+  answer: v.pipe(
+    v.object({ result: v.object({ results: v.array(v.object({ url: v.string(), title: v.optional(v.nullable(v.string())), description: v.optional(v.nullable(v.string())) })) }) }),
+    v.transform(({ result }): SearchAnswer => ({
+      hits: result.results.map((hit) => ({ url: hit.url, title: hit.title ?? undefined, snippet: hit.description ?? undefined })),
+    })),
+  ),
+  refusal: v.pipe(v.object({ detail: v.string() }), v.transform(({ detail }) => detail)),
+};
+
+/**
+ * Ceramic.ai, the API's own default: 1.72 through Cloudflare, 11 answerable, junk in 18; $0.25 per 1,000. Also with the
+ * person's key, at the owner's ask (2026-11-08) though it scores under the bar an own-API entry earns.
+ */
+const CERAMIC: WebSearchProviderEntry = { label: 'Ceramic', cloudflare: true, direct: CERAMIC_DIRECT };
 
 /** In the order Settings offers them. */
 export const WEB_SEARCH_PROVIDER_IDS = ['exa', 'linkup', 'ceramic'] as const;

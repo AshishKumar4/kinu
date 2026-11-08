@@ -206,6 +206,40 @@ describe('a refusal along the chain', () => {
     });
   });
 
+  // Owner, 2026-11-08: Settings and onboarding offered a key for Exa alone.
+  test("a person's own Ceramic or Linkup key searches that provider's API, and its refusal is read in its words", async () => {
+    const asked: Array<{ url: string; authorization: string | null; body: unknown }> = [];
+    const page = 'https://developers.cloudflare.com/durable-objects/api/alarms/';
+
+    const answers = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init);
+      const authorization = request.headers.get('authorization');
+
+      asked.push({ url: request.url, authorization, body: await request.json() });
+
+      if (authorization === 'Bearer revoked') return Response.json({ title: 'Unauthorized', status: 401, detail: 'Invalid authentication token.', code: 'invalid_api_key' }, { status: 401 });
+
+      return request.url.startsWith('https://api.ceramic.ai/')
+        ? Response.json({ requestId: 'r', result: { results: [{ url: page, title: 'Alarms', description: 'Schedule an alarm' }], totalResults: 1 } })
+        : Response.json({ results: [{ type: 'image', url: 'https://example.com/a.png', name: 'a' }, { type: 'text', url: page, name: 'Alarms', content: 'per object' }] });
+    }, { preconnect: fetch.preconnect });
+
+    const search = (provider: 'ceramic' | 'linkup', key: string) => chainWebSearch({
+      fetch: answers, deployment: async () => spent(), report: () => {}, pacer: new ProviderPacer({ now: () => 0, sleep: async () => {} }),
+      getAuth: async (credential) => (credential === provider ? { headers: { Authorization: `Bearer ${key}` }, credentialKey: provider } : null),
+      chain: async () => ({ routes: [{ provider, billing: 'key' }], retries: 0 }),
+    });
+
+    const found = await Promise.all((['ceramic', 'linkup'] as const).map(async (provider) => (await search(provider, `${provider}-key`)({ query: 'durable object alarms', limit: 5 })).results.map((hit) => [hit.url, hit.snippet])));
+
+    expect(found).toEqual([[[page, 'Schedule an alarm']], [[page, 'per object']]]);
+    expect(asked).toEqual([
+      { url: 'https://api.ceramic.ai/search', authorization: 'Bearer ceramic-key', body: { query: 'durable object alarms', maxResults: 5 } },
+      { url: 'https://api.linkup.so/v1/search', authorization: 'Bearer linkup-key', body: { q: 'durable object alarms', depth: 'standard', outputType: 'searchResults', maxResults: 5 } },
+    ]);
+    await expect(search('ceramic', 'revoked')({ query: 'q', limit: 5 })).rejects.toMatchObject({ message: expect.stringContaining('Ceramic with your key: Ceramic answered 401: Invalid authentication token.') });
+  });
+
   test("a 400 hands over too, and AI Gateway's own refusal is read in its words", async () => {
     // Cloudflare's answer to a search on a gateway the account lacks (2026-10-19).
     const missingGateway = () => Response.json({
