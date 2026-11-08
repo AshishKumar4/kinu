@@ -6,7 +6,7 @@ export const SCHEMA_STAMPS = {
   local: 0xf77c573,
   control: 0x945d029,
   mailname: 0x9673b19,
-  mailbox: 0x97af72d,
+  mailbox: 0x6041934,
   monitor: 0x9b12c22,
   deploy: 0x697facd,
 } as const;
@@ -19,7 +19,7 @@ export const SCHEMA_TABLES: Readonly<Record<keyof typeof SCHEMA_STAMPS, readonly
   local: ["activity_log","actor_config","actor_context_selection","actor_contexts","actor_executions","actor_profile_inputs","actor_requests","actor_subagents","actor_turn_claims","actor_turn_cuts","actor_turn_fence","agent_data_tables","agent_deliveries","agent_fact_history","agent_facts","agent_figure_folds","agent_figures","agent_log","agent_open_turns","agent_report_steers","agent_reports","agent_sequence","agent_stops","agent_tasks","agent_turn_reports","agent_workspaces","alternate_takes","artifact_versions","background_job_holders","background_jobs","cache_warm","compaction_archive","compaction_state","completed_turns","context_memberships","context_proposal_entries","context_proposals","context_revisions","conversation_entries","conversation_entry_parts","conversation_fts_state","crafted_tools","driver_lease","effect_tombstones","ephemeral_slates","evolution_events","executor_output","exploration_objectives","exploration_records","exploration_seals","fibers","fork_lineage","fork_staged_files","fork_transfer","fork_transfer_counts","github_items","github_nodes","github_repos","head_journal","head_runs","head_steps","imported_experience","instruction_approvals","lessons","mcts_search_runs","memory_note_chunks","memory_note_files","memory_projection_updates","mission_budget","open_turns","opened_turns","owner_questions","owner_requests","plan_reviews","prepared_outputs","proposed_tasks","refinement_requests","reply_channels","run_events","scaffold_versions","search_nodes","session_messages","slate_edit_marks","slate_file_manifest","slate_publications","slate_share_users","slate_share_views","slate_shares","slate_state","slate_versions","slate_viewer_requests","slates","stream_parts","swarm_node_records","tool_effect_claims","tool_lessons","triggers","turn_ratings","workspace_actors","workspace_identity"],
   control: ["cp_account_standing","cp_audit","cp_feedback","cp_invites","cp_users","cp_workspaces","gallery_installs","gallery_listings","gallery_stars"],
   mailname: ["mail_name"],
-  mailbox: ["mail_addresses","mail_allow","mail_attachments","mail_blob_graves","mail_box","mail_messages","mail_threads"],
+  mailbox: ["mail_addresses","mail_allow","mail_attachments","mail_blob_graves","mail_box","mail_messages","mail_retired","mail_threads"],
   monitor: ["monitor_incidents","monitor_signal_streaks"],
   deploy: ["deploy_step"],
 };

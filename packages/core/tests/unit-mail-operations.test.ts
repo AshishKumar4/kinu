@@ -252,3 +252,79 @@ describe('a message still being filed is in no read until it lands whole', () =>
     expect(filed.unread).toBe(1);
   });
 });
+
+// docs/MAIL.md §2: a workspace that is deleted retires its addresses; its mail stays, under the archived workspace. On
+// staging 2026-11-05 the eval account held 1 workspace and 400 boxes, and the person's box named a deleted assistant.
+describe('a deleted workspace retires its boxes, and its mail stays', () => {
+  test('its boxes list as archived, its mail is kept, new mail to it files in the person\'s box and wakes no one', async () => {
+    const sql = makeSqlExec(new Database(':memory:'));
+
+    initMailboxTables(sql);
+
+    const mail = new MailStore({
+      sql, domain: 'kinu.run', now: () => NOW, id: () => crypto.randomUUID(),
+      parse: async (raw) => ({
+        from: { name: null, address: 'dana@northwind.io' }, to: [], cc: [], subject: new TextDecoder().decode(raw), messageId: null, inReplyTo: null,
+        references: [], text: 'hello', ownWords: 'hello', html: null, attachments: [],
+      }),
+      blobs: { put: () => Promise.resolve(), text: () => Promise.resolve(null), delete: () => Promise.resolve() },
+      digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')),
+    });
+
+    mail.open({ userId: 'u-ashish', email: 'me@ashishkumarsingh.com', username: 'ashish', assistant: { workspace: SCOUT.workspace, actorId: 'actor-main' } });
+    const [home] = mail.readableBy(SCOUT);
+    const delivery = (subject: string) => mail.deliver({ raw: new TextEncoder().encode(subject), envelopeFrom: 'dana@northwind.io', recipient: { username: 'ashish', path: home?.path ?? '', tag: null } });
+
+    await delivery('before');
+    const retired = mail.retireWorkspace(SCOUT.workspace);
+    const after = await delivery('after');
+
+    expect({
+      retired: retired.length,
+      boxes: mail.boxes().map((box) => [box.path, box.workspace]),
+      archived: mail.archived().map((box) => box.workspace),
+      kept: mail.list({ view: 'all', path: home?.path ?? '' }).threads.map((thread) => thread.subject),
+      after: [after?.box, after?.wake],
+    }).toEqual({ retired: 2, boxes: [['', null]], archived: [SCOUT.workspace, SCOUT.workspace], kept: ['before'], after: ['', null] });
+  });
+
+  test('mail whose bytes were still being kept as its workspace was deleted files in the person\'s box, waking no one', async () => {
+    const sql = makeSqlExec(new Database(':memory:'));
+    const keeping = Promise.withResolvers<void>();
+    const kept = Promise.withResolvers<void>();
+
+    initMailboxTables(sql);
+
+    const mail = new MailStore({
+      sql, domain: 'kinu.run', now: () => NOW, id: () => crypto.randomUUID(),
+      parse: async () => ({
+        from: { name: null, address: 'dana@northwind.io' }, to: [], cc: [], subject: 'mid-teardown', messageId: null, inReplyTo: null,
+        references: [], text: 'hello', ownWords: 'hello', html: null, attachments: [],
+      }),
+      // The raw bytes' write is held until the workspace below is retired.
+      blobs: { put: async () => { keeping.resolve(); await kept.promise; }, text: () => Promise.resolve(null), delete: () => Promise.resolve() },
+      digest: (bytes) => Promise.resolve(createHash('sha256').update(bytes).digest('hex')),
+    });
+
+    mail.open({ userId: 'u-ashish', email: 'me@ashishkumarsingh.com', username: 'ashish', assistant: { workspace: MAIN.workspace, actorId: 'actor-main' } });
+    const [home] = mail.readableBy(MAIN);
+    const delivered = mail.deliver({ raw: new TextEncoder().encode('x'), envelopeFrom: 'dana@northwind.io', recipient: { username: 'ashish', path: home?.path ?? '', tag: null } });
+
+    await keeping.promise;
+    mail.retireWorkspace(MAIN.workspace);
+    kept.resolve();
+    const filed = await delivered;
+
+    expect({ box: filed?.box, wake: filed?.wake, triage: filed?.triage }).toEqual({ box: '', wake: null, triage: null });
+  });
+
+  test('a workspace made again under its name gets a box of its own; the archived one keeps its address', () => {
+    const [old] = store.readableBy(MAIN);
+
+    store.retireWorkspace(MAIN.workspace);
+    const [fresh] = store.readableBy({ ...MAIN, mainActorId: 'actor-main-2', actorId: 'actor-main-2' });
+
+    expect({ old: old?.path, fresh: fresh?.path, archived: store.archived().map((box) => box.path) })
+      .toEqual({ old: 'api-worker', fresh: 'api-worker-2', archived: ['api-worker'] });
+  });
+});

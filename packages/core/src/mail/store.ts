@@ -13,7 +13,7 @@ import { replySubject } from './words';
 import { filedRecipients, mailAddress } from './message';
 import { MAIL_BOX_KINDS, MAIL_SEND_STATES, MAIL_WAKES, MAIL_WOKE } from './mailbox-api';
 import type {
-  MailAgentMessage, MailBox, MailCaller, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView,
+  MailAgentMessage, MailArchivedBox, MailBox, MailCaller, MailDelivery, MailListing, MailListQuery, MailMessageView, MailOutgoing, MailParty, MailThreadSummary, MailThreadView,
   MailSendState, MailTriaged, MailTriageItem, MailTriagePick, MailWake, MailWoke,
 } from './mailbox-api';
 import type { SqlExec } from '../types/primitives';
@@ -64,6 +64,13 @@ interface MailStoreDeps {
   /** Where a sent message's send stands, by its id: the outbox's word, the only one; null where it holds none. */
   readonly sendState?: (messageId: string) => 'pending' | 'sent' | 'dlq' | null;
 }
+
+/** A box not retired (`mail_retired`), in a query over `mail_addresses` that names its own columns bare. */
+const LIVE = 'path NOT IN (SELECT path FROM mail_retired)';
+
+const ArchivedRow = v.object({
+  path: v.string(), kind: v.picklist(MAIL_BOX_KINDS), workspace: v.string(), retired_at: v.number(),
+});
 
 const BoxRow = v.object({
   path: v.string(), kind: v.picklist(MAIL_BOX_KINDS), workspace: v.nullable(v.string()),
@@ -118,7 +125,7 @@ export class MailStore {
   }
 
   private box(path: string): MailBox | null {
-    const [row] = rows(BoxRow, this.deps.sql.exec("SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE path = ?", path));
+    const [row] = rows(BoxRow, this.deps.sql.exec(`SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE path = ? AND ${LIVE}`, path));
 
     return row === undefined ? null : this.boxOf(row, this.identity()?.username ?? '');
   }
@@ -182,7 +189,7 @@ export class MailStore {
   private placed(owner: MailBoxOwner, workspacePath?: string): { readonly made: MailBox } | { readonly path: string } {
     // By kind too: the Personal assistant's main agent reads the person's box and its workspace's.
     const [held] = rows(BoxRow, this.deps.sql.exec(
-      'SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ?', owner.workspace, owner.actorId, owner.kind,
+      `SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND actor_id = ? AND kind = ? AND ${LIVE}`, owner.workspace, owner.actorId, owner.kind,
     ));
 
     if (held !== undefined) return { made: this.boxOf(held, this.identity()?.username ?? '') };
@@ -190,7 +197,7 @@ export class MailStore {
     const label = mailLabelOf(owner.name) ?? (owner.kind === 'workspace' ? 'workspace' : 'agent');
 
     const under = workspacePath
-      ?? rows(v.object({ path: v.string() }), this.deps.sql.exec("SELECT path FROM mail_addresses WHERE kind = 'workspace' AND workspace = ?", owner.workspace))[0]?.path
+      ?? rows(v.object({ path: v.string() }), this.deps.sql.exec(`SELECT path FROM mail_addresses WHERE kind = 'workspace' AND workspace = ? AND ${LIVE}`, owner.workspace))[0]?.path
       ?? mailLabelOf(owner.workspace) ?? 'workspace';
 
     const at = (own: string) => (owner.kind === 'workspace' ? own : `${own}.${under}`);
@@ -259,7 +266,7 @@ export class MailStore {
     if (home === undefined) return [];
 
     const others = rows(BoxRow, this.deps.sql.exec(
-      "SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND path != ? AND (kind = 'workspace' OR actor_id = ?) ORDER BY path",
+      `SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE workspace = ? AND path != ? AND (kind = 'workspace' OR actor_id = ?) AND ${LIVE} ORDER BY path`,
       caller.workspace, own.path, caller.actorId,
     )).map((row) => this.boxOf(row, username));
 
@@ -405,7 +412,33 @@ export class MailStore {
   boxes(): MailBox[] {
     const username = this.identity()?.username ?? '';
 
-    return rows(BoxRow, this.deps.sql.exec('SELECT path, kind, workspace, actor_id, wake FROM mail_addresses ORDER BY path')).map((row) => this.boxOf(row, username));
+    return rows(BoxRow, this.deps.sql.exec(`SELECT path, kind, workspace, actor_id, wake FROM mail_addresses WHERE ${LIVE} ORDER BY path`)).map((row) => this.boxOf(row, username));
+  }
+
+  /** The boxes of workspaces since deleted, newest retired first: their mail is kept, under the workspace each names. */
+  archived(): MailArchivedBox[] {
+    const username = this.identity()?.username ?? '';
+
+    return rows(ArchivedRow, this.deps.sql.exec(
+      'SELECT a.path, a.kind, a.workspace, r.retired_at FROM mail_retired r JOIN mail_addresses a ON a.path = r.path ORDER BY r.retired_at DESC, a.path',
+    )).map((row) => ({ path: row.path, kind: row.kind, workspace: row.workspace, address: mailAddressOf(username, row.path, this.deps.domain), retiredAt: row.retired_at }));
+  }
+
+  /**
+   * `workspace` is deleted: its boxes retire (docs/MAIL.md §2), and the person's box forgets it as their assistant, so
+   * its mail wakes nothing until the next one reads it (`open`). Asked by its teardown while its registry row still
+   * holds the name, so no workspace of that name is made meanwhile; one made after gets boxes of its own. The paths it
+   * retired; none when asked again.
+   */
+  retireWorkspace(workspace: string): string[] {
+    const retired = rows(v.object({ path: v.string() }), this.deps.sql.exec(
+      `INSERT INTO mail_retired (path, retired_at) SELECT path, ? FROM mail_addresses WHERE kind != 'person' AND workspace = ? AND ${LIVE} RETURNING path`,
+      this.deps.now(), workspace,
+    )).map((row) => row.path);
+
+    this.deps.sql.exec("UPDATE mail_addresses SET workspace = NULL, actor_id = NULL WHERE path = '' AND workspace = ?", workspace);
+
+    return retired.sort();
   }
 
   setWake(path: string, wake: MailWake, allow?: readonly string[]): MailBox {
@@ -443,8 +476,10 @@ export class MailStore {
     const answered = [parsed.inReplyTo, ...parsed.references].filter((id): id is string => id !== null).map(bare);
 
     for (const id of answered) {
+      // CROSS JOIN holds the message, found by its header index, as the outer loop: a plain join let SQLite walk every
+      // thread of the box by path, so each reply cost the box's size (a 4,000-thread box: 1 ms a reply and growing).
       const [found] = rows(v.object({ thread_id: v.string() }), this.deps.sql.exec(
-        'SELECT m.thread_id FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ?', id, path,
+        'SELECT m.thread_id FROM mail_messages m CROSS JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ?', id, path,
       ));
 
       if (found !== undefined) return found.thread_id;
@@ -473,7 +508,7 @@ export class MailStore {
     // Only an arrival: a message the person sent themselves, to their own address or an alias of it, carries the
     // Message-ID their sent copy holds, and arrives (staging 2026-10-22: a test to privacy@ never showed).
     const [seen] = headerId === null ? [] : rows(v.pick(MessageColumns, ['id', 'thread_id', 'verdict', 'woke']), this.deps.sql.exec(
-      "SELECT m.id, m.thread_id, m.verdict, m.woke FROM mail_messages m JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ? AND m.send_state IS NULL",
+      "SELECT m.id, m.thread_id, m.verdict, m.woke FROM mail_messages m CROSS JOIN mail_threads t ON t.id = m.thread_id WHERE m.header_id = ? AND t.path = ? AND m.send_state IS NULL",
       headerId, box.path,
     ));
 
@@ -486,14 +521,20 @@ export class MailStore {
     }
 
     const at = this.deps.now();
-    const woke = named === null ? null : this.wakeOf(box, verdict);
     const messageId = this.deps.id();
     // Every byte kept first; then the thread, its message, its attachments and its index with no await between them, so
     // the object commits them together and no reader meets a thread without its message (staging 06498fc55).
     const keys = await this.keep(input.raw, parsed);
     const attachments = await this.keepAttachments(parsed.attachments);
+    // Where it is filed, and whom it wakes, read again with no await before the filing: a box retired while its bytes
+    // were kept files nothing, and an assistant gone meanwhile wakes nothing (docs/MAIL.md §2).
+    const addressed = this.box(input.recipient.path);
+    const filedIn = addressed ?? this.box('');
+
+    if (filedIn === null) return null;
+    const woke = addressed === null ? null : this.wakeOf(filedIn, verdict);
     const tag = input.recipient.tag === null ? '' : `+${input.recipient.tag}`;
-    const threadId = this.threadFor(box.path, parsed);
+    const threadId = this.threadFor(filedIn.path, parsed);
 
     this.deps.sql.exec(
       `INSERT INTO mail_messages (id, thread_id, header_id, from_addr, from_name, to_json, cc_json, delivered_to,
@@ -514,9 +555,9 @@ export class MailStore {
     this.index(messageId, parsed.subject, `${from.name ?? ''} ${from.address}`, parsed.text);
     // A thread that comes back to life leaves the Trash.
     this.deps.sql.exec('UPDATE mail_threads SET trashed_at = NULL WHERE id = ?', threadId);
-    const triage = this.awaitTriage(box, woke, threadId, at);
+    const triage = this.awaitTriage(filedIn, woke, threadId, at);
 
-    return this.arrival(box, parsed, { messageId, threadId, headerId, from, verified: verdict.verified, woke, duplicate: false, triage });
+    return this.arrival(filedIn, parsed, { messageId, threadId, headerId, from, verified: verdict.verified, woke, duplicate: false, triage });
   }
 
   /** What a filed message comes to for the router: whom it wakes, on whose word, and with what words. */
@@ -613,16 +654,27 @@ export class MailStore {
       bindings.push(ftsPhrases(query.query).join(' ') || '""');
     }
 
-    const ids = rows(v.object({ id: v.string(), latest: v.number(), unread: v.number() }), this.deps.sql.exec(
-      `SELECT t.id, (SELECT MAX(at) FROM mail_messages m WHERE m.thread_id = t.id) AS latest,
-         EXISTS (SELECT 1 FROM mail_messages u WHERE u.thread_id = t.id AND u.send_state IS NULL AND u.read = 0) AS unread
-       FROM mail_threads t WHERE ${where.join(' AND ')} ORDER BY latest DESC`, ...bindings,
-    )).filter((row) => query.before === undefined || row.latest < query.before);
+    // Each thread's newest message and whether any is unread, in one pass over the messages' thread index, so a page
+    // reads only its own rows: per thread, as before, a page of a 6,000-thread box cost 23 ms (2026-11-05).
+    const threads = `WITH latest AS (
+        SELECT thread_id, MAX(at) AS latest, MAX(send_state IS NULL AND read = 0) AS unread FROM mail_messages GROUP BY thread_id
+      ) SELECT t.id, l.latest, l.unread FROM mail_threads t JOIN latest l ON l.thread_id = t.id WHERE ${where.join(' AND ')}`;
 
-    const shown = ids.filter((row) => query.unread !== true || row.unread === 1).slice(0, query.limit ?? 50);
-    const threads = shown.map((row) => this.summary(row.id)).filter((summary): summary is MailThreadSummary => summary !== null);
+    // Older than the page's cursor, for the page and for its count alike.
+    const before = query.before === undefined ? '' : ' AND l.latest < ?';
+    const cursor = query.before === undefined ? [] : [query.before];
 
-    return { threads, unread: ids.filter((row) => row.unread === 1).length };
+    const shown = rows(v.object({ id: v.string() }), this.deps.sql.exec(
+      `${threads}${before}${query.unread === true ? ' AND l.unread = 1' : ''} ORDER BY l.latest DESC LIMIT ?`, ...bindings, ...cursor, query.limit ?? 50,
+    ));
+
+    const [counted] = rows(v.object({ unread: v.number() }), this.deps.sql.exec(
+      `SELECT COUNT(*) AS unread FROM (${threads}${before} AND l.unread = 1)`, ...bindings, ...cursor,
+    ));
+
+    const summaries = shown.map((row) => this.summary(row.id)).filter((summary): summary is MailThreadSummary => summary !== null);
+
+    return { threads: summaries, unread: counted?.unread ?? 0 };
   }
 
   private messages(threadId: string): Message[] {

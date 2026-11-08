@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import {
   objectNamed,
   durableStamps, EmailOutbox, initMailboxTables, mailboxEmail, sha256Hex, openSchema, writeStamp,
-  type MailAgentMessage, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
+  type MailAgentMessage, type MailArchivedBox, type MailBox, type MailboxAgentCalls, type MailboxCalls, type MailCaller, type MailDelivery, type MailListing, type MailListQuery, type MailMessageView, type MailOutgoing,
   type MailBoxOwner, type MailRecipient, type MailThreadSummary, type MailThreadView, type MailTriaged, type MailTriageItem, type MailTriagePick, type MailWake,
   MailStore, type MailBlobs, type ArmedRestore, type OpsCaller, type RestoreTarget, requireOps,
   bookmarkNow, missingBytes, restartedForRestore, restoreArmed, type MissingBytes,
@@ -343,6 +343,16 @@ export class MailboxDO extends DurableObject<Env> implements MailboxCalls, Mailb
 
   boxes(): Promise<readonly MailBox[]> {
     return settle(this.served(() => this.store.boxes()));
+  }
+
+  /** The boxes of workspaces since deleted, their mail kept (docs/MAIL.md §2). */
+  archived(): Promise<readonly MailArchivedBox[]> {
+    return settle(this.served(() => this.store.archived()));
+  }
+
+  /** `workspace` is deleted: its boxes retire, their mail kept, as its teardown asks (docs/MAIL.md §2). */
+  retireWorkspace(workspace: string): Promise<readonly string[]> {
+    return settle(this.served(() => this.store.retireWorkspace(workspace)));
   }
 
   /** Whether the person holds an address, which a turn asks without listing every box. */

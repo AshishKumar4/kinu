@@ -14,7 +14,7 @@ import {
   rpcMovesOverview, WorkspaceTerminalInputSchema, type AgentRpcMethod, type MediaRef, type StoragePredatesReleaseError, type StoredImage, type UserCaller,
 } from '@kinu.run/core';
 import { Effect } from 'effect';
-import { attempt, diagnostics, refusalOf, settle, tolerate, type KinuError, type Refusal } from '@kinu.run/core/obs';
+import { attempt, diagnostics, flight, refusalOf, settle, tolerate, type KinuError, type Refusal } from '@kinu.run/core/obs';
 import {
   CLI_AUTHORITY_REVOKED, cliBearerFromTags, rejectOutOfScopeRpc, rpcFrameOf, SESSION_AUTHORITY_REVOKED, sessionBearerFromTags,
   WEBSOCKET_POLICY_CLOSE, type CliSocketBearer, type RpcFrame,
@@ -120,6 +120,19 @@ class ClientSocketGate {
 
   /** Per socket, its newest frame's place: settled once that frame has taken it, so the frame after it may go on. */
   private readonly lines = new Map<string, Promise<void>>();
+
+  /** A bearer's liveness check, one in flight per bearer: the frames of a burst (a tab's open) join the check already
+   *  asking, and a frame after it settles asks again, so nothing is held across time and a revocation shows at most one
+   *  check behind. A check each frame was one owner call each, 93-221 ms (staging 2026-11-05). */
+  private readonly sessionChecks = flight(
+    (tokenHash: string) => this.askOwner('verifySocketSession', (stub, caller) => stub.verifySocketSession(caller, tokenHash)),
+    { key: (tokenHash) => tokenHash },
+  );
+
+  private readonly bearerChecks = flight(
+    (tokenHash: string) => this.askOwner('verifyCliSocketBearer', (stub, caller) => stub.verifyCliSocketBearer(caller, tokenHash)),
+    { key: (tokenHash) => tokenHash },
+  );
 
   /**
    * A frame from a socket whose authority still holds goes on; one whose authority ended is refused and closed. Its
@@ -384,7 +397,7 @@ class ClientSocketGate {
       return Effect.succeed('This connection carries no readable session. Reload the page to sign in again.');
     }
 
-    const verified = this.askOwner('verifySocketSession', (stub, caller) => stub.verifySocketSession(caller, session.tokenHash));
+    const verified = this.sessionChecks(session.tokenHash);
 
     return Effect.matchEffect(verified, {
       onSuccess: ({ live }) => Effect.succeed(live ? null : SESSION_AUTHORITY_REVOKED),
@@ -396,7 +409,7 @@ class ClientSocketGate {
   private cliBearerDenial(bearer: CliSocketBearer): Effect.Effect<string | null> {
     if (!bearer.readable) return Effect.succeed('This connection carries no readable authorization. Reconnect with: kinu auth');
 
-    const verified = this.askOwner('verifyCliSocketBearer', (stub, caller) => stub.verifyCliSocketBearer(caller, bearer.tokenHash));
+    const verified = this.bearerChecks(bearer.tokenHash);
 
     return Effect.matchEffect(verified, {
       onSuccess: ({ live, generation, error }) => Effect.succeed(live && generation <= bearer.generation ? null : error ?? CLI_AUTHORITY_REVOKED),
@@ -413,7 +426,8 @@ class ClientSocketGate {
     });
   }
 
-  /** Whether a socket's authority is still live, asked of the owner's user object: retried, never cached. */
+  /** Whether a socket's authority is still live, asked of the owner's user object: retried, never cached (joined only
+   *  while in flight, {@link sessionChecks}). */
   private askOwner<A>(check: 'verifySocketSession' | 'verifyCliSocketBearer', ask: (stub: UserHubClient, caller: UserCaller) => Promise<A>): Effect.Effect<A, KinuError> {
     return attempt({ doing: `checking whether a websocket's authority is still live (${check})`, otherwise: 'unavailable' }, async () => {
       const caller = await this.host.caller();

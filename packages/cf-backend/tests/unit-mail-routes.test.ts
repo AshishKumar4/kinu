@@ -122,6 +122,7 @@ function env(accounts: 'operators' | 'everyone' = 'operators'): MailRoutesEnv {
             return Promise.reject(claimed.reason);
           },
           boxes: () => Promise.resolve(store.boxes()),
+          archived: () => Promise.resolve(store.archived()),
           list: (query: Parameters<MailStore['list']>[0]) => Promise.resolve(store.list(query)),
           thread: (id: string) => store.thread(id),
           update: (id: string, change: Parameters<MailStore['update']>[1]) => Promise.resolve(store.update(id, change)),
@@ -172,8 +173,8 @@ beforeEach(() => {
 
 describe('a person creates their address once, as the deployment allows', () => {
   test('before they create one there is no address, and it says whether they may', async () => {
-    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).toEqual({ status: 200, body: { enabled: true, domain: 'kinu.run', address: null, canCreate: true, boxes: [] } });
-    expect((await call(PRIYA, { method: 'GET', path: '/api/user/mail/boxes' })).body).toEqual({ enabled: true, domain: 'kinu.run', address: null, canCreate: false, boxes: [] });
+    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes' })).toEqual({ status: 200, body: { enabled: true, domain: 'kinu.run', address: null, canCreate: true, boxes: [], archived: [] } });
+    expect((await call(PRIYA, { method: 'GET', path: '/api/user/mail/boxes' })).body).toEqual({ enabled: true, domain: 'kinu.run', address: null, canCreate: false, boxes: [], archived: [] });
   });
 
   test('an operator creates their address, and the person\'s own box is opened at it', async () => {
@@ -245,7 +246,7 @@ describe('a deployment with no mail domain has no Mail', () => {
   test('it says so, offers no address and refuses to create one, and the footer\'s read says it too', async () => {
     const off = { domain: '' } as const;
 
-    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes', ...off })).toEqual({ status: 200, body: { enabled: false, domain: null, address: null, canCreate: false, boxes: [] } });
+    expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/boxes', ...off })).toEqual({ status: 200, body: { enabled: false, domain: null, address: null, canCreate: false, boxes: [], archived: [] } });
     expect((await call(ASHISH, { method: 'POST', path: '/api/user/mail/address', body: { username: 'ashish' }, ...off })).status).toBe(503);
     expect(claims.size).toBe(0);
     expect(await call(ASHISH, { method: 'GET', path: '/api/user/mail/important?limit=3', ...off })).toEqual({ status: 200, body: { enabled: false, unread: 0, items: [] } });

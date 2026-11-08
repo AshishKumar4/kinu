@@ -1,7 +1,7 @@
 /**
  * A socket's frames reach the actor in the order they were sent. Each frame's authority is asked of the owner's user
- * object first, and those answers come back in any order: on staging rc12 (titled-chat, 2026-10-16) a Continue sent
- * 42 ms after its Stop was let in first, and the Stop then handed it back.
+ * object first: on staging rc12 (titled-chat, 2026-10-16) a Continue sent 42 ms after its Stop was let in first, and
+ * the Stop then handed it back. Frames that arrive together join one check, which answers them all on one turn.
  */
 import { afterEach, expect, test } from 'bun:test';
 import type { Connection, WSMessage } from 'agents';
@@ -36,19 +36,15 @@ function nameOf(message: WSMessage): string {
  */
 async function gated(handle: (name: string) => Promise<void> = async () => {}, room: ChatWireTransport | null = null) {
   const user = createTestUserDO();
-  const asked: (() => void)[] = [];
   const reached: string[] = [];
-  const { promise: bothAsked, resolve: secondAsked } = Promise.withResolvers<void>();
+  const { promise: checkAsked, resolve: asking } = Promise.withResolvers<void>();
+  const { promise: answered, resolve: answer } = Promise.withResolvers<void>();
 
   users.push(user);
-  // Each check waits for the test's word, so the test decides which frame's authority answers first.
+  // The check waits for the test's word, so both frames are in before it answers.
   user.userDO.verifySocketSession = async () => {
-    const { promise, resolve } = Promise.withResolvers<void>();
-
-    asked.push(resolve);
-
-    if (asked.length === 2) secondAsked();
-    await promise;
+    asking();
+    await answered;
 
     return { live: true };
   };
@@ -84,18 +80,16 @@ async function gated(handle: (name: string) => Promise<void> = async () => {}, r
 
   const socket: Connection = socketConnection({ id: 'tab-1', tags: [sessionBearerConnectionTag('a'.repeat(64)) ?? ''] });
 
-  return { handlers, socket, asked, bothAsked, reached };
+  return { handlers, socket, answer, checkAsked, reached };
 }
 
-test("a socket's frames go on in the order they came, though the second's authority answers first", async () => {
-  const { handlers, socket, asked, bothAsked, reached } = await gated();
+test("a socket's frames go on in the order they came, though one check answers both at once", async () => {
+  const { handlers, socket, answer, checkAsked, reached } = await gated();
   const stop = handlers.onMessage(socket, frame('stop'));
   const send = handlers.onMessage(socket, frame('send'));
 
-  await bothAsked;
-  // The Continue's check answers first, the Stop's on the same turn after it.
-  asked[1]?.();
-  asked[0]?.();
+  await checkAsked;
+  answer();
   await Promise.all([stop, send]);
 
   expect(reached).toEqual(['stop', 'send']);
@@ -134,7 +128,7 @@ test("the Stop's RPC keeps its place in the room's order ahead of the send that 
 
   // Its handling goes on past the room (the Stop's device sweep) until the send has reached the agent: a gate that held
   // the send behind the Stop's whole handling would never let it.
-  const { handlers, socket, asked, bothAsked } = await gated(async () => {
+  const { handlers, socket, answer, checkAsked } = await gated(async () => {
     await steps(12);
     await room.interrupt();
     await sent;
@@ -143,9 +137,8 @@ test("the Stop's RPC keeps its place in the room's order ahead of the send that 
   const stop = handlers.onMessage(socket, JSON.stringify({ type: 'rpc', id: 'stop', method: 'cancelCurrentWork', args: [] }));
   const send = handlers.onMessage(socket, chatRequest('send', 'send'));
 
-  await bothAsked;
-  asked[1]?.();
-  asked[0]?.();
+  await checkAsked;
+  answer();
   await Promise.all([stop, send]);
 
   expect(order).toEqual(['stop', 'send']);
@@ -156,7 +149,7 @@ test("a frame whose handler waits on a long turn does not hold the next frame ba
 
   // The first frame's handler waits until the second has reached the base: a gate that held the second behind the
   // first's whole handling would never let it.
-  const { handlers, socket, asked, bothAsked, reached } = await gated(async (name) => {
+  const { handlers, socket, answer, checkAsked, reached } = await gated(async (name) => {
     if (name === 'stop') {
       endTurn();
 
@@ -169,9 +162,8 @@ test("a frame whose handler waits on a long turn does not hold the next frame ba
   const send = handlers.onMessage(socket, frame('send'));
   const stop = handlers.onMessage(socket, frame('stop'));
 
-  await bothAsked;
-  asked[0]?.();
-  asked[1]?.();
+  await checkAsked;
+  answer();
   await Promise.all([send, stop]);
 
   expect(reached).toEqual(['send', 'stop']);

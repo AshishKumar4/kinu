@@ -1031,6 +1031,10 @@
     "target_path TEXT",
     "CHECK ((kind = 'alias') = (target_path IS NOT NULL))"
   ],
+  "mail_retired@packages/core/src/state/mail-schema.ts": [
+    "path TEXT PRIMARY KEY REFERENCES mail_addresses (path)",
+    "retired_at INTEGER NOT NULL"
+  ],
   "mail_threads@packages/core/src/state/mail-schema.ts": [
     "id TEXT PRIMARY KEY",
     "path TEXT NOT NULL REFERENCES mail_addresses (path)",

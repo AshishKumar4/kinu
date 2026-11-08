@@ -17,7 +17,7 @@ import {
   err, importantMail, json, MAIL_MESSAGE_FIELDS, mailDeploymentAliases, mailUsernameRefusal, MAIL_VIEWS, MAIL_WAKES, MailAddress, MailBoxPath, mailText, mailThreadText, objectNamed, ownerCaller, safeJson,
   type MailListQuery, type ObjectNamespace, type OwnerCapabilityEnv,
 } from '@kinu.run/core';
-import { attempt, authoredRefusal, diagnostics, settle } from '@kinu.run/core/obs';
+import { attempt, authoredRefusal, diagnostics, settle, tolerateAsync } from '@kinu.run/core/obs';
 import type { FamilyEnv } from '../api/context';
 import { isListedOperator } from '../control-plane/admin-caller';
 import type { OrchestratorAgent } from '../orchestrator';
@@ -28,7 +28,7 @@ import type { MailboxDO } from './mailbox-do';
 import type { MailNameDO } from './mailname-do';
 import { accountNamed } from '../user/workspace-placement';
 
-type MailboxReach = Pick<MailboxDO, 'open' | 'boxes' | 'list' | 'thread' | 'update' | 'draft' | 'send' | 'setWake'>;
+type MailboxReach = Pick<MailboxDO, 'open' | 'boxes' | 'archived' | 'list' | 'thread' | 'update' | 'draft' | 'send' | 'setWake'>;
 
 export interface MailRoutesEnv extends OwnerCapabilityEnv {
   readonly EMAIL_DOMAIN?: string;
@@ -97,12 +97,14 @@ async function addressOf(c: MailContext): Promise<string | null> {
 export const mailRoutes = new Hono<FamilyEnv<MailRoutesEnv>>();
 
 mailRoutes.get('/api/user/mail/boxes', async (c) => {
-  if (!mailOn(c)) return json({ body: { enabled: false, domain: null, address: null, canCreate: false, boxes: [] } });
+  if (!mailOn(c)) return json({ body: { enabled: false, domain: null, address: null, canCreate: false, boxes: [], archived: [] } });
 
   const address = await addressOf(c);
   const canCreate = address === null && await mayCreate(c);
+  // A deleted workspace's boxes, apart: their mail is kept, and nothing files in them (docs/MAIL.md §2).
+  const [boxes, archived] = address === null ? [[], []] : await Promise.all([mailbox(c).boxes(), mailbox(c).archived()]);
 
-  return json({ body: { enabled: true, domain: c.env.EMAIL_DOMAIN ?? '', address, canCreate, boxes: address === null ? [] : await mailbox(c).boxes() } });
+  return json({ body: { enabled: true, domain: c.env.EMAIL_DOMAIN ?? '', address, canCreate, boxes, archived } });
 });
 
 /** Why `username` cannot be the person's: not a name or reserved (core's rules), or another account's; null when it can. */
@@ -211,19 +213,25 @@ mailRoutes.patch('/api/user/mail/threads/:id', async (c) => {
 
   if (change === null) return err(400, 'read and trashed (booleans) are what a person changes; Important is the assistant\'s.');
 
-  return json({ body: await mailbox(c).update(c.req.param('id'), change) });
+  // The Mailbox's own refusal (no such thread) in its words, as the send's: across RPC the shared onError has its class alone.
+  return settle(Effect.map(
+    Effect.tryPromise({ try: async () => mailbox(c).update(c.req.param('id'), change), catch: (cause) => authoredRefusal({ doing: 'changing this thread', cause }) }),
+    (body) => json({ body }),
+  ));
 });
 
 // A message the person writes: sent now, or kept as a draft. Both take the same fields.
 for (const [path, act] of [['/api/user/mail/send', 'send'], ['/api/user/mail/drafts', 'draft']] as const) {
   mailRoutes.post(path, (c) => settle(Effect.gen(function* () {
-    const outgoing = yield* Effect.promise(async () => safeJson(c.req.raw, Outgoing));
+    const body = yield* Effect.promise(async () => tolerateAsync(() => c.req.raw.json(), 'malformed-input'));
+    const outgoing = v.safeParse(Outgoing, body);
 
-    if (outgoing === null) return err(400, 'path, to, subject and text are required.');
+    // What is wrong, by its field: an address that is none, a message to no one, a missing subject.
+    if (!outgoing.success) return err(400, `The message's ${v.getDotPath(outgoing.issues[0]) ?? 'fields'}: ${outgoing.issues[0].message}`);
 
     // The Mailbox's own refusal (a recipient the sending service suppressed, EmailOutbox) answers in its words: across
     // RPC it is no KinuError here, and the shared onError would answer its class alone ("Not allowed.").
-    const view = yield* Effect.tryPromise({ try: async () => mailbox(c)[act](outgoing), catch: (cause) => authoredRefusal({ doing: `${act === 'send' ? 'sending' : 'saving'} this message`, cause }) });
+    const view = yield* Effect.tryPromise({ try: async () => mailbox(c)[act](outgoing.output), catch: (cause) => authoredRefusal({ doing: `${act === 'send' ? 'sending' : 'saving'} this message`, cause }) });
 
     return json({ body: view });
   })));
