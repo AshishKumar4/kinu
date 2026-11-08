@@ -10,7 +10,7 @@ import { decodeJsonValue, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from '../user/user-do';
-import { ownerCaller } from '@kinu.run/core';
+import { mailUsernameRefusal, objectNamed, ownerCaller } from '@kinu.run/core';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import type { IndexFeedSink } from './index-feed';
 import { controlPlaneStub, type ControlPlaneEnv } from './stub';
@@ -21,6 +21,7 @@ import { accountIdFor } from '../auth/store';
 import type { SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { accountNamed } from '../user/workspace-placement';
+import type { MailNameDO, MailNameReturn } from '../mail/mailname-do';
 
 /** A UserDO name; it makes the workspace name beside it an address rather than a guess. */
 export const UserIdSchema = v.pipe(v.string(), v.regex(/^[a-f0-9]{32}$/));
@@ -32,6 +33,8 @@ const JobIdSchema = v.pipe(v.string(), v.nonEmpty());
 const SUPPORT_READ_REASONS = ['support_ticket', 'incident', 'owner_request'] as const;
 
 const Index = v.pipe(v.number(), v.integer(), v.minValue(0));
+
+const EmailSchema = v.pipe(v.string(), v.trim(), v.toLowerCase(), v.email());
 
 /** The actions, as data; `describeAction` derives audit names from these, so vocabulary cannot drift. */
 export const ControlActionSchema = v.variant('action', [
@@ -91,8 +94,13 @@ export const ControlActionSchema = v.variant('action', [
   v.object({ action: v.literal('account.class'), userId: UserIdSchema, class: v.picklist(STORED_CLASSES) }),
   v.object({ action: v.literal('account.suspend'), userId: UserIdSchema, reason: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(300)) }),
   v.object({ action: v.literal('account.unsuspend'), userId: UserIdSchema }),
+  /** A retired address handed back to the account that held it, the one its email signs in as (MailNameDO.returnTo). */
+  v.object({
+    action: v.literal('account.address_return'), email: EmailSchema,
+    label: v.pipe(v.string(), v.trim(), v.toLowerCase(), v.check((label) => mailUsernameRefusal(label) === null, 'not an address name')),
+  }),
   /** An email invited before or after its first sign-in: its account is the one that email signs in as. */
-  v.object({ action: v.literal('invite.email'), email: v.pipe(v.string(), v.trim(), v.toLowerCase(), v.email()) }),
+  v.object({ action: v.literal('invite.email'), email: EmailSchema }),
   /** A single-use link, 7 days: whoever signs in and opens it is invited. */
   v.object({ action: v.literal('invite.link') }),
 ]);
@@ -110,6 +118,7 @@ type ActionReason =
   | 'none_pending'
   | 'no_grants'
   | 'name_mismatch'
+  | 'not_retired'
   | 'threw';
 
 /** `denied`: this plane refused; `failed`: the owning object did. Keeps refusals out of outage counts. */
@@ -125,7 +134,7 @@ export interface ActionOutcome {
 }
 
 /** `request` names no domain object: a body the schema refused, still audited. */
-type AuditTargetKind = 'job' | 'approval' | 'workspace' | 'request' | 'account' | 'invite';
+type AuditTargetKind = 'job' | 'approval' | 'workspace' | 'request' | 'account' | 'invite' | 'address';
 
 export interface ActionIdentity {
   /** snake_case: the analytics sink groups on the tail after the first dot. */
@@ -144,6 +153,8 @@ export function describeAction(action: ControlAction): ActionIdentity {
     case 'account.suspend':
     case 'account.unsuspend':
       return { operation, targetKind: 'account', target: action.userId };
+    case 'account.address_return':
+      return { operation, targetKind: 'address', target: `${action.label}/${action.email}` };
     case 'invite.email':
       return { operation, targetKind: 'invite', target: action.email };
     case 'invite.link':
@@ -203,6 +214,7 @@ type ActionControlPlane = IndexFeedSink & Pick<ControlPlaneDO, 'noteAccountStand
 export interface ActionEnv<Id> extends ControlPlaneEnv<Id, ActionControlPlane>, SignInDeclarationEnv {
   OrchestratorAgent: ObjectNamespace<Id, ActionTarget>;
   UserDO: ObjectNamespace<Id, ActionRegistry>;
+  MAILNAME: ObjectNamespace<Id, Pick<MailNameDO, 'returnTo'>>;
 }
 
 /**
@@ -248,6 +260,14 @@ async function accountAction<Id>(env: ActionEnv<Id>, action: AccountAction, oper
     return { outcome: 'ok', detail: `invite link made, open until ${new Date(expiresAt).toISOString()}`, reason: 'ok', result: { path: `/invite/${token}`, expiresAt } };
   }
 
+  if (action.action === 'account.address_return') {
+    const returned = await objectNamed(env.MAILNAME, action.label).returnTo(accountIdFor(env, action.email));
+
+    if (returned === 'returned') return { outcome: 'ok', detail: `${action.label} is ${action.email}'s to take again in Mail`, reason: 'ok', affected: 1 };
+
+    return { outcome: 'denied', detail: ADDRESS_NOT_RETURNED[returned], reason: 'not_retired' };
+  }
+
   const userId = action.action === 'invite.email' ? accountIdFor(env, action.email) : action.userId;
   const user = accountNamed(env.UserDO, userId);
 
@@ -261,6 +281,12 @@ async function accountAction<Id>(env: ActionEnv<Id>, action: AccountAction, oper
 
   return { outcome: 'ok', detail: `${userId} is ${now.class}${now.suspended === null ? '' : ', suspended'}`, reason: 'ok', affected: 1 };
 }
+
+const ADDRESS_NOT_RETURNED: Readonly<Record<Exclude<MailNameReturn, 'returned'>, string>> = {
+  unclaimed: 'No account has held that address; they can take it in Mail.',
+  held: 'An account holds that address now.',
+  retired_from_another: 'That address was retired from another account.',
+};
 
 async function controlAction<Id>(env: ActionEnv<Id>, action: Exclude<ControlAction, AccountAction>): Promise<ActionOutcome> {
   if (action.action === 'workspace.remove') {

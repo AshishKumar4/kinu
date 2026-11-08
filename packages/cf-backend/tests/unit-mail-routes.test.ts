@@ -64,7 +64,13 @@ function storeOf(userId: string): MailStore {
 /** One label's MailName object: its claim, as a map of labels. */
 function mailName(label: string) {
   return {
-    lookup: () => Promise.resolve(claims.get(label) ?? null),
+    standing: (userId: string) => {
+      const held = claims.get(label);
+
+      if (held === undefined) return Promise.resolve('unclaimed' as const);
+
+      return Promise.resolve(held.user_id === userId ? 'theirs' as const : 'taken' as const);
+    },
     claim: (claimed: string, userId: string) => {
       const held = claims.get(claimed);
 

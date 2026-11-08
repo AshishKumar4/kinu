@@ -341,6 +341,8 @@ interface CensusMailNameRpc extends Rpc.DurableObjectBranded {
   claim(label: string, userId: string): Promise<{ label: string; user_id: string; state: string }>;
   lookup(): Promise<{ label: string; user_id: string; state: string } | null>;
   whenRetired(): Promise<void>;
+  standing(userId: string): Promise<import('../../src/mail/mailname-do').MailNameStanding>;
+  forgetRetiredFrom(): Promise<void>;
 }
 
 /** `mail-routing-probe`: the shipped mail objects, on a subdomain, with a routing grant. */
@@ -372,6 +374,7 @@ interface CensusStorageRpc extends Rpc.DurableObjectBranded {
 interface CensusControlRpc extends Rpc.DurableObjectBranded {
   seedPerson(person: CensusPerson): Promise<void>;
   controlCensus(person: CensusPerson): Promise<Record<string, number>>;
+  operatorAction(action: import('../../src/control-plane/actions').ControlAction): Promise<{ outcome: string; detail: string }>;
 }
 
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {

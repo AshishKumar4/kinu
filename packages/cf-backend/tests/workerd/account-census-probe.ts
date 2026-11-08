@@ -25,6 +25,7 @@ import { handleInboundMail } from '../../src/mail/handler';
 import { UserDO } from '../../src/user/user-do';
 import { shareViewerKey } from '../../src/viewer-pass';
 import { accountIdFor } from '../../src/auth/store';
+import { runControlAction, type ActionOutcome, type ControlAction } from '../../src/control-plane/actions';
 
 export * from '../../src/server';
 
@@ -369,12 +370,22 @@ export class CensusMailNameDO extends MailNameDO {
   async whenRetired(): Promise<void> {
     await this.retiring.promise;
   }
+
+  /** As a label retired before its object kept whom it was retired from: the key is the one MailNameDO keeps it under. */
+  async forgetRetiredFrom(): Promise<void> {
+    this.ctx.storage.kv.delete('mail:retired-from');
+  }
 }
 
 /** The audit's text columns, any of which may name an account. */
 const AUDIT_COLUMNS = ['actor_user', 'actor_email', 'target', 'detail'] as const;
 
 export class CensusControlPlaneDO extends ControlPlaneDO {
+  /** An operator's action, as the control plane's action route runs it once the attempt is audited. */
+  async operatorAction(action: ControlAction): Promise<ActionOutcome> {
+    return await runControlAction(this.env, action, { email: 'ops@kinu.run', caller: await internalCaller(this.env) });
+  }
+
   /** Priya in the fleet's index: her user and workspace rows, her feedback with its screenshot, an operator's audit
    *  row about her workspace, and her star, report and install on Dana's listed board. */
   async seedPerson(person: Person): Promise<void> {

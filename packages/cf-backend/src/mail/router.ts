@@ -53,7 +53,7 @@ async function resolve(deps: MailRouterDeps, to: string): Promise<{ userId: stri
   const declared = deps.aliases.get(recipient.username);
   const claim = await deps.name(declared ?? recipient.username).lookup();
 
-  // A name kept with no owner is retired: it routes nowhere, and its row keeps anyone from claiming it again.
+  // A name kept with no owner is retired: it routes nowhere until the account it was retired from claims it again.
   if (claim === null || claim.user_id === '') return null;
 
   // The deployment's own address (`privacy@D`) reaches its account's own box, and nothing under it.

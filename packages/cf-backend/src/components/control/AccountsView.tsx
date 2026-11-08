@@ -1,12 +1,12 @@
 /**
  * The operators' accounts (the owner's board, operator A): on a desktop one table with every limit a column, on a
  * phone a list; each account on its own page. Invite lifts every limit; Suspend signs one out with a reason, and its
- * data stays. Every change runs through `/api/control/actions`, so the audit log holds it before it shows here.
+ * data stays; Give an address back returns a retired address to the account it was retired from. Every change runs through `/api/control/actions`, so the audit log holds it before it shows here.
  */
 import { useState, type ReactNode } from "react";
 import { Effect } from "effect";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
-import { ProhibitIcon, UserPlusIcon } from "@phosphor-icons/react";
+import { EnvelopeSimpleIcon, ProhibitIcon, UserPlusIcon } from "@phosphor-icons/react";
 import { shownBytes, timeAgo, type AccountLimits, type LimitReading } from "@kinu.run/core";
 import { runAction, type AccountRow, type ControlAction } from "@/lib/control-api";
 import { Button } from "@/components/ui/Button";
@@ -264,6 +264,38 @@ function SuspendDialog({ email, userId, onClose, onDone }: { email: string; user
   );
 }
 
+/** A retired address handed back to this account: one its deletion retired before addresses kept whom they were
+ *  retired from. It routes nothing until they take it again in Mail. */
+function AddressReturnDialog({ email, onClose }: { email: string; onClose: () => void }) {
+  const [label, setLabel] = useState("");
+  const [said, setSaid] = useState<Said | null>(null);
+  const step = useLabelledStep();
+  const busy = step.busy !== null;
+  const shown = step.error === null ? said : { done: false, text: step.error };
+
+  const give = (): void => step.run("give back", async () => {
+    setSaid(await act({ action: "account.address_return", email, label: label.trim() }));
+  });
+
+  return (
+    <Modal title="Give an address back" icon={<EnvelopeSimpleIcon size={16} />} width="md" onClose={onClose} busy={busy}
+      footer={(
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
+          <Button variant="primary" size="sm" disabled={busy || label.trim() === ""} onClick={give}>Give it back</Button>
+        </>
+      )}>
+      <div className="space-y-3">
+        <p className="t-body p-text-2">An address {email} held before their account was deleted. Once it&apos;s back, they take it again in Mail; until then no mail reaches it.</p>
+        <Field label="The address's name, before the @">
+          <TextInput value={label} onChange={(event) => setLabel(event.target.value)} maxLength={20} aria-label="The address's name" autoComplete="off" />
+        </Field>
+        {shown !== null && <p role={shown.done ? "status" : "alert"} className={`t-meta ${shown.done ? "p-text-2" : "p-danger"}`}>{shown.text}</p>}
+      </div>
+    </Modal>
+  );
+}
+
 /** One account on its own page: its class, each limit, and the operator's changes to its standing. */
 export function AccountStanding({ userId, email, seen, limits, onChanged }: {
   userId: string;
@@ -273,6 +305,7 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
   onChanged: () => void;
 }): ReactNode {
   const [suspending, setSuspending] = useState(false);
+  const [returning, setReturning] = useState(false);
   const [said, setSaid] = useState<Said | null>(null);
   const step = useLabelledStep();
   const busy = step.busy !== null;
@@ -322,10 +355,12 @@ export function AccountStanding({ userId, email, seen, limits, onChanged }: {
         {report.suspended === null
           ? <Button variant="danger" size="sm" icon={<ProhibitIcon size={12} />} disabled={busy} onClick={() => setSuspending(true)}>Suspend</Button>
           : <Button variant="secondary" size="sm" disabled={busy} onClick={() => run({ action: "account.unsuspend", userId })}>Lift the suspension</Button>}
+        <Button variant="secondary" size="sm" icon={<EnvelopeSimpleIcon size={12} />} disabled={busy} onClick={() => setReturning(true)}>Give an address back</Button>
       </div>
       <p className="t-meta p-text-3">Invited lifts every limit. Suspended can&apos;t sign in; their data stays until you lift it or remove the account.</p>
       {shown !== null && <p role={shown.done ? "status" : "alert"} className={`t-meta ${shown.done ? "p-text-2" : "p-danger"}`}>{shown.text}</p>}
       {suspending && <SuspendDialog email={email} userId={userId} onClose={() => setSuspending(false)} onDone={onChanged} />}
+      {returning && <AddressReturnDialog email={email} onClose={() => setReturning(false)} />}
     </section>
   );
 }

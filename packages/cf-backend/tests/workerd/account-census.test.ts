@@ -108,7 +108,8 @@ describe("deleting an account on real workerd, every store's census", () => {
 
     for (const [table, rows] of Object.entries(after.mailbox)) expect({ table, rows }).toEqual({ table, rows: 0 });
 
-    // Her address routes nowhere, and no one can take it (docs/MAIL.md §11): Email Routing's mail to it is refused.
+    // Her address retired (docs/MAIL.md §11): it routes nowhere, so Email Routing's mail to it is refused, and no other
+    // account can take it, nor an operator give it one.
     expect(await account(dana).mailTo('priya@kinu.run', MIME)).toHaveLength(1);
 
     const claimed = async (userId: string) => {
@@ -121,7 +122,10 @@ describe("deleting an account on real workerd, every store's census", () => {
       }
     };
 
-    expect([await claimed(dana), await claimed(priya.userId)]).toEqual([expect.stringContaining('is taken'), expect.stringContaining('is taken')]);
+    expect(await claimed(dana)).toContain('is taken');
+    expect([await name.standing(dana), await name.standing(priya.userId)]).toEqual(['taken', 'theirs']);
+    expect(await control().operatorAction({ action: 'account.address_return', email: 'dana@northwind.io', label: 'priya' })).toMatchObject({ outcome: 'denied' });
+    expect(await name.lookup()).toMatchObject({ label: 'priya', user_id: '' });
 
     // A push from a workspace still naming her, as one cached before the deletion would send: her account keeps no
     // card, it answers that it was deleted, and Dana's account forgets her again (owner decision, 2026-10-20).
@@ -145,6 +149,14 @@ describe("deleting an account on real workerd, every store's census", () => {
       danaWorkspace: { slate_share_users: 0, slate_share_users_revoked: 0, slate_viewer_requests: 0, slate_edit_marks: 0, slate_share_views: 0 },
       danaAccount: { cards: 0, overviews: 0 },
     });
+
+    // The same person signs in again, as the same account (her email's), and takes her address back (owner, 2026-11-08).
+    const [again = ''] = await account('census-ids').accountsOf([EMAIL]);
+
+    await mailbox.open({ userId: again, email: EMAIL, username: 'priya', assistant: null });
+    expect(await name.lookup()).toMatchObject({ label: 'priya', user_id: priya.userId });
+    expect(await account(dana).mailTo('priya@kinu.run', MIME)).toEqual([]);
+    expect(await claimed(dana)).toContain('is taken');
   });
 
   // Review of the account deletion, 2026-10-20: a delivery mid-write when the box was deleted wrote its bytes after the
@@ -188,5 +200,36 @@ describe("deleting an account on real workerd, every store's census", () => {
     const left = await mailbox.mailCensus(priya.userId);
 
     for (const [table, rows] of Object.entries(left)) expect({ table, rows }).toEqual({ table, rows: 0 });
+  });
+
+  // The owner's own address, 2026-11-08: retired as their account was deleted, before a label kept whom it was retired
+  // from, so signing in again could not take it back. An operator gives it back from the control plane.
+  it('an operator gives a retired address back to the account that held it, and only a retired one', async () => {
+    const [sam = '', dana = ''] = await account('census-ids').accountsOf(['sam@example.org', 'dana@northwind.io']);
+    const mailbox = env.CENSUS_MAILBOX.get(env.CENSUS_MAILBOX.idFromName(sam));
+    const name = env.CENSUS_MAILNAME.get(env.CENSUS_MAILNAME.idFromName('samr'));
+    const giveBack = async (label: string) => control().operatorAction({ action: 'account.address_return', email: 'sam@example.org', label });
+
+    await account(sam).seedProfile({ userId: sam, email: 'sam@example.org' }, 'Sam Okafor');
+    await mailbox.open({ userId: sam, email: 'sam@example.org', username: 'samr', assistant: null });
+    expect(await giveBack('samr')).toMatchObject({ outcome: 'denied' });
+
+    try {
+      await account(sam).deleteThis();
+    } catch (cause) {
+      expect(renderThrownChain({ cause })).toContain('destroyed');
+    }
+
+    await name.forgetRetiredFrom();
+    expect(await name.standing(sam)).toBe('taken');
+    expect(await giveBack('neverheld')).toMatchObject({ outcome: 'denied' });
+
+    expect(await giveBack('samr')).toMatchObject({ outcome: 'ok' });
+    expect(await name.standing(dana)).toBe('taken');
+    expect(await account(dana).mailTo('samr@kinu.run', MIME)).toHaveLength(1);
+
+    await mailbox.open({ userId: sam, email: 'sam@example.org', username: 'samr', assistant: null });
+    expect(await name.lookup()).toMatchObject({ label: 'samr', user_id: sam });
+    expect(await account(dana).mailTo('samr@kinu.run', MIME)).toEqual([]);
   });
 });
