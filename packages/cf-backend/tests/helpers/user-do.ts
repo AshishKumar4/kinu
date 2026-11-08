@@ -236,6 +236,8 @@ export interface TestUserDOOptions {
   mcpAppCredentials?: readonly string[];
   /** How a workspace answers the owner's ask for its first tile; absent, the ask is only recorded. */
   overviewNudge?: (name: string) => Promise<void>;
+  /** Deliver a minted identity to a real workspace, or hold its RPC before delivery. */
+  installWorkspaceCapability?: (name: string, token: string) => Promise<void>;
   /** Notify an open workspace roster; its answer says whether the page is still watching. */
   deviceRosterMoved?: (name: string) => Promise<boolean>;
   /** The slate-picture bucket; absent, a teardown has no pictures to delete. */
@@ -756,6 +758,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           return wipedWorkspaces.has(name) ? 0 : 1;
         },
         async installWorkspaceCapability(token: string) {
+          await options.installWorkspaceCapability?.(name, token);
           installed.set(name, token);
 
           return { ok: true as const };

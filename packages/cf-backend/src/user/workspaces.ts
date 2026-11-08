@@ -67,10 +67,16 @@ export interface WorkspaceAdmission {
 export class UserWorkspaces {
   constructor(private readonly host: UserWorkspacesHost) {}
 
-  /** Provisioning in flight, per workspace. A DO does not serialize across an RPC await, so
-   *  coalescing here keeps concurrent first-touches from installing tokens from different mints. */
-  /** One minting of a workspace's identity at a time, every asker joining it. */
+  /** One minting of a workspace's identity at a time, every asker joining it: a DO does not serialize across an RPC
+   *  await, so concurrent first-touches would otherwise install tokens from different mints. */
   private readonly provisioning = flight((workspaceName: string) => Effect.gen({ self: this }, function* () {
+    const workspace = objectNamed(this.host.env.OrchestratorAgent, workspaceName);
+    const issued = workspaceCapabilityHash(this.host.ctx.storage.sql, workspaceName);
+
+    // An asker's observation may predate an identity an earlier minting already delivered (a /wake that claimed the
+    // workspace before its birth): what the workspace holds now decides, or a second mint revokes the first mid-turn.
+    if (issued !== null && issued === (yield* attemptInItsWords('unavailable', () => workspace.getWorkspaceCapabilityHash()))) return;
+
     const { token, tokenHash } = yield* Effect.promise(() => freshWorkspaceCapability());
 
     // Admits fork reservations, refuses rows mid-teardown and names absent from the registry.
@@ -78,7 +84,6 @@ export class UserWorkspaces {
       return yield* new KinuError('unavailable', `Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
     }
 
-    const workspace = objectNamed(this.host.env.OrchestratorAgent, workspaceName);
     yield* attemptInItsWords('unavailable', () => workspace.installWorkspaceCapability(token));
   }), { key: (workspaceName) => workspaceName });
 
