@@ -13,6 +13,7 @@ import { SCRIPTED_MODEL_KEY_ENV, SCRIPTED_MODEL_ORIGIN } from '../../packages/te
 import { SCRIPTED_MCP_PATH, SCRIPTED_MCP_TOOL, SessionAnswerSchema } from '../../scripts/scripted-mcp';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
+import { executorWords } from '../../evals/src/session';
 
 const SUITE = 'First-run · mcp-reconnect';
 
@@ -101,7 +102,7 @@ export class Slate extends SlateObject {
 }
 END`));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + executorWords(setup));
 
         const tallies = { connect: new Tally(), call: new Tally(), sameSession: new Tally(), renewed: new Tally() };
         /** Probe servers a removal did not take: the account keeps them, so the case fails on them. */

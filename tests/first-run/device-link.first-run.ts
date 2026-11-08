@@ -39,7 +39,7 @@ import {
   CONSENT_PARKED, listDevicesOverCliRoute, revokeDeviceOverUserRoute,
   type DeviceAccount, type DeviceListing, type DeviceRow,
 } from './device-session';
-import type { KinuPublicSession, PublicExecutorResult, PublicSessionPlan } from '../../evals/src/session';
+import { executorWords, type KinuPublicSession, type PublicExecutorResult, type PublicSessionPlan } from '../../evals/src/session';
 import { attachMachine, detachMachine, readDaemonLogTail, type AttachedMachine } from './daemon';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 
@@ -230,7 +230,7 @@ async function runDeviceCommand(
     // A socket-level failure throws here with its own words; a refusal or an
     // answer arrives as the result, which the caller reports verbatim.
     const result = await session.execute('device', command, machine.name);
-    const words = result.error ?? result.stdout ?? result.refusal?.error ?? '';
+    const words = executorWords(result);
 
     if (CONSENT_PARKED.test(words)) {
       const card = (await session.pendingConsents()).find((pending) => pending.deviceId === machine.deviceId);

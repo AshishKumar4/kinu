@@ -12,6 +12,7 @@ import {
 } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
+import { executorWords } from '../../evals/src/session';
 
 const SUITE = 'First-run · blueprint-fork';
 
@@ -74,7 +75,7 @@ export class Slate extends SlateObject {
 }
 END`));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the fork source: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the fork source: ' + executorWords(setup));
 
         // What the slate reaches is what its owner's calls recorded; the MCP call is refused here, and recorded all the same.
         for (const method of ['manifest', 'docs']) await session.slateOp({ op: 'call', id: SLATE, method, args: [] });

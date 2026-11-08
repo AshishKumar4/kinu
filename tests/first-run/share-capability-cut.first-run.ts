@@ -16,6 +16,7 @@ import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunR
 import { lendShares } from './my-access';
 import { shareHost } from './share-entry';
 import { webHeaders } from '../../evals/src/workspace-roster';
+import { executorWords } from '../../evals/src/session';
 
 const SUITE = 'First-run · share-capability-cut';
 
@@ -87,7 +88,7 @@ export class Slate extends SlateObject {
 }
 END`));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slates: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slates: ' + executorWords(setup));
 
         // A share is cut from what the owner's own calls reached: run each method once, then take the owner's mark back.
         const exercised = [[SLATE, 'probe'], [SLATE, 'mutate'], [CONTROL_SLATE, 'probe'], [CONTROL_SLATE, 'ctrl']] as const;

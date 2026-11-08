@@ -59,7 +59,7 @@
     },
     {
       "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
-      "complexity": 34
+      "complexity": 32
     },
     {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",

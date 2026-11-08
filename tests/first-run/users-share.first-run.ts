@@ -10,6 +10,7 @@ import { LiveShareCreatedSchema, liveSharePagePath } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
 import { openShare } from './share-entry';
+import { executorWords } from '../../evals/src/session';
 
 const SUITE = 'First-run · users-share';
 
@@ -88,7 +89,7 @@ export class Slate extends SlateObject {
 }
 END`));
 
-        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + (setup.error ?? setup.stdout ?? ''));
+        if ((setup.exitCode ?? 1) !== 0) throw new Error('Could not author the probe slate: ' + executorWords(setup));
         const { email } = v.parse(Profile, await (await fetch(`${plan.origin}/api/user/profile`, { headers: recipient })).json());
 
         const made = await fetch(`${plan.origin}/api/shared/live`, {
