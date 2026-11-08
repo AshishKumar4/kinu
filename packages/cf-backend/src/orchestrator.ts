@@ -9406,14 +9406,14 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       kv: this.env.AUTH_KV,
       budget: () => this.budget,
       // A refusal or a consent page is not failed for a name: an account that does not answer leaves it unnamed.
-      ownerName: async () => await settle(Effect.catch(
-        attempt({ doing: "reading the owner's name for a share's visitor", otherwise: 'unavailable' }, async () => await this.account.ownerName()),
-        (failure) => Effect.sync(() => {
-          diagnostics.failure('share.owner_name_unread', failure, { workspace: this.name });
+      ownerName: async () => {
+        let name: string | null = null;
 
-          return null;
-        }),
-      )),
+        await settleLogged('share.owner_name_unread', { doing: "reading the owner's name for a share's visitor", otherwise: 'unavailable' },
+          async () => { name = await this.account.ownerName(); }, { workspace: this.name });
+
+        return name;
+      },
       ownerUserId: () => this.getOwnerUserId(),
       viewerKey: (share, userId) => shareViewerKey(this.env, share, userId),
       // `owner` shares' effects wait on the owner in the workspace's one queue, as every parked action does.
