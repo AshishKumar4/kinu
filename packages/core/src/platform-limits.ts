@@ -115,6 +115,8 @@ export const PLATFORM_LIMITS = {
   'browser.session.keep_alive_ms': { value: 1_200_000, unit: 'ms' },
   'do.placement.location_hint': null,
   'provider.region.served': null,
+  'provider.anthropic.full_size_images': { value: 20, unit: 'count' },
+  'provider.anthropic.many_image_edge': { value: 3_000, unit: 'count' },
 } as const satisfies Readonly<Record<string, PlatformQuantity | null>>;
 
 export type PlatformFactId = keyof typeof PLATFORM_LIMITS;

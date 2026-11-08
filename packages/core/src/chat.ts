@@ -1069,7 +1069,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     };
 
     const result = streamText({
-      model: call.model(current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts)),
+      model: call.model(withToolResultImages(current.model, current.accepts, current.spec)),
       instructions: attempt.system,
       // The model's stack spends the call's retries; the SDK retries nothing on top.
       maxRetries: 0,

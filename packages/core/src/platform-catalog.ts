@@ -600,7 +600,7 @@ export const PLATFORM_CATALOG = {
   'rpc.arg_bytes': {
     subject: 'Largest byte payload carried as an ordinary Workers RPC argument or return value',
     origin: 'platform',
-    bounds: 'wire',
+    bounds: 'count',
     evidence: 'observed-in-production',
     provenance: 'staging 667f96316, evals pilot d8b53e373 trial 2: '
       + 'kinu/tmp/evals-lane/pilot-d8b53e373/trials/2/evals/evals-minecraft-1792378577427/'
@@ -2393,6 +2393,48 @@ export const PLATFORM_CATALOG = {
       'OpenAI: https://developers.openai.com/api/docs/supported-countries, its 403 text from '
       + 'https://developers.openai.com/api/docs/guides/error-codes. Anthropic\'s list says "Any country or region not listed is '
       + 'unsupported". OpenAI answers an unauthenticated call 401 before it reads the region.',
+  },
+  'provider.anthropic.full_size_images': {
+    subject: 'Anthropic takes images at full size in a request of at most 20; past 20, every image must fit a smaller bound',
+    origin: 'platform',
+    bounds: 'count',
+    evidence: 'documented',
+    provenance: 'https://platform.claude.com/docs/en/build-with-claude/vision',
+    date: '2026-11-08',
+    trigger: 'a Messages request carrying more than 20 images, one of them over the many-image bound on either side',
+    onBreach: 'HTTP 400 invalid_request_error for the whole request; every later turn of that chat repeats it, since the image stays in its history',
+    observable: [
+      {
+        context: 'the owner\'s workspace brisk-anvil-39c111f7, claude, 400',
+        message: 'messages.37.content.6.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 3000 pixels',
+      },
+    ],
+    firstPartySignal: true,
+    notes:
+      'The docs (read 2026-11-08): "If a single API request contains more than 20 images, a stricter per-image dimension '
+      + 'limit applies to every image in that request" ... "either resize each image so that neither dimension exceeds 3,000 '
+      + 'px, or keep the request to 20 or fewer image and document blocks." Kinu keeps a request at 20 images.',
+  },
+  'provider.anthropic.many_image_edge': {
+    subject: 'In an Anthropic request of more than 20 images, no image may exceed 3,000 pixels on either side (a pixel count)',
+    origin: 'platform',
+    bounds: 'wire',
+    evidence: 'documented',
+    provenance: 'https://platform.claude.com/docs/en/build-with-claude/vision',
+    date: '2026-11-08',
+    trigger: 'a Messages request carrying more than 20 images, one of them over the many-image bound on either side',
+    onBreach: 'HTTP 400 invalid_request_error for the whole request; every later turn of that chat repeats it, since the image stays in its history',
+    observable: [
+      {
+        context: 'the owner\'s workspace brisk-anvil-39c111f7, claude, 400',
+        message: 'messages.37.content.6.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 3000 pixels',
+      },
+    ],
+    firstPartySignal: true,
+    notes:
+      'The docs (read 2026-11-08): "If a single API request contains more than 20 images, a stricter per-image dimension '
+      + 'limit applies to every image in that request" ... "either resize each image so that neither dimension exceeds 3,000 '
+      + 'px, or keep the request to 20 or fewer image and document blocks." Kinu keeps a request at 20 images.',
   },
 } as const satisfies Readonly<Record<PlatformFactId, PlatformEvidence>>;
 
