@@ -246,8 +246,10 @@ export class SessionContext {
       }
 
       // An empty authored edit is still recorded: an explicitly empty history is a statement.
-      return this.revise(probe.selection, head, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
+      const revised = this.revise(probe.selection, head, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
         recordUnchanged: proposal !== undefined || cause === 'edit', named });
+
+      return revised instanceof KinuError ? yield* Effect.fail(revised) : revised;
     })));
   }
 
@@ -268,7 +270,9 @@ export class SessionContext {
       const added = { entryId: crypto.randomUUID(), messageId: reference.messageId, position: index };
       const next = [...kept.slice(0, index), added, ...kept.slice(index)].map((entry, position) => ({ ...entry, position }));
 
-      return this.revise(probe.selection, head, next, { author: this.actor.actorId, cause: 'render', turnId: request.turnId, proposalId: null, recordUnchanged: false, named: NONE });
+      const revised = this.revise(probe.selection, head, next, { author: this.actor.actorId, cause: 'render', turnId: request.turnId, proposalId: null, recordUnchanged: false, named: NONE });
+
+      return revised instanceof KinuError ? yield* Effect.fail(revised) : revised;
     })));
   }
 
@@ -286,11 +290,15 @@ export class SessionContext {
         return same?.messageId === message.messageId && same.entryId === String(position) ? same : { messageId: message.messageId, entryId: String(position), position };
       });
 
-      return this.revise(probe.selection, kept, next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false, named: NONE });
+      const revised = this.revise(probe.selection, kept, next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false, named: NONE });
+
+      if (revised instanceof KinuError) return settleSync(Effect.fail(revised));
+
+      return revised;
     });
   }
 
-  private revise(expected: ContextSelection, head: KeptHead, next: readonly ContextEntry[], origin: RevisionOrigin): ContextSelection {
+  private revise(expected: ContextSelection, head: KeptHead, next: readonly ContextEntry[], origin: RevisionOrigin): ContextSelection | KinuError {
     const current = head.entries;
     const kept = keptPrefix(current, next);
     const prior = new Map(current.slice(kept).map(entry => [entry.entryId, entry]));
@@ -325,7 +333,7 @@ export class SessionContext {
         SELECT ${actorId},${expected.contextId},${entry.entryId},${revision},${entry.position},message_id FROM session_messages
         WHERE actor_id=${actorId} AND message_id=${entry.messageId} AND origin!='render' RETURNING entry_id`;
 
-      if (joined.length === 0) throw new KinuError('denied', 'working context requires an actor-owned semantic message');
+      if (joined.length === 0) return new KinuError('denied', 'working context requires an actor-owned semantic message');
     }
 
     const ids = kept === current.length ? head.ids : new Set(current.slice(0, kept).map(entry => entry.entryId));

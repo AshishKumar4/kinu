@@ -1,5 +1,8 @@
 // The one table routing every SpendSource to a model; `satisfies` makes a missing row a compile error.
+import { Effect } from 'effect';
 import { SPEND_SOURCES, type SpendSource } from '../events/model-call';
+import { KinuError } from '../obs/error';
+import { settleSync } from '../obs/effect';
 import type { ReasoningEffort } from '../providers/effort';
 import { declaredReasoningEffort } from '../providers/reasoning-effort';
 import { specWithoutAccount } from '../providers/types';
@@ -66,16 +69,6 @@ function atEffort(slot: TierRoute, wanted: ReasoningEffort, declared: DeclaredEf
   return { model: slot.model, reasoningEffort: at(slot.model), fallbacks: slot.fallbacks.map((fallback) => ({ ...fallback, reasoningEffort: at(fallback.model) })) };
 }
 
-function tierResolution(profile: ResolvedTurnProfile, tier: TierId): TierRoute {
-  const assignment = profile.tiers[tier];
-
-  if (!assignment) {
-    throw new Error(`turn profile carries no ${tier} tier resolution`);
-  }
-
-  return assignment;
-}
-
 /** Null only for `platform` producers, which build their binding-bound client directly. */
 /** `declared`: the listing's levels, for a source whose policy wants an effort of its own; without it, the slot's. */
 export function resolveModelRoute(
@@ -108,7 +101,9 @@ export function resolveModelRoute(
     });
   }
 
-  const slot = tierResolution(profile, policy.tier);
+  const slot = profile.tiers[policy.tier];
+
+  if (!slot) return settleSync(Effect.fail(new KinuError('io', `turn profile carries no ${policy.tier} tier resolution`)));
   const { model, reasoningEffort, fallbacks } = 'effort' in policy && declared !== undefined ? atEffort(slot, policy.effort, declared) : slot;
 
   return Object.freeze({ source, tier: policy.tier, model, reasoningEffort, fallbacks, retries: profile.retries });

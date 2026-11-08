@@ -7,7 +7,7 @@ import type { SqlExecutor } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
-import { settle } from '../obs/effect';
+import { settle, settleSync } from '../obs/effect';
 import { encodeModelMessage } from './message-codec';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';
 import { type SessionPayloads, SessionPayloadReader, payloadReference, type SessionPayload } from './payload';
@@ -169,7 +169,7 @@ function heldAddress(carrier: JsonValue | undefined): string | null {
 
 /** A stored attachment as the chat draws it: the address it already has, its own address when `name` mints one, or its
  *  bytes inline as a data URL. */
-function drawnAttachment(part: JsonObject, name: ((index: number) => string) | undefined): JsonObject {
+function drawnAttachment(part: JsonObject, name: ((index: number) => string) | undefined): JsonObject | KinuError {
   const carrier = part.data ?? part.image;
   const mediaType = v.is(v.string(), part.mediaType) ? part.mediaType : 'application/octet-stream';
   const held = heldAddress(carrier);
@@ -181,22 +181,24 @@ function drawnAttachment(part: JsonObject, name: ((index: number) => string) | u
   else if (name !== undefined) url = name(0);
   else if (binary.success) url = `data:${mediaType};base64,${binary.output.$binary}`;
   else if (string.success) url = string.output.startsWith('data:') ? string.output : `data:${mediaType};base64,${string.output}`;
-  else throw new KinuError('io', 'stored attachment has no native data carrier');
+  else return new KinuError('io', 'stored attachment has no native data carrier');
 
   return { type: 'file', mediaType, url, ...(part.filename !== undefined && { filename: part.filename }) };
 }
 
-/** A tool result settles the call it answers, which its entry drew before it. */
-function settleCall(call: JsonObject | undefined, part: JsonObject, name: ((index: number) => string) | undefined): void {
-  if (call === undefined) throw new KinuError('io', 'public tool result has no call in its entry');
+/** A tool result settles the call it answers, which its entry drew before it; an error where it drew none. */
+function settleCall(call: JsonObject | undefined, part: JsonObject, name: ((index: number) => string) | undefined): KinuError | null {
+  if (call === undefined) return new KinuError('io', 'public tool result has no call in its entry');
   const output = v.parse(JsonObjectSchema, part.output);
   call.state = output.type === 'error-text' || output.type === 'error-json' ? 'output-error' : 'output-available';
 
   if (call.state === 'output-error') call.errorText = v.is(v.string(), output.value) ? output.value : JSON.stringify(output.value);
   else call.output = name === undefined ? output.value ?? output : drawnOutput(output, name);
+
+  return null;
 }
 
-function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role'], media?: PartMedia): JsonObject[] {
+function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role'], media?: PartMedia): JsonObject[] | KinuError {
   const projected: JsonObject[] = [];
   const calls = new Map<string, JsonObject>();
 
@@ -212,9 +214,14 @@ function drawnParts(parts: readonly JsonObject[], role: ConversationEntry['role'
       calls.set(id, call);
       projected.push(call);
     } else if (part.type === 'tool-result') {
-      settleCall(calls.get(v.parse(v.string(), part.toolCallId)), part, name);
+      const unsettled = settleCall(calls.get(v.parse(v.string(), part.toolCallId)), part, name);
+
+      if (unsettled !== null) return unsettled;
     } else if (part.type === 'file' || part.type === 'image') {
-      projected.push(drawnAttachment(part, name));
+      const attachment = drawnAttachment(part, name);
+
+      if (attachment instanceof KinuError) return attachment;
+      projected.push(attachment);
     } else {
       const { providerOptions, ...value } = part;
 
@@ -233,11 +240,15 @@ const StepMessageSchema = v.looseObject({ content: v.union([v.string(), v.array(
 
 /** A recorded step projected for display. */
 export function drawnStep(messages: readonly JsonValue[]): JsonObject[] {
-  return drawnParts(messages.flatMap((message) => {
+  const drawn = drawnParts(messages.flatMap((message) => {
     const { content } = v.parse(StepMessageSchema, message);
 
     return v.is(v.string(), content) ? [{ type: 'text', text: content }] : content;
   }), 'assistant');
+
+  if (drawn instanceof KinuError) return settleSync(Effect.fail(drawn));
+
+  return drawn;
 }
 
 export function readSessionTranscript(sql: SqlExecutor, authority: ActorReadAuthority, sessionId: string, files: (() => Promise<Pick<VFS, 'readFile'>>) | null): SessionTranscriptReader {
@@ -508,6 +519,8 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
     for (const [at, entry] of page.entries()) {
       if (at > 0 && at % DRAWN_SLICE_ROWS === 0) await nextLoopTurn();
       const drawn = await this.drawnEntry(entry, request.media, parts);
+
+      if (drawn instanceof KinuError) return settle(Effect.fail(drawn));
       const size = drawn.message === null ? 0 : utf8Bytes(JSON.stringify(drawn.message));
 
       if (items.length > 0 && bytes + size > request.bytes) break;
@@ -528,7 +541,12 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   async drawnMessage(id: string, media: MediaUrl): Promise<UIMessage | null> {
     const entry = this.read(id);
 
-    return entry === null ? null : (await this.drawnEntry(entry, media, new Map())).message;
+    if (entry === null) return null;
+    const drawn = await this.drawnEntry(entry, media, new Map());
+
+    if (drawn instanceof KinuError) return settle(Effect.fail(drawn));
+
+    return drawn.message;
   }
 
   /** The row that asked for the answer `id` names: the nearest one before it that is not an answer; null for none. */
@@ -584,7 +602,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       || [...new Set(entry.parts.map((part) => part.messageId))].some((messageId) => this.messages.spilled(messageId)));
   }
 
-  private async drawnEntry(entry: ConversationEntry, media: MediaUrl, parts: Map<string, readonly StoredPart[]>): Promise<DrawnEntry> {
+  private async drawnEntry(entry: ConversationEntry, media: MediaUrl, parts: Map<string, readonly StoredPart[]>): Promise<DrawnEntry | KinuError> {
     if (this.unreadable(entry)) return { entry, message: null };
 
     const message = await this.materializeEntry(entry, parts, (at) => (index) => {
@@ -592,6 +610,8 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
 
       return media({ messageId: ref?.messageId ?? '', partNo: ref?.partNo ?? 0, index });
     });
+
+    if (message instanceof KinuError) return message;
 
     // The SDK's message has no time, and the chat places what happened beside it by one: the seed and every page carry it.
     const own = v.safeParse(JsonObjectSchema, message.metadata);
@@ -668,11 +688,16 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
   async message(id: string): Promise<UIMessage | null> {
     const entry = this.read(id);
 
-    return entry === null ? null : this.materializeEntry(entry);
+    if (entry === null) return null;
+    const message = await this.materializeEntry(entry);
+
+    if (message instanceof KinuError) return settle(Effect.fail(message));
+
+    return message;
   }
 
   /** With `media`, each image is drawn as its address and no image's bytes are read; without, inline. */
-  private async materializeEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>, media?: PartMedia): Promise<UIMessage> {
+  private async materializeEntry(entry: ConversationEntry, cache?: Map<string, readonly StoredPart[]>, media?: PartMedia): Promise<UIMessage | KinuError> {
       const parts: JsonObject[] = [];
 
       for (const part of await this.parts(entry.parts, cache)) {
@@ -680,6 +705,8 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       }
 
       const projected = drawnParts(parts, entry.role, media);
+
+      if (projected instanceof KinuError) return projected;
       const metadata = entry.metadata === null ? undefined : await this.payloads.read(entry.metadata);
 
       this.actor.assertCurrent();
@@ -694,7 +721,7 @@ export class SessionTranscriptReader<A extends ActorReadAuthority = ActorReadAut
       // Drawn from this store's own rows, so the SDK's validator, which walked every part of every read, is not run.
       const drawn = v.safeParse(UIMessageSchema, message);
 
-      if (!drawn.success) throw new KinuError('io', 'conversation entry did not materialize');
+      if (!drawn.success) return new KinuError('io', 'conversation entry did not materialize');
 
       return drawn.output;
   }
