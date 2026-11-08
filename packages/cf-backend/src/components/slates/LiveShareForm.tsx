@@ -47,7 +47,7 @@ const IMPACT_WORDS: Readonly<Record<SlateGraphMember["impact"], string>> = {
 
 const ACCESS: readonly AccessOption<LiveShareVisibility>[] = [
   { id: "users", icon: <UsersIcon size={15} />, label: "Only people you add", detail: "Anyone else who gets the link sees nothing." },
-  { id: "public", icon: <GlobeIcon size={15} />, label: "Anyone with the link", detail: "No sign-in needed. It still runs as you." },
+  { id: "public", icon: <GlobeIcon size={15} />, label: "Anyone with the link", detail: "No sign-in needed. Whose access it runs with is set below." },
 ];
 
 /**
@@ -57,7 +57,7 @@ const ACCESS: readonly AccessOption<LiveShareVisibility>[] = [
  */
 const MODES: readonly Choice<ShareMode>[] = [
   { id: "own", icon: <UserCircleIcon size={16} />, label: "Their own access", detail: "Each person sees their own data, on their own connections. Nothing of yours is used." },
-  { id: "owner", icon: <IdentificationCardIcon size={16} />, label: "My access", detail: "It acts with your connections, within the reach below. Each change waits for you." },
+  { id: "owner", icon: <IdentificationCardIcon size={16} />, label: "My access", detail: "It acts with your connections, within the reach below. Each change waits for you. Your agent's chat stays yours alone." },
 ];
 
 /**

@@ -318,7 +318,7 @@ export class SlateShareProbeDO extends DurableObject<SlateHostDeps['env']> {
       shareEntry: (share) => `https://app.test/shared/live/probe/${share}`,
       // No AUTH_KV binding, as on a deployment without it; the spend bound is real.
       budget: () => this.governor(),
-      ownerTitle: async () => ctx.id.name ?? ctx.id.toString(),
+      ownerName: async () => ctx.id.name ?? ctx.id.toString(),
       ownerUserId: () => 'u-owner',
       partConnections: this.accounts,
       ownerEffects: {

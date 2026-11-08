@@ -17,7 +17,7 @@ import {
   type SlateFileChange, type SlateOperation, type EgressPrincipal,
 } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { attempt, ERROR_CODES, KinuError, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { attempt, attemptInItsWords, CODE_IS_REFUSAL, ERROR_CODES, KinuError, refusalOf, settle, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import type { ApprovalSpend } from '@kinu.run/core';
 import { Cause, Effect } from 'effect';
 import { ONLY_A_PAGE_PUSHES, PAGE_KEEPS_NO_DATA, ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
@@ -72,7 +72,8 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained' | 'bun
   kv?: KvStore;
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
-  ownerTitle?(): Promise<string>;
+  /** The name the workspace's owner gave their account, as a share's visitors are told it; null where they gave none. */
+  ownerName?(): Promise<string | null>;
   /** Each viewer's own account, where their personal parts' calls run (`part-runs.ts`); absent, no part runs. */
   readonly partConnections?: PartConnections;
   ownerUserId?(): string | null;
@@ -183,7 +184,7 @@ export class SlateHost {
       ...(deps.viewerKey !== undefined && { viewerKey: deps.viewerKey.bind(deps) }),
       ...(deps.forgetPicture !== undefined && { forgetPicture: deps.forgetPicture.bind(deps) }),
       ...(deps.sharesChanged !== undefined && { sharesChanged: deps.sharesChanged.bind(deps) }),
-      ...(deps.ownerTitle !== undefined && { ownerTitle: deps.ownerTitle.bind(deps) }),
+      ...(deps.ownerName !== undefined && { ownerName: deps.ownerName.bind(deps) }),
       ...(deps.ownerEffects !== undefined && { ownerEffects: deps.ownerEffects }),
       ...(deps.toolContract !== undefined && { toolContract: deps.toolContract.bind(deps) }),
       ...(deps.listingChanged !== undefined && { listingChanged: deps.listingChanged.bind(deps) }),
@@ -203,7 +204,6 @@ export class SlateHost {
     this.parts = new PersonalParts({
       workspace: deps.workspace, controller: this.controller, resident: this.resident, call: (request) => this.call(request),
       ...(deps.ownerUserId !== undefined && { ownerUserId: deps.ownerUserId.bind(deps) }),
-      ...(deps.ownerTitle !== undefined && { ownerTitle: deps.ownerTitle.bind(deps) }),
       ...(deps.partConnections !== undefined && { connections: deps.partConnections }),
     });
   }
@@ -239,15 +239,17 @@ export class SlateHost {
   /** What the grant reaches of the owner's, disclosed before anything of theirs runs. */
   private async consentPage(share: LiveShareRecord, namespaces: readonly string[], context: string): Promise<Response> {
     const project = await this.controller.project(CRED_SESSION_USER, share.slate);
-    const owner = (await this.deps.ownerTitle?.()) ?? this.deps.workspace;
+    const named = await this.deps.ownerName?.() ?? null;
+    const owner = named ?? 'its owner';
     const title = slateTitle(project, share.slate);
     const reached = namespaces.map((namespace) => `<li>${escapeHtml(namespace)}</li>`).join('');
+    const heading = named === null ? `${title} is shared with you` : `${named} shared ${title}`;
 
     const html = publicPage({
-      title: `${owner} shared ${title}`,
+      title: heading,
       body: `<main><section class="section">
-<h1>${escapeHtml(owner)} shared ${escapeHtml(title)}</h1>
-<p class="dim">This slate runs in ${escapeHtml(owner)}'s workspace and calls these connections with their credentials:</p>
+<h1>${escapeHtml(heading)}</h1>
+<p class="dim">This app runs in ${escapeHtml(owner)}'s workspace and calls these connections with their credentials:</p>
 <ul>${reached}</ul>
 <p class="dim">What you do here runs as ${escapeHtml(owner)} and is logged for them.</p>
 <a class="btn solid" href="${escapeHtml(`${VIEWER_EXCHANGE_PATH}?consent=1${context === '' ? '' : `&${context}`}`)}">Continue</a>
@@ -454,9 +456,10 @@ export class SlateHost {
       // held first to the sharing they began under.
       const within = (namespace: string, member: string) => { servers.within({ slate: id, chain, address: { namespace, member }, fence: { lineage, record: issued } }); };
 
-      // A viewer's request is held to its own share as it stands now, and the server's word on it with it.
+      // A viewer's request is held to its own share as it stands now, and the server's word on it with it. A refusal
+      // decided on the way is the visitor's to read as written; only a failure keeps where it happened.
       if (viewer !== undefined) {
-        return await this.controller.viewers.call({
+        return await settle(Effect.catch(attemptInItsWords('io', () => this.controller.viewers.call({
           share: viewer.share, id, request: parsed.output, chain, issued, gate: (call) => gate(call, viewer.subject),
           bound: (address) => servers.bounded({ slate: id, chain, address }),
           run: (route, nested, admit) => this.run(shareCaller(viewer.share), route, {
@@ -465,7 +468,7 @@ export class SlateHost {
             viewer: true,
             ...(parsed.output.authorize && { authorizeOnly: true }),
           }, viewer),
-        });
+        })), (failure) => Effect.succeed(CODE_IS_REFUSAL[failure.code] ? { ok: false as const, ...refusalOf(failure) } : refused({ cause: failure }))));
       }
 
       if (caller.share !== undefined) return { ok: false, ...refusalOf(new KinuError('denied', `Slate ${id} runs for a share, and called out under no viewer's request`)) };

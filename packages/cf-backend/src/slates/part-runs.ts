@@ -51,7 +51,6 @@ export interface PersonalPartsDeps {
   readonly controller: SlateController<SlateSource, ResidentSlateProcess>;
   readonly resident: ResidentSlateProcesses;
   readonly ownerUserId?: () => string | null;
-  readonly ownerTitle?: () => Promise<string>;
   readonly connections?: PartConnections;
   /** A method of the slate's own server, called as its shares allow (`SlateHost.call`). */
   call(request: SlateAppCall): Promise<SlateCallResult>;

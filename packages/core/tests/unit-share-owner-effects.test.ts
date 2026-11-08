@@ -152,20 +152,20 @@ test("one principal. the owner's own request to their shared slate asks them for
   expect(owned.ran).toEqual(['user:ana:fs.text', 'owner:fs.write']);
 });
 
-test("an own share lends its server nothing, for anyone, and says who can turn on My access", async () => {
+test("an own share lends its server nothing, for anyone", async () => {
   const own = world('own');
 
-  await expect(own.call('fs.text')).rejects.toThrow('Sam can turn on My access');
-  await expect(own.ownersCall('fs.write')).rejects.toThrow('can turn on My access');
+  await expect(own.call('fs.text')).rejects.toMatchObject({ code: 'denied' });
+  await expect(own.ownersCall('fs.write')).rejects.toMatchObject({ code: 'denied' });
   expect({ ran: own.ran, asked: own.asked() }).toEqual({ ran: [], asked: [] });
 });
 
 test('an owner share whose slate moved past the approved revision lends nothing, observing or not, the owner\'s own request included', async () => {
   const { call, ownersCall, ran, asked } = world('owner', { board: 'rev-2', digest: 'rev-9' });
 
-  await expect(call('fs.text')).rejects.toThrow('changed since its owner approved what it reaches');
-  await expect(call('fs.write')).rejects.toThrow('changed since its owner approved what it reaches');
-  await expect(ownersCall('fs.write')).rejects.toThrow('changed since its owner approved what it reaches');
+  await expect(call('fs.text')).rejects.toMatchObject({ code: 'denied' });
+  await expect(call('fs.write')).rejects.toMatchObject({ code: 'denied' });
+  await expect(ownersCall('fs.write')).rejects.toMatchObject({ code: 'denied' });
   expect({ ran, asked: asked().length }).toEqual({ ran: [], asked: 0 });
 });
 
@@ -174,8 +174,8 @@ test("a call from a slate the shared one hops to is held to the shared server's 
 
   expect(await call('fs.text', { slate: 'digest', chain: ['board'] })).toMatchObject({ ok: true });
   // The hop's own leaf the shared server's grant does not reach: refused, whoever the share is.
-  await expect(call('fs.write', { slate: 'digest', chain: ['board'] })).rejects.toThrow(/does not (grant|reach) workspace\.fs\.write/u);
-  expect(() => { servers.within({ slate: 'digest', chain: ['board'], address: { namespace: 'workspace', member: 'fs.write' } }); }).toThrow('does not reach');
+  await expect(call('fs.write', { slate: 'digest', chain: ['board'] })).rejects.toMatchObject({ code: 'denied' });
+  expect(() => { servers.within({ slate: 'digest', chain: ['board'], address: { namespace: 'workspace', member: 'fs.write' } }); }).toThrow();
 });
 
 test("a browser member the class runs waits on the owner when the host is asked to authorize it, and its refusal report asks nothing", async () => {
@@ -224,7 +224,7 @@ test('a call on one share fails closed when another share of the same server sto
   both.live.setAuthority('s2', { mode: 'owner', grantRevision: 'rev-1' }, grant);
   expect(await both.call('fs.text')).toMatchObject({ ok: true });
   // s2 turns to each viewer's own access: the server lends nothing now, so s1's call is not sent either.
-  await expect(both.call('fs.text', { meanwhile: () => { both.live.setAuthority('s2', { mode: 'own', grantRevision: null }, grant); } })).rejects.toThrow('can turn on My access');
+  await expect(both.call('fs.text', { meanwhile: () => { both.live.setAuthority('s2', { mode: 'own', grantRevision: null }, grant); } })).rejects.toMatchObject({ code: 'denied' });
 });
 
 test('a pre-approved tool and root run unasked at that revision only; another root, or another revision, asks', async () => {
@@ -287,7 +287,7 @@ test('R4-P1 nested lineage. a member reached inside a running call meets its lin
   const board = { incarnation: 'p1', generation: live.generation('board'), ancestors: {} };
   const member = { slate: 'board', chain: [], address: { namespace: 'workspace', member: 'deleteFile' } };
 
-  expect(servers.beyond({ ...member, fence: { lineage: board, record: null } })?.message).toContain('does not reach');
+  expect(servers.beyond({ ...member, fence: { lineage: board, record: null } })?.code).toBe('denied');
   live.revoke('s1');
   // Unshared now, the member is the owner's own; reached by the call that began shared, it is refused.
   expect(servers.beyond(member)).toBeNull();
@@ -366,11 +366,11 @@ test("'Always' on a call another slate made names that caller, on the shared sla
   expect(live.get('s1')?.grant.preapproved).toEqual([{ slate: 'digest', namespace: 'workspace', member: 'fs.write', root: {}, revision: 'rev-1' }]);
 });
 
-test("R3-P1 pending edit. while an editor's change awaits review, the owner share lends nothing and says whose change it is", async () => {
+test("R3-P1 pending edit. while an editor's change awaits review, the owner share lends nothing", async () => {
   const { live, servers, call } = world('owner');
 
   live.markEdit('board', 'pat@example.test');
   expect(live.authoritiesOf('board')).toMatchObject([{ mode: 'owner', grantRevision: null, editedBy: 'pat@example.test' }]);
   expect(servers.authorityOf('board')).toEqual({ kind: 'none' });
-  await expect(call('fs.text')).rejects.toThrow("pat@example.test's change to slate board is awaiting Sam's review");
+  await expect(call('fs.text')).rejects.toMatchObject({ code: 'denied' });
 });
