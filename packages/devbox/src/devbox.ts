@@ -1646,8 +1646,13 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         this.#deleteSchedule(STARTUP_CALLBACK);
       }
     } else {
+      const repeated = this.#refused?.generation === generation && this.#refused.reason === reason;
+
       this.#refused = { generation, reason };
-      await this.#record('attach', `[${failure} -> retry] ${reason}`);
+
+      // A start the platform keeps refusing says so once, not once a retry (Home, 2026-11-06: an "Attach failed" card a
+      // second while the account had no container to give).
+      if (!repeated) await this.#record('attach', `[${isCapacityRefusal(failed) ? 'no room' : failure} -> retry] ${reason}`);
 
       if (this.#owns(generation)) await this.armAlarm(STARTUP_CALLBACK, 1);
     }
