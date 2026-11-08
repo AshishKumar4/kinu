@@ -61,9 +61,9 @@ deletes it); each part is Nimbus's own build of the source change its ask propos
 
 Asked of Nimbus and not carried: mysql2's `checkServerIdentity` under workerd's
 TLS (#48; a program passing one is refused, told to run the client on the computer, issue #60), connections keeping the host's socket type (#49), the Cloudflare accounts envelope (#50), a credentialed
-SqliteVFS view walking `..` after a link (#53; Kinu's store planes still key lexically), and the shell resolving an
-operand as POSIX does rather than lexically (#54; a command still reads `./missing/../f` and `f/` where the file plane
-refuses them).
+SqliteVFS view walking `..` after a link (#53; Kinu's store planes still key lexically). The shell takes an operand as
+POSIX does since 0.28 (#54, `operandPath`): `./missing/../f` and `f/` are refused there as the file plane refuses them
+(the shared-backend `workspace-paths` suite, 2026-11-08).
 
 0.18 ships the servername `connectTls` carries (#44, the patch is gone; Kinu's egress takes Nimbus's `EgressTlsTarget`),
 an egress per process (`egressFor`, #45), and a route's traversal report (#41). Kinu mints each process's egress with

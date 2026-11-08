@@ -114,11 +114,14 @@ for (const name of testBackends()) {
           expect(await plane.read(path)).toMatchObject({ content: 'one' });
         }
 
-        // `..` is taken after the walk reaches it, so a directory that is not there is not passed through.
+        // `..` is taken after the walk reaches it, so a directory that is not there is not passed through, by the file
+        // tool and the shell alike (#56); a file is no directory.
         const missing = await plane.read('./missing/../item.txt');
 
         expect(missing).toHaveProperty('error');
         expect(missing).not.toHaveProperty('content');
+        expect(await Promise.all(['cat ./missing/../item.txt', 'cat item.txt/', 'cat ./dir/../item.txt'].map(async (command) => (await plane.shell.exec(command)).exitCode === 0)))
+          .toEqual([false, false, true]);
 
         expect(await plane.read(`${plane.home}/../../slates/project/./item.txt`)).toMatchObject({ content: 'slate' });
 
