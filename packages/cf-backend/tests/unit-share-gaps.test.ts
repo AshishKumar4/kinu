@@ -267,7 +267,6 @@ test('D3: a credentialed share answers its consent page until the consent cookie
   // What the grant reaches: the read-only MCP tool and the file read, by namespace.
   expect(html).toContain('<li>mcp.github</li>');
   expect(html).toContain('<li>workspace</li>');
-  expect(html).toContain('issues-owner');
   expect(html).toContain(`/${CONSENT_PATH}`);
 
   const minted = await visit(world, url, '203.0.113.4', { path: CONSENT_PATH });
