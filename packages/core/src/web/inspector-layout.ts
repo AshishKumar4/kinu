@@ -2,7 +2,6 @@
  * Inspector column layout machine (no React, no DOM); effects live in `cf-backend/src/hooks/use-inspector-layout.ts`.
  * Commits are classified by input mark, never by comparing layouts: only marked commits persist.
  */
-import { surfaceKindOf, type SurfaceKind } from '../read-models/surface-presence';
 import { readStored, writeStored } from './stored';
 
 export const INSPECTOR_DEFAULT_PX = 340;
@@ -78,14 +77,12 @@ function readInspectorChoice(account: string, workspace: string | undefined): bo
  * The surface the inspector last showed in a workspace, kept per account and workspace beside its open/closed choice:
  * the tab it opens on again, after a reload or a return. Null where nothing is kept, or for an unkeyed session.
  */
-export function readInspectorSurface(account: InspectorAccount | null, workspace: string): SurfaceKind | null {
-  const raw = account?.kind === "known" ? readStored(`kinu.inspector.surface.${account.email}.${workspace}`) : null;
-
-  return raw === null ? null : surfaceKindOf(raw);
+export function readInspectorSurface(account: InspectorAccount | null, workspace: string): string | null {
+  return account?.kind === "known" ? readStored(`kinu.inspector.surface.${account.email}.${workspace}`) : null;
 }
 
 /** Keeps `surface` as the one the inspector shows in `workspace`; an unkeyed session keeps nothing. */
-export function keepInspectorSurface(account: InspectorAccount | null, workspace: string, surface: SurfaceKind): void {
+export function keepInspectorSurface(account: InspectorAccount | null, workspace: string, surface: string): void {
   if (account?.kind === "known") writeStored(`kinu.inspector.surface.${account.email}.${workspace}`, surface);
 }
 

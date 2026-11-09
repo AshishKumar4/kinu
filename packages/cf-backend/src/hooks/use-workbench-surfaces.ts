@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
-  cloudPlanes, filesFocusOf, PLANE, referencePrefixes, SLATE_PREFIX, WORKSPACE_ROOT,
+  cloudPlanes, filesFocusOf, PLANE, referencePrefixes, SLATE_PREFIX, surfaceKindOf, WORKSPACE_ROOT,
   type DiffAnchor, type ExecutorInfo, type FilesFocus, type SlateSummary, type SurfaceKind,
 } from "@kinu.run/core";
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
@@ -60,6 +60,13 @@ interface WorkbenchSurfaces {
   readonly desktopLanded: () => void;
 }
 
+/** The tab kept for `account` in `workspace` (`readInspectorSurface`), when it names a surface. */
+function keptSurface(account: InspectorAccount | null, workspace: string): SurfaceKind | null {
+  const kept = readInspectorSurface(account, workspace);
+
+  return kept === null ? null : surfaceKindOf(kept);
+}
+
 /** Whose tab, in which workspace, the shown one is: null until the account is known. */
 function keptFor(account: InspectorAccount | null, workspace: string): string | null {
   return account?.kind === "known" ? `${account.email}\n${workspace}` : null;
@@ -90,7 +97,7 @@ export function useWorkbenchSurfaces({ workspace, executors, slates, search, ins
   const [landingSlate, setLandingSlate] = useState<string | null>(() => new URLSearchParams(search).get("slate"));
   const [forkLanding, setForkLanding] = useState(() => forkLandingOf(new URLSearchParams(search)));
   const account = useInspectorAccount(true);
-  const [surface, setShown] = useState<SurfaceKind>(() => readInspectorSurface(account, workspace) ?? "Work");
+  const [surface, setShown] = useState<SurfaceKind>(() => keptSurface(account, workspace) ?? "Work");
   // The account and workspace the shown tab was read for, and the last tab picked on purpose (the reader's, or a landing's
   // or a link's): an account resolved after the first paint, or another than the one cached, reads its own kept tab
   // unless one was picked meanwhile, which is then kept for it.
@@ -112,7 +119,7 @@ export function useWorkbenchSurfaces({ workspace, executors, slates, search, ins
       return;
     }
 
-    const kept = readInspectorSurface(account, workspace);
+    const kept = keptSurface(account, workspace);
 
     if (kept !== null) setShown(kept);
   }, [account, workspace]);

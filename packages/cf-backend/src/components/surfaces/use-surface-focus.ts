@@ -71,7 +71,7 @@ export function useSurfaceFocus(input: {
   readonly slates: readonly SlateSummary[] | undefined;
   readonly pinnedPorts: readonly PinnedPort[];
   readonly onSurface: (surface: SurfaceKind) => void;
-  readonly onLanded: (surface: SurfaceKind) => void;
+  readonly onLanded: ((surface: SurfaceKind) => void) | undefined;
 }): SurfaceFocus {
   const [dismissed, setDismissed] = useState<string | null>(null);
 
@@ -86,8 +86,8 @@ export function useSurfaceFocus(input: {
 
   const land = useCallback((next: SurfaceKind) => {
     setDismissed((prev) => dismissalAfter(input.previewFocus, next, prev));
-    input.onLanded(next);
-  }, [input.previewFocus, input.onLanded]);
+    (input.onLanded ?? input.onSurface)(next);
+  }, [input.previewFocus, input.onLanded, input.onSurface]);
 
   const chipSurface = readyChipSurface(input.previewFocus, input.surface, dismissed);
 

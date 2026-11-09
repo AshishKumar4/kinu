@@ -203,7 +203,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
     slates: props.slates,
     pinnedPorts: props.pinnedPorts,
     onSurface: props.onSurface,
-    onLanded: props.onLanded ?? props.onSurface,
+    onLanded: props.onLanded,
   });
 
   const chip = focus.readyChip;

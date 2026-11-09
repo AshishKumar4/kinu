@@ -2560,6 +2560,7 @@ export {
   pruneSlateReloads,
   siteSurface,
   surfaceHasContent,
+  surfaceKindOf,
   surfacePreviewTarget,
 } from './read-models/surface-presence';
 
