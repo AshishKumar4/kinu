@@ -94,6 +94,8 @@ interface WorkSurfaceProps {
   workspacePlanArrival?: WorkspacePlanArrival | null;
   onReviewActor?: (name: string, actorId?: string) => void | Promise<void>;
   onSurface: (s: SurfaceKind) => void;
+  /** Where the surface landed itself (`landedSurface`), the one asked for being gone or not yet listed; absent, `onSurface`. */
+  onLanded?: (s: SurfaceKind) => void;
   agents?: { readonly list: readonly PanelAgent[]; readonly shown: string | null; readonly open: (agent: PanelAgent) => void };
   pinnedPorts: PinnedPort[];
   /** The address a chat's preview opened its port's surface at; that surface shows it rather than the port's root. */
@@ -201,6 +203,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
     slates: props.slates,
     pinnedPorts: props.pinnedPorts,
     onSurface: props.onSurface,
+    onLanded: props.onLanded ?? props.onSurface,
   });
 
   const chip = focus.readyChip;
@@ -227,8 +230,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
   useEffect(() => {
     if (presses.current !== drawnPresses.current) return;
 
-    if (surface !== null && surface !== requested) focus.navigate(surface);
-  }, [surface, requested, focus.navigate]);
+    if (surface !== null && surface !== requested) focus.land(surface);
+  }, [surface, requested, focus.land]);
 
   useEffect(() => {
     if (!settled && props.tabPresence !== undefined) setSettledFor(workspaceKey);

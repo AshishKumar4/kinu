@@ -13,7 +13,7 @@ import {
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import type { WorkbenchHandle } from "@/components/WorkbenchPanels";
 import type { ChatImageSource } from "@/components/ChatImages";
-import { keepInspectorSurface, readInspectorSurface } from "@kinu.run/core/web/inspector-layout";
+import { keepInspectorSurface, readInspectorSurface, type InspectorAccount } from "@kinu.run/core/web/inspector-layout";
 import { useInspectorAccount } from "@/hooks/use-inspector-layout";
 
 /** A chat's file links: the prefixes it links, and what opens one. */
@@ -39,6 +39,8 @@ interface WorkbenchSurfaces {
   readonly surface: SurfaceKind;
   /** Picks a surface where the inspector already shows. */
   readonly setSurface: (surface: SurfaceKind) => void;
+  /** Shows the tab the inspector itself landed on, which is never kept as the one left open. */
+  readonly landSurface: (surface: SurfaceKind) => void;
   /** Picks a surface and brings the inspector into view. */
   readonly show: (surface: SurfaceKind) => void;
   /** The address a chat's site preview opened its port's preview at, which the inspector shows for that surface. */
@@ -56,6 +58,11 @@ interface WorkbenchSurfaces {
   /** The page opened on `?environment=desktop`: Environment shows the chosen machine's desktop, once. */
   readonly desktopLanding: boolean;
   readonly desktopLanded: () => void;
+}
+
+/** Whose tab, in which workspace, the shown one is: null until the account is known. */
+function keptFor(account: InspectorAccount | null, workspace: string): string | null {
+  return account?.kind === "known" ? `${account.email}\n${workspace}` : null;
 }
 
 /** A preview surface, and the address within its site it shows. */
@@ -83,25 +90,44 @@ export function useWorkbenchSurfaces({ workspace, executors, slates, search, ins
   const [landingSlate, setLandingSlate] = useState<string | null>(() => new URLSearchParams(search).get("slate"));
   const [forkLanding, setForkLanding] = useState(() => forkLandingOf(new URLSearchParams(search)));
   const account = useInspectorAccount(true);
-  const [surface, setSurface] = useState<SurfaceKind>(() => readInspectorSurface(account, workspace) ?? "Work");
-  // Whether `surface` is this account's yet: an account resolved only after the first paint reads its kept tab then,
-  // unless something already asked for another; until then nothing is kept over it.
-  const read = useRef(account?.kind === "known");
+  const [surface, setShown] = useState<SurfaceKind>(() => readInspectorSurface(account, workspace) ?? "Work");
+  // The account and workspace the shown tab was read for, and the last tab picked on purpose (the reader's, or a landing's
+  // or a link's): an account resolved after the first paint, or another than the one cached, reads its own kept tab
+  // unless one was picked meanwhile, which is then kept for it.
+  const readFor = useRef(keptFor(account, workspace));
+  const picked = useRef<SurfaceKind | null>(null);
+  const latest = useRef(account);
+
+  latest.current = account;
 
   useEffect(() => {
-    if (account?.kind !== "known") return;
+    const key = keptFor(account, workspace);
 
-    if (read.current) {
-      keepInspectorSurface(account, workspace, surface);
+    if (key === null || readFor.current === key) return;
+    readFor.current = key;
+
+    if (picked.current !== null) {
+      keepInspectorSurface(account, workspace, picked.current);
 
       return;
     }
 
-    read.current = true;
     const kept = readInspectorSurface(account, workspace);
 
-    if (kept !== null && surface === "Work") setSurface(kept);
-  }, [account, workspace, surface]);
+    if (kept !== null) setShown(kept);
+  }, [account, workspace]);
+
+  /** A tab picked on purpose: shown, and kept for the workspace once its account is read. */
+  const setSurface = useCallback((next: SurfaceKind): void => {
+    picked.current = next;
+    setShown(next);
+
+    if (readFor.current !== null && readFor.current === keptFor(latest.current, workspace)) keepInspectorSurface(latest.current, workspace, next);
+  }, [workspace]);
+
+  /** The tab the inspector landed on itself, the one asked for being gone or not yet listed: shown, never kept. */
+  const landSurface = useCallback((next: SurfaceKind): void => { setShown(next); }, []);
+
   // `?environment=desktop` opens Environment, once the inspector's layout is decided (a reveal before it is undone), and
   // Environment shows the chosen machine's desktop; each lets go once it has. Followed, not read once: the desktop's old
   // address redirects here within the same page, which stays mounted across the workspace's own routes.
@@ -118,7 +144,7 @@ export function useWorkbenchSurfaces({ workspace, executors, slates, search, ins
   const show = useCallback((next: SurfaceKind): void => {
     setSurface(next);
     workbench.current?.reveal();
-  }, []);
+  }, [setSurface]);
 
   const [previewAddress, setPreviewAddress] = useState<PreviewAddress | null>(null);
 
@@ -177,7 +203,7 @@ export function useWorkbenchSurfaces({ workspace, executors, slates, search, ins
   const desktopLanded = useCallback(() => setDesktopLanding(false), []);
 
   return {
-    workbench, surface, setSurface, show, previewAddress, openPreview, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
+    workbench, surface, setSurface, landSurface, show, previewAddress, openPreview, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
     desktopLanding, desktopLanded,
   };
 }

@@ -229,7 +229,7 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
 
   // Which surface the inspector shows, and every way the chat, the stack and a landing ask for one.
   const {
-    workbench, surface, setSurface, show, previewAddress, openPreview, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
+    workbench, surface, setSurface, landSurface, show, previewAddress, openPreview, filesFocus, fileLinks, chatImages, changesFocus, openChangeNote, forkLanding, forkLandingOpened,
     desktopLanding, desktopLanded,
   } = useWorkbenchSurfaces({
     workspace: agentId, executors: state.executors, slates: state.slates, search: location.search,
@@ -594,6 +594,7 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
               workbench.current?.showChat();
             }}
             onSurface={setSurface}
+            onLanded={landSurface}
             agents={agentsPanel}
             pinnedPorts={state.pinnedPorts}
             previewAddress={previewAddress}
