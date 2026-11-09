@@ -94,7 +94,6 @@ export function deployPlan(manifest: ReleaseManifest, inputs: DeployInputs): rea
     mailRoutingStep(inputs),
     kvStep(manifest),
     bucketStep(manifest),
-    vectorizeStep(manifest),
     gatewayStep(),
     seedStep(manifest),
     computerToolsStep(manifest),
@@ -258,58 +257,6 @@ function bucketStep(manifest: ReleaseManifest): DeployStep {
   };
 }
 
-function vectorizeStep(manifest: ReleaseManifest): DeployStep {
-  return {
-    id: 'vectorize',
-    title: 'Create the memory index',
-    after: ['account'],
-    run(context: DeployContext): Effect.Effect<string, KinuError> {
-      return Effect.gen(function* () {
-        const base = `/accounts/${context.inputs.accountId}/vectorize/v2/indexes`;
-
-        const existing = yield* Effect.promise(async () => cloudflareResult(
-          context.transport,
-          { method: 'GET', path: base },
-          v.array(v.object({ name: v.string(), config: v.object({ dimensions: v.number(), metric: v.string() }) })),
-        ));
-
-        const held = new Map(existing.map((index) => [index.name, index.config]));
-
-        for (const index of manifest.vectorIndexes) {
-          const name = resourceName(context.inputs, index.name);
-          const config = held.get(name);
-
-          // An index of another shape binds, and refuses every vector this release writes: not ready, and not ours to drop.
-          if (config !== undefined && (config.dimensions !== index.dimensions || config.metric !== index.metric)) {
-            return yield* new KinuError('bad_input', `${name} already exists at ${String(config.dimensions)} dimensions, `
-              + `${config.metric}, and this release writes ${String(index.dimensions)}-dimension ${index.metric} vectors, `
-              + `which it would refuse. Delete ${name} in the Cloudflare dashboard (Vectorize), or deploy under another name.`);
-          }
-
-          if (config !== undefined) {
-            context.note(`${name} already exists.`);
-            continue;
-          }
-
-          yield* Effect.promise(async () => cloudflareResult(
-            context.transport,
-            {
-              method: 'POST',
-              path: base,
-              body: { name, config: { dimensions: index.dimensions, metric: index.metric } },
-            },
-            v.object({ name: v.optional(v.string()) }),
-          ));
-
-          context.note(`${name} created at ${index.dimensions} dimensions, ${index.metric}.`);
-        }
-
-        return `${manifest.vectorIndexes.length} index(es) ready.`;
-      });
-    },
-  };
-}
-
 function gatewayStep(): DeployStep {
   return {
     id: 'ai-gateway',
@@ -463,7 +410,7 @@ function uploadStep(manifest: ReleaseManifest): DeployStep {
   return {
     id: 'upload',
     title: 'Upload the Worker',
-    after: ['computer-token', 'credits-token', 'mail-routing', 'kv', 'r2', 'vectorize', 'ai-gateway', 'seed', 'secrets'],
+    after: ['computer-token', 'credits-token', 'mail-routing', 'kv', 'r2', 'ai-gateway', 'seed', 'secrets'],
     run(context: DeployContext): Effect.Effect<string, KinuError> {
       return Effect.gen(function* () {
         const accountId = context.inputs.accountId;
@@ -1251,8 +1198,6 @@ async function wireBinding(
 
     case 'r2':
       return { type: 'r2_bucket', name, bucket_name: resource };
-    case 'vectorize':
-      return { type: 'vectorize', name, index_name: resource };
     case 'durable-object': {
       if (!context.inputs.sandbox && manifest.migrations.some((migration) => migration.newSqliteClasses.includes(binding.resource))
         && binding.resource === 'KinuDevbox') return null;

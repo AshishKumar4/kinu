@@ -2,7 +2,7 @@ diff --git a/packages/core/src/memory/vector-store.ts b/packages/core/src/memory
 index 0ee07c799..0f410bca5 100644
 --- a/packages/core/src/memory/vector-store.ts
 +++ b/packages/core/src/memory/vector-store.ts
-@@ -85,7 +85,7 @@ export function reciprocalRankFusion<T extends { id: string }>(
+@@ -41,7 +41,7 @@ export function reciprocalRankFusion<T extends { id: string }>(
      }
    }
  
@@ -10,4 +10,4 @@ index 0ee07c799..0f410bca5 100644
 +  return Array.from(byId.values()).sort((a, b) => a.rrfScore - b.rrfScore);
  }
  
- /** A cooldown, not a latch: the next use after it re-probes, so transient errors recover. */
+ /** Chunks one embedding request carries. */

@@ -141,9 +141,9 @@ export default defineConfig(({ command }) => ({
             // keeps (owner, 2026-10-08). A box answers that it runs on a deployment, and its contracts are proved on
             // real containers (gate:devbox-e2e).
             dev: { ...worker.dev, enable_containers: false },
-            // Offline, Workers AI and Vectorize are unbound rather than left to hang on a remote that is never reached:
-            // memory falls back to its full-text index (runtime.ts), and the turns run on the scripted model.
-            ...(offline && { ai: undefined, vectorize: [] }),
+            // Offline, Workers AI is unbound rather than left to hang on a remote that is never reached: memory falls back
+            // to its full-text index (runtime.ts), and the turns run on the scripted model.
+            ...(offline && { ai: undefined }),
           };
         }
         // A build's app host is its front Worker's (front-config.ts), and the main Worker keeps the preview hosts'. Set,

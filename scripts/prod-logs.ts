@@ -631,11 +631,9 @@ function byGroups(a: { readonly groups: readonly string[] }, b: { readonly group
 
 // ---- shared readings -------------------------------------------------------
 
-/** Rows that name the workspace an object holds; `vector.store_registered` names objects started before
- *  `actor.startup` logged a name. For names only: activations are counted by {@link startupHours}. */
+/** Rows that name the workspace an object holds. For names only: activations are counted by {@link startupHours}. */
 const NAME_MARKERS = [
   { event: 'actor.startup', nameField: 'fields.workspace' },
-  { event: 'vector.store_registered', nameField: 'fields.namespace' },
 ] as const;
 
 const DO_ID = '$workers.durableObjectId';

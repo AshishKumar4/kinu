@@ -25,15 +25,13 @@ import type { JsonObject } from '../src/utils/json';
 
 const unavailableIndex: VectorStore = {
   available: false,
-  upsertChunks: async () => { throw new Error('unavailable index must not be used'); },
-  deleteChunks: async () => { throw new Error('unavailable index must not be used'); },
+  fill: async () => { throw new Error('unavailable index must not be used'); },
   search: async () => { throw new Error('unavailable index must not be used'); },
 };
 
 const emptyIndex: VectorStore = {
   available: true,
-  upsertChunks: async () => {},
-  deleteChunks: async () => {},
+  fill: async () => {},
   search: async () => [],
 };
 

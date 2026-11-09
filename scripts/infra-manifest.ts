@@ -63,9 +63,6 @@ export const WRANGLER_CONFIG = 'packages/cf-backend/wrangler.jsonc';
 
 export const ENV_TYPES = 'packages/cf-backend/env.d.ts';
 
-/** Where the Vectorize index's geometry actually lives — see `vectorizeGeometry`. */
-export const EMBEDDER_SOURCE = 'packages/cf-backend/src/runtime.ts';
-
 /* ── The binding manifest ─────────────────────────────────────────────── */
 
 /** One `exports` entry: a class the build declares, or the tombstone that deletes its namespace. */
@@ -122,7 +119,6 @@ const WorkerSchema = v.object({
     binding: v.string(),
     id: v.string(),
   }))),
-  vectorize: v.optional(v.array(v.object({ binding: v.string(), index_name: v.string() }))),
   analytics_engine_datasets: v.optional(v.array(v.object({
     binding: v.string(), dataset: v.string(),
   }))),
@@ -200,7 +196,7 @@ function environmentConfig(config: v.InferOutput<typeof WranglerConfigSchema>, e
 /* ── The shapes ───────────────────────────────────────────────────────── */
 
 export type ResourceKind =
-  | 'account' | 'kv' | 'r2' | 'vectorize' | 'ai-gateway'
+  | 'account' | 'kv' | 'r2' | 'ai-gateway'
   | 'worker' | 'durable-object' | 'container' | 'custom-domain' | 'zone-route'
   | 'wildcard-dns' | 'dns-record' | 'cron' | 'binding' | 'email-routing'
   // The outer control-plane gate, in three separately-actionable pieces: the
@@ -423,17 +419,6 @@ export const UNCAPTURED: readonly Uncaptured[] = [
       + '`GET /accounts/<id>/ai-gateway/gateways` answers 403 code 10000 — the gateway can be '
       + 'neither created nor read by anything in this repository.',
     check: 'https://dash.cloudflare.com/?to=/:account/ai/ai-gateway',
-  },
-  {
-    what: "The Vectorize indexes' GEOMETRY. `wrangler.jsonc` names `kinu-memory` and "
-      + 'stops there; creating an index needs `--dimensions` and '
-      + '`--metric`, and one created at the wrong dimension count accepts the binding and '
-      + 'rejects every insert.',
-    evidence: 'the dimension is a literal in the embedder construction in '
-      + `${EMBEDDER_SOURCE} and the metric appears only in a wrangler.jsonc COMMENT. `
-      + '`vectorizeGeometry()` reads the dimension back out of the embedder rather than '
-      + 'restating it, so the two cannot drift.',
-    check: 'npx wrangler vectorize list',
   },
   {
     what: 'The proxied DNS records the `pattern + zone_name` routes need. Production takes a '
@@ -863,38 +848,6 @@ export const SUPPLY = new Map<string, Supply>([
 
 /* ── Derivation ───────────────────────────────────────────────────────── */
 
-/** The Vectorize dimension, read back out of the embedder that produces the
- *  vectors rather than restated here. An index created at the wrong dimension
- *  binds fine and rejects every insert, so the number has to come from the one
- *  place that decides it. Disagreeing call sites are a THROW: two embedders at
- *  different widths cannot both be right about one index. */
-export interface VectorGeometry {
-  readonly dimensions: number;
-  readonly metric: string;
-}
-
-export function vectorizeGeometry(
-  source = readFileSync(join(REPO, EMBEDDER_SOURCE), 'utf8'),
-): VectorGeometry {
-  const widths = new Set<string>();
-
-  for (const [, width] of source.matchAll(/createWorkersAIEmbedder\([^)]*dimensions:\s*(\d+)/gu)) {
-    widths.add(width ?? '');
-  }
-
-  if (widths.size !== 1) {
-    throw new Error(
-      `${EMBEDDER_SOURCE}: expected exactly one embedder width, found [${[...widths].join(', ')}]`
-      + ' — the Vectorize index cannot be created at two dimensions',
-    );
-  }
-
-  // `cosine` is not stated in code anywhere: bge vectors are unit-normalised, so
-  // cosine and dot rank identically and the wrangler.jsonc comment settled on
-  // cosine. Recorded in UNCAPTURED as a value the manifest does not carry.
-  return { dimensions: Number([...widths][0]), metric: 'cosine' };
-}
-
 interface Draft {
   readonly kind: ResourceKind;
   readonly name: string;
@@ -920,7 +873,6 @@ function workerRow(config: DeployedConfig): InfraWorker {
   const bindings = [
     ...(config.kv_namespaces ?? []).map((k) => k.binding),
     ...(config.r2_buckets ?? []).map((r) => r.binding),
-    ...(config.vectorize ?? []).map((x) => x.binding),
     ...(config.analytics_engine_datasets ?? []).map((d) => d.binding),
     ...(config.durable_objects?.bindings ?? []).map((d) => d.name),
     ...(config.worker_loaders ?? []).map((w) => w.binding),
@@ -1044,7 +996,6 @@ function containerDrafts(config: DeployedConfig): Draft[] {
 function draftsFor(
   declared: InfraWorker,
   config: DeployedConfig,
-  geometry: VectorGeometry,
 ): readonly Draft[] {
   const worker = declared.workerName;
   const drafts: Draft[] = [];
@@ -1082,23 +1033,6 @@ function draftsFor(
           + 'cannot be reasoned about, so the absence is said rather than guessed.',
       create: ['r2', 'bucket', 'create', bucket.bucket_name],
       destroy: ['r2', 'bucket', 'delete', bucket.bucket_name],
-    });
-  }
-
-  for (const index of config.vectorize ?? []) {
-    drafts.push({
-      kind: 'vectorize',
-      name: index.index_name,
-      origin: 'wrangler-cli',
-      binding: index.binding,
-      purpose: `semantic memory, ${String(geometry.dimensions)}-dim ${geometry.metric}`,
-      holds: 'every embedded memory. Deleting it drops hybrid recall to FTS5-only until the '
-        + 'index is rebuilt.',
-      create: [
-        'vectorize', 'create', index.index_name,
-        `--dimensions=${String(geometry.dimensions)}`, `--metric=${geometry.metric}`,
-      ],
-      destroy: ['vectorize', 'delete', index.index_name, '-f'],
     });
   }
 
@@ -1344,7 +1278,6 @@ export function deploymentAt(origin: string, configPath = WRANGLER_CONFIG): Depl
 export function deriveInfrastructure(
   environment: InfraEnvironment = 'production',
   configPath = WRANGLER_CONFIG,
-  geometry = vectorizeGeometry(),
 ): Infrastructure {
   const config = deployedConfig(environment, configPath);
 
@@ -1352,7 +1285,7 @@ export function deriveInfrastructure(
   const optionality = new Map(envFields().map((field) => [field.name, field.optional]));
   const resources = new Map<string, Resource>();
 
-  for (const draft of draftsFor(worker, config, geometry)) {
+  for (const draft of draftsFor(worker, config)) {
     const id = `${draft.kind}.${draft.name}`;
 
     resources.set(id, {

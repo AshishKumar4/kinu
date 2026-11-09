@@ -117,7 +117,7 @@ promote, `mailRoutingRetiredStep` retires a zone or domain the deployment left. 
 
 The ledger steps (`deployPlan` in `steps.ts`) shown as seven phases, by one table in `phases.ts` (a step it does not
 name sits in the phase of the step before it): Preparing your account (account, the computer's token), Creating storage
-(KV, R2, Vectorize, AI Gateway, seed, the computer's tools), Uploading Kinu (secrets, upload, the computer), Putting it
+(KV, R2, AI Gateway, seed, the computer's tools), Uploading Kinu (secrets, upload, the computer), Putting it
 on your address, Setting up mail (left out when there is none), Checking it answers, Going live (promote, handover).
 
 - **Ledger:** unchanged in kind: `DeployRunDO` keeps each step's state, attempts, facts and failure (`deploy-do.ts`).

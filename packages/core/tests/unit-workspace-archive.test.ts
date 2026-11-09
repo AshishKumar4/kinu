@@ -424,8 +424,10 @@ const OWNER_TEXT = '# the owner wrote this\n';
     initSchema(source);
     const memory = new MemoryStore(source.vfs, source.sql, write => source.db.transaction(write)());
     memory.ensureSchema();
-    await memory.indexFile('memory/note.md', 'a pending semantic projection');
-    expect(memory.pendingProjection()).toHaveLength(1);
+    await memory.writeFile('memory/note.md', 'an embedded note');
+    await memory.indexFile('memory/note.md', 'an embedded note');
+    memory.putVectors((await memory.chunksOwedVectors(10)).map((chunk) => ({ id: chunk.id, hash: chunk.hash, embedding: Float32Array.of(1) })));
+    expect(await memory.nearestChunks(async () => Float32Array.of(1), 10)).toHaveLength(1);
     // Every transcript row names its writer, so a restore files it under that owner, not the archive's main actor.
     const cloudActor = createTestActor(source.sql, source.execRaw, 'cloud', 'cloud');
     const cloud = historyOver(source, cloudActor);
@@ -445,7 +447,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
     await restoreWorkspaceArchive(target.archive, lines);
 
     // Read unscoped: an actor-predicated read would answer an empty set and pass for the wrong reason.
-    expect(target.sql`SELECT name FROM sqlite_master WHERE name = 'memory_projection_updates'`).toEqual([]);
+    expect(target.sql`SELECT name FROM sqlite_master WHERE name = 'memory_note_vectors'`).toEqual([]);
     expect(target.sql<{ id: string; actor_id: string }>`
       SELECT id, actor_id FROM conversation_entries ORDER BY id`).toEqual([
       { id: 'a1', actor_id: cloudActor.actorId },

@@ -1,5 +1,5 @@
 // Local door layout and workerd config, rendered from `release.json` (docs/SELF-DEPLOY.md).
-// DO storage and KV map to disk directories; R2 (own protocol), Vectorize, AI, containers,
+// DO storage and KV map to disk directories; R2 (own protocol), AI, containers,
 // Worker loader, Analytics Engine and email are left out by name. Paths are relative to the config.
 import { releaseModuleKind, type ReleaseBinding, type ReleaseManifest } from './manifest';
 import * as v from 'valibot';

@@ -13,9 +13,9 @@
  * carries the reason it is unknown, and nothing in this file ever collapses one
  * into the other.
  *
- * ONE LIST CALL PER FAMILY, not one probe per resource. `wrangler vectorize info
- * <name>` exits non-zero both for "no such index" and for "your token expired",
- * and separating those means reading error prose. A single `list` either
+ * ONE LIST CALL PER FAMILY where the list is whole (R2's is not; see `r2`), not
+ * one probe per resource: a probe that exits non-zero both for "no such resource"
+ * and for "your token expired" is separated only by reading error prose. A single `list` either
  * succeeds — in which case membership is decided, present or absent, with no
  * ambiguity — or fails, in which case EVERY resource of that family is `unknown`
  * and says so. The list is memoised, so an inventory of twenty resources costs
@@ -247,16 +247,9 @@ const NamedRows = v.array(v.object({ name: v.string() }));
 
 const KvRows = v.array(v.object({ id: v.string(), title: v.string() }));
 
-const VectorizeRows = v.array(v.object({
-  name: v.string(),
-  config: v.object({ dimensions: v.number(), metric: v.string() }),
-}));
-
 const ContainerRows = v.array(v.object({ name: v.string(), image: v.string(), id: v.string() }));
 
 const kvCatalog = new Catalog('KV', ['kv', 'namespace', 'list'], KvRows);
-
-const vectorizeCatalog = new Catalog('Vectorize', ['vectorize', 'list', '--json'], VectorizeRows);
 
 const containerCatalog = new Catalog('Containers', ['containers', 'list', '--json'], ContainerRows);
 
@@ -330,23 +323,6 @@ export function kvNamespace(id: string): Observation {
   const row = loaded.rows.find((entry) => entry.id === id);
 
   return row === undefined ? absent : present(row.title);
-}
-
-export function vectorize(name: string, dimensions: number, metric: string): Observation {
-  const loaded = vectorizeCatalog.load();
-
-  if ('failure' in loaded) return unknown(loaded.failure);
-  const row = loaded.rows.find((entry) => entry.name === name);
-
-  if (row === undefined) return absent;
-  const geometry = `${String(row.config.dimensions)}-dim ${row.config.metric}`;
-
-  // Present but the wrong shape is worse than absent: the binding resolves and
-  // every insert is rejected. Reported as a live index with its real geometry so
-  // the caller can compare, rather than silently as "exists".
-  return present(row.config.dimensions === dimensions && row.config.metric === metric
-    ? geometry
-    : `${geometry} — DOES NOT MATCH the ${String(dimensions)}-dim ${metric} the embedder produces`);
 }
 
 export function container(name: string, image: string): Observation {

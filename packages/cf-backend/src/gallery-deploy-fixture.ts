@@ -129,7 +129,7 @@ const LISTED: Partial<Record<DeployFixtureState, readonly DeployedKinu[]>> = {
 
 // ── Runs ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const STEPS = ["account", "kv", "r2", "vectorize", "ai-gateway", "seed", "secrets", "upload", "address", "smoke", "promote", "handover"] as const;
+const STEPS = ["account", "kv", "r2", "ai-gateway", "seed", "secrets", "upload", "address", "smoke", "promote", "handover"] as const;
 
 /** The address step: where a run that stopped on its address carries on from. */
 const ADDRESS_STEP = STEPS.indexOf("address");

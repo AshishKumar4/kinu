@@ -1,70 +1,27 @@
 import { exists, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 import { direntTypeOfStat } from '@nimbus-sh/core/vfs/dirent-type.js';
-/** Keeps the Vectorize index in step with the FTS5 memory store; separate from runtime.ts to stay dependency-light. */
+/** Every backend's memory: the notes, their FTS5 index and, where an embedder is bound, their vectors. */
 
 import { Effect } from 'effect';
-import { serialQueue } from '@kinu.run/agent-utils';
 
 import { type CheckpointFiles, type Memory } from '../types/primitives';
 import { type VectorStore } from './vector-store';
 
 import { readTailWithVfsOps } from '../vfs/mounts';
-import { MEMORY_DIR, noteDateAt } from './note';
+import { MEMORY_DIR, noteDater } from './note';
 import { scrubSecrets } from '../safety/secret-patterns';
-import type { MemoryStore, NoteDater, NoteStamp } from "@kinu.run/agent-utils/memory";
+import type { MemoryStore, NoteStamp } from "@kinu.run/agent-utils/memory";
 import { diagnostics, KinuError, settle, toKinuError } from "../obs/index";
 import { writeConditionally, type ObservedFile } from '../vfs/conditional-write';
 import { FileRefusalError } from '../types/file-edits';
 
-const mirrorLanes = new WeakMap<MemoryStore, ReturnType<typeof serialQueue>>();
-
-/** Ids one Vectorize delete takes. */
-const VECTOR_DELETE_BATCH = 1000;
-
-/** The one lane every write to `store`'s projection runs in, in order. */
-function laneOf(store: MemoryStore): ReturnType<typeof serialQueue> {
-  let serial = mirrorLanes.get(store);
-
-  if (serial === undefined) {
-    serial = serialQueue();
-    mirrorLanes.set(store, serial);
-  }
-
-  return serial;
-}
-
-/** One owned mirror lane acknowledges durable index revisions, never a user configuration update. */
-async function flushPendingVectors(store: MemoryStore, vectors: VectorStore, cap = Number.MAX_SAFE_INTEGER): Promise<void> {
-  await laneOf(store)(async () => {
-    const pending = store.pendingProjection(cap);
-    const upsert = pending.filter((operation) => operation.kind === 'upsert').map((operation) => operation.id);
-
-    if (pending.length === 0) return;
-
-    const fresh = await store.chunksByIds(upsert);
-    const current = new Set(fresh.map((chunk) => chunk.id));
-    const remove = pending.filter((operation) => operation.kind === 'delete' || !current.has(operation.id)).map((operation) => operation.id);
-
-    if (remove.length > 0) await vectors.deleteChunks(remove);
-
-    if (fresh.length > 0) await vectors.upsertChunks(fresh);
-
-    store.ackProjection(pending);
-  });
-}
-
-/** A semantic projection beside the canonical memory index. */
-export interface MemoryVectors {
-  readonly store: VectorStore;
-}
-
 /**
- * Every backend's memory. FTS5 is the source of truth: vector failures retain durable projection obligations,
- * never fail the write. Vector calls are awaited so embeddings are durable before the turn
- * continues. Without `vectors` (the CLI, workspace birth) the index is FTS5 alone.
+ * FTS5 is the source of truth: a failed embedding leaves its chunks owing a vector, found lexically meanwhile, and never
+ * fails the write. The fill is awaited, so a note written is found by meaning on the next search. Without `vectors` (the
+ * CLI, workspace birth) the index is FTS5 alone.
  */
 export function adaptMemory(
-  store: MemoryStore, files: VFS & CheckpointFiles & Required<Pick<VFS, 'readRange'>>, vectors?: MemoryVectors,
+  store: MemoryStore, files: VFS & CheckpointFiles & Required<Pick<VFS, 'readRange'>>, vectors?: VectorStore,
 ): Memory {
   /** Every note new to the index, changed under it, or gone from it, indexed again. */
   const refresh = async (): Promise<void> => {
@@ -76,24 +33,7 @@ export function adaptMemory(
     }
   };
 
-  /** Dates a hydration's hits: the stamp of each note heading, else its file's last change, stat once a path. */
-  const dater = (): NoteDater => {
-    const changed = new Map<string, Promise<number | undefined>>();
-
-    return async (path, lines, endLine) => {
-      const stamped = noteDateAt(lines, endLine);
-
-      if (stamped !== null) return stamped;
-      const read = changed.get(path) ?? Promise.resolve(files.stat(path, { follow: false })).then((stat) => stat?.mtimeMs);
-
-      changed.set(path, read);
-
-      return await read;
-    };
-  };
-
   const memory: Memory = {
-    chunk: async (id) => (await store.chunksByIds([id], dater()))[0] ?? null,
     // Memory text is kept scrubbed (`memory/scrub.ts`).
     write: (path, content) => store.writeFile(path, scrubSecrets(content)),
     append: (path, content) => store.appendToFile(path, scrubSecrets(content)),
@@ -105,13 +45,9 @@ export function adaptMemory(
 
         if (vectors === undefined) return;
 
-        if (!vectors.store.available) return;
-
-        const vectorStore = vectors.store;
-
         yield* Effect.tryPromise({
-          try: () => flushPendingVectors(store, vectorStore),
-          catch: (cause) => toKinuError({ doing: 'syncing the memory chunk delta into the vector index', cause, otherwise: 'unavailable' }),
+          try: () => vectors.fill(),
+          catch: (cause) => toKinuError({ doing: "embedding the memory chunks that owe a vector", cause, otherwise: 'unavailable' }),
         }).pipe(Effect.catch((failure) => Effect.sync(() => {
           diagnostics.failure('memory.vector_sync_failed', failure, { path });
         })));
@@ -121,7 +57,7 @@ export function adaptMemory(
     async search(query, limit) {
       await refresh();
 
-      return await store.search(query, limit, async (path) => memory.index(path), dater());
+      return await store.search(query, limit, async (path) => memory.index(path), noteDater(files));
     },
     // A note that moved is taken in before it is read, as a search takes it in.
     async read(path) {
@@ -245,27 +181,4 @@ async function notePaths(files: VFS, dir = MEMORY_DIR.slice(0, -1)): Promise<str
   }
 
   return out;
-}
-
-/** Bounded so a large memory table embeds across several boots. */
-const MEMORY_VECTOR_BACKFILL_CAP = 512;
-
-/** Acknowledges delivered revisions only; a failed page remains owed across boots. */
-export async function backfillMemoryVectors(store: MemoryStore, vectorStore: VectorStore, cap = MEMORY_VECTOR_BACKFILL_CAP): Promise<void> {
-  if (!vectorStore.available) return;
-  await flushPendingVectors(store, vectorStore, cap);
-}
-
-/**
- * The memory's semantic projection deleted, every chunk's, as its workspace is: nothing derived from its notes outlives
- * them. In the projection's own lane, after every write already in it (a backfill the runtime started among them), so
- * none lands after; in batches a delete call takes; one that fails throws, so the workspace's deletion is tried again.
- * Not a member of `Memory`, which every agent holds: only the workspace's own teardown reaches it.
- */
-export async function forgetMemoryVectors(store: MemoryStore, vectors: MemoryVectors): Promise<void> {
-  await laneOf(store)(async () => {
-    const ids = store.projectedIds();
-
-    for (let at = 0; at < ids.length; at += VECTOR_DELETE_BATCH) await vectors.store.deleteChunks(ids.slice(at, at + VECTOR_DELETE_BATCH));
-  });
 }

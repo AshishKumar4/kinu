@@ -20,7 +20,7 @@ import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
   CONTROL_PLANE_ACCESS_PATHS, type InfraWorker, type Infrastructure, type Resource, SUPPLY,
   UNCAPTURED, UNOBSERVABLE, claimedHosts, deployedConfig, deriveInfrastructure, envFields, environmentFrom, liveClasses, readSites,
-  requiredIn, supplyCensus, vectorizeGeometry,
+  requiredIn, supplyCensus,
 } from './infra-manifest';
 import {
   type AccessApplicationView, type ContainerApplication, type Deployment, accessCovering, accessDestinations, accessOverreach,
@@ -74,7 +74,6 @@ describe('the inventory is derived from the manifest, not written beside it', ()
     // These are the ones whose absence breaks a specific, named thing.
     expect(ids).toContain('r2.kinu-backups');
     expect(ids).toContain('r2.nimbus-runtime-cache');
-    expect(ids).toContain('vectorize.kinu-memory');
     expect(ids).toContain('ai-gateway.kinu-ai-gateway');
     expect(ids).toContain('custom-domain.kinu.run');
     expect(ids).toContain('wildcard-dns.*.kinu.run');
@@ -89,22 +88,14 @@ describe('the inventory is derived from the manifest, not written beside it', ()
     const required = (id: string): boolean | undefined =>
       infrastructure.resources.find((resource) => resource.id === id)?.required;
 
-    // AUTH_KV is not optional in Env; BACKUP_BUCKET and MEMORY_VECTORS are.
+    // AUTH_KV is not optional in Env; BACKUP_BUCKET is.
     expect(authStore().required).toBe(true);
     expect(required('r2.kinu-backups')).toBe(false);
-    expect(required('vectorize.kinu-memory')).toBe(false);
     // And the derivation actually consulted Env rather than defaulting: the
     // optional set is non-empty and is a strict subset.
     const optional = infrastructure.resources.filter((resource) => !resource.required);
     expect(optional.length).toBeGreaterThan(0);
     expect(optional.length).toBeLessThan(infrastructure.resources.length);
-  });
-
-  test('the Vectorize geometry is read out of the embedder, and disagreement throws', () => {
-    expect(vectorizeGeometry().dimensions).toBe(384);
-    expect(() => vectorizeGeometry('createWorkersAIEmbedder({ dimensions: 384 })\n'
-      + 'createWorkersAIEmbedder({ dimensions: 768 })')).toThrow(/two dimensions/u);
-    expect(() => vectorizeGeometry('no embedder here')).toThrow(/exactly one embedder width/u);
   });
 
   test('`Env` parses, and a member it cannot read is a throw rather than a skip', () => {
@@ -1072,7 +1063,7 @@ describe('teardown refuses by default', () => {
 
     for (const resource of bearing) expect((resource.holds ?? '').length).toBeGreaterThan(40);
 
-    for (const kind of ['kv', 'r2', 'vectorize', 'durable-object']) {
+    for (const kind of ['kv', 'r2', 'durable-object']) {
       expect(bearing.some((resource) => resource.kind === kind)).toBe(true);
     }
   });
@@ -1103,7 +1094,6 @@ describe('what the manifest cannot express is recorded rather than assumed', () 
     // instead of finding the first one — see the manifest's `manual` note.
     expect(creatable.map((resource) => resource.id).sort()).toEqual([
       'r2.kinu-backups', 'r2.kinu-feedback', 'r2.kinu-mail', 'r2.kinu-releases', 'r2.kinu-slate-pictures', 'r2.nimbus-runtime-cache',
-      'vectorize.kinu-memory',
     ]);
 
     for (const resource of creatable) {

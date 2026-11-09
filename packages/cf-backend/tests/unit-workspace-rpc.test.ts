@@ -92,7 +92,7 @@ test('an in-process promise has no remote pipeline but keeps its rejection uncha
   await expect(workspace.getAuth('credential')).rejects.toBe(failure);
 });
 
-const tailOnly: Memory = { chunk: unused, write: unused, append: unused, index: unused, search: unused, read: unused, tail: async () => null };
+const tailOnly: Memory = { write: unused, append: unused, index: unused, search: unused, read: unused, tail: async () => null };
 
 /** A workspace whose every port, session and memory is counted as it is opened and let go (#69). */
 function counted(calls: Partial<AgentWorkspacePort>) {

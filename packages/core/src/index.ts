@@ -1204,20 +1204,16 @@ export {
 // Semantic memory
 export {
   reciprocalRankFusion,
-  createCloudflareVectorStore,
+  createMemoryVectors,
   createNoopVectorStore,
-  VECTOR_BACKEND_COOLDOWN_MS,
   type VectorStore,
   type Embedder,
-  type VectorizeIndex,
-  type VectorRecord,
   type IndexedChunk,
-  type VectorSearchHit,
+  type NearestChunk,
 } from './memory/vector-store';
 
 export {
   hybridSearch,
-  memorySnippetRehydrator,
   type LexicalHit,
   type HybridHit,
   type LexicalSearchFn,
@@ -2751,8 +2747,7 @@ export {
 } from './http/health-route';
 
 export {
-  adaptMemory, forgetMemoryVectors,
-  backfillMemoryVectors,
+  adaptMemory,
 } from './memory/vector-sync';
 
 export {

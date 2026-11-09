@@ -1,16 +1,14 @@
-/** hybridSearch: FTS5 + Vectorize merged via RRF. */
+/** hybridSearch: FTS5 and the note vectors merged via RRF. */
 
 import { describe, test, expect } from 'bun:test';
 import { createTestFactsStore, present, createRecordingLogger } from '@kinu.run/test-utils';
 import {
   hybridSearch,
-  memorySnippetRehydrator,
-  createCloudflareVectorStore,
   createNoopVectorStore,
   type LexicalHit,
   type LexicalSearchFn,
+  type NearestChunk,
   type VectorStore,
-  type VectorSearchHit,
 } from '../src/index';
 import { setDiagnosticsSink } from '../src/obs/index';
 
@@ -20,20 +18,25 @@ const lexicalCorpus: LexicalHit[] = [
   { id: 'shared', path: 'c.md', startLine: 1, endLine: 5, score: 0.5, snippet: 'shared snippet' },
 ];
 
-const semanticCorpus: VectorSearchHit[] = [
-  { id: 's-1', path: 'x.md', startLine: 1, endLine: 5, score: 0.85 },
-  { id: 'shared', path: 'c.md', startLine: 1, endLine: 5, score: 0.7 },
-  { id: 's-2', path: 'y.md', startLine: 1, endLine: 5, score: 0.5 },
+const semanticCorpus: NearestChunk[] = [
+  { id: 's-1', path: 'x.md', startLine: 1, endLine: 5, score: 0.85, text: 'x text', hash: 'x' },
+  { id: 'shared', path: 'c.md', startLine: 1, endLine: 5, score: 0.7, text: 'c text', hash: 'c' },
+  { id: 's-2', path: 'y.md', startLine: 1, endLine: 5, score: 0.5, text: 'y text', hash: 'y' },
 ];
 
 const lexicalFn = async (_q: string, limit: number) => lexicalCorpus.slice(0, limit);
 
-const vectorStore = (semantic: VectorSearchHit[]): VectorStore => ({
+const vectorStore = (semantic: NearestChunk[]): VectorStore => ({
   available: true,
-  async upsertChunks() {},
-  async deleteChunks() {},
+  async fill() {},
   async search(_q, limit = 10) { return semantic.slice(0, limit); },
 });
+
+const failingStore: VectorStore = {
+  available: true,
+  async fill() {},
+  async search() { throw new Error('embedding refused'); },
+};
 
 describe('hybridSearch', () => {
   test('merges lexical + semantic; shared item ranks first', async () => {
@@ -70,32 +73,16 @@ describe('hybridSearch', () => {
   });
 
   test('handles semantic failure gracefully (vectorStore.search throws)', async () => {
-    const failingStore: VectorStore = {
-      available: true,
-      async upsertChunks() {},
-      async deleteChunks() {},
-      async search() { throw new Error('vectorize down'); },
-    };
-
     const out = await hybridSearch('q', lexicalFn, failingStore);
     expect(out.length).toBeGreaterThan(0);
 
     for (const h of out) expect(h.sources).toEqual(['lexical']);
   });
 
-  test('a dead index behind the real store does not read as "no matches" when FTS is down too', async () => {
-    const store = createCloudflareVectorStore({
-      index: {
-        async upsert() { return {}; },
-        async query() { throw new Error('vectorize down'); },
-        async deleteByIds() { return {}; },
-      },
-      embedder: { dimensions: 1, async embed() { return [1]; } },
-    });
-
+  test('a failed semantic arm does not read as "no matches" when FTS is down too', async () => {
     const failing: LexicalSearchFn = async () => { throw new Error('FTS down'); };
 
-    await expect(hybridSearch('q', failing, store)).rejects.toThrow(AggregateError);
+    await expect(hybridSearch('q', failing, failingStore)).rejects.toThrow(AggregateError);
   });
 
   test('enriches with snippet from lexical when available', async () => {
@@ -103,33 +90,6 @@ describe('hybridSearch', () => {
     const shared = present(out.find((h) => h.id === 'shared'), "the 'shared' hit");
     expect(shared.snippet).toBe('shared snippet');
   });
-
-  test('semantic candidates must still identify their canonical chunk and hash', async () => {
-      const chunks = new Map([
-        ['x.md:3-5', { id: 'x.md:3-5', path: 'x.md', startLine: 3, endLine: 5, text: 'line 3\nline 4\nline 5', hash: 'current' }],
-        ['x.md:7-8', { id: 'x.md:7-8', path: 'x.md', startLine: 7, endLine: 8, text: 'line 7\nline 8', hash: 'current' }],
-      ]);
-
-      const memory = { chunk: async (id: string) => chunks.get(id) ?? null };
-
-      const sem: VectorSearchHit[] = [
-        { id: 'x.md:3-5', path: 'x.md', startLine: 3, endLine: 5, score: 0.9, hash: 'current' },
-        { id: 'x.md:7-8', path: 'x.md', startLine: 7, endLine: 8, score: 0.8, hash: 'current' },
-        { id: 'gone.md:1-2', path: 'gone.md', startLine: 1, endLine: 2, score: 0.7, hash: 'current' },
-        { id: 'x.md:3-5', path: 'x.md', startLine: 3, endLine: 5, score: 1, hash: 'replaced' },
-      ];
-
-      const out = await hybridSearch('q', async () => [], vectorStore(sem), { rehydrate: memorySnippetRehydrator(memory) });
-      expect(out.map((hit) => [hit.id, hit.snippet, hit.sources])).toEqual([
-        ['x.md:3-5', 'line 3\nline 4\nline 5', ['semantic']],
-        ['x.md:7-8', 'line 7\nline 8', ['semantic']],
-      ]);
-    });
-
-  test('a lexical snippet is never replaced by a rehydrated one', async () => {
-      const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus), { rehydrate: async () => ({ text: 'rehydrated text' }) });
-      expect(present(out.find((hit) => hit.id === 'shared'), "the 'shared' hit").snippet).toBe('shared snippet');
-    });
 
   test('fuses lexical + semantic hits keyed on the canonical chunk id', async () => {
     // The production id both sources emit for a chunk: `path:start-end`.
@@ -139,8 +99,8 @@ describe('hybridSearch', () => {
       { id: chunkId, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, score: 0.4, snippet: 'the actual chunk text' },
     ];
 
-    const sem: VectorSearchHit[] = [
-      { id: chunkId, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, score: 0.9 },
+    const sem: NearestChunk[] = [
+      { id: chunkId, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, score: 0.9, text: 'the actual chunk text', hash: 'h' },
     ];
 
     const out = await hybridSearch('q', async () => lex, vectorStore(sem));
@@ -150,56 +110,6 @@ describe('hybridSearch', () => {
     expect(out[0].snippet).toBe('the actual chunk text');
     expect(out[0].lexicalScore).toBe(0.4);
     expect(out[0].semanticScore).toBe(0.9);
-  });
-
-  test('a throwing rehydrator excludes the unverifiable semantic hit', async () => {
-    const log = createRecordingLogger();
-    const restore = setDiagnosticsSink(log);
-
-    try {
-      const sem: VectorSearchHit[] = [
-        { id: 'x.md:1-2', path: 'x.md', startLine: 1, endLine: 2, score: 0.9 },
-      ];
-
-      const out = await hybridSearch('q', async () => [], vectorStore(sem), {
-        rehydrate: async () => { throw new Error('rehydrate boom'); },
-      });
-
-      expect(out).toEqual([]);
-      expect(log.emitted.some((line) => line.event === 'memory.semantic_search_failed')).toBe(true);
-    } finally {
-      restore();
-    }
-  });
-
-  test('a failed canonical read does not poison a later lookup', async () => {
-      let calls = 0;
-      const chunk = { id: 'x.md:1-1', path: 'x.md', startLine: 1, endLine: 1, text: 'line1', hash: 'current' };
-
-      const memory = { chunk: async () => {
-        calls++;
-
-        if (calls === 1) throw new Error('transient read');
-
-        return chunk;
-      } };
-
-      const rehydrate = memorySnippetRehydrator(memory);
-      const hit: VectorSearchHit = { ...chunk, score: 1 };
-      await expect(rehydrate(hit)).rejects.toThrow('transient read');
-      await expect(rehydrate(hit)).resolves.toEqual({ text: 'line1' });
-    });
-
-  test('failed canonical reads are unavailable, while verified deletions are an empty answer', async () => {
-    const unavailable = new Error('canonical memory could not be read');
-    const lexical: LexicalSearchFn = async () => { throw new Error('lexical unavailable'); };
-
-    const vectors = vectorStore([{ id: 'gone', path: 'gone.md', startLine: 1, endLine: 1, score: 1 }]);
-
-    await expect(hybridSearch('q', lexical, vectors, { rehydrate: async () => { throw unavailable; } })).rejects.toMatchObject({
-      errors: expect.arrayContaining([expect.objectContaining({ code: 'unavailable', cause: unavailable })]),
-    });
-    expect(await hybridSearch('q', lexical, vectors, { rehydrate: async () => null })).toEqual([]);
   });
 
   test('a remembered fact surfaces as a fact-source hit, labelled by its key', async () => {
@@ -213,26 +123,6 @@ describe('hybridSearch', () => {
     expect(hit.sources).toEqual(['fact']);
     expect(hit.label).toContain('deploy.target');
     expect(hit.snippet).toBe('staging');
-  });
-
-  test('a fact hit never reaches the rehydrator — it carries its own text', async () => {
-    const { facts } = createTestFactsStore();
-    facts.upsert('user.tz', 'UTC');
-
-    let reads = 0;
-
-    const rehydrate = async () => {
-      reads++;
-
-      return { text: 'should not run' };
-    };
-
-    const out = await hybridSearch('user tz', async () => [], createNoopVectorStore(), { facts: () => facts.all(), rehydrate });
-
-    expect(out).toHaveLength(1);
-    expect(out[0].id).toBe('fact:user.tz');
-    expect(out[0].snippet).toBe('UTC');
-    expect(reads).toBe(0);
   });
 
   test('the fact arm degrades like the lexical one when the store throws', async () => {

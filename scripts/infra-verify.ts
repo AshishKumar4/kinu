@@ -79,13 +79,13 @@ import { assertMeasured, blocked, finding } from './gate-ratchet';
 import {
   type Deployment, type Observation, PROBE_LABEL, accessApplication, accessOrganization,
   accessPolicies, accessScope, authenticated, container, containerNamespace, deployment, edgeResponds,
-  emailRoutingToWorker, hostResolves, kvNamespace, r2, secretNames, servesWorker, vectorize,
+  emailRoutingToWorker, hostResolves, kvNamespace, r2, secretNames, servesWorker,
   wildcardDns,
 } from './infra-cloudflare';
 import {
   CONTROL_PLANE_ACCESS_PATHS, type InfraEnvironment, type InfraWorker, type Infrastructure, type Resource, SUPPLY,
   INFRA_ENVIRONMENTS, UNCAPTURED, UNOBSERVABLE, WRANGLER_CONFIG, claimedHosts, deployedConfig, deploymentOf, deriveInfrastructure, envFields,
-  environmentFrom, liveClasses, readSites, requiredIn, supplyCensus, vectorizeGeometry,
+  environmentFrom, liveClasses, readSites, requiredIn, supplyCensus,
 } from './infra-manifest';
 import { REPO_ROOT as REPO } from './repo-root';
 import { ResetSchema, resetResourceIds, servingOf } from './reset';
@@ -167,7 +167,6 @@ const DEPLOYED_TYPE = new Map<string, string>([
   ['kv_namespace', 'KV'],
   ['r2_bucket', 'R2'],
   ['send_email', 'Email Sending'],
-  ['vectorize', 'Vectorize'],
   ['worker_loader', 'Worker Loader'],
 ]);
 
@@ -287,12 +286,6 @@ export async function observe(
       return observedRow(resource, kvNamespace(resource.name));
     case 'r2':
       return observedRow(resource, r2(resource.name));
-    case 'vectorize': {
-      const geometry = vectorizeGeometry();
-
-      return observedRow(resource, vectorize(resource.name, geometry.dimensions, geometry.metric));
-    }
-
     case 'container':
     case 'container-namespace':
       return observedRow(resource, observedContainer(resource, live));

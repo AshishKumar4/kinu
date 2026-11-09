@@ -32,7 +32,7 @@ export const CLOUDFLARE_DEPLOY_CLIENT = {
   scopes: [
     'user-details.read', 'account-settings.read',
     'workers-scripts.write', 'workers-routes.write', 'workers-kv-storage.write',
-    'workers-r2.write', 'vectorize.write', 'aig.write', 'zone.read', 'dns.write',
+    'workers-r2.write', 'aig.write', 'zone.read', 'dns.write',
     'email-routing-rule.write', 'email-sending.write',
     // The computer: its container application, and the account token its box deletes snapshots with.
     'containers.write', 'account-api-tokens.write',

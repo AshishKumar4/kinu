@@ -168,7 +168,6 @@ function replayMemory(base: Memory): Memory {
   const written = new Map<string, string>();
 
   return {
-    chunk: (id) => base.chunk(id),
     search: (query, limit) => base.search(query, limit),
     write: async (path, content) => { written.set(path, content); },
     append: async (path, content) => { written.set(path, `${written.get(path) ?? await base.read(path) ?? ''}${content}`); },

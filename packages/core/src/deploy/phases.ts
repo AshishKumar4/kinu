@@ -34,7 +34,6 @@ const STEP_PHASES = {
   'credits-token': 'prepare',
   kv: 'storage',
   r2: 'storage',
-  vectorize: 'storage',
   'ai-gateway': 'storage',
   seed: 'storage',
   'computer-tools': 'storage',

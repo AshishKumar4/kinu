@@ -3,8 +3,8 @@
  * manifest declares, idempotently, and say what it could not do.
  *
  * WHAT IT DOES AND DELIBERATELY DOES NOT. It creates the account-level resources
- * `wrangler deploy` binds and cannot create for itself: R2 buckets and the
- * Vectorize indexes. It does NOT deploy the Worker.
+ * `wrangler deploy` binds and cannot create for itself: the R2 buckets. It does
+ * NOT deploy the Worker.
  * `bun run deploy` is the only production deploy path — a bare `wrangler deploy`
  * skips the asset check and the post-deploy smoke gate, and production has
  * already shipped that way once — so provisioning composes with that command
@@ -40,12 +40,12 @@ import { restCall } from './cloudflare-rest';
 import { restApiToken } from './cloudflare-token';
 import {
   type Deployment, type Observation, type Run, authenticated, deployment, environmentArgs, kvNamespace, r2, secretNames,
-  requireCloudflareAccountId, vectorize, why,
+  requireCloudflareAccountId, why,
   wrangler,
 } from './infra-cloudflare';
 import {
   INFRA_ENVIRONMENTS, type Infrastructure, type Resource, SUPPLY, UNCAPTURED, deriveInfrastructure,
-  environmentFrom, requiredIn, vectorizeGeometry,
+  environmentFrom, requiredIn,
 } from './infra-manifest';
 
 const BOLD = '\u001B[1m';
@@ -107,12 +107,6 @@ function look(resource: Resource): Observation {
   switch (resource.kind) {
     case 'kv': return kvNamespace(resource.name);
     case 'r2': return r2(resource.name);
-    case 'vectorize': {
-      const geometry = vectorizeGeometry();
-
-      return vectorize(resource.name, geometry.dimensions, geometry.metric);
-    }
-
     // Named one by one rather than left to a `default`: a resource kind this
     // program cannot look up is a fact about the seam, and a kind added later
     // has to arrive here and be answered rather than fall quietly into

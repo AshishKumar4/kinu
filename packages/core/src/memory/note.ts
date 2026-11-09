@@ -1,6 +1,7 @@
 import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** The one note-save primitive: appends a dated `### Note` heading to `memory/MEMORY.md`, then indexes it. */
 
+import type { NoteDater } from '@kinu.run/agent-utils/memory';
 import type { Memory } from '../types/primitives';
 
 export const MEMORY_PATH = 'memory/MEMORY.md';
@@ -85,7 +86,7 @@ export function parseMemoryNotes(content: string): MemoryNote[] {
  * When the lines of a note file through `endLine` were written, as the file itself says: the date stamped on the last
  * note heading at or above it (`appendMemoryNote`), at day precision. Null where no heading above is stamped.
  */
-export function noteDateAt(lines: readonly string[], endLine: number): number | null {
+function noteDateAt(lines: readonly string[], endLine: number): number | null {
   for (let at = Math.min(endLine, lines.length) - 1; at >= 0; at--) {
     const line = lines[at] ?? '';
 
@@ -97,6 +98,22 @@ export function noteDateAt(lines: readonly string[], endLine: number): number | 
   }
 
   return null;
+}
+
+/** Dates a hydration's hits: the stamp of each note heading, else its file's last change, stat once a path. */
+export function noteDater(files: Pick<VFS, 'stat'>): NoteDater {
+  const changed = new Map<string, Promise<number | undefined>>();
+
+  return async (path, lines, endLine) => {
+    const stamped = noteDateAt(lines, endLine);
+
+    if (stamped !== null) return stamped;
+    const read = changed.get(path) ?? Promise.resolve(files.stat(path, { follow: false })).then((stat) => stat?.mtimeMs);
+
+    changed.set(path, read);
+
+    return await read;
+  };
 }
 
 /** The notes the agent kept, oldest first, as the sleep-time pass folds them into facts. */

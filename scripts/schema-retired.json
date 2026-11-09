@@ -17,6 +17,7 @@
   "gepa_runs",
   "head_merge_results",
   "mail_untriaged",
+  "memory_projection_updates",
   "pattern_extractions",
   "refinement_lane_holds",
   "request_renders",

@@ -4,10 +4,9 @@ import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, createMemoryMemory, createTestRuntime } from './helpers';
-import { MemoryStore, type IndexedChunk } from '@kinu.run/agent-utils/memory';
-import { adaptMemory, backfillMemoryVectors, forgetMemoryVectors } from '../src/memory/vector-sync';
-import { hybridSearch, memorySnippetRehydrator } from '../src/memory/hybrid-search';
-import type { VectorStore } from '../src/memory/vector-store';
+import { MemoryStore } from '@kinu.run/agent-utils/memory';
+import { adaptMemory } from '../src/memory/vector-sync';
+import { createMemoryVectors, type Embedder } from '../src/memory/vector-store';
 import { searchMemoryHits } from '../src/memory/memory-search';
 import { isoDate } from '../src/utils/date';
 import { appendMemoryNote, memoryIndexPath, parseMemoryNotes, readMemoryTail } from '../src/memory/note';
@@ -21,125 +20,109 @@ function store() {
   return { memory: createMemoryMemory(db, vfs), vfs };
 }
 
-describe('the semantic mirror survives an unavailable or failed backend', () => {
-  test.each(['unavailable', 'delete-failure'])('a $0 update retains its tombstone until recovery', async (failure) => {
+/** A stand-in for the embedding model: each axis a meaning, counted by the words that carry it. */
+const MEANINGS = [['deploy', 'ship', 'release', 'production'], ['secret', 'credential', 'rotate'], ['renew', 'registrar', 'domain']];
+
+/** `hold()` stops the next embedding once it has started, until `release()`. */
+function meaningEmbedder(): Embedder & { hold(): { readonly entered: Promise<void>; release(): void } } {
+  type Signal = ReturnType<typeof Promise.withResolvers<void>>;
+
+  let held: { readonly entered: Signal; readonly gate: Signal } | null = null;
+
+  return {
+    hold() {
+      const hold = { entered: Promise.withResolvers<void>(), gate: Promise.withResolvers<void>() };
+      held = hold;
+
+      return { entered: hold.entered.promise, release: () => hold.gate.resolve() };
+    },
+    async embed(text: string) {
+      const hold = held;
+      held = null;
+      hold?.entered.resolve();
+      await hold?.gate.promise;
+
+      return MEANINGS.map((words) => words.filter((word) => text.toLowerCase().includes(word)).length);
+    },
+  };
+}
+
+function recallingWorkspace() {
+  const { rt, db, workspace } = createTestRuntime();
+  const indexed = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
+  indexed.ensureSchema();
+  const embedder = meaningEmbedder();
+  const vectors = createMemoryVectors({ store: indexed, embedder, files: workspace.vfs });
+  const memory = adaptMemory(indexed, workspace.vfs, vectors);
+  const recall = async (query: string, limit = 5) => (await searchMemoryHits(memory, vectors, query, { limit })).hits;
+
+  return { db, workspace, indexed, embedder, vectors, memory, recall };
+}
+
+describe('recall by meaning, from the vectors the workspace keeps beside its notes', () => {
+  test('a note written is recalled by meaning on the very next search, with no word in common', async () => {
+    const { db, memory, recall } = recallingWorkspace();
+
+    try {
+      for (const [path, text] of [['memory/deploys.md', 'We deploy the worker on Fridays.'], ['memory/keys.md', 'Dana rotates the webhook secret.']]) {
+        await memory.write(path, text);
+        await memory.index(path);
+      }
+
+      const top = async (query: string) => (await recall(query, 1)).map((hit) => ({ snippet: hit.snippet, sources: hit.sources }));
+
+      expect({ shipping: await top('how to ship to production'), credentials: await top('who handles credential rotation') }).toEqual({
+        shipping: [{ snippet: 'We deploy the worker on Fridays.', sources: ['semantic'] }],
+        credentials: [{ snippet: 'Dana rotates the webhook secret.', sources: ['semantic'] }],
+      });
+    } finally { db.close(); }
+  });
+
+  test("a replaced note's old vector never surfaces, even when its embedding lands after the replacement", async () => {
+    const { db, indexed, memory, embedder, vectors, recall } = recallingWorkspace();
+    const replacement = 'The registrar renews kinu.run in March.';
+
+    try {
+      await memory.write('memory/keys.md', 'Dana rotates the webhook secret on Fridays.');
+      // The embedding of this text is slow: the note is replaced, and its chunk re-indexed, while it is under way.
+      const slow = embedder.hold();
+      const indexing = memory.index('memory/keys.md');
+      await slow.entered;
+      await memory.write('memory/keys.md', replacement);
+      await indexed.indexFile('memory/keys.md', replacement);
+      slow.release();
+      await indexing;
+
+      // No chunk is ranked by a meaning its text no longer holds.
+      expect((await vectors.search('who handles credential rotation')).filter((hit) => hit.score > 0)).toEqual([]);
+      const rotation = await recall('who handles credential rotation');
+      expect(rotation.some((hit) => hit.snippet.includes('Dana'))).toBe(false);
+      expect((await recall('when is the domain due')).map((hit) => hit.snippet)).toEqual([replacement]);
+    } finally { db.close(); }
+  });
+
+  test('a workspace whose chunks hold no vector embeds them all at its next start', async () => {
     const { rt, db, workspace } = createTestRuntime();
-    const chunks = new Map<string, IndexedChunk>();
-    let available = true;
-    let rejectDeletes = false;
-
-    const vectors: VectorStore = {
-      get available() { return available; },
-      upsertChunks: async (fresh) => { for (const chunk of fresh) chunks.set(chunk.id, chunk); },
-      deleteChunks: async (ids) => {
-        if (rejectDeletes) throw new Error('the semantic backend rejected deletion');
-
-        for (const id of ids) chunks.delete(id);
-      },
-      search: async () => [...chunks.values()].map((chunk) => ({ ...chunk, score: 1 })),
-    };
-
     const indexed = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
     indexed.ensureSchema();
 
-    const memory = adaptMemory(indexed, workspace.vfs, { store: vectors });
-
     try {
-      await memory.write('memory/mirror.md', 'old remote-only words');
-      await memory.index('memory/mirror.md');
-      expect(chunks.size).toBe(1);
-      expect((await hybridSearch('old remote-only', async () => [], vectors, { rehydrate: memorySnippetRehydrator(memory) }))[0]?.snippet).toBe('old remote-only words');
-      available = failure !== 'unavailable';
-      rejectDeletes = failure === 'delete-failure';
-      await memory.write('memory/mirror.md', failure === 'unavailable' ? 'replacement canonical words' : '');
-      await memory.index('memory/mirror.md');
+      // Indexed with no embedder bound (workspace birth, a reset memory table): every chunk owes a vector.
+      const unbound = adaptMemory(indexed, workspace.vfs);
+      const notes = Array.from({ length: 40 }, (_, at) => `## Note ${String(at)}\nRelease ${String(at)} ships from main.`).join('\n\n');
+      await unbound.write('memory/releases.md', notes);
+      await unbound.index('memory/releases.md');
+      await unbound.write('memory/keys.md', 'Dana rotates the webhook secret on Fridays.');
+      await unbound.index('memory/keys.md');
+      const owed = await indexed.chunksOwedVectors(Number.MAX_SAFE_INTEGER);
+      expect(owed.length).toBeGreaterThan(1);
 
-      expect(await memory.search('old remote-only')).toEqual([]);
-      available = true;
-      expect(await hybridSearch('old remote-only', async () => [], vectors, { rehydrate: memorySnippetRehydrator(memory) })).toEqual([]);
-      rejectDeletes = false;
-      // A later boot is not holding the index call's in-memory delta.
+      // The next start's runtime fills what is owed.
       const reopened = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
+      await createMemoryVectors({ store: reopened, embedder: meaningEmbedder(), files: workspace.vfs }).fill();
 
-      await backfillMemoryVectors(reopened, vectors);
-      expect([...chunks.values()].map((chunk) => chunk.text)).toEqual(failure === 'unavailable' ? ['replacement canonical words'] : []);
-      const current = await hybridSearch('replacement canonical', async () => [], vectors, { rehydrate: memorySnippetRehydrator(memory) });
-
-      expect(current.map((hit) => hit.snippet)).toEqual(failure === 'unavailable' ? ['replacement canonical words'] : []);
-    } finally { db.close(); }
-  });
-});
-
-// A deleted workspace's memory leaves nothing in the shared index: every chunk's vector goes, those indexed now and
-// those whose projection is still owed (the privacy policy: deleting an account deletes everything it has).
-describe("a workspace's deletion takes its memory's vectors", () => {
-  test('every projected chunk, current or owed, is deleted from the index', async () => {
-    const { rt, db, workspace } = createTestRuntime();
-    const chunks = new Map<string, IndexedChunk>();
-    let available = true;
-
-    const vectors: VectorStore = {
-      get available() { return available; },
-      upsertChunks: async (fresh) => { for (const chunk of fresh) chunks.set(chunk.id, chunk); },
-      deleteChunks: async (ids) => { for (const id of ids) chunks.delete(id); },
-      search: async () => [],
-    };
-
-    const indexed = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
-    indexed.ensureSchema();
-    const memory = adaptMemory(indexed, workspace.vfs, { store: vectors });
-
-    try {
-      await memory.write('memory/northwind.md', 'Dana at Northwind rotates the webhook secret on Fridays.');
-      await memory.index('memory/northwind.md');
-      // A second note indexed while the backend is away: its vector is owed, not yet written.
-      available = false;
-      await memory.write('memory/registrar.md', 'The registrar renews kinu.run in March.');
-      await memory.index('memory/registrar.md');
-      available = true;
-      await backfillMemoryVectors(new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync), vectors);
-      expect(chunks.size).toBe(2);
-
-      await forgetMemoryVectors(indexed, { store: vectors });
-
-      expect(chunks.size).toBe(0);
-    } finally { db.close(); }
-  });
-
-  // Review of the account deletion, 2026-10-20: the runtime's backfill at its construction could upsert a chunk after
-  // the deletion had run, and the workspace's wipe then took the index that would have retried it.
-  test('a backfill under way when the deletion starts lands before it, not after', async () => {
-    const { rt, db, workspace } = createTestRuntime();
-    const chunks = new Map<string, IndexedChunk>();
-    const embedding = Promise.withResolvers<void>();
-    let available = false;
-
-    const vectors: VectorStore = {
-      get available() { return available; },
-      upsertChunks: async (fresh) => {
-        await embedding.promise;
-
-        for (const chunk of fresh) chunks.set(chunk.id, chunk);
-      },
-      deleteChunks: async (ids) => { for (const id of ids) chunks.delete(id); },
-      search: async () => [],
-    };
-
-    const indexed = new MemoryStore(workspace.vfs, rt.storage.sql, rt.storage.transactionSync);
-    indexed.ensureSchema();
-
-    try {
-      // Indexed while the backend was away: its vector is owed.
-      await adaptMemory(indexed, workspace.vfs, { store: vectors }).write('memory/northwind.md', 'Dana rotates the webhook secret on Fridays.');
-      await adaptMemory(indexed, workspace.vfs, { store: vectors }).index('memory/northwind.md');
-      available = true;
-      const backfill = backfillMemoryVectors(indexed, vectors);
-      const forget = forgetMemoryVectors(indexed, { store: vectors });
-
-      embedding.resolve();
-      await Promise.all([backfill, forget]);
-
-      expect(chunks.size).toBe(0);
+      expect(await reopened.chunksOwedVectors(Number.MAX_SAFE_INTEGER)).toEqual([]);
+      expect((await reopened.nearestChunks(async () => Float32Array.of(0, 1, 0), owed.length)).length).toBe(owed.length);
     } finally { db.close(); }
   });
 });

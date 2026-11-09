@@ -89,9 +89,7 @@ function manifestOf(): string {
       { binding: 'LocalProbe', kind: 'durable-object', resource: 'LocalProbe', required: true },
       { binding: 'ASSETS', kind: 'assets', resource: '', required: true },
       { binding: 'BACKUP_BUCKET', kind: 'r2', resource: 'kinu-backups', required: false },
-      { binding: 'MEMORY_VECTORS', kind: 'vectorize', resource: 'kinu-memory', required: false },
     ],
-    vectorIndexes: [{ name: 'kinu-memory', dimensions: 384, metric: 'cosine' }],
     migrations: [{ tag: 'v1', newSqliteClasses: ['LocalProbe'] }],
     secrets: [],
     vars: [{ name: 'SANDBOX_TRANSPORT', policy: 'carried', value: 'rpc' }],
@@ -215,7 +213,6 @@ describe('kinu deploy local', () => {
     expect(installed.stdout).toContain(VERSION);
     expect(installed.stdout).toContain(`http://127.0.0.1:${String(port)}`);
     // Unsupported capabilities are named, not dropped; `r2Bucket` over a disk service cannot work.
-    expect(installed.stdout).toContain('MEMORY_VECTORS');
     expect(installed.stdout).toContain('BACKUP_BUCKET');
 
     const layout = join(home, 'local');

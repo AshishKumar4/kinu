@@ -15,7 +15,6 @@ import type { AgentIsolateTail, AgentWorkspaceRPC } from "./src/agent-facets";
 import type { SlateBinding } from "./src/slates/bindings";
 import type { PartBinding } from "./src/slates/part-binding";
 import type { MossaicShardDO, MossaicUserDO } from "./src/drive/mossaic-objects";
-import type { VectorizeIndex as KinuVectorizeIndex } from "@kinu.run/core";
 import type { PictureBucket } from "./src/slates/pictures";
 
 // Top-level imports make this a module, so `Env` is declared global explicitly.
@@ -25,8 +24,6 @@ declare global {
     AI?: Ai;
     /** Worker version recorded on builtin-loop turn claims; absent (old deploys, `wrangler dev`) ⇒ unknown. */
     CF_VERSION_METADATA?: { id: string; tag: string; timestamp: string };
-    /** Optional semantic-memory index. Without it, memory remains FTS-only. */
-    MEMORY_VECTORS?: KinuVectorizeIndex;
     /** R2 store for hosted Nimbus runtimes (runtime-catalog.ts:117 calls `.get()`); absent ⇒ hosted
      *  `python3`/`ruby`/`clang` exit 127. */
     NIMBUS_RUNTIME_CACHE?: R2Bucket;

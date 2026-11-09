@@ -150,7 +150,7 @@ containers and search code on your own Cloudflare account.
 
 ```bash
 bun install
-bun run infra:provision      # R2 buckets and Vectorize indexes
+bun run infra:provision      # R2 buckets
 bun run deploy               # the Worker, DO namespaces, container, routes, cron
 bun run infra:provision      # the secrets; wrangler needs the Worker to exist first
 bun run gate:infra           # every declared resource exists and is bound

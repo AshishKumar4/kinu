@@ -10,7 +10,7 @@ Nothing here can create these for you:
 
 - a Cloudflare account on the Workers Paid plan;
 - a zone for the app hostname, active on that account;
-- a wrangler login (`npx wrangler login`) with Workers, KV, R2, Vectorize,
+- a wrangler login (`npx wrangler login`) with Workers, KV, R2,
   Containers and Email scopes.
 
 Then name your deployment. Every value lives in `packages/cf-backend/wrangler.jsonc`: set your `account_id`, your `routes`, your `CLI_PUBLIC_ORIGIN`, and the KV namespace id that `wrangler kv namespace create kinu-auth` prints. `scripts/deploy.sh` reads the deploy account from `CLOUDFLARE_ACCOUNT_ID`, which defaults to the kinu.run account, so export your own. Commit the configuration. The deploy refuses a dirty checkout, so the build stamp always names the exact bytes that shipped.
@@ -45,7 +45,7 @@ For a build runner with no key file, `KINU_RELEASE_SIGNING_KEY` can supply the s
 ## Step two: provision, deploy
 
 ```bash
-bun run infra:provision staging   # staging's R2 buckets, Vectorize indexes and secrets
+bun run infra:provision staging   # staging's R2 buckets and secrets
 bun run deploy --bootstrap        # staging's Worker, DO namespaces, container, routes, cron
 ```
 

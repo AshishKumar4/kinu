@@ -828,7 +828,6 @@ describe('file tool', () => {
       async index(path: string) { indexed.push(path); },
       async search() { return []; },
       async read() { return null; },
-      async chunk() { return null; },
       async tail() { return null; },
     };
 
@@ -849,7 +848,6 @@ describe('file tool', () => {
       async index() { throw new Error('index unavailable'); },
       async search() { return []; },
       async read() { return null; },
-      async chunk() { return null; },
       async tail() { return null; },
     };
 

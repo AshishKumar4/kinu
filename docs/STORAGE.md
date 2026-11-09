@@ -23,12 +23,15 @@ Other Durable Objects in `wrangler.jsonc` keep databases of their own.
 `UserDO` holds the per-user `user_*` and `device_*` tables and the owner's
 `experience_library`; those belong to the user, not to a workspace.
 
-Three stores sit outside actor SQLite:
+Two stores sit outside actor SQLite:
 
 - Browser auth: the `AUTH_KV` KV namespace.
 - Computer `/workspace` backups: the `BACKUP_BUCKET` R2 bucket.
-- Optional embedding recall: the `MEMORY_VECTORS` Vectorize index. It extends
-  FTS5 and is never the source of truth.
+
+Memory recall by meaning stays inside the workspace's SQLite:
+`memory_note_vectors` keeps one normalized 384-dimension embedding per note
+chunk, beside `memory_note_chunks`, and a search scans them exactly. It extends
+FTS5 and is never the source of truth.
 
 `AUTH_KV` holds only expiring records, each with its own TTL: browser
 sessions, one-time OAuth handoff state, and CLI sign-in rate limits. None of
