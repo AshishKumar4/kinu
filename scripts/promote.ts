@@ -419,6 +419,9 @@ export const OverrideSchema = v.object({
   verdict: v.literal('UNVERIFIED'),
   words: v.pipe(v.string(), v.trim(), v.nonEmpty()),
   reds: v.array(v.string()),
+  /** Production took it while staging's run of it was still testing (owner, 2026-11-08: "deploy to prod, and keep
+   *  testing in staging simultaneously"): `reds` are none yet, not none. */
+  stagingPending: v.optional(v.literal(true)),
   overriddenAt: v.string(),
 });
 
@@ -448,7 +451,7 @@ export function withdraw(records: Records, sha: string, moment: 'publishing' | '
 export async function writeOverride(
   staging: Records,
   sha: string,
-  owner: { readonly words: string; readonly reds: readonly string[]; readonly at: string },
+  owner: { readonly words: string; readonly reds: readonly string[] | 'pending'; readonly at: string },
   served: (downloads: Downloads) => Promise<void>,
 ): Promise<Override> {
   const text = staging.read(builtKey(sha));
@@ -457,7 +460,10 @@ export async function writeOverride(
   const built = v.parse(VerifiedSchema, JSON.parse(text));
 
   await served(built.downloads);
-  const record = v.parse(OverrideSchema, { ...built, verdict: 'UNVERIFIED', words: owner.words, reds: owner.reds, overriddenAt: owner.at });
+  const pending = owner.reds === 'pending';
+  const record = v.parse(OverrideSchema, { ...built, verdict: 'UNVERIFIED', words: owner.words, reds: pending ? [] : owner.reds, overriddenAt: owner.at });
+
+  if (pending) record.stagingPending = true;
 
   staging.write(overrideKey(sha), JSON.stringify(record));
 
@@ -477,17 +483,14 @@ export function adoptedRecord(staging: Records, sha: string, override: boolean):
   return override ? v.parse(OverrideSchema, JSON.parse(text)) : v.parse(VerifiedSchema, JSON.parse(text));
 }
 
-/** The reds the last staging deploy of `sha` reported here, from the environment's report index: an override names them. */
-export function stagingReds(index: string, sha: string): readonly string[] {
-  if (!existsSync(index)) throw new Error(`no staging deploy reported here (${index}), so ${sha}'s open reds are unknown`);
-
-  const summary = readFileSync(index, 'utf8').split('\n').filter((line) => line !== '')
+/** The reds the last staging deploy of `sha` reported here, from the environment's report index: an override names them.
+ *  `pending` while no run of it has reported: a build staging serves (`writeOverride` checks) is still being tested. */
+export function stagingReds(index: string, sha: string): readonly string[] | 'pending' {
+  const summary = !existsSync(index) ? undefined : readFileSync(index, 'utf8').split('\n').filter((line) => line !== '')
     .map((line) => v.parse(v.looseObject({ sha: v.string(), reds: v.array(v.string()) }), JSON.parse(line)))
     .filter((each) => each.sha === sha).at(-1);
 
-  if (summary === undefined) throw new Error(`no staging deploy of ${sha} reported here, so its open reds are unknown`);
-
-  return summary.reds;
+  return summary === undefined ? 'pending' : summary.reds;
 }
 
 /** A build production took: the version that served it, its commit, and every download it served. A build a
@@ -502,7 +505,7 @@ export const PromotionSchema = v.object({
   /** Its front Worker's version (front-config.ts); none for a build from before the front, which answered its host itself. */
   front: v.optional(v.string()),
   /** A build the owner promoted without staging's verification: owner override, unverified. */
-  override: v.optional(v.object({ verdict: v.literal('UNVERIFIED'), words: v.string(), reds: v.array(v.string()) })),
+  override: v.optional(v.object({ verdict: v.literal('UNVERIFIED'), words: v.string(), reds: v.array(v.string()), stagingPending: v.optional(v.literal(true)) })),
 });
 
 export type Promotion = v.InferOutput<typeof PromotionSchema>;
@@ -982,7 +985,7 @@ async function overrideCommand({ sha, origins, records }: Context, [words = '']:
   const owner = { words, reds: stagingReds(join(REPORTS, 'staging', 'index.jsonl'), sha), at: new Date().toISOString() };
   const written = await writeOverride(records, sha, owner, async (downloads) => { await servedAs(origins.staging, sha, downloads); });
 
-  console.log(`promote: OWNER OVERRIDE, UNVERIFIED: ${sha} as staging served it (${written.digest}), with ${String(written.reds.length)} open red(s) there: ${written.reds.join('; ') || 'none reported'}`);
+  console.log(`promote: OWNER OVERRIDE, UNVERIFIED: ${sha} as staging served it (${written.digest}), ${written.stagingPending === true ? 'with staging still testing it' : `with ${String(written.reds.length)} open red(s) there: ${written.reds.join('; ') || 'none reported'}`}`);
 
   return 0;
 }
@@ -1028,7 +1031,11 @@ async function promotedCommand({ sha, origins, buckets, production, records }: C
     sha, version, front: servingFront(), at: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS), ...resetIn(reset),
   };
 
-  if (owner !== undefined) promotion.override = { verdict: owner.verdict, words: owner.words, reds: owner.reds };
+  if (owner !== undefined) {
+    promotion.override = { verdict: owner.verdict, words: owner.words, reds: owner.reds };
+
+    if (owner.stagingPending === true) promotion.override.stagingPending = true;
+  }
 
   await servedAs(origins.production, sha, promotion.downloads);
 

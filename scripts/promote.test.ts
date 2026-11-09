@@ -487,12 +487,22 @@ describe('an owner override', () => {
     expect(() => adoptedRecord(bucket({ [verifiedKey(sha)]: JSON.stringify(built) }), sha, true)).toThrow(`no owner override of ${sha} was recorded`);
   });
 
-  test('names the reds of the last staging deploy of its build, and refuses where none reported here', () => {
+  test('names the reds of the last staging deploy of its build, and staging still testing where none reported here', () => {
     const index = join(scratchDir('promote-override-index'), 'index.jsonl');
     const line = (of: string, reds: readonly string[]) => JSON.stringify({ sha: of, reds });
 
     writeFileSync(index, [line(sha, ['an earlier red']), line('b'.repeat(40), []), line(sha, owner.reds)].join('\n') + '\n');
-    expect(stagingReds(index, sha)).toEqual(owner.reds);
-    expect(() => stagingReds(index, 'c'.repeat(40))).toThrow('its open reds are unknown');
+    expect([stagingReds(index, sha), stagingReds(index, 'c'.repeat(40)), stagingReds(`${index}.absent`, sha)]).toEqual([owner.reds, 'pending', 'pending']);
+  });
+
+  // Owner, 2026-11-08: "deploy to prod, and keep testing in staging simultaneously". Production takes the build staging
+  // serves while its run is still testing; the override says so, and staging never having served it still refuses.
+  test('names a build staging serves but has not reported as taken while staging still tests it, and its promotion says so', async () => {
+    const staging = bucket({ [builtKey(sha)]: JSON.stringify(built) });
+    const pending = { ...owner, reds: 'pending' as const };
+    const overridden = await writeOverride(staging, sha, pending, async () => undefined);
+
+    expect({ reds: overridden.reds, pending: overridden.stagingPending, adopted: adoptedRecord(staging, sha, true) }).toEqual({ reds: [], pending: true, adopted: overridden });
+    await expect(writeOverride(bucket({}), sha, pending, async () => undefined)).rejects.toThrow(`staging never served ${sha}`);
   });
 });
