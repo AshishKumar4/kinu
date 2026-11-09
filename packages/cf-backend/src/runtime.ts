@@ -17,7 +17,7 @@ import {
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   createSandboxExecutor, createDeviceTunnelExecutor, soleLiveDevice, type DeviceTransport,
   type WorkspaceFiles,
-  createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
+  createMemoryVectors, createWorkersAIEmbedder, createNoopVectorStore, createSqlFiber,
   buildRuntime, createRoutedModelLane, routedLlm, bindRoute, type ModelLaneComponents,
   type VectorStore,
 } from "@kinu.run/core";
@@ -56,7 +56,7 @@ import {
   userCredentials,
 } from "./providers/agent-registry";
 import { ownerCaller, type UserCaller } from "@kinu.run/core";
-import { adaptMemory, backfillMemoryVectors, forgetMemoryVectors } from "@kinu.run/core";
+import { adaptMemory } from "@kinu.run/core";
 import { actorAffinity } from "@kinu.run/core";
 import { nimbusPreviewConfigured } from "./nimbus-route";
 import { workspaceServingScope, type HostedBox, type WorkspaceServing } from "./workspace-host";
@@ -198,8 +198,6 @@ function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity, caller: 
 export type CFRuntime = AgentRuntime & {
   /** The reflection lane: routed, so it answers to a schema where a fast lane is absent. */
   llm: RoutedLLM;
-  /** The workspace memory's vectors deleted, as the workspace is (`forgetMemoryVectors`): its teardown's alone. */
-  forgetMemoryVectors(): Promise<void>;
   /** Also what the parent-file RPC serves a fork, so a fork reads exactly its parent's bytes. */
   localVfs: WorkspaceFiles;
   /** `refreshStatus()` is awaited at turn start. */
@@ -292,12 +290,12 @@ export function createCFRuntime(
   memoryStore.ensureSchema();
 
   // Built before the memory adapter so writes embed.
-  const vectorStore = buildVectorStore(env, actor, hooks.reportModelCall, () => memoryStore.holdsChunks());
+  const vectorStore = buildVectorStore(env, memoryStore, originVfs, hooks.reportModelCall);
 
   const craftStore = new AgentUtilsCraftStore(sql);
   craftStore.ensureSchema();
 
-  const memory = adaptMemory(memoryStore, originVfs, { store: vectorStore });
+  const memory = adaptMemory(memoryStore, originVfs, vectorStore);
 
   const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }, async () => ({})));
 
@@ -500,8 +498,8 @@ export function createCFRuntime(
   const startupWork: Promise<void> = Promise.all([
     settleLogged(
       'memory.vector_backfill_detached_failed',
-      { doing: 'backfilling semantic-memory vectors at runtime construction', otherwise: 'unavailable' },
-      () => backfillMemoryVectors(memoryStore, vectorStore),
+      { doing: 'embedding the memory chunks that owe a vector at runtime construction', otherwise: 'unavailable' },
+      () => vectorStore.fill(),
       { workspace: actor.workspaceName },
     ),
     settleLogged(
@@ -570,7 +568,6 @@ export function createCFRuntime(
     localVfs: baseWorkspaceVfs,
     deviceTransport,
     vectorStore,
-    forgetMemoryVectors: () => forgetMemoryVectors(memoryStore, { store: vectorStore }),
     sandboxHandle,
     processRetry: processRetryTool(executionBox),
     portHolders: (): PortHolders => {
@@ -601,40 +598,12 @@ export function createCFRuntime(
   return runtime;
 }
 
-const EMBEDDING_MODEL = '@cf/baai/bge-small-en-v1.5';
+/** The memory's own vectors where Workers AI is bound to embed them; otherwise noop (FTS5-only). */
+function buildVectorStore(env: Env, store: MemoryStore, files: Pick<CoreVFS, 'stat'>, reportModelCall: ModelCallSink): VectorStore {
+  const embedder = createWorkersAIEmbedder({ env, report: reportModelCall });
 
-/** Vectorize-backed only when both env.AI and env.MEMORY_VECTORS are bound; otherwise noop (FTS5-only). */
-function buildVectorStore(
-  env: Env,
-  actor: ActorRuntimeIdentity,
-  reportModelCall: ModelCallSink,
-  holds: () => boolean,
-): VectorStore {
-  const embedder = createWorkersAIEmbedder({ env, model: EMBEDDING_MODEL, dimensions: 384, report: reportModelCall });
-  const vectorizeBinding = env.MEMORY_VECTORS;
-
-  if (!embedder || !vectorizeBinding) {
-    return createNoopVectorStore();
-  }
-
-  const built = Result.try({
-    // Shared index across workspaces: scope every write and query to this one.
-    try: () => createCloudflareVectorStore({ index: vectorizeBinding, embedder, namespace: actor.workspaceName, holds }),
-    catch: (cause) => toKinuError({ doing: 'constructing the Vectorize memory store', cause, otherwise: 'unavailable' }),
-  });
-
-  if (Result.isFailure(built)) {
-    diagnostics.failure('vector.store_construction_failed', built.failure, { namespace: actor.workspaceName });
-
-    return createNoopVectorStore();
-  }
-
-  diagnostics.event('vector.store_registered', { namespace: actor.workspaceName });
-
-  return built.success;
+  return embedder === undefined ? createNoopVectorStore() : createMemoryVectors({ store, embedder, files });
 }
-
-
 
 /** Where the owner changes a tier's model, as a refusal notice names it. */
 export const MODEL_SETTINGS = 'Settings > Models';

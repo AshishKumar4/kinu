@@ -21,9 +21,8 @@ function buildServer(resolveAgent: McpResolver, agentName: string, answer: McpAn
     "search_memory",
     {
       description:
-        "Hybrid search over the agent's long-term memory: FTS5 (lexical) + Vectorize " +
-        "(semantic) merged via Reciprocal Rank Fusion when Vectorize is configured; " +
-        "FTS5-only otherwise. Returns matching passages with merged scores.",
+        "Search the agent's long-term memory by words and by meaning. " +
+        "Returns matching passages with merged scores.",
       inputSchema: {
         query: z.string().describe("Search query (natural language or FTS5 syntax)."),
         limit: z.number().int().min(1).max(50).optional().describe("Max results (default 10)."),

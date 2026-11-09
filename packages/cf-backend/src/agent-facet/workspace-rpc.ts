@@ -193,7 +193,6 @@ class ConsumedMemory implements Memory {
   index(...args: Parameters<Memory['index']>) { return settle(this.call(memory => memory.index(...args))); }
   search(...args: Parameters<Memory['search']>) { return settle(this.call(memory => memory.search(...args))); }
   read(...args: Parameters<Memory['read']>) { return settle(this.call(memory => memory.read(...args))); }
-  chunk(...args: Parameters<Memory['chunk']>) { return settle(this.call(memory => memory.chunk(...args))); }
   tail(...args: Parameters<Memory['tail']>) { return settle(this.call(memory => memory.tail(...args))); }
 }
 

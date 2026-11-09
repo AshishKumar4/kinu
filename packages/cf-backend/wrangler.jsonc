@@ -468,12 +468,6 @@
   "kv_namespaces": [
     { "binding": "AUTH_KV", "id": "4a677dd3488e4325917a2e4aefa9a6f8" }
   ],
-  // Semantic memory: runtime.ts auto-detects MEMORY_VECTORS and builds the
-  // CloudflareVectorStore so search_memory / searchMemoryHybrid return
-  // RRF-merged FTS5 + Vectorize hits (384-dim to match the Workers AI embedder).
-  "vectorize": [
-    { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory" }
-  ],
   // ── Staging ───────────────────────────────────────────────────────────────
   // Every deploy lands here first (`bun run deploy`), and a build that passed here
   // is promoted to production (`bun run deploy --promote`). Its own Worker,
@@ -555,9 +549,6 @@
       // unique, so provisioning never creates one).
       "kv_namespaces": [
         { "binding": "AUTH_KV", "id": "c06cad3d9e2642258e80b4c4700e04be" }
-      ],
-      "vectorize": [
-        { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory-staging" }
       ],
       // Production's vars with staging's values. Mail is on, at staging.kinu.run,
       // open to every account (MAIL_ACCOUNTS) so the eval identity may claim; a

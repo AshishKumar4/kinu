@@ -268,6 +268,9 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  * own run events (main's isolate +2, the workspace's -2), a told end is read before it is written, so the room hears it
  * before the write (`TurnFences.ending`, +1), and a missing local skills root is listed with no lookup before it (+1),
  * which on the shared Drive saves a call to the account's store. The workspace's 190, main's isolate's 189.
+ * 401 against 400 on 2026-11-09 (#103; the cut read 401 in 5 of 6 sizes measured over 3 runs, aef18b20f 400 in all 10): the turn's recall scans the
+ * memory's vectors in the workspace's own SQLite (+1), a read the probe never made while its semantic store was the
+ * Vectorize binding it lacks; production read the store's chunks for that recall before (`holdsChunks`), so it pays none.
  * What remains, by group. Workspace: the Agents SDK's job queue (65, every arm and alarm asks it, and it is the SDK's);
  * the settle sequence's terminal effects and receipts (25: each attempt is written before its call, and each retry
  * read follows a write of its own); the evolution pass and the turn's review (27); the four reports' acceptance,
@@ -281,7 +284,7 @@ const turnStatements = new Map<number, { readonly workspace: OperationCost['tabl
  */
 /** The budget a production turn's statements are held to, at both sizes alike, so no statement runs once per delta or per
  *  earlier message; set above what the turn measures (the history above) so a harmless statement does not flip it. */
-const TURN_STATEMENTS = 400;
+const TURN_STATEMENTS = 410;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

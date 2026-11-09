@@ -1068,6 +1068,11 @@
     "path TEXT PRIMARY KEY",
     "stamp TEXT"
   ],
+  "memory_note_vectors@packages/agent-utils/src/memory/store.ts": [
+    "chunk_id TEXT PRIMARY KEY",
+    "hash TEXT NOT NULL",
+    "embedding BLOB NOT NULL"
+  ],
   "memory_projection_updates@packages/agent-utils/src/memory/store.ts": [
     "revision INTEGER PRIMARY KEY AUTOINCREMENT",
     "id TEXT NOT NULL UNIQUE",

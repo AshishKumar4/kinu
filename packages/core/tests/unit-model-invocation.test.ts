@@ -308,7 +308,6 @@ describe('the Workers AI utility bindings file unmeasured platform spend', () =>
 
     const embedder = createWorkersAIEmbedder({
       env: { AI: { run: async (_model, input) => ({ data: (Array.isArray(input.text) ? input.text : [input.text]).map(() => [0.5]) }) } },
-      dimensions: 1,
       report,
     });
 

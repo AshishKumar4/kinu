@@ -152,7 +152,7 @@ test('a write or edit names the file it changed when its link moves while memory
   const indexed: string[] = [];
 
   const memory: Memory = {
-    chunk: async () => null, write: async () => {}, append: async () => {}, search: async () => [], read: async () => null, tail: async () => null,
+    write: async () => {}, append: async () => {}, search: async () => [], read: async () => null, tail: async () => null,
     // Another call repoints the link while this one's index is awaited.
     async index(path) {
       indexed.push(path);

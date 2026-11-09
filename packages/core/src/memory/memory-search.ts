@@ -4,7 +4,7 @@ import type { Memory } from '../types/primitives';
 import { createNoopVectorStore, type VectorStore } from './vector-store';
 import type { FactsStore } from './facts';
 import type { AccountMemory } from './account';
-import { hybridSearch, memorySnippetRehydrator, type HybridHit, type LexicalHit, type LexicalSearchFn } from './hybrid-search';
+import { hybridSearch, type HybridHit, type LexicalHit, type LexicalSearchFn } from './hybrid-search';
 
 /** What a memory search reaches beyond the workspace's notes: its facts, and the account's facts, and its notes where
  *  it names them. Absent, not. */
@@ -18,7 +18,7 @@ export interface MemorySearchScope {
  * hits. `semantic` says whether a semantic index answered. Each caller projects these hits into its own shape.
  */
 export async function searchMemoryHits(
-  memory: Pick<Memory, 'search' | 'chunk'>, vectorStore: VectorStore | null | undefined, query: string, opts: MemorySearchScope & { readonly limit: number },
+  memory: Pick<Memory, 'search'>, vectorStore: VectorStore | null | undefined, query: string, opts: MemorySearchScope & { readonly limit: number },
 ): Promise<{ readonly semantic: boolean; readonly hits: HybridHit[] }> {
   const { facts, account } = opts;
   const index = vectorStore ?? createNoopVectorStore();
@@ -30,7 +30,7 @@ export async function searchMemoryHits(
   } satisfies LexicalHit));
 
   const hits = await hybridSearch(query, lexical, index, {
-    finalK: opts.limit, rehydrate: memorySnippetRehydrator(memory),
+    finalK: opts.limit,
     ...(facts !== undefined && { facts: () => facts.all() }),
     // The account is read inside its arms, so a user object that does not answer costs the account's hits, never the search.
     ...(account !== undefined && { accountFacts: async () => await account.facts() }),

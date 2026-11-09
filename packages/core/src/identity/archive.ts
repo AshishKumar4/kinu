@@ -52,7 +52,8 @@ const EXCLUDED_TABLES = {
   memory_note_files: true,
   // Folded from the run events the archive carries, up to a rowid a restore renumbers: the next read folds them again.
   agent_figure_folds: true,
-  memory_projection_updates: true,
+  // Embedded again from the notes' chunks once the next open indexes them.
+  memory_note_vectors: true,
 } satisfies Record<string, true>;
 
 /** An FTS5 index's `content` option: the table it indexes, `''` for none (contentless), null where it keeps its own. */

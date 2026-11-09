@@ -215,14 +215,13 @@ function converts(ai: WorkersAiMarkdown | undefined): ai is ConvertingBinding {
 /** The binding reports no usage: each request files one unmeasured `platform` row. */
 export function createWorkersAIEmbedder(opts: {
   readonly env: { readonly AI?: WorkersAiEmbedding };
-  readonly model?: string;
-  readonly dimensions?: number;
   readonly report: ModelCallSink;
 }): Embedder | undefined {
   const binding = opts.env.AI;
 
   if (binding === undefined) return undefined;
-  const model = opts.model ?? '@cf/baai/bge-small-en-v1.5';
+  // The smallest embedding model Workers AI lists: 384 dimensions, about 107 ms a query (#103, 2026-11-09).
+  const model = '@cf/baai/bge-small-en-v1.5';
   const filed: ModelCallReport = { source: 'platform', usage: {}, spec: `workers-ai/${model}`, modelId: model };
 
   const runOne = (text: string): Effect.Effect<number[]> => Effect.flatMap(Effect.promise(() => binding.run(model, { text })), (result) => {
@@ -233,7 +232,6 @@ export function createWorkersAIEmbedder(opts: {
   });
 
   return {
-    dimensions: opts.dimensions ?? 384,
     embed(text: string) { return settle(runOne(text)); },
     embedBatch(texts: readonly string[]) {
       return settle(Effect.flatMap(Effect.promise(() => binding.run(model, { text: [...texts] })), (result) => {

@@ -1,6 +1,6 @@
 /**
  * What a turn's question recalls of memory, read once as the turn is prepared and shown in every step's block outside the
- * cached prefix (`renderMemoryForTurn`): the one hybrid search (`searchMemoryHits`: the notes' FTS5, Vectorize where
+ * cached prefix (`renderMemoryForTurn`): the one hybrid search (`searchMemoryHits`: the notes' FTS5, their vectors where
  * bound, the workspace's facts and the account's the turn read) keyed on what the turn asks. The account's notes are the
  * memory tool's to search: each would cross to the account's object once more a turn. A fact is named by its key, so each step
  * shows its value as it then is; a note keeps the words that matched, with when it was written and whether a fact has
@@ -28,7 +28,7 @@ export type RecalledMemory =
   };
 
 export interface RecallSources {
-  readonly memory: Pick<Memory, 'search' | 'chunk'>;
+  readonly memory: Pick<Memory, 'search'>;
   /** Null where none is bound (the CLI): the notes are matched by FTS5 alone. */
   readonly vectorStore: VectorStore | null;
   readonly facts: FactsStore;

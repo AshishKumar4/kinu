@@ -9147,7 +9147,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       if (this.wipe === undefined) {
         // Quieted already when its owner's teardown asked first; a deletion resumed after a restart quiets here.
         yield* this.quietAgents();
-        yield* Effect.promise(async () => this.releaseOutsideState(ownerUserId !== null));
+        yield* Effect.promise(async () => this.releaseOutsideState());
       }
 
       const wipe = this.wipe ??= { ownerUserId, done: this.wipeStorage() };
@@ -9172,8 +9172,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     }));
   }
 
-  /** `claimed`: it had an owner, so it may have had agents and their memory; one that never did has neither. */
-  private async releaseOutsideState(claimed: boolean): Promise<void> {
+  private async releaseOutsideState(): Promise<void> {
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
     // The watermark outranks every earlier record (core preview/preview-exposures.ts).
     if (this.env.AUTH_KV) {
@@ -9184,11 +9183,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       await forgetSandboxPreviews(this.env.AUTH_KV, sandboxIdForWorkspace(this.name));
     }
 
-    // Its agents' browsers on Browser Run hold their pages until they sit idle out: closed now. Its memory's vectors live
-    // in a shared index, outside its storage: deleted now, while its chunks still name them.
+    // Its agents' browsers on Browser Run hold their pages until they sit idle out: closed now.
     await closeWorkspaceBrowserSessions(this.ctx.storage.sql, this.env.BROWSER);
-
-    if (claimed) await this.rt.forgetMemoryVectors();
 
     const sb = this.computerBox();
 
@@ -9589,7 +9585,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   }
 
   /**
-   * FTS5 + Vectorize merged via Reciprocal Rank Fusion; pure FTS5 when Vectorize isn't bound.
+   * FTS5 and the notes' vectors merged via Reciprocal Rank Fusion; pure FTS5 when Workers AI isn't bound.
    * The single memory-search surface for all remote callers (browser rpc, CLI /rpc, MCP).
    */
   @callable() async searchMemoryHybrid(query: string, limit = 10): Promise<HybridHit[]> {

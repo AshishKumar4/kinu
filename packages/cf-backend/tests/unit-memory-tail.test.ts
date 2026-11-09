@@ -3,8 +3,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, makeSql } from '../../core/tests/helpers';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
-import type { VectorStore } from '@kinu.run/core';
-import { adaptMemory } from '@kinu.run/core';
+import { adaptMemory, createNoopVectorStore } from '@kinu.run/core';
 
 const PATH = 'memory/MEMORY.md';
 
@@ -15,12 +14,7 @@ function memoryOver(content: string) {
   const store = new MemoryStore(files, sql, write => database.transaction(write)());
   store.ensureSchema();
 
-  const vectors: VectorStore = {
-    available: false,
-    async upsertChunks() {}, async deleteChunks() {}, async search() { return []; },
-  };
-
-  const memory = adaptMemory(store, files, { store: vectors });
+  const memory = adaptMemory(store, files, createNoopVectorStore());
 
   return { memory, ready: memory.write(PATH, content) };
 }

@@ -1,8 +1,7 @@
-/** Hybrid retrieval: lexical arms (FTS5 notes, both scopes' facts, account notes) and VectorStore fused with Reciprocal Rank Fusion. */
+/** Hybrid retrieval: lexical arms (FTS5 notes, both scopes' facts, account notes) and the note vectors fused with Reciprocal Rank Fusion. */
 
 import { Effect } from 'effect';
-import type { Memory } from '../types/primitives';
-import type { VectorStore, VectorSearchHit } from './vector-store';
+import type { NearestChunk, VectorStore } from './vector-store';
 import { reciprocalRankFusion } from './vector-store';
 import { searchFacts, unifiedFacts, type Fact, type FactSearchHit, type MemoryScope } from './facts';
 import type { AccountNoteHit } from './account';
@@ -38,27 +37,6 @@ export interface HybridHit {
 
 export type LexicalSearchFn = (query: string, limit: number) => Promise<LexicalHit[]>;
 
-/** A semantic hit's canonical text and its note's write time, read back. */
-interface RehydratedSnippet {
-  readonly text: string;
-  readonly writtenAt?: number;
-}
-
-/** The vector store holds no chunk text, so semantic-only hits need their text read back. Null when unreadable. */
-export type SnippetRehydrator = (hit: VectorSearchHit) => Promise<RehydratedSnippet | null>;
-
-/** Remote candidates must still identify the canonical chunk and content. */
-export function memorySnippetRehydrator(memory: Pick<Memory, 'chunk'>): SnippetRehydrator {
-  return async (hit) => {
-    const chunk = await memory.chunk(hit.id);
-
-    if (chunk === null || hit.hash === undefined || chunk.hash !== hit.hash
-      || chunk.path !== hit.path || chunk.startLine !== hit.startLine || chunk.endLine !== hit.endLine) return null;
-
-    return { text: chunk.text, ...(chunk.writtenAt !== undefined && { writtenAt: chunk.writtenAt }) };
-  };
-}
-
 export interface HybridSearchOptions {
   /** Per-source candidate count. Default 20. */
   perSourceK?: number;
@@ -74,7 +52,6 @@ export interface HybridSearchOptions {
   accountFacts?: () => Promise<readonly Fact[]>;
   /** The account's notes the query matches, a fourth source that degrades as the others do. */
   accountNotes?: (query: string, limit: number) => Promise<readonly AccountNoteHit[]>;
-  rehydrate?: SnippetRehydrator;
   /** The clock ages are read against. */
   now?: number;
 }
@@ -85,7 +62,7 @@ type ArmOutcome<Hit> =
   | { readonly kind: 'failed'; readonly error: KinuError };
 
 /** `skipped` is not `answered` with nothing: an unconsulted index says nothing about matches. */
-type SemanticOutcome = ArmOutcome<VectorSearchHit> | { readonly kind: 'skipped' };
+type SemanticOutcome = ArmOutcome<NearestChunk> | { readonly kind: 'skipped' };
 
 type FactsOutcome = ArmOutcome<FactSearchHit> | { readonly kind: 'skipped' };
 
@@ -108,23 +85,9 @@ export function hybridSearch(
 
   const lexicalArm = armOf(() => lexicalSearch(query, perSourceK), 'run the lexical half of a hybrid search', 'io');
 
-  const semanticArm: Effect.Effect<SemanticOutcome> = (vectorStore.available
+  const semanticArm: Effect.Effect<SemanticOutcome> = vectorStore.available
     ? armOf(() => vectorStore.search(query, perSourceK), 'run the semantic half of a hybrid search', 'unavailable')
-    : Effect.succeed<SemanticOutcome>({ kind: 'skipped' })).pipe(Effect.flatMap((outcome) => {
-      const rehydrate = options.rehydrate;
-  
-      if (outcome.kind !== 'answered' || rehydrate === undefined) return Effect.succeed(outcome);
-  
-      return armOf(async () => {
-        const hits = await Promise.all(outcome.hits.map(async (hit) => {
-          const read = await rehydrate(hit);
-
-          return read === null ? null : { ...hit, ...read };
-        }));
-
-        return hits.flatMap((hit) => hit === null ? [] : [hit]);
-      }, 'validate semantic candidates against canonical memory', 'unavailable');
-    }));
+    : Effect.succeed({ kind: 'skipped' });
 
   const sharedFacts: Effect.Effect<readonly Fact[]> = accountFacts === undefined ? Effect.succeed([]) : attempt(
     { doing: "read the account's facts for a hybrid search", otherwise: 'unavailable' }, accountFacts,
@@ -208,7 +171,7 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, now }: 
 
   const factHits: readonly FactSearchHit[] = factArm.kind === 'answered' ? factArm.hits : [];
 
-  const semanticHits: readonly (VectorSearchHit & { readonly writtenAt?: number })[] = semantic.kind === 'answered'
+  const semanticHits: readonly NearestChunk[] = semantic.kind === 'answered'
     ? semantic.hits
     : [];
 
@@ -232,7 +195,7 @@ function fused({ lexical, semantic, factArm, accountNotes, finalK, rrfK, now }: 
 interface Found {
   readonly l: LexicalHit | undefined;
   readonly f: FactSearchHit | undefined;
-  readonly s: (VectorSearchHit & { readonly writtenAt?: number }) | undefined;
+  readonly s: NearestChunk | undefined;
   readonly n: AccountNoteHit | undefined;
 }
 

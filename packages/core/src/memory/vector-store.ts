@@ -1,65 +1,23 @@
-/** Semantic memory recall over Vectorize; fused with FTS5 hits via RRF. The cf-backend wires the bindings. */
+/** Semantic memory recall over the vectors the memory store keeps beside its chunks; fused with FTS5 hits via RRF. */
 
-import { Effect } from 'effect';
-import * as v from 'valibot';
-import type { IndexedChunk } from '@kinu.run/agent-utils/memory';
-import { hashText } from '@kinu.run/agent-utils/memory';
-import { renderIssues, type JsonObject } from '../utils/json';
-import { diagnostics, settle, toKinuError } from '../obs/index';
-
-/** Duck-typed so core stays dependency-free. */
-interface VectorMutation {
-  ids?: string[];
-}
-
-export interface VectorizeIndex {
-  upsert(vectors: VectorRecord[]): Promise<VectorMutation>;
-  query(
-    vector: number[],
-    options?: { topK?: number; namespace?: string; returnMetadata?: boolean | 'all' | 'indexed'; filter?: JsonObject },
-  ): Promise<{ matches: VectorMatch[] }>;
-  deleteByIds(ids: string[]): Promise<VectorMutation>;
-}
-
-export interface VectorRecord {
-  readonly id: string;
-  readonly values: number[];
-  /** Scopes the shared index to one workspace/agent. */
-  readonly namespace?: string;
-  readonly metadata?: JsonObject;
-}
-
-interface VectorMatch {
-  readonly id: string;
-  readonly score: number;
-  readonly metadata?: JsonObject;
-}
+import { serialQueue } from '@kinu.run/agent-utils';
+import type { MemoryStore, NearestChunk } from '@kinu.run/agent-utils/memory';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { noteDater } from './note';
 
 export interface Embedder {
   embed(text: string): Promise<number[]>;
   embedBatch?(texts: readonly string[]): Promise<number[][]>;
-  readonly dimensions: number;
 }
 
-export type { IndexedChunk } from '@kinu.run/agent-utils/memory';
-
-export interface VectorSearchHit {
-  hash?: string;
-  id: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  score: number;
-  text?: string;
-}
+export type { IndexedChunk, NearestChunk } from '@kinu.run/agent-utils/memory';
 
 export interface VectorStore {
   readonly available: boolean;
-  /** Idempotent on id. Rejects when the write did not land. */
-  upsertChunks(chunks: readonly IndexedChunk[]): Promise<void>;
-  deleteChunks(ids: readonly string[]): Promise<void>;
-  /** Rejects on backend failure: `hybridSearch` decides whether another arm covers. */
-  search(query: string, topK?: number): Promise<VectorSearchHit[]>;
+  /** The chunks nearest `query` in meaning, with their text. */
+  search(query: string, topK?: number): Promise<NearestChunk[]>;
+  /** Embeds every chunk that holds no vector of its current text, newest first. Rejects when an embedding did not land. */
+  fill(): Promise<void>;
 }
 
 /** score = Σ 1/(k + rank); default k=60 (Cormack/Lynam). Sorted descending. */
@@ -86,136 +44,58 @@ export function reciprocalRankFusion<T extends { id: string }>(
   return Array.from(byId.values()).sort((a, b) => b.rrfScore - a.rrfScore);
 }
 
-/** A cooldown, not a latch: the next use after it re-probes, so transient errors recover. */
-export const VECTOR_BACKEND_COOLDOWN_MS = 30_000;
+/** Chunks one embedding request carries. */
+const FILL_PAGE = 512;
 
-/** Current projection metadata: a reset reindexes every canonical note. */
-const ChunkMetadataSchema = v.object({
-  chunkId: v.string(),
-  hash: v.string(),
-  path: v.string(),
-  startLine: v.number(),
-  endLine: v.number(),
-});
+/** Unit length, so a dot product is the cosine. */
+function normalized(vector: readonly number[]): Float32Array {
+  const norm = Math.hypot(...vector);
+  const unit = new Float32Array(vector.length);
+
+  for (const [at, value] of vector.entries()) unit[at] = norm === 0 ? 0 : value / norm;
+
+  return unit;
+}
 
 /**
- * Chunk text is not stored; callers rehydrate by id. The index is shared across workspaces and
- * vector ids are unique per index, so ids are namespace-derived hashes plus a namespace filter;
- * the verbatim chunk id rides in metadata so hits fuse with FTS5.
+ * The workspace's vectors, kept in its own storage beside the chunks they embed: a note written is found by meaning on
+ * the next search, and a chunk deleted takes its vector in the same transaction.
  */
-export function createCloudflareVectorStore(opts: {
-  index: VectorizeIndex;
-  embedder: Embedder;
-  /** Omit only for an unshared index. */
-  namespace?: string;
-  /** Whether the index may hold anything of this namespace. The memory store's chunks are its only source, and a hit for
-   *  a chunk the store no longer holds is dropped anyway, so without one a search finds nothing: it answers so without
-   *  embedding or querying (#103: about 180 ms of every warm turn in a workspace with no memory). */
-  holds?: () => boolean;
-}): VectorStore {
-  const { index, embedder, namespace, holds } = opts;
-
-  // Failures always throw; `available` only lets the search arm skip during the cooldown.
-  let unavailableUntil = 0;
-
-  // SHA-256 of `${namespace}\0${chunkId}` truncated to 40 hex (160 bits), within Vectorize's id limit.
-  // Deterministic, so delete recomputes it. Raw chunk id without a namespace.
-  async function storageId(chunkId: string): Promise<string> {
-    if (!namespace) return chunkId;
-
-    return (await hashText(`${namespace}\u0000${chunkId}`)).slice(0, 40);
-  }
-
-  async function toRecords(chunks: readonly IndexedChunk[]): Promise<VectorRecord[]> {
-    const vectors = embedder.embedBatch
-      ? await embedder.embedBatch(chunks.map((c) => c.text))
-      : await Promise.all(chunks.map((c) => embedder.embed(c.text)));
-
-    return Promise.all(chunks.map(async (c, i) => ({
-      id: await storageId(c.id),
-      values: vectors[i],
-      namespace,
-      metadata: { path: c.path, startLine: c.startLine, endLine: c.endLine, chunkId: c.id, hash: c.hash ?? await hashText(c.text) },
-    })));
-  }
-
-  /** Trips the cooldown and rethrows. */
-  function tripping<T>(operation: string, call: () => Promise<T>): Effect.Effect<T> {
-    return Effect.tryPromise({ try: call, catch: (cause) => ({ cause }) }).pipe(
-      Effect.tapError((failed) => Effect.sync(() => {
-        diagnostics.failure(
-          'vector.backend_tripped',
-          toKinuError({ doing: 'reach the vector backend', cause: failed.cause, otherwise: 'unavailable' }),
-          { operation },
-        );
-        unavailableUntil = Date.now() + VECTOR_BACKEND_COOLDOWN_MS;
-      })),
-      Effect.catch((failed) => Effect.die(failed.cause)),
-    );
-  }
-
+export function createMemoryVectors(opts: { store: MemoryStore; embedder: Embedder; files: Pick<VFS, 'stat'> }): VectorStore {
+  const { store, embedder, files } = opts;
+  // One fill at a time, so two writes in a row do not embed the same owed chunks twice.
+  const lane = serialQueue();
 
   return {
-    get available() { return Date.now() >= unavailableUntil; },
+    available: true,
 
-    upsertChunks(chunks: readonly IndexedChunk[]) {
-      return settle(chunks.length === 0 ? Effect.void : Effect.asVoid(tripping('batch upsert', async () => index.upsert(await toRecords(chunks)))));
+    async search(query, topK = 10) {
+      return await store.nearestChunks(async () => normalized(await embedder.embed(query)), topK, noteDater(files));
     },
 
-    deleteChunks(ids: readonly string[]) {
-      return settle(ids.length === 0 ? Effect.void : Effect.asVoid(tripping('delete', async () => index.deleteByIds(await Promise.all(ids.map(storageId))))));
-    },
+    fill() {
+      return lane(async () => {
+        // Newest first, so a note just written is embedded before an older backlog; until a page finds nothing owed.
+        for (let owed = await store.chunksOwedVectors(FILL_PAGE); owed.length > 0; owed = await store.chunksOwedVectors(FILL_PAGE)) {
+          const texts = owed.map((chunk) => chunk.text);
+          const vectors = embedder.embedBatch ? await embedder.embedBatch(texts) : await Promise.all(texts.map((text) => embedder.embed(text)));
 
-    search(text: string, topK = 10) {
-      if (holds?.() === false) return Promise.resolve([]);
+          store.putVectors(owed.flatMap((chunk, at) => {
+            const vector = vectors[at];
 
-      return settle(tripping('query', async () => {
-        const began = performance.now();
-        const vector = await embedder.embed(text);
-        const embedded = performance.now();
-
-        const res = await index.query(vector, {
-          topK,
-          returnMetadata: true,
-          namespace,
-        });
-
-        // #103: which half of a turn's semantic recall waits (embedding or the index), and on how many matches.
-        diagnostics.event('vector.search_timing', { embedMs: embedded - began, queryMs: performance.now() - embedded, matches: res.matches?.length ?? 0 });
-
-        return (res.matches ?? []).flatMap((m) => {
-          const located = v.safeParse(ChunkMetadataSchema, m.metadata ?? {});
-
-          // Records outside the metadata convention are named, not returned as blank hits.
-          if (!located.success) {
-            diagnostics.event('vector.hit_refused', { id: m.id, issues: renderIssues(located.issues) });
-
-            return [];
-          }
-
-          const fields = located.output;
-
-          return [{
-            // Verbatim chunk id matches the FTS5 hit id so RRF fuses them.
-            id: fields.chunkId,
-            path: fields.path,
-            startLine: fields.startLine,
-            hash: fields.hash,
-            endLine: fields.endLine,
-            score: m.score,
-          }];
-        });
-      }));
+            return vector === undefined ? [] : [{ id: chunk.id, hash: chunk.hash, embedding: normalized(vector) }];
+          }));
+        }
+      });
     },
   };
 }
 
-/** FTS5-only fallback when Vectorize is not provisioned. */
+/** FTS5 alone where no embedder is bound (the CLI, an unbound AI). */
 export function createNoopVectorStore(): VectorStore {
   return {
     available: false,
-    async upsertChunks() { /* nop */ },
-    async deleteChunks() { /* nop */ },
     async search() { return []; },
+    async fill() { /* nop */ },
   };
 }

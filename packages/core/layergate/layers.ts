@@ -14,7 +14,7 @@ import { TurnContextBudget } from '../src/context-budget';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../src/tools/registry';
 import { isVfsError, syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../src/memory/vector-store';
+import { createNoopVectorStore, type NearestChunk, type VectorStore } from '../src/memory/vector-store';
 import type { BackendHost } from '../src/types/backend-host';
 import type { KinuEvent, ReadableKinuEvent } from '../src/events/hub/types';
 import type { LexicalHit } from '../src/memory/hybrid-search';
@@ -180,15 +180,14 @@ function lexicalHit(id: string, score: number): LexicalHit {
   return { id, path: `memory/${id}.md`, startLine: 1, endLine: 4, score, snippet: `snippet ${id}` };
 }
 
-function vectorHit(id: string, score: number): VectorSearchHit {
-  return { id, path: `memory/${id}.md`, startLine: 1, endLine: 4, score };
+function vectorHit(id: string, score: number): NearestChunk {
+  return { id, path: `memory/${id}.md`, startLine: 1, endLine: 4, score, text: `snippet ${id}`, hash: id };
 }
 
-function fakeVectorStore(hits: readonly VectorSearchHit[]): VectorStore {
+function fakeVectorStore(hits: readonly NearestChunk[]): VectorStore {
   return {
     available: true,
-    upsertChunks: async () => {},
-    deleteChunks: async () => {},
+    fill: async () => {},
     search: async () => [...hits],
   };
 }

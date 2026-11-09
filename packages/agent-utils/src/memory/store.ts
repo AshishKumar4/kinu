@@ -1,3 +1,4 @@
+import * as v from "valibot";
 import type { SqlExecutor } from "../types";
 import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { chunkMarkdown, hashText } from "./chunker";
@@ -14,7 +15,7 @@ interface FtsRow extends ChunkRow { rank: number }
 
 /** A memory chunk with its verbatim text. Declared here because core depends on agent-utils. */
 export interface IndexedChunk {
-	hash?: string;
+	hash: string;
 	id: string;
 	path: string;
 	startLine: number;
@@ -22,12 +23,6 @@ export interface IndexedChunk {
 	text: string;
 	/** When its note was last written, where the reader knows. */
 	writtenAt?: number;
-}
-
-/** Chunks a vector index must upsert and chunk ids it must delete after (re)indexing a file. */
-export interface MemoryIndexDelta {
-	upserted: IndexedChunk[];
-	deletedIds: string[];
 }
 
 export type NoteReader = (path: string) => Promise<string | null>;
@@ -38,7 +33,13 @@ export type NoteDater = (path: string, lines: readonly string[], endLine: number
 /** A note's file identity as it was indexed; one that differs changed under the index. Null: indexed, not yet trusted. */
 export type NoteStamp = string | null;
 
-/** The note holds the text; rows keep lines and hash, FTS5 the terms. */
+/** A chunk the vector scan ranked, with its text read back. */
+export type NearestChunk = IndexedChunk & { readonly score: number };
+
+/** DO storage reads a blob back as an ArrayBuffer, bun:sqlite as a Uint8Array. */
+const EmbeddingSchema = v.union([v.instance(ArrayBuffer), v.instance(Uint8Array)]);
+
+/** The note holds the text; rows keep lines and hash, FTS5 the terms, and the vector of the text each hash names. */
 export function initMemoryChunkTables(sql: SqlExecutor): void {
 	void sql`
 		CREATE TABLE IF NOT EXISTS memory_note_chunks (
@@ -50,11 +51,14 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 		)
 	`;
 	void sql`CREATE INDEX IF NOT EXISTS idx_mc_path ON memory_note_chunks(path)`;
-	void sql`CREATE TABLE IF NOT EXISTS memory_projection_updates (
-		revision INTEGER PRIMARY KEY AUTOINCREMENT,
-		id TEXT NOT NULL UNIQUE,
-		kind TEXT NOT NULL CHECK (kind IN ('upsert', 'delete'))
-	)`;
+	// A normalized float32 embedding of the chunk text `hash` names: a chunk whose hash moved owes a vector again.
+	void sql`
+		CREATE TABLE IF NOT EXISTS memory_note_vectors (
+			chunk_id  TEXT PRIMARY KEY,
+			hash      TEXT NOT NULL,
+			embedding BLOB NOT NULL
+		)
+	`;
 	void sql`
 		CREATE TABLE IF NOT EXISTS memory_note_files (
 			path  TEXT PRIMARY KEY,
@@ -117,19 +121,18 @@ export class MemoryStore {
 		return this.sql<{ stamp: NoteStamp }>`SELECT stamp FROM memory_note_files WHERE path = ${path}`.at(0)?.stamp;
 	}
 
-	/** (Re)index a note as the file `stamp` names held it; the vector index's delta. */
-	async indexFile(path: string, content: string, stamp: NoteStamp = null): Promise<MemoryIndexDelta> {
-		return this.replaceChunks(path, content, stamp);
+	/** (Re)index a note as the file `stamp` names held it. */
+	async indexFile(path: string, content: string, stamp: NoteStamp = null): Promise<void> {
+		await this.replaceChunks(path, content, stamp);
 	}
 
-	/** A note that is gone, or is no file: its chunks and its stamp leave. */
-	async forgetFile(path: string): Promise<MemoryIndexDelta> {
-		return this.replaceChunks(path, '', undefined);
+	/** A note that is gone, or is no file: its chunks, their vectors and its stamp leave. */
+	async forgetFile(path: string): Promise<void> {
+		await this.replaceChunks(path, '', undefined);
 	}
 
-	private async replaceChunks(path: string, content: string, stamp: NoteStamp | undefined): Promise<MemoryIndexDelta> {
+	private async replaceChunks(path: string, content: string, stamp: NoteStamp | undefined): Promise<void> {
 		const chunks = await chunkMarkdown(content);
-		const delta: MemoryIndexDelta = { upserted: [], deletedIds: [] };
 
 		this.transactionSync(() => {
 			const existing = this.sql<{ id: string; hash: string }>`
@@ -151,14 +154,13 @@ export class MemoryStore {
 					VALUES (${id}, ${path}, ${chunk.startLine}, ${chunk.endLine}, ${chunk.hash})
 				`;
 				void this.sql`INSERT INTO memory_note_chunks_fts (rowid, text) SELECT rowid, ${chunk.text} FROM memory_note_chunks WHERE id = ${id}`;
-				delta.upserted.push({ id, path, startLine: chunk.startLine, endLine: chunk.endLine, text: chunk.text, hash: chunk.hash });
 			}
 
 			for (const [id] of existingMap) {
 				if (!newIds.has(id)) {
 					void this.sql`DELETE FROM memory_note_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_note_chunks WHERE id = ${id})`;
 					void this.sql`DELETE FROM memory_note_chunks WHERE id = ${id}`;
-					delta.deletedIds.push(id);
+					void this.sql`DELETE FROM memory_note_vectors WHERE chunk_id = ${id}`;
 				}
 			}
 
@@ -166,52 +168,60 @@ export class MemoryStore {
 			else void this.sql`
 				INSERT INTO memory_note_files (path, stamp) VALUES (${path}, ${stamp})
 				ON CONFLICT(path) DO UPDATE SET stamp = excluded.stamp`;
-			this.queueProjection(delta);
 		});
-
-		return delta;
 	}
 
-	/** Derived-index obligations are private index state, not user-visible agent configuration. */
-	private queueProjection(delta: MemoryIndexDelta): void {
-		for (const id of delta.deletedIds) void this.sql`INSERT OR REPLACE INTO memory_projection_updates (id, kind) VALUES (${id}, 'delete')`;
+	/** Up to `limit` chunks with no vector of their current text, newest first, read back from their notes. */
+	async chunksOwedVectors(limit: number): Promise<IndexedChunk[]> {
+		const rows = this.sql<ChunkRow>`SELECT c.id, c.path, c.start_line, c.end_line, c.hash FROM memory_note_chunks c
+			LEFT JOIN memory_note_vectors v ON v.chunk_id = c.id AND v.hash = c.hash
+			WHERE v.chunk_id IS NULL ORDER BY c.rowid DESC LIMIT ${limit}`;
 
-		for (const chunk of delta.upserted) void this.sql`INSERT OR REPLACE INTO memory_projection_updates (id, kind) VALUES (${chunk.id}, 'upsert')`;
+		return this.hydrateChunks(rows);
 	}
 
-	pendingProjection(limit = Number.MAX_SAFE_INTEGER): { id: string; kind: 'upsert' | 'delete'; revision: number }[] {
-		return this.sql<{ id: string; kind: 'upsert' | 'delete'; revision: number }>`SELECT id, kind, revision FROM memory_projection_updates ORDER BY revision LIMIT ${limit}`;
+	/** Each vector kept only while its chunk still holds the text it embeds: one embedded before an edit landed is dropped. */
+	putVectors(vectors: readonly { readonly id: string; readonly hash: string; readonly embedding: Float32Array }[]): void {
+		this.transactionSync(() => {
+			for (const { id, hash, embedding } of vectors) {
+				void this.sql`INSERT OR REPLACE INTO memory_note_vectors (chunk_id, hash, embedding)
+					SELECT id, hash, ${new Float32Array(embedding).buffer} FROM memory_note_chunks WHERE id = ${id} AND hash = ${hash}`;
+			}
+		});
 	}
 
-	/** Every chunk that may have a projection: the chunks indexed now, and those whose projection is still owed. */
-	projectedIds(): string[] {
-		return this.sql<{ id: string }>`SELECT id FROM memory_note_chunks UNION SELECT id FROM memory_projection_updates`.map((row) => row.id);
-	}
+	/**
+	 * The `limit` chunks nearest the query `embed` answers (normalized, as every kept vector is) by dot product, scanned
+	 * exactly; a vector counts only where its chunk still holds the text it embeds. With none kept, the query is never
+	 * embedded.
+	 */
+	async nearestChunks(embed: () => Promise<Float32Array>, limit: number, dated?: NoteDater): Promise<NearestChunk[]> {
+		const rows = this.sql<ChunkRow & { embedding: ArrayBuffer | Uint8Array }>`
+			SELECT c.id, c.path, c.start_line, c.end_line, c.hash, v.embedding FROM memory_note_vectors v
+			JOIN memory_note_chunks c ON c.id = v.chunk_id AND c.hash = v.hash`;
 
-	/** Whether any chunk is indexed: without one, the vector index holds nothing of this store. */
-	holdsChunks(): boolean {
-		return this.sql<{ held: number }>`SELECT EXISTS(SELECT 1 FROM memory_note_chunks) AS held`[0]?.held === 1;
-	}
+		if (rows.length === 0) return [];
+		const query = await embed();
+		const top: Array<ChunkRow & { score: number }> = [];
 
-	ackProjection(updates: readonly { id: string; revision: number }[]): void {
-		for (const update of updates) void this.sql`DELETE FROM memory_projection_updates WHERE id = ${update.id} AND revision = ${update.revision}`;
-	}
+		for (const { embedding, ...row } of rows) {
+			const score = dot(query, vectorOf(embedding));
 
-	/** Pending semantic references are hydrated from the current note and hash, never from a queued body. */
-	async chunksByIds(ids: readonly string[], dated?: NoteDater): Promise<IndexedChunk[]> {
-		if (ids.length === 0) return [];
+			if (top.length === limit && score <= (top.at(-1)?.score ?? -Infinity)) continue;
+			const at = top.findIndex((held) => held.score < score);
 
-		const rows = this.sql<ChunkRow>`SELECT id, path, start_line, end_line, hash FROM memory_note_chunks
-			WHERE id IN (SELECT value FROM json_each(${JSON.stringify(ids)})) ORDER BY id`;
+			top.splice(at === -1 ? top.length : at, 0, { ...row, score });
 
-		return this.hydrateChunks(rows, dated);
+			if (top.length > limit) top.pop();
+		}
+
+		const read = await chunkTexts(top, (path) => this.readFile(path), dated);
+
+		return read.flatMap(({ row, text, writtenAt }) => text === null ? [] : [{ ...indexedChunk(row, text, writtenAt), score: row.score }]);
 	}
 
 	private async hydrateChunks(rows: readonly ChunkRow[], dated?: NoteDater): Promise<IndexedChunk[]> {
-		return (await chunkTexts(rows, (path) => this.readFile(path), dated)).flatMap(({ row, text, writtenAt }) => text === null ? [] : [{
-			id: row.id, path: row.path, startLine: row.start_line, endLine: row.end_line, text, hash: row.hash,
-			...(writtenAt !== undefined && { writtenAt }),
-		}]);
+		return (await chunkTexts(rows, (path) => this.readFile(path), dated)).flatMap(({ row, text, writtenAt }) => text === null ? [] : [indexedChunk(row, text, writtenAt)]);
 	}
 
 	/** `dated`: dates each hit off the lines its hydration read. */
@@ -224,6 +234,10 @@ export class MemoryStore {
 
 		await (content === null ? this.forgetFile(path) : this.indexFile(path, content));
 	}
+}
+
+function indexedChunk(row: ChunkRow, text: string, writtenAt: number | undefined): IndexedChunk {
+	return { id: row.id, path: row.path, startLine: row.start_line, endLine: row.end_line, text, hash: row.hash, ...(writtenAt !== undefined && { writtenAt }) };
 }
 
 /** Null where the note's lines no longer hash to the row. */
@@ -292,6 +306,20 @@ function runFtsQuery(sql: SqlExecutor, ftsQuery: string, limit: number): FtsRow[
 		ORDER BY rank ASC, mc.rowid ASC
 		LIMIT ${limit}
 	`;
+}
+
+function vectorOf(embedding: ArrayBuffer | Uint8Array): Float32Array {
+	const bytes = v.parse(EmbeddingSchema, embedding);
+
+	return new Float32Array(bytes instanceof Uint8Array ? bytes.slice().buffer : bytes);
+}
+
+function dot(a: Float32Array, b: Float32Array): number {
+	let sum = 0;
+
+	for (let i = 0; i < a.length; i++) sum += (a[i] ?? 0) * (b[i] ?? 0);
+
+	return sum;
 }
 
 function isMissingFileError<Failure>(failure: Failure): failure is Failure & Error & { code: "ENOENT" } {
