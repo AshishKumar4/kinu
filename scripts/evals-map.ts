@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { MUSE_CALLS_AT_ONCE, evalMatrix, type EvalMatrix } from '../evals/src/config';
-import { claimLabel, onTrialBlock, RENEWING_MARK, TEARDOWN_MARK, trialAccounts, trialInheritedRows, type SlotClaim, type TrialBlock } from '../evals/src/slot';
+import { claimLabel, LEASED_FILE, onTrialBlock, RENEWING_MARK, TEARDOWN_MARK, trialAccounts, trialInheritedRows, type SlotClaim, type TrialBlock } from '../evals/src/slot';
 import { parseEvalAccount } from '@kinu.run/core';
 import { collectEvalTasks } from '../evals/src/eval';
 import type { EvalTask } from '../evals/src/task';
@@ -15,7 +15,8 @@ import { deploymentOf } from './infra-manifest';
 import { gitIn } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { drainArmadaProgress } from './armada-progress';
-import { KINU_ARMADA, keysWindows, kinuArmada, leaseBlock, openClaims, outranked } from './evals-lease';
+import { KINU_ARMADA, keysWindows, kinuArmada, liveClaims } from './evals-lease';
+import { leaseBlock } from '../evals/src/lease';
 import { EVAL_SUITES, suiteTasks, type EvalSuite } from './evals-suites';
 import { NETWORK_SCOPE, processEvals, resolveGh, settleEvalRun } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
@@ -214,12 +215,19 @@ async function sequencesIsolated(plan: MapPlan, matrix: EvalMatrix): Promise<voi
   }
 }
 
-/** `work`'s answer, once `after` has settled too, whether `work` answered or threw. */
-async function settled<T>(work: Promise<T>, after: () => Promise<void>): Promise<T> {
-  try {
-    return await work;
-  } finally {
-    await after();
+/** The longest a run waits for its armada job to end before it deletes the block its trials ran on. */
+const JOB_END_MS = 15 * 60_000;
+
+/**
+ * Until armada reports `job` ended: it outlives a map that stopped following it (about three minutes), its trials still
+ * acting as the block's accounts, which are deleted only once none does. A job that never ends leaves them.
+ */
+async function jobEnded(job: string | null): Promise<void> {
+  const deadline = Date.now() + JOB_END_MS;
+
+  while (job !== null && (await liveClaims(kinuArmada())).some((claim) => claim.job === job)) {
+    if (Date.now() > deadline) throw new Error(`armada job ${job} has not ended, so the trial accounts it acts as are left`);
+    await Bun.sleep(5_000);
   }
 }
 
@@ -255,13 +263,11 @@ function blockOf(origins: MapPlan['origins'], claim: SlotClaim): TrialBlock {
 }
 
 /**
- * The run's trials on a block of trial accounts no open run holds (scripts/evals-lease.ts), each origin's keys stored on
- * that block first, and the block's accounts deleted as the run ends, however it ends (`onTrialBlock`): an interrupt
- * stops its trials and lets the deletes run. A run that took a block at the same moment as an earlier one gives it up
- * and leases again.
+ * The run's trials on a block of trial accounts it leases first (evals/src/lease.ts), each origin's keys stored on that
+ * block, and the block's accounts deleted as the run ends, however it ends, before the lease goes (`onTrialBlock`): an
+ * interrupt stops its trials and lets the deletes run. A run that finds no block free fails, naming why.
  */
 async function leasedMap(plan: MapPlan, started: (job: string) => void) {
-  const armada = kinuArmada();
   const hosts = plan.origins.map(({ origin }) => new URL(origin).host);
   // A trial's account counts every task file, run or not; a sequence's counts none, its tasks sharing one.
   const size = (plan.matrix.sequence ? 1 : plan.slots) * plan.matrix.models.length * plan.matrix.arms.length * plan.matrix.trials;
@@ -270,7 +276,7 @@ async function leasedMap(plan: MapPlan, started: (job: string) => void) {
   let holding = false;
 
   // Holding no block, an interrupt ends the run at once; holding one, it stops what runs on it, and the block's accounts
-  // are deleted before the run ends. The armada map's own child hears it too (`mapTrials`).
+  // are deleted before its lease goes. The armada map's own child hears it too (`mapTrials`).
   const interrupted = (signal: NodeJS.Signals): void => {
     if (!holding) process.exit(130);
     stopping.abort(new Error(`stopped by ${signal}`));
@@ -282,71 +288,54 @@ async function leasedMap(plan: MapPlan, started: (job: string) => void) {
   await keysWindows(console.log);
 
   try {
-    for (;;) {
-      const first = await leaseBlock(armada, { size, pass: plan.pass, hosts }, console.log);
-      const claim = { first, last: first - 1 + size, hosts };
-      const matrix = { ...plan.matrix, firstSlot: first };
-      const items = evalQueue(evalItems(plan.taskFiles, matrix, plan.origins, plan.pass), tasks, plan.budget);
+    const lease = await leaseBlock({ size, pass: plan.pass, hosts, liveClaims: async () => liveClaims(kinuArmada()) });
+    const { first } = lease;
+    const claim = { first, last: lease.last, hosts };
+    const matrix = { ...plan.matrix, firstSlot: first };
+    const items = evalQueue(evalItems(plan.taskFiles, matrix, plan.origins, plan.pass), tasks, plan.budget);
 
-      holding = true;
+    holding = true;
+    writeFileSync(join(plan.out, LEASED_FILE), `${JSON.stringify(claim)}\n`);
+    let job: string | null = null;
 
-      const ran = await onTrialBlock(blockOf(plan.origins, claim), async (release) => {
-        // Standalone runs need the same actual credentials/catalog as deploy --evals, on exactly the block leased. Only the
-        // operator's provisioning step reads the existing key file; trial containers receive identities, never Muse keys.
-        for (const { origin } of plan.origins) {
-          const provision = Bun.spawn([...NETWORK_SCOPE, process.execPath, 'scripts/eval-provider-keys.ts', origin, `--accounts=${String(first)}-${String(claim.last)}`], {
-            cwd: ROOT, env: { ...process.env, KINU_EVAL_MODELS: matrix.models.join(',') },
-            stdout: 'inherit', stderr: 'inherit', signal: stopping.signal,
-          });
+    return await onTrialBlock(lease, blockOf(plan.origins, claim), async () => {
+      // Standalone runs need the same actual credentials/catalog as deploy --evals, on exactly the block leased. Only the
+      // operator's provisioning step reads the existing key file; trial containers receive identities, never Muse keys.
+      for (const { origin } of plan.origins) {
+        const provision = Bun.spawn([...NETWORK_SCOPE, process.execPath, 'scripts/eval-provider-keys.ts', origin, `--accounts=${String(first)}-${String(claim.last)}`], {
+          cwd: ROOT, env: { ...process.env, KINU_EVAL_MODELS: matrix.models.join(',') },
+          stdout: 'inherit', stderr: 'inherit', signal: stopping.signal,
+        });
 
-          const exit = await provision.exited;
-
-          stopping.signal.throwIfAborted();
-
-          if (exit !== 0) throw new Error(`actual eval keys/catalog were not provisioned at ${origin}; no trials started`);
-        }
-
-        // A sequence's tasks open on what its earlier tasks left (prepareTrialAccount), so each account is checked once, here.
-        if (matrix.sequence) await sequencesIsolated(plan, matrix);
+        const exit = await provision.exited;
 
         stopping.signal.throwIfAborted();
-        const identities = [...new Set(plan.origins.map(({ origin }) => evalWebIdentityEnv(origin)))];
-        const argv = evalMapArgv({ sha: plan.sha, out: plan.out, identities, trials: items.length, claim, budget: plan.budget, sequence: matrix.sequence });
-        let lost = false;
-        let checked: Promise<void> = Promise.resolve();
 
-        console.log(`evals: ${String(items.length)} trials on trial-${String(first)} to trial-${String(claim.last)}, in one queue under ${String(plan.budget)} calls at once, each spending its task's peak`);
+        if (exit !== 0) throw new Error(`actual eval keys/catalog were not provisioned at ${origin}; no trials started`);
+      }
 
-        // The block is the run's once its job claims it, unless an earlier job claims it too: given up at once, and an
-        // unanswered check gives it up as well, so the run never deletes accounts another run may hold.
-        const mapped = await settled(mapTrials(argv, items, (named) => {
+      // A sequence's tasks open on what its earlier tasks left (prepareTrialAccount), so each account is checked once, here.
+      if (matrix.sequence) await sequencesIsolated(plan, matrix);
+
+      stopping.signal.throwIfAborted();
+      const identities = [...new Set(plan.origins.map(({ origin }) => evalWebIdentityEnv(origin)))];
+      const argv = evalMapArgv({ sha: plan.sha, out: plan.out, identities, trials: items.length, claim, budget: plan.budget, sequence: matrix.sequence });
+
+      console.log(`evals: ${String(items.length)} trials on trial-${String(first)} to trial-${String(claim.last)}, in one queue under ${String(plan.budget)} calls at once, each spending its task's peak`);
+
+      return {
+        items,
+        ...await mapTrials(argv, items, (named) => {
+          job = named;
           started(named);
-          release.own();
-          checked = (async () => {
-            if (!await outranked(armada, named, claim)) return;
-            lost = true;
-            release.lost();
-            console.log(`evals: an earlier run took trial-${String(first)} to trial-${String(claim.last)} at the same moment; giving them up`);
-            await armada.cancel(named);
-          })().catch(() => {
-            lost = true;
-            release.lost();
-            console.log(`evals: could not tell whether an earlier run holds trial-${String(first)} to trial-${String(claim.last)}, so they are left`);
-          });
-        }), () => checked);
-
-        return lost ? null : { items, ...mapped };
-      }, {
-        before: async () => { await stopRenewals(plan.out); },
-        // Ended before its job claimed the block: deleted only where no other run's job claims any of it.
-        unclaimed: async () => !(await openClaims(armada)).some((other) => other.first <= claim.last && other.last >= claim.first
-          && other.hosts.some((host) => hosts.includes(host))),
-      });
-
-      holding = false;
-
-      if (ran !== null) return ran;
-    }
+        }),
+      };
+    }, {
+      before: async () => {
+        await jobEnded(job);
+        await stopRenewals(plan.out);
+      },
+    });
   } finally {
     process.off('SIGINT', interrupted);
     process.off('SIGTERM', interrupted);

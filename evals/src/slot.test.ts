@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { BUILTIN_PROFILE_CATALOG, DEV_IDENTITY_ACCOUNT_HEADER, EVAL_WORKSPACE_LEASE_MS, inheritedRows, parseEvalAccount, profileCatalogDigest } from '@kinu.run/core';
 import { evalWorkspaceName } from '@kinu.run/test-utils';
 import { evalMatrix } from './config';
-import { claimLabel, claimOf, freeBlock, onTrialBlock, prepareTrialAccount, trialAccounts, trialSlot } from './slot';
+import { onTrialBlock, prepareTrialAccount, trialAccounts, trialSlot } from './slot';
 import type { EvalTarget } from './workspace-roster';
 
 const TASK_FILES = ['budget-board.eval.ts', 'chess.eval.ts', 'launch-prep.eval.ts', 'order-book.eval.ts'];
@@ -37,20 +37,6 @@ describe('a trial\'s slot', () => {
     expect(pass).toHaveLength(TASK_FILES.length);
     expect(new Set(pass).size).toBe(pass.length);
     expect(measured.filter((account) => pass.includes(account))).toEqual([]);
-  });
-
-  // Staging 5c522f12d, 2026-10-19: a deploy's runs and an operator's ran on trial accounts each chose alone, and only the
-  // per-trial guard kept them apart. A run now takes a block no open run's claim holds on the same deployment.
-  test('a run takes the lowest block of its half that no open run on its deployment claims', () => {
-    const staging = 'staging.kinu.run';
-    const held = [claimOf(claimLabel('5c522f12d44f', { first: 1, last: 48, hosts: [staging] }))].filter((claim) => claim !== null);
-
-    expect(held).toEqual([{ first: 1, last: 48, hosts: [staging] }]);
-    expect(freeBlock(40, false, [staging], held)).toBe(49);
-    expect(freeBlock(40, false, ['kinu.run'], held)).toBe(1);
-    expect(freeBlock(8, true, [staging, 'kinu.run'], held)).toBe(257);
-    expect(freeBlock(40, false, [staging], [...held, { first: 49, last: 230, hosts: [staging] }])).toBeNull();
-    expect(claimOf('rc21')).toBeNull();
   });
 
   test('a block placed past its half fails at once, saying which accounts the half has', () => {
@@ -243,46 +229,49 @@ describe("a run's trial accounts", () => {
       .filter((account) => account !== null).map((account) => ({ origin, identity: { kind: 'secret' as const, secret: 's', account } })),
   });
 
+  /** A lease as `leaseBlock` gives it, which says when it was let go. */
+  const leased = (first: number, last: number) => {
+    const events: string[] = [];
+
+    return {
+      events, lease: { first, last, hosts: ['127.0.0.1'], release: async () => { events.push('released'); } },
+    };
+  };
+
   // The owner, 2026-11-09: 64 trial accounts left on production, 256 on staging.
-  test('a run that ends, fails or is stopped leaves no account of its block, and reads none after deleting it', async () => {
+  test('a run that ends, fails or is stopped leaves no account of its block, reads none after deleting it, then lets its lease go', async () => {
     const accounts = accountsDeployment({});
     const origin = accounts.server.url.origin;
     const said: string[] = [];
+    const say = (line: string): void => { said.push(line); };
+
+    const ended = leased(3, 5);
+    const broke = leased(6, 7);
 
     try {
-      const say = (line: string): void => { said.push(line); };
-
-      expect(await onTrialBlock(block(origin, 3, 5), async (release) => {
-        release.own();
-
-        return 'measured';
-      }, { say })).toBe('measured');
-      await expect(onTrialBlock(block(origin, 6, 7), async (release) => { release.own(); throw new Error('a trial broke'); }, { say })).rejects.toThrow('a trial broke');
+      expect(await onTrialBlock(ended.lease, block(origin, 3, 5), async () => 'measured', { say })).toBe('measured');
+      await expect(onTrialBlock(broke.lease, block(origin, 6, 7), async () => { throw new Error('stopped by SIGTERM'); }, { say })).rejects.toThrow('stopped by SIGTERM');
 
       expect([...accounts.deleted].sort()).toEqual(['trial-3', 'trial-4', 'trial-5', 'trial-6', 'trial-7']);
       expect(accounts.calls.filter(({ call }) => call.endsWith('AFTER DELETE'))).toEqual([]);
       expect(said).toEqual(['evals: deleted 3 of the run\'s 3 trial accounts', 'evals: deleted 2 of the run\'s 2 trial accounts']);
+      expect([ended.events, broke.events]).toEqual([['released'], ['released']]);
     } finally {
       await accounts.server.stop(true);
     }
   });
 
-  // Two runs can lease one block at once; its armada job's claim says whose it is, so before the job nothing is deleted,
-  // and a block an earlier job holds too is given up.
-  test("a block lost to an earlier run, or never claimed by the run's job, is not the run's, and none of it is deleted", async () => {
+  // Its remote trials still acting as the block (a job that has not ended), or a renewal still landing: nothing is deleted.
+  test('a teardown whose wait refuses deletes nothing, and still lets the lease go', async () => {
     const accounts = accountsDeployment({});
-    const origin = accounts.server.url.origin;
+    const held = leased(1, 2);
 
     try {
-      await onTrialBlock(block(origin, 1, 2), async (release) => { release.own(); release.lost(); }, { say: () => {} });
-      await expect(onTrialBlock(block(origin, 3, 4), async () => { throw new Error('provisioning refused'); }, { say: () => {} })).rejects.toThrow('provisioning refused');
+      await expect(onTrialBlock(held.lease, block(accounts.server.url.origin, 1, 2), async () => {}, {
+        say: () => {}, before: async () => { throw new Error('armada job j1 has not ended'); },
+      })).rejects.toThrow('has not ended');
 
-      expect(accounts.calls).toEqual([]);
-
-      // Ended before its job, where no other run's job claims the block: its provisioned accounts are deleted.
-      await expect(onTrialBlock(block(origin, 5, 5), async () => { throw new Error('stopped by SIGTERM'); }, { say: () => {}, unclaimed: async () => true }))
-        .rejects.toThrow('stopped by SIGTERM');
-      expect([...accounts.deleted]).toEqual(['trial-5']);
+      expect({ calls: accounts.calls, events: held.events }).toEqual({ calls: [], events: ['released'] });
     } finally {
       await accounts.server.stop(true);
     }
@@ -294,7 +283,7 @@ describe("a run's trial accounts", () => {
     const accounts = accountsDeployment({ 'trial-1': ['codex.oauth', 'cloudflare.oauth'] });
 
     try {
-      await onTrialBlock(block(accounts.server.url.origin, 1, 1), async (release) => { release.own(); }, { say: () => {} });
+      await onTrialBlock(leased(1, 1).lease, block(accounts.server.url.origin, 1, 1), async () => {}, { say: () => {} });
       const writes = accounts.calls.filter(({ call }) => call.startsWith('DELETE')).map(({ call }) => call);
 
       expect(writes).toEqual(['DELETE /api/user/credentials/codex.oauth?revoke=0', 'DELETE /api/user/credentials/cloudflare.oauth?revoke=0', 'DELETE /api/user/account']);

@@ -3,8 +3,8 @@ import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import { DEV_IDENTITY_ACCOUNT_HEADER } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
-import { claimedAccounts, giveAgain, modelsNamed, ompGrant, planLogins, trialSelection, whileRenewing } from './eval-plan-run';
-import { RENEWING_MARK, TEARDOWN_MARK } from '../evals/src/slot';
+import { giveAgain, leasedAccounts, modelsNamed, ompGrant, planLogins, trialSelection, whileRenewing } from './eval-plan-run';
+import { LEASED_FILE, RENEWING_MARK, TEARDOWN_MARK } from '../evals/src/slot';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 
 const held = new Map<string, string[]>([
@@ -100,15 +100,15 @@ test('a read finds every copy of a plan login among the accounts it names, and d
 });
 
 // The owner, 2026-11-09: staging held 256 trial accounts no run used. Every read of an account records it as one of the
-// deployment's, and the run read trial-1 to trial-256 for plan logins; it reads only the blocks its sequences' jobs claim.
-test("the accounts a run reads are its sequences' claimed blocks on its deployment, and no other", () => {
-  const claims = [
-    { job: 'mine', first: 3, last: 4, hosts: ['staging.kinu.run'], createdAt: 1 },
-    { job: 'mine', first: 9, last: 9, hosts: ['kinu.run'], createdAt: 1 },
-    { job: 'theirs', first: 5, last: 6, hosts: ['staging.kinu.run'], createdAt: 2 },
-  ];
+// deployment's, and the run read trial-1 to trial-256 for plan logins; it reads only the block a sequence's run leased.
+test("the accounts a renewal reads are its sequence's leased block on its deployment, and no other", () => {
+  const sequence = join(scratchDir('plan-run-lease'), 'haiku');
 
-  expect(claimedAccounts(claims, new Set(['mine']), 'staging.kinu.run')).toEqual(['trial-3', 'trial-4']);
+  expect(leasedAccounts(sequence, 'staging.kinu.run')).toEqual([]);
+  mkdirSync(sequence, { recursive: true });
+  writeFileSync(join(sequence, LEASED_FILE), `${JSON.stringify({ first: 3, last: 4, hosts: ['staging.kinu.run'] })}\n`);
+
+  expect([leasedAccounts(sequence, 'staging.kinu.run'), leasedAccounts(sequence, 'kinu.run')]).toEqual([['trial-3', 'trial-4'], []]);
 });
 
 // A renewal landing after a sequence disconnected its accounts' logins would be revoked by the accounts' delete. Each side

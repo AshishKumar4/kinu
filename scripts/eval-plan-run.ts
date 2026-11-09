@@ -33,8 +33,8 @@ import {
 } from '@kinu.run/core';
 import { DEFAULT_MODELS } from '../evals/src/config';
 import { deployedBuild } from '../evals/src/target';
-import { kinuArmada, keysWindows, openClaims, type HeldClaim } from './evals-lease';
-import { RENEWING_MARK, TEARDOWN_MARK } from '../evals/src/slot';
+import { kinuArmada, keysWindows } from './evals-lease';
+import { LEASED_FILE, RENEWING_MARK, TEARDOWN_MARK } from '../evals/src/slot';
 import { deploymentOf } from './infra-manifest';
 import { REPO_ROOT as ROOT } from './repo-root';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -158,10 +158,14 @@ export async function whileRenewing<T>(sequence: string, renewal: () => Promise<
   }
 }
 
-/** The trial accounts `jobs` hold on `host`, as each one's armada label claims its block: nothing else is read. */
-export function claimedAccounts(claims: readonly HeldClaim[], jobs: ReadonlySet<string>, host: string): string[] {
-  return claims.filter((claim) => jobs.has(claim.job) && claim.hosts.includes(host))
-    .flatMap((claim) => Array.from({ length: claim.last - claim.first + 1 }, (_, at) => `trial-${String(claim.first + at)}`));
+/** The trial accounts a sequence's run leased on `host`, as it wrote them in its output (`LEASED_FILE`); none before. */
+export function leasedAccounts(sequence: string, host: string): string[] {
+  const file = join(sequence, LEASED_FILE);
+
+  if (!existsSync(file)) return [];
+  const claim = v.parse(v.object({ first: v.number(), last: v.number(), hosts: v.array(v.string()) }), JSON.parse(readFileSync(file, 'utf8')));
+
+  return claim.hosts.includes(host) ? Array.from({ length: claim.last - claim.first + 1 }, (_, at) => `trial-${String(claim.first + at)}`) : [];
 }
 
 /** Starts the holder, or reads the running one; prints what it says. */
@@ -270,8 +274,8 @@ async function hold(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  /** The armada jobs `slugs`' sequences hold, as each one's `run.json` names them. */
-  const sequenceJobs = (slugs: readonly string[] = models.map((each) => each.slug)): string[] => slugs.flatMap((slug) => {
+  /** The armada jobs the sequences hold, as each one's `run.json` names them. */
+  const sequenceJobs = (): string[] => models.map((each) => each.slug).flatMap((slug) => {
     const run = join(out, slug, 'run.json');
 
     return existsSync(run) ? v.parse(v.looseObject({ jobs: v.array(v.string()) }), JSON.parse(readFileSync(run, 'utf8'))).jobs : [];
@@ -307,7 +311,7 @@ async function hold(argv: readonly string[]): Promise<number> {
       if (now.accessToken === given.get(key)?.accessToken) continue;
 
       const reached = await whileRenewing(join(out, slug), async () => {
-        const accounts = claimedAccounts(await openClaims(kinuArmada()), new Set(sequenceJobs([slug])), new URL(origin).host);
+        const accounts = leasedAccounts(join(out, slug), new URL(origin).host);
 
         return await giveAgain({ origin, secret, holders: await planLogins(origin, secret, accounts), key, grant: now });
       });
