@@ -71,7 +71,7 @@ import type { AccountSpend, SlateSurfaceValue } from '@kinu.run/core';
 import { ShareCardJobs, type HeldShare, type ReceivedShare } from './share-cards';
 import { EvalLeaseJobs } from './eval-leases';
 import { WorkspaceDeletionJobs } from './workspace-deletions';
-import { ACCOUNT_DELETING_KEY, AccountDeletionJob } from './account-deletion';
+import { ACCOUNT_DELETING_KEY, AccountDeletionJob, SHARE_FORGETS_OWED_KEY } from './account-deletion';
 import { accountIdFor } from '../auth/store';
 import type { SqlRow, UserObjectHost } from './user-host';
 
@@ -1748,16 +1748,15 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'account');
 
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) return settle(Effect.fail(new KinuError('bad_input', 'invalid owner user id')));
-    const person = { userId: ownerUserId, email: (this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '').trim().toLowerCase() };
 
-    // Every account it sent a card forgets it; its own card jobs are withdrawn first, so none lands after. Every account
-    // that sent it one forgets it too, where it shared.
-    await forgetSharesGiven(this.env, ownerUserId, caller, await this.shareCards_withdraw(caller));
-    const cards = this.sqlx<{ owner_user_id: string; workspace: string }>(`SELECT owner_user_id, workspace FROM user_share_cards`);
-
-    await forgetSharesReceived(this.env, person, caller, cards.map((card) => ({ ownerUserId: card.owner_user_id, workspace: card.workspace })));
-
-    const workspaces = this.workspaces.markEveryForDeletion(() => { this.ctx.storage.kv.put(ACCOUNT_DELETING_KEY, { ownerUserId }); });
+    // Marked before anything is awaited: from here every read finds it being deleted, and its jobs finish it, however the
+    // request ends. One whose answer was lost while it awaited another account read as live, and its deletion landed
+    // later on the account's next use (evals, 2026-11-09).
+    const workspaces = this.workspaces.markEveryForDeletion(() => {
+      this.ctx.storage.kv.put(ACCOUNT_DELETING_KEY, { ownerUserId });
+      // A delete asked again keeps those its first left untold.
+      this.ctx.storage.kv.put(SHARE_FORGETS_OWED_KEY, [...new Set([...this.forgetsOwed(), ...this.shareCards.recipients()])]);
+    });
 
     for (const name of workspaces) await this.workspaceDeletions.dueNow(name);
     await this.accountDeletion.due();
@@ -1766,11 +1765,30 @@ export class UserDO extends Agent<Env> {
     return { ok: true, workspaces: workspaces.length };
   }
 
+  /** The accounts it sent cards to that its deletion has not yet told to forget them. */
+  private forgetsOwed(): string[] {
+    return v.parse(v.array(v.string()), this.ctx.storage.kv.get(SHARE_FORGETS_OWED_KEY) ?? []);
+  }
+
   /** What a marked account holds outside its own storage, once its workspaces are gone; each step reads what is left. */
   private async clearAccountElsewhere(): Promise<void> {
     const { ownerUserId } = v.parse(AccountDeletingSchema, this.ctx.storage.kv.get(ACCOUNT_DELETING_KEY));
     const caller = await ownerCaller(this.env);
     const person = { userId: ownerUserId, email: (this.sqlx<{ email: string }>(`SELECT email FROM user_profile WHERE id = 1`)[0]?.email ?? '').trim().toLowerCase() };
+
+    // Every account it sent a card forgets it; its own card jobs are withdrawn first, so none lands after. Each is struck
+    // once told, so a retry tells only those left. Every account that sent it one forgets it too, where it shared.
+    const owed = new Set([...this.forgetsOwed(), ...await this.shareCards_withdraw(caller)]);
+
+    for (const recipient of owed) {
+      await forgetSharesGiven(this.env, ownerUserId, caller, [recipient]);
+      owed.delete(recipient);
+      this.ctx.storage.kv.put(SHARE_FORGETS_OWED_KEY, [...owed]);
+    }
+
+    const cards = this.sqlx<{ owner_user_id: string; workspace: string }>(`SELECT owner_user_id, workspace FROM user_share_cards`);
+
+    await forgetSharesReceived(this.env, person, caller, cards.map((card) => ({ ownerUserId: card.owner_user_id, workspace: card.workspace })));
 
     for (const { id } of this.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE revoked_at IS NULL`)) await this.devices.revokeDevice(caller, id);
 

@@ -7,6 +7,7 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { sandboxIdForWorkspace } from '@kinu.run/core';
+import { KinuError } from '@kinu.run/core/obs';
 import { renderThrownChain, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { createRecordingLogger, type RecordingLogger } from '@kinu.run/test-utils';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
@@ -313,4 +314,93 @@ test("a workspace that hires another while its account is being deleted is refus
   await harness.abortRaised();
 
   expect({ destroyed: harness.destroyedWorkspaces, aborted: harness.aborted }).toEqual({ destroyed: ['ledger'], aborted: ['destroyed'] });
+});
+
+// Evals, 2026-11-09: a run's delete of its trial account lost its answer while the account awaited another one it had
+// shared with; the account still read as live, the next run took it, and the delete landed under that run. An admitted
+// delete is marked before anything is awaited, and the forget sweep is its job's, so a failure there is retried.
+test('an admitted delete reads as being deleted at once, before any account it shared with answers, and ends deleted', async () => {
+  const sharerAnswers = Promise.withResolvers<void>();
+  let asked = 0;
+
+  const sharer = {
+    shareCards_put: async () => 'kept' as const,
+    shareCards_remove: async () => {},
+    shareRecipient_forget: async () => {
+      await sharerAnswers.promise;
+      asked += 1;
+
+      if (asked === 1) throw new KinuError('unavailable', "the sharer's account is restarting");
+    },
+  };
+
+  const harness = createTestUserDO({ durableObjectId: OWNER, accounts: () => sharer });
+  const owner = await testOwner();
+  const email = 'owner@example.test';
+
+  await harness.userDO.ensureProfile(owner, email);
+  harness.db.run('INSERT INTO user_share_cards (owner_user_id, workspace, share_id, card, received_at) VALUES (?, ?, ?, ?, ?)',
+    ['fedcba9876543210fedcba9876543210', 'issues', 'share-1', '{}', Date.now()]);
+
+  const deleting = harness.userDO.deleteAccount(owner, OWNER);
+
+  // The answer may be lost from here on: every read already finds the account being deleted.
+  await new Promise<void>((next) => { setImmediate(next); });
+  await expect(harness.userDO.ensureProfile(owner, email)).rejects.toThrow('This account is being deleted.');
+
+  sharerAnswers.resolve();
+  await deleting;
+
+  while (harness.accountDeleted.length < 2) {
+    harness.db.run('UPDATE cf_agents_jobs SET time = 0');
+    await harness.userDO.alarm();
+  }
+
+  await harness.userDO.alarm();
+  await harness.abortRaised();
+
+  expect({ asked, aborted: harness.aborted }).toEqual({ asked: 2, aborted: ['destroyed'] });
+  await expect(harness.userDO.ensureProfile(owner, email)).rejects.toThrow('This account was deleted.');
+});
+
+// Review of the fix above: its workspace's teardown takes the records of whom it sent cards to before the sweep that tells
+// them runs, and a telling that fails is retried; the accounts it sent cards to are named as it is marked.
+test('every account it sent a card is told to forget it, though its workspace went first and the first telling failed', async () => {
+  const told: string[] = [];
+  let asked = 0;
+
+  const recipient = {
+    shareCards_put: async () => 'kept' as const,
+    shareCards_remove: async () => {},
+    sharesReceived_forget: async (...[, ownerUserId]: Parameters<TestUserDO['userDO']['sharesReceived_forget']>) => {
+      asked += 1;
+
+      if (asked === 1) throw new KinuError('unavailable', "the recipient's account is restarting");
+      told.push(ownerUserId);
+    },
+  };
+
+  const harness = createTestUserDO({ durableObjectId: OWNER, accounts: () => recipient });
+  const owner = await testOwner();
+
+  await harness.userDO.registerWorkspace(owner, 'ledger');
+  harness.db.run('INSERT INTO share_cards_sent (workspace, share_id, recipient_user_id, card) VALUES (?, ?, ?, ?)',
+    ['ledger', 'share-1', 'fedcba9876543210fedcba9876543210', '{}']);
+
+  await harness.userDO.deleteAccount(owner, OWNER);
+
+  const lap = async (): Promise<void> => {
+    harness.db.run('UPDATE cf_agents_jobs SET time = 0');
+    await harness.userDO.alarm();
+  };
+
+  while (asked === 0) await lap();
+  // Asked again once its workspace and the first telling went: the recipient is still owed its telling.
+  await harness.userDO.deleteAccount(owner, OWNER);
+
+  while (harness.accountDeleted.length < 2) await lap();
+  await harness.userDO.alarm();
+  await harness.abortRaised();
+
+  expect({ told, destroyed: harness.destroyedWorkspaces, aborted: harness.aborted }).toEqual({ told: [OWNER], destroyed: ['ledger'], aborted: ['destroyed'] });
 });

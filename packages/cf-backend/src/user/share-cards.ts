@@ -115,22 +115,29 @@ export class ShareCardJobs extends LifecycleCapability {
     await Promise.all(pushes);
   }
 
-  /**
-   * For the account-delete sweep: every account that holds or is owed a card is named, every delivery not yet made
-   * is cancelled, and a delivery mid-send has landed. A pending removal's recipient has no sent row, only its job, so
-   * both are read before the jobs go; the forget that follows is then the last word each recipient hears.
-   */
-  async withdraw(): Promise<string[]> {
-    const jobs = this.lifecycle.jobs.list().filter((job) => job.fn === SHARE_CARD_JOB);
-    const owed = jobs.map((job) => v.parse(ShareCardWriteSchema, job.payload).recipient);
+  /** Every account that holds or is owed a card: a pending removal's recipient has no sent row, only its job. */
+  recipients(): string[] {
+    const owed = this.lifecycle.jobs.list().filter((job) => job.fn === SHARE_CARD_JOB).map((job) => v.parse(ShareCardWriteSchema, job.payload).recipient);
 
     const sent = this.#deps.sql.exec(`SELECT DISTINCT recipient_user_id FROM share_cards_sent`).toArray()
       .map((row) => v.parse(v.object({ recipient_user_id: v.string() }), row).recipient_user_id);
 
+    return [...new Set([...sent, ...owed])];
+  }
+
+  /**
+   * For the account-delete sweep: every account that holds or is owed a card is named, every delivery not yet made
+   * is cancelled, and a delivery mid-send has landed. Both are read before the jobs go; the forget that follows is then
+   * the last word each recipient hears.
+   */
+  async withdraw(): Promise<string[]> {
+    const recipients = this.recipients();
+    const jobs = this.lifecycle.jobs.list().filter((job) => job.fn === SHARE_CARD_JOB);
+
     await Promise.all(jobs.map((job) => this.lifecycle.jobs.cancel(job.id)));
     await Promise.allSettled(this.#sending);
 
-    return [...new Set([...sent, ...owed])];
+    return recipients;
   }
 
   /**

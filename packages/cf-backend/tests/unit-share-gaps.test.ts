@@ -703,13 +703,21 @@ test("a share is unseen until its person opens Shared, on any device, and one ma
   }
 });
 
-/** The account delete as its route runs it: the typed email, then the forget sweep, then the object's teardown. */
+/** The account delete as its route runs it, then its jobs to their end: the forget sweep, then the object's teardown. */
 async function deleteAccount(world: World, owner: AuthIdentity): Promise<number> {
   const request = new Request('https://app.test/api/user/account', {
     method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirm: owner.email }),
   });
 
-  return present(await serveFamily(accountRoutes, { identity: owner })(request, world.env), 'the delete answer').status;
+  const status = present(await serveFamily(accountRoutes, { identity: owner })(request, world.env), 'the delete answer').status;
+  const account = world.ownerUser;
+
+  while (account.accountDeleted.length < 2) {
+    account.db.run('UPDATE cf_agents_jobs SET time = 0');
+    await account.userDO.alarm();
+  }
+
+  return status;
 }
 
 test("an account deleted while a card's removal is pending tells that person to forget it", async () => {

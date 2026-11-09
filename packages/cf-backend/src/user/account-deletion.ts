@@ -15,6 +15,10 @@ const ACCOUNT_DELETION_JOB = 'account-deletion';
 /** The account is being deleted, and by whom: it admits nothing new (`UserLimits`), and its jobs finish it. */
 export const ACCOUNT_DELETING_KEY = 'account:deleting';
 
+/** The accounts it sent cards to, named as it was marked and each struck once told to forget them: its workspaces'
+ *  teardown takes the records that name them, before the sweep that tells them runs. */
+export const SHARE_FORGETS_OWED_KEY = 'account:deleting:recipients';
+
 export interface AccountDeletionDeps {
   /** Whether the account is marked for deletion. */
   readonly marked: () => boolean;
