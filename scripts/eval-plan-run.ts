@@ -34,6 +34,7 @@ import {
 import { DEFAULT_MODELS } from '../evals/src/config';
 import { deployedBuild } from '../evals/src/target';
 import { kinuArmada, keysWindows, openClaims, type HeldClaim } from './evals-lease';
+import { TEARDOWN_MARK } from '../evals/src/slot';
 import { deploymentOf } from './infra-manifest';
 import { REPO_ROOT as ROOT } from './repo-root';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -53,6 +54,10 @@ const OMP_STORE = join(process.env['HOME'] ?? '', '.omp/agent/agent.db');
 
 /** Each plan's login in OMP's store: its row, and the provider that row must be. */
 export interface OmpLogin { readonly id: number; readonly provider: string }
+
+/** How long one renewal's call may take: well inside the minute a sequence waits, as it tears down, for one to land
+ *  (scripts/evals-map.ts `stopRenewals`). */
+const CALL_MS = 30_000;
 
 /** How often the holder looks for a token OMP has renewed. */
 const RENEWED_EVERY_MS = 5 * 60_000;
@@ -105,7 +110,7 @@ export async function planLogins(origin: string, secret: string, accounts: reado
   for (let at = 0; at < accounts.length; at += 32) {
     found.push(...(await Promise.all(accounts.slice(at, at + 32).map(async (account) => {
       const headers = { [DEV_IDENTITY_HEADER]: secret, ...account !== 'eval-service' && { [DEV_IDENTITY_ACCOUNT_HEADER]: account } };
-      const held = v.parse(v.array(v.object({ key: v.string() })), await (await fetch(`${origin}/api/user/credentials`, { headers })).json());
+      const held = v.parse(v.array(v.object({ key: v.string() })), await (await fetch(`${origin}/api/user/credentials`, { headers, signal: AbortSignal.timeout(CALL_MS) })).json());
 
       return held.map(({ key }) => key).filter((key) => key === CLAUDE_CRED_KEY || key === CODEX_CRED_KEY || key === CHATGPT_KEY).map((key) => `${account} ${key}`);
     }))).flat());
@@ -126,7 +131,7 @@ export async function giveAgain(input: {
 
     if (held !== key) continue;
     const headers = { [DEV_IDENTITY_HEADER]: secret, ...account !== 'eval-service' && { [DEV_IDENTITY_ACCOUNT_HEADER]: account }, 'content-type': 'application/json' };
-    const answer = await fetch(`${origin}/api/user/credentials/${encodeURIComponent(key)}`, { method: 'POST', headers, body: JSON.stringify(grant) });
+    const answer = await fetch(`${origin}/api/user/credentials/${encodeURIComponent(key)}`, { method: 'POST', headers, body: JSON.stringify(grant), signal: AbortSignal.timeout(CALL_MS) });
 
     if (!answer.ok) throw new Error(`giving ${account} the renewed ${key} answered ${String(answer.status)}`);
     given.push(account);
@@ -247,15 +252,18 @@ async function hold(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  /** The armada jobs the sequences' runs hold, as each one's `run.json` names them. */
-  const sequenceJobs = (): string[] => models.flatMap(({ slug }) => {
+  /** The armada jobs the sequences' runs hold, as each one's `run.json` names them; `renewable`: only those of a run not
+   *  yet tearing down, whose accounts a renewal may still reach. */
+  const sequenceJobs = (renewable = false): string[] => models.flatMap(({ slug }) => {
     const run = join(out, slug, 'run.json');
 
-    return existsSync(run) ? v.parse(v.looseObject({ jobs: v.array(v.string()) }), JSON.parse(readFileSync(run, 'utf8'))).jobs : [];
+    if (!existsSync(run) || (renewable && existsSync(join(out, slug, TEARDOWN_MARK)))) return [];
+
+    return v.parse(v.looseObject({ jobs: v.array(v.string()) }), JSON.parse(readFileSync(run, 'utf8'))).jobs;
   });
 
-  /** The trial accounts the sequences hold now, on the run's deployment: those their jobs claim, and no other. */
-  const sequencesAccounts = async (): Promise<string[]> => claimedAccounts(await openClaims(kinuArmada()), new Set(sequenceJobs()), new URL(origin).host);
+  /** The trial accounts the sequences hold and a renewal may reach, on the run's deployment: those their jobs claim. */
+  const sequencesAccounts = async (): Promise<string[]> => claimedAccounts(await openClaims(kinuArmada()), new Set(sequenceJobs(true)), new URL(origin).host);
 
   // Each sequence hears the stop and deletes the accounts it holds before it exits (evals-map, `onTrialBlock`); its jobs
   // are cancelled after, should one have outlived it.

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { connect, type Armada } from 'armada';
 import { LimitCache, limitLines } from '@kinu.run/core';
-import { claimOf, freeBlock, type SlotClaim } from '../evals/src/slot';
+import { claimOf, freeBlock, TRIAL_TEARDOWN_MS, type SlotClaim } from '../evals/src/slot';
 import { EVAL_PROVIDER_KEYS, keysIn } from './eval-provider-keys';
 
 /** Kinu's armada deployment, which runs every eval trial. */
@@ -17,7 +17,7 @@ export const KINU_ARMADA = join(homedir(), '.config', 'armada', 'armada-kinu.jso
 const WAIT_MS = 60_000;
 
 const JobsPageSchema = v.object({
-  jobs: v.array(v.looseObject({ id: v.string(), label: v.string(), phase: v.string(), createdAt: v.number() })),
+  jobs: v.array(v.looseObject({ id: v.string(), label: v.string(), phase: v.string(), createdAt: v.number(), finishedAt: v.optional(v.nullable(v.number())) })),
 });
 
 /** A claim, and the job that holds it: the earlier job keeps a block two runs took at once. */
@@ -37,8 +37,11 @@ export function kinuArmada(): Armada {
   }
 }
 
-/** Every block an open job claims, read through all the jobs the deployment keeps, a page of 100 at a time. */
-export async function openClaims(armada: Armada): Promise<HeldClaim[]> {
+/**
+ * Every block an open job claims, read through all the jobs the deployment keeps, a page of 100 at a time. A job that
+ * finished still holds its block for `TRIAL_TEARDOWN_MS`, while its run deletes the block's accounts (`onTrialBlock`).
+ */
+export async function openClaims(armada: Pick<Armada, 'call'>, now: number = Date.now()): Promise<HeldClaim[]> {
   const held: HeldClaim[] = [];
   let before: string | undefined;
 
@@ -46,7 +49,8 @@ export async function openClaims(armada: Armada): Promise<HeldClaim[]> {
     const page = v.parse(JobsPageSchema, await (await armada.call(`/jobs?limit=100${before === undefined ? '' : `&before=${encodeURIComponent(before)}`}`)).json());
 
     for (const job of page.jobs) {
-      const claim = job.phase === 'done' ? null : claimOf(job.label);
+      const holding = job.phase !== 'done' || (job.finishedAt ?? now) > now - TRIAL_TEARDOWN_MS;
+      const claim = holding ? claimOf(job.label) : null;
 
       if (claim !== null) held.push({ ...claim, job: job.id, createdAt: job.createdAt });
     }

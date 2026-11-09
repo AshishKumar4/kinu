@@ -239,28 +239,56 @@ export interface TrialBlock {
 }
 
 /**
- * `run` on a leased block of trial accounts, each of which is deleted when it ends, however it ends: trial accounts
- * pile up otherwise (the owner, 2026-11-09: 64 left on production, 256 on staging). The next run's provisioning makes
- * each again before any trial opens on it (scripts/eval-provider-keys.ts). `release.lost()` gives the block up instead:
- * another run holds it, and its accounts are that run's. What a delete refused is said, never thrown over `run`'s end.
+ * How long a run's armada job still holds its block once it finished (scripts/evals-lease.ts `openClaims`): the run's
+ * teardown deletes the block's accounts within it, so no run leases the block while they are deleted.
  */
-export async function onTrialBlock<T>(block: TrialBlock, run: (release: { lost(): void }) => Promise<T>, say: (line: string) => void = console.log): Promise<T> {
-  let ours = true;
+export const TRIAL_TEARDOWN_MS = 20 * 60_000;
+
+/** The file a run writes in its output as its teardown begins: what renews into its accounts stops (scripts/eval-plan-run.ts). */
+export const TEARDOWN_MARK = 'tearing-down';
+
+/** How long a teardown may take: its deletes stop well inside the hold, and what was left is said. */
+const TEARDOWN_DEADLINE_MS = 15 * 60_000;
+
+/** Each account of `block` deleted, eight at a time, until the teardown's deadline: what that came to, in words. */
+async function deleteBlock(block: TrialBlock, now: () => number): Promise<string> {
+  const deadline = now() + TEARDOWN_DEADLINE_MS;
+  const refused: string[] = [];
+  let deleted = 0;
+
+  for (let at = 0; at < block.targets.length && now() < deadline; at += 8) {
+    const answers = await Promise.allSettled(block.targets.slice(at, at + 8).map(async (target) => deleteTrialAccount(target)));
+
+    deleted += answers.filter((answer) => answer.status === 'fulfilled' && answer.value === null).length;
+    refused.push(...answers.flatMap((answer) => (answer.status === 'rejected' ? [String(answer.reason)] : answer.value ?? [])));
+  }
+
+  return `evals: deleted ${String(deleted)} of the run's ${String(block.targets.length)} trial accounts${refused.length === 0 ? '' : `; refused: ${refused.join('; ')}`}`;
+}
+
+/**
+ * `run` on a leased block of trial accounts, each of which is deleted when it ends, however it ends, once the block is
+ * the run's: trial accounts pile up otherwise (the owner, 2026-11-09: 64 left on production, 256 on staging). The block
+ * is the run's from `release.own()`, called as its armada job claims it, to `release.lost()`, called the moment an
+ * earlier run is found to hold it too; before its job, two runs may have leased it at once, so nothing is deleted. The
+ * next run's provisioning makes each account again before any trial opens on it (scripts/eval-provider-keys.ts). What
+ * a delete refused is said, never thrown over `run`'s end. `before` runs first: whatever writes to the block stops.
+ */
+export async function onTrialBlock<T>(
+  block: TrialBlock, run: (release: { own(): void; lost(): void }) => Promise<T>,
+  options: { readonly say?: (line: string) => void; readonly before?: () => Promise<void>; readonly now?: () => number } = {},
+): Promise<T> {
+  const say = options.say ?? console.log;
+  const now = options.now ?? Date.now;
+  let ours = false;
+  let lost = false;
 
   try {
-    return await run({ lost: () => { ours = false; } });
+    return await run({ own: () => { ours = !lost; }, lost: () => { lost = true; ours = false; } });
   } finally {
     if (ours) {
-      const refused: string[] = [];
-
-      for (let at = 0; at < block.targets.length; at += 8) {
-        const answers = await Promise.allSettled(block.targets.slice(at, at + 8).map(async (target) => deleteTrialAccount(target)));
-
-        refused.push(...answers.flatMap((answer) => (answer.status === 'rejected' ? [String(answer.reason)] : answer.value ?? [])));
-      }
-
-      say(`evals: deleted ${String(block.targets.length - refused.length)} of the run's ${String(block.targets.length)} trial accounts`
-        + `${refused.length === 0 ? '' : `; refused: ${refused.join('; ')}`}`);
+      await options.before?.();
+      say(await deleteBlock(block, now));
     }
   }
 }

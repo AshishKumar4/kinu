@@ -250,8 +250,14 @@ describe("a run's trial accounts", () => {
     const said: string[] = [];
 
     try {
-      expect(await onTrialBlock(block(origin, 3, 5), async () => 'measured', (line) => { said.push(line); })).toBe('measured');
-      await expect(onTrialBlock(block(origin, 6, 7), async () => { throw new Error('a trial broke'); }, (line) => { said.push(line); })).rejects.toThrow('a trial broke');
+      const say = (line: string): void => { said.push(line); };
+
+      expect(await onTrialBlock(block(origin, 3, 5), async (release) => {
+        release.own();
+
+        return 'measured';
+      }, { say })).toBe('measured');
+      await expect(onTrialBlock(block(origin, 6, 7), async (release) => { release.own(); throw new Error('a trial broke'); }, { say })).rejects.toThrow('a trial broke');
 
       expect([...accounts.deleted].sort()).toEqual(['trial-3', 'trial-4', 'trial-5', 'trial-6', 'trial-7']);
       expect(accounts.calls.filter(({ call }) => call.endsWith('AFTER DELETE'))).toEqual([]);
@@ -261,11 +267,15 @@ describe("a run's trial accounts", () => {
     }
   });
 
-  test("a block lost to an earlier run is that run's, and none of it is deleted", async () => {
+  // Two runs can lease one block at once; its armada job's claim says whose it is, so before the job nothing is deleted,
+  // and a block an earlier job holds too is given up.
+  test("a block lost to an earlier run, or never claimed by the run's job, is not the run's, and none of it is deleted", async () => {
     const accounts = accountsDeployment({});
+    const origin = accounts.server.url.origin;
 
     try {
-      await onTrialBlock(block(accounts.server.url.origin, 1, 2), async (release) => { release.lost(); }, () => {});
+      await onTrialBlock(block(origin, 1, 2), async (release) => { release.own(); release.lost(); }, { say: () => {} });
+      await expect(onTrialBlock(block(origin, 3, 4), async () => { throw new Error('provisioning refused'); }, { say: () => {} })).rejects.toThrow('provisioning refused');
 
       expect(accounts.calls).toEqual([]);
     } finally {
@@ -279,7 +289,7 @@ describe("a run's trial accounts", () => {
     const accounts = accountsDeployment({ 'trial-1': ['codex.oauth', 'cloudflare.oauth'] });
 
     try {
-      await onTrialBlock(block(accounts.server.url.origin, 1, 1), async () => {}, () => {});
+      await onTrialBlock(block(accounts.server.url.origin, 1, 1), async (release) => { release.own(); }, { say: () => {} });
       const writes = accounts.calls.filter(({ call }) => call.startsWith('DELETE')).map(({ call }) => call);
 
       expect(writes).toEqual(['DELETE /api/user/credentials/codex.oauth?revoke=0', 'DELETE /api/user/credentials/cloudflare.oauth?revoke=0', 'DELETE /api/user/account']);

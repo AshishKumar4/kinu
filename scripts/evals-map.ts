@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { MUSE_CALLS_AT_ONCE, evalMatrix, type EvalMatrix } from '../evals/src/config';
-import { claimLabel, onTrialBlock, trialAccounts, trialInheritedRows, type SlotClaim, type TrialBlock } from '../evals/src/slot';
+import { claimLabel, onTrialBlock, TEARDOWN_MARK, trialAccounts, trialInheritedRows, type SlotClaim, type TrialBlock } from '../evals/src/slot';
 import { parseEvalAccount } from '@kinu.run/core';
 import { collectEvalTasks } from '../evals/src/eval';
 import type { EvalTask } from '../evals/src/task';
@@ -214,6 +214,29 @@ async function sequencesIsolated(plan: MapPlan, matrix: EvalMatrix): Promise<voi
   }
 }
 
+/** `work`'s answer, once `after` has settled too, whether `work` answered or threw. */
+async function settled<T>(work: Promise<T>, after: () => Promise<void>): Promise<T> {
+  try {
+    return await work;
+  } finally {
+    await after();
+  }
+}
+
+/** How long a run waits, once it says it is tearing down, for a plan login's renewal under way to land. */
+const RENEWAL_SETTLE_MS = 60_000;
+
+/**
+ * Before a run's accounts go: one that holds a plan login (scripts/eval-plan-run.ts) says it is tearing down, so its
+ * holder renews it no more, and waits out a renewal already sent. A renewal landing after the account's logins were
+ * disconnected would be revoked at its provider by the account's delete.
+ */
+async function stopRenewals(out: string): Promise<void> {
+  if ((process.env['KINU_EVAL_PLAN_GRANTS'] ?? '') === '') return;
+  writeFileSync(join(out, TEARDOWN_MARK), `${String(Date.now())}\n`);
+  await Bun.sleep(RENEWAL_SETTLE_MS);
+}
+
 /** Each account of `claim`'s block on each of `origins`, as a trial acts as it there. */
 function blockOf(origins: MapPlan['origins'], claim: SlotClaim): TrialBlock {
   const accounts = Array.from({ length: claim.last - claim.first + 1 }, (_, at) => parseEvalAccount(`trial-${String(claim.first + at)}`))
@@ -289,23 +312,26 @@ async function leasedMap(plan: MapPlan, started: (job: string) => void) {
 
         console.log(`evals: ${String(items.length)} trials on trial-${String(first)} to trial-${String(claim.last)}, in one queue under ${String(plan.budget)} calls at once, each spending its task's peak`);
 
-        const mapped = await mapTrials(argv, items, (named) => {
+        // The block is the run's once its job claims it, unless an earlier job claims it too: given up at once, and an
+        // unanswered check gives it up as well, so the run never deletes accounts another run may hold.
+        const mapped = await settled(mapTrials(argv, items, (named) => {
           started(named);
+          release.own();
           checked = (async () => {
             if (!await outranked(armada, named, claim)) return;
             lost = true;
+            release.lost();
             console.log(`evals: an earlier run took trial-${String(first)} to trial-${String(claim.last)} at the same moment; giving them up`);
             await armada.cancel(named);
-          })();
-        });
+          })().catch(() => {
+            lost = true;
+            release.lost();
+            console.log(`evals: could not tell whether an earlier run holds trial-${String(first)} to trial-${String(claim.last)}, so they are left`);
+          });
+        }), () => checked);
 
-        await checked;
-
-        if (!lost) return { items, ...mapped };
-        release.lost();
-
-        return null;
-      });
+        return lost ? null : { items, ...mapped };
+      }, { before: async () => { await stopRenewals(plan.out); } });
 
       holding = false;
 

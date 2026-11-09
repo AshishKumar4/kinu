@@ -3,7 +3,8 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asFetchFunction } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
-import { keysWindows } from './evals-lease';
+import { keysWindows, openClaims } from './evals-lease';
+import { claimLabel, TRIAL_TEARDOWN_MS } from '../evals/src/slot';
 
 const NOW = Date.parse('2026-10-19T12:31:23Z');
 
@@ -34,4 +35,18 @@ test("a run's closing read says a spent window and refuses nothing", async () =>
 
   await expect(keysWindows((line) => said.push(line), { keysPath, fetch: usage(100), now: NOW, refuseSpent: false })).resolves.toBeUndefined();
   expect(said.some((line) => line.includes('5h  100% used'))).toBe(true);
+});
+
+// A finished run still deletes its block's accounts (evals/src/slot.ts `onTrialBlock`): its job holds the block for that
+// long, so no run leases the block and provisions it while it goes (review of 7529d7c18).
+test("a run's block stays held while its job runs, and while its teardown may still be deleting it", async () => {
+  const job = (id: string, first: number, phase: string, finishedAt: number | null) => ({
+    id, label: claimLabel('5c522f12d44f', { first, last: first + 1, hosts: ['staging.kinu.run'] }), phase, createdAt: NOW - 3_600_000, finishedAt,
+  });
+
+  const armada = { call: async () => Response.json({ jobs: [
+    job('running', 1, 'running', null), job('tearing-down', 3, 'done', NOW - 60_000), job('long-done', 5, 'done', NOW - TRIAL_TEARDOWN_MS - 1),
+  ] }) };
+
+  expect((await openClaims(armada, NOW)).map((claim) => [claim.job, claim.first])).toEqual([['running', 1], ['tearing-down', 3]]);
 });
