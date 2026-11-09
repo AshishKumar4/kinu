@@ -207,7 +207,7 @@ export type Pause = (ms: number) => Promise<void>;
 
 /**
  * Deletes `target`'s account through the product's own account delete, its profile's email confirming it, and answers
- * once the deletion has finished: a finding, or null. Its credentials go first, each disconnected without revoking: an
+ * once the deletion has finished, or `DELETION_FINISH_MS` from its start has passed: a finding, or null. Its credentials go first, each disconnected without revoking: an
  * account's delete revokes what it holds at the provider, and a trial account holds logins it does not own (a plan's,
  * OMP's; the deployment's gateway token). Reading it after is safe: a deleted account, or one being deleted, answers so
  * (`UserDO.ensureProfile`), and is neither made again nor noted in the control plane by a read (`UserDO.observed`).
@@ -216,8 +216,10 @@ export async function deleteTrialAccount(target: EvalTarget, pause: Pause = asyn
   const headers = webHeaders(target.identity);
   const account = accountOf(target);
 
+  const deadline = Date.now() + DELETION_FINISH_MS;
+
   const call = async (path: string, init: { readonly method?: string; readonly json?: unknown } = {}) => fetch(`${target.origin}${path}`, {
-    method: init.method ?? 'GET', signal: AbortSignal.timeout(DELETE_CALL_MS),
+    method: init.method ?? 'GET', signal: AbortSignal.timeout(Math.max(1, Math.min(DELETE_CALL_MS, deadline - Date.now()))),
     headers: init.json === undefined ? headers : { ...headers, 'content-type': 'application/json' },
     ...init.json !== undefined && { body: JSON.stringify(init.json) },
   });
@@ -245,13 +247,13 @@ export async function deleteTrialAccount(target: EvalTarget, pause: Pause = asyn
   }
 
   // Its workspaces are torn down and its storage destroyed by jobs of its own: the account is free once they have run.
-  for (let waited = 0; waited <= DELETION_FINISH_MS; waited += DELETION_POLL_MS) {
+  while (Date.now() < deadline) {
     const now = standingOf((await call('/api/user/profile')).status);
 
     if (now === 'deleted') return null;
 
     if (now !== 'deleting') return `${account} at ${target.origin} read as ${now ?? 'an error'} while its deletion was finishing`;
-    await pause(DELETION_POLL_MS);
+    await pause(Math.min(DELETION_POLL_MS, Math.max(0, deadline - Date.now())));
   }
 
   return `${account}'s deletion at ${target.origin} had not finished after ${String(DELETION_FINISH_MS / 60_000)} minutes`;

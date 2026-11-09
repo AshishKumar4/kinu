@@ -95,6 +95,8 @@ export const EVAL_WORKSPACE_LEASE_MS = 10 * EVAL_WORKSPACE_BEAT_MS;
 const TRIAL_ACCOUNT_KEEPS: ReadonlySet<string> = new Set([
   'user_credentials', 'user_credential_revisions', 'account_epochs.credentials_revision',
   'user_profile', 'account_epochs.auth_generation', 'cf_agents_state', 'device_status_watchers',
+  // Its sign-in's session: a deleted trial account is made again only by signing in (evals/src/slot.ts).
+  'user_browser_sessions',
 ]);
 
 /**

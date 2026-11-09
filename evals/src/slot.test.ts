@@ -51,6 +51,8 @@ describe('a trial\'s slot', () => {
 test('a trial account may hold its provider keys and its own bookkeeping, and nothing else', () => {
   expect(inheritedRows({
     user_credentials: 2, user_credential_revisions: 2, 'account_epochs.credentials_revision': 1, user_profile: 1,
+    // The session its sign-in made: a deleted trial account is made again only by signing in (review of 57d67686c).
+    user_browser_sessions: 1,
     experience_library: 3, user_mcp_servers: 1, user_config: 0,
   })).toEqual({ experience_library: 3, user_mcp_servers: 1 });
 });
