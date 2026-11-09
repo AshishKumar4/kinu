@@ -133,7 +133,7 @@ const bridged = () => document.documentElement.hasAttribute("${SLATE_BRIDGE_ATTR
 export const slate = new Proxy(Object.create(null), {
   get(_target, member) {
     if (typeof member !== "string" || member === "then") return undefined;
-    return (...args) => (bridged() ? session().$method(member, args) : session()[member](...args));
+    return (...args) => asked(bridged() ? session().$method(member, args) : session()[member](...args));
   },
 });
 

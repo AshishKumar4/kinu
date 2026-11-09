@@ -109,7 +109,7 @@ import { createCodemodeToolFactory } from "./codemode-tool";
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubagentReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
-import { GUEST_APP_TOOL, GUEST_ASK_METADATA, guestAnswer, guestAppTool, guestDynamicContext, guestSoul, guestTitle, guestVisitorLabel, NO_GUEST_INSTRUCTIONS, NO_GUEST_SKILLS } from './guest-agents';
+import { GUEST_APP_TOOL, GUEST_ASK_METADATA, GUEST_ROLE, guestAnswer, turnEntries, guestAppTool, guestDynamicContext, guestSoul, guestTitle, guestVisitorLabel, NO_GUEST_INSTRUCTIONS, NO_GUEST_SKILLS } from './guest-agents';
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
@@ -2620,15 +2620,34 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
       if (held !== null) return held;
       const { controller } = yield* Effect.promise(async () => this.slates());
-      const record = controller.live.live(share);
+
+      // A guest answers only on a share that lends its owner's access, read again once its hire is made: a share ended or
+      // turned to each visitor's own access meanwhile gets none, its retirement pass having run before this hire.
+      const lends = (): LiveShareRecord | null => {
+        const now = controller.live.get(share);
+
+        return now === undefined || now.revokedAt !== null || now.mode !== 'owner' ? null : now;
+      };
+
+      const record = lends();
+
+      if (record === null) return yield* new KinuError('denied', 'This app is no longer shared');
       const title = (yield* Effect.promise(async () => controller.readLiveShare(share)))?.title ?? record.slate;
-      // One creation per hire of theirs: two first messages at once make one guest, and a retired one's successor is new.
-      const creationId = `guest:${share}:${subject}:${String(guests.hired(share, subject))}`;
+      // Keyed by the visitor's guests retired so far, never by what stands: two first messages, however they interleave,
+      // name one hire, which its creation key makes once; the record of it is written once.
+      const creationId = guests.creationOf(share, subject);
+
+      const name = `guest-${sha256Hex(creationId, 16)}`;
 
       const reference = yield* this.subagentRuntime().spawn({
-        name: `guest-${sha256Hex(creationId, 16)}`, displayName: guestTitle(title, { subject }), nameOrigin: 'user', role: 'task',
-        mission: `Answer a visitor of ${title}`, lifetime: 'durable', origin: 'agent', creationId,
+        name, displayName: guestTitle(title, { subject }), nameOrigin: 'user', role: 'task', mission: `Answer a visitor of ${title}`, lifetime: 'durable', origin: 'agent', creationId,
       });
+
+      if (lends() === null) {
+        yield* this.subagentRuntime().dismiss(name, { keepHistory: false, interrupt: true }, reference);
+
+        return yield* new KinuError('denied', 'This app is no longer shared');
+      }
 
       const principal: GuestPrincipal = { actorId: reference.actorId, share, slate: record.slate, subject };
 
@@ -2667,13 +2686,15 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
     if (asks === undefined || asks.size === 0 || turnId === null) return;
 
-    const read = await hold(attempt({ doing: "reading a shared app's guest's answer", otherwise: 'unavailable' }, async () => this.agentCall(actorId, (isolate, snapshot) => isolate.historyPage(snapshot, {}))));
+    const read = await hold(attempt({ doing: "reading a shared app's guest's answer", otherwise: 'unavailable' }, async () => turnEntries(
+      async (request) => this.agentCall(actorId, (isolate, snapshot) => isolate.historyPage(snapshot, request)), turnId,
+    )));
 
     // Unread, no later turn would answer them either: each ask waiting is told why.
     if (Exit.isFailure(read)) return this.guestAsksEnded(actorId, toKinuError({ doing: "reading a shared app's guest's answer", cause: Cause.squash(read.cause), otherwise: 'unavailable' }));
 
     for (const [key, ask] of asks) {
-      const said = guestAnswer(read.value.items, key, turnId);
+      const said = guestAnswer(read.value, key, turnId);
 
       if (said === null) continue;
       asks.delete(key);
@@ -5125,6 +5146,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     const { surface, reach } = opened;
     const resolved = await this.surfaceProfile(actor, turn, opened);
     const host = await this.slates();
+    // Its share as it stands now: a guest of a share that ended opens no turn.
+    host.controller.live.live(guest.share);
     const app = await host.controller.readLiveShare(guest.share);
     const title = app?.title ?? guest.slate;
     const tools: ToolSet = { [GUEST_APP_TOOL]: guestAppTool({ slate: guest.slate, title }, async (path, args) => await host.guestCall(guest, { path, args })) };
@@ -5133,7 +5156,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     const sources = await this.guestSources(actor, surface, guestSoul({ title, description: app?.description ?? '', owner: await this.guestOwnerName(), visitor: guestVisitorLabel(guest.subject) }));
 
     const assembled = await this.assembledSurface(actor, surface, {
-      resolved, tools, stores, raw: tools, capture: null, reports: { spoke: false, settled: false }, ownerLane, offered: tools, sources, guest: true,
+      resolved, tools, stores, raw: tools, capture: null, reports: { spoke: false, settled: false }, ownerLane, offered: tools, sources, guest: { role: GUEST_ROLE },
       codemodeCapabilities: () => [],
     });
 

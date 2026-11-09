@@ -6,7 +6,7 @@
  */
 import { env } from 'cloudflare:test';
 import { expect, it } from 'vitest';
-import { GUEST_ANSWER } from '../hire-shapes';
+import { GUEST_ANSWER, OWNER_TASK_ROLE } from '../hire-shapes';
 
 const probe = (workspace: string) => env.HIRE_PROBE.get(env.HIRE_PROBE.idFromName(workspace));
 
@@ -31,7 +31,7 @@ it("a visitor's message to a shared app's chat reaches their own guest, which kn
   // Every model call that read a visitor's words was a guest's: the owner's own agent was never asked.
   expect(visit.calls.length).toBeGreaterThan(0);
   expect(visit.calls.every((call) => call.tools.length === 1 && call.tools[0] === 'app')).toBe(true);
-  expect(visit.calls.some((call) => call.system.includes(OWNER_SOUL))).toBe(false);
+  expect(visit.calls.some((call) => call.system.includes(OWNER_SOUL) || call.system.includes(OWNER_TASK_ROLE))).toBe(false);
   expect(visit.calls.every((call) => call.system.includes('guest assistant'))).toBe(true);
 
   const after = await probe(workspace).guestShareEnded(workspace);

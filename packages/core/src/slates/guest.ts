@@ -8,11 +8,8 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
-import type { JsonValue } from '../utils/json';
 import type { SqlExec } from '../types/primitives';
-import { MACHINE_FILES } from '../operations/executors';
-import { SLATES_ROOT, isTreeRelativePath } from '../vfs/workspace-path';
-import { shareMemberRefusal, slateAddressImpact } from './members';
+import { shareMemberRefusal } from './members';
 import type { SlateAddress, SlateRoute } from './surface';
 
 /** Which share and visitor an agent answers, as the workspace's `slate_share_guests` row records it. */
@@ -33,40 +30,17 @@ export type GuestAuthorization = 'in-scope' | 'ask-exact' | 'forbidden';
 /** What only the owner reaches, or what would let a guest drive an agent or a machine: never a guest's. */
 const FORBIDDEN_NAMESPACES: ReadonlySet<string> = new Set(['agent', 'agents', 'computer', 'device']);
 
-const PathArgument = v.union([v.string(), v.looseObject({ path: v.string() })]);
-
-/** The path a file member's first argument names, or null where it names none. */
-function pathOf(args: readonly JsonValue[]): string | null {
-  const parsed = v.safeParse(PathArgument, args[0]);
-
-  if (!parsed.success) return null;
-
-  return typeof parsed.output === 'string' ? parsed.output : parsed.output.path;
-}
-
-/** Whether `path` lies in `slate`'s own files, spelled from `/` with no `.`, `..` or empty segment. */
-function inSlateFiles(slate: string, path: string): boolean {
-  const root = `${SLATES_ROOT}/${slate}`;
-
-  return path === root || (path.startsWith(`${root}/`) && isTreeRelativePath(path.slice(root.length + 1)));
-}
-
-/** A member of the files of the workspace's own machine: `file.*`, or the workspace executor's `fs.*`. */
-function fileMember(address: SlateAddress): boolean {
-  return address.namespace === 'file' || (address.namespace === 'workspace' && address.member.startsWith(`${MACHINE_FILES}.`));
-}
-
 /**
- * How a guest of `slate`'s share may make `route` (named `address`), `slates` the slates the share's grant reaches. It
- * reads the app's own files; a write to them is its owner's to approve, as anything else of theirs is.
+ * How a guest of `slate`'s share may make `route` (named `address`), `slates` the slates the share's grant reaches: the
+ * app's code and its model calls. Its files are not: a file there may link anywhere of the owner's, so reading one, like
+ * anything else of theirs, is theirs to approve.
  */
 export function guestAuthorization(input: {
-  readonly slate: string;
   readonly slates: readonly string[];
   readonly address: SlateAddress;
   readonly route: SlateRoute;
 }): GuestAuthorization {
-  const { slate, slates, address, route } = input;
+  const { slates, address, route } = input;
 
   if (FORBIDDEN_NAMESPACES.has(address.namespace) || shareMemberRefusal(address) !== null) return 'forbidden';
 
@@ -74,18 +48,11 @@ export function guestAuthorization(input: {
     case 'app': return slates.includes(route.id) ? 'in-scope' : 'ask-exact';
     case 'ai': return route.stream === true ? 'forbidden' : 'in-scope';
     case 'agent': return 'forbidden';
-    case 'namespace': break;
+    case 'namespace':
     case 'mcp':
     case 'rpc':
     case 'tool': return 'ask-exact';
   }
-
-  if (!fileMember(address)) return 'ask-exact';
-  const path = pathOf(route.args);
-
-  if (path === null || !inSlateFiles(slate, path)) return 'ask-exact';
-
-  return slateAddressImpact(address) === 'observe' ? 'in-scope' : 'ask-exact';
 }
 
 /**
@@ -137,11 +104,15 @@ export class SlateShareGuests {
       principal.actorId, principal.share, principal.slate, principal.subject, this.now());
   }
 
-  /** How many guests `subject` has had on `share`, retired ones too: what tells each hire of theirs from the last. */
-  hired(share: string, subject: string): number {
-    const [row] = this.db.exec('SELECT COUNT(*) AS n FROM slate_share_guests WHERE share_id = ? AND viewer_subject = ?', share, subject).toArray();
+  /**
+   * The creation key of `subject`'s guest on `share`: one per guest of theirs, so every first message of theirs while one
+   * stands, however they interleave with its hire, names the same hire, and a retired guest's successor a new one.
+   */
+  creationOf(share: string, subject: string): string {
+    const [row] = this.db.exec(`SELECT COUNT(*) AS n FROM slate_share_guests AS g JOIN workspace_actors AS a ON a.actor_id = g.actor_id
+      WHERE g.share_id = ? AND g.viewer_subject = ? AND (a.retiring_at IS NOT NULL OR a.deleted_at IS NOT NULL)`, share, subject).toArray();
 
-    return v.parse(v.object({ n: v.number() }), row).n;
+    return `guest:${share}:${subject}:${String(v.parse(v.object({ n: v.number() }), row).n)}`;
   }
 
   /** The live guest answering `subject` on `share`, or null. */

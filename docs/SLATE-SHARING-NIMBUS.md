@@ -107,11 +107,12 @@ cookie, kept 30 days).
 
 The guest runs no program. Its one tool, `app`, calls the app as the visitor's page does, so it has no network, no MCP
 discovery and none of the owner's secrets. Its prompt holds the app and its own conversation, nothing of the owner's. One
-table decides each call: the app's own methods and granted slates, `ai.run` and reads under `/slates/<id>` run as the
-visitor's would; anything else of the owner's, MCP tools included, runs only on the owner's approval of that exact call,
+table decides each call: the app's own methods and granted slates, and `ai.run`, run as the visitor's would; anything
+else of the owner's, its files and MCP tools included, runs only on the owner's approval of that exact call,
 once ("always" never stands for a guest); `agent.*`, `agents.*`, `computer` and `device` never. A member reached inside a
 call on a guest's way runs only where its address alone is in scope. Ending the share, or changing its mode, retires its
-guests, and their conversations stay for the owner. Their model calls spend the share's daily label.
+guests, and their conversations stay for the owner. Their model calls spend the share's daily label. A share on each
+visitor's own access has no guest: a guest's model is its owner's.
 
 ## 3. Personal parts
 

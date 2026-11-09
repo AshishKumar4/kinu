@@ -133,6 +133,11 @@ class PerTurn<T> {
   }
 }
 
+/** A run's framing, from the tools its turn may call; for a chat turn, a shared app's guest's role alone. */
+function briefOf(run: RunInference | undefined, mode: WorkMode, surface: Pick<ActorSurface, 'offered' | 'guest'>): string | undefined {
+  return run?.brief?.(callableToolNames(mode, surface.offered)) ?? surface.guest?.role;
+}
+
 export class AgentTurns {
   private readonly open = new PerTurn<OpenTurn>();
 
@@ -594,7 +599,7 @@ export class AgentTurns {
     const advisorTools = await this.advisorTools(turn, surface);
 
     lap('advisor');
-    const brief = run?.brief?.(callableToolNames(mode, surface.offered));
+    const brief = briefOf(run, mode, surface);
     const facts = this.offeredFacts(turn, prepared);
 
     if (facts === null) return null;
@@ -737,7 +742,7 @@ export class AgentTurns {
   /** The turn's advisor's read tools over the agent's stores, kept on the turn, and as its isolate is told of them. */
   private async advisorTools(turn: OpenTurn, surface: Pick<ActorSurface, 'stores' | 'guest'>): Promise<readonly AgentToolDescriptor[]> {
     // A shared app's guest has no advisor: its reads would reach what the guest does not.
-    if (surface.guest === true) return [];
+    if (surface.guest !== undefined) return [];
     const { stores } = surface;
 
     turn.advisor = advisorReadTools({ files: stores.deps.files, memory: stores.deps.memory });

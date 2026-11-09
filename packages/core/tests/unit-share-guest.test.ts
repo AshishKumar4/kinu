@@ -114,17 +114,16 @@ function world(mode: 'own' | 'owner' = 'owner') {
   return { call, ran, routes, asked, decide, decided, guest, guests, actors, guestActor, live };
 }
 
-test("a guest reaches its app's methods and files as its visitor would, and asks its owner for the exact call outside them", async () => {
+test("a guest reaches its app's code as its visitor would, and asks its owner for the exact call outside it, its files included", async () => {
   const { call, ran, asked } = world();
 
   expect(await cameTo(call(['slates', 'digest', 'latest']))).toBe('ran');
-  expect(await cameTo(call(['fs', 'text'], { by: 'guest', args: [{ path: '/slates/board/notes.md' }] }))).toBe('ran');
-  expect(ran).toEqual(['slates.digest.latest', 'fs.text']);
+  expect(ran).toEqual(['slates.digest.latest']);
   expect(asked()).toEqual([]);
 
-  // Outside its slate's files, a read the share grants still asks: a guest's grant is its app's scope, not the member.
+  // A file read the share grants still asks, its app's own included: a file there may link anywhere of the owner's.
+  expect(await cameTo(call(['fs', 'text'], { by: 'guest', args: [{ path: '/slates/board/notes.md' }] }))).toBe('denied');
   expect(await cameTo(call(['fs', 'text'], { by: 'guest', args: [{ path: '/home/main/notes.md' }] }))).toBe('denied');
-  expect(await cameTo(call(['fs', 'text'], { by: 'guest', args: [{ path: '/slates/board/../../home/main/notes.md' }] }))).toBe('denied');
   // A tool the share grants on her access, and one it does not (memory), both ask her for that exact call.
   expect(await cameTo(call(['mcp', 'github', 'create_issue'], { by: 'guest', args: [{ title: 'Webhook retries fail' }] }))).toBe('denied');
   expect(await cameTo(call(['memory', 'search'], { by: 'guest', args: [{ query: 'stripe keys' }] }))).toBe('denied');
@@ -135,7 +134,7 @@ test("a guest reaches its app's methods and files as its visitor would, and asks
     ['workspace', 'fs.text', expect.any(String)], ['workspace', 'fs.text', expect.any(String)],
     ['mcp.github', 'create_issue', expect.any(String)], ['memory', 'search', expect.any(String)],
   ]);
-  expect(ran).toEqual(['slates.digest.latest', 'fs.text']);
+  expect(ran).toEqual(['slates.digest.latest']);
 });
 
 test('the owner decides a guest\'s call for that call alone: the guest is told, its next same call runs once, "always" stands for nothing', async () => {
@@ -191,12 +190,13 @@ test('a visitor talks to their guest once they say who they are, and the share m
   expect(await cameTo(call(['agent', 'ask'], { by: 'visitor', subject: 'anon:ana', args: [{ text: 'Hello?' }] }))).toBe('denied');
 });
 
-test("on each visitor's own access, a guest reaches its app's own scope and nothing of the owner's, asked or not", async () => {
+// A guest's model runs on its owner's account, which a share on each visitor's own access never uses.
+test("on each visitor's own access, a guest reaches nothing, asked or not", async () => {
   const { call, ran, asked } = world('own');
 
-  expect(await cameTo(call(['slates', 'digest', 'latest']))).toBe('ran');
+  expect(await cameTo(call(['slates', 'digest', 'latest']))).toBe('denied');
   expect(await cameTo(call(['mcp', 'github', 'create_issue'], { by: 'guest', args: [{ title: 'x' }] }))).toBe('denied');
-  expect(ran).toEqual(['slates.digest.latest']);
+  expect(ran).toEqual([]);
   expect(asked()).toEqual([]);
 });
 
@@ -205,7 +205,12 @@ test("a visitor has one live guest at a time: a retired guest is no one's, and t
 
   expect(guests.of('s1', 'anon:ana')).toEqual(guest);
   expect(guests.of('s1', 'anon:bo')).toBeNull();
-  expect(guests.hired('s1', 'anon:ana')).toBe(1);
+  // A second first message read after the first one's guest was recorded names that same hire.
+  const first = guests.creationOf('s1', 'anon:bo');
+
+  guests.record({ ...guest, actorId: actors.sibling('guest-board-bo').actorId, subject: 'anon:bo' });
+  expect(guests.creationOf('s1', 'anon:bo')).toBe(first);
+  const standing = guests.creationOf('s1', 'anon:ana');
 
   actors.directory.apply(actorReferenceOf(actors.main), actors.directory.storagePath(actorReferenceOf(actors.main)), {
     action: 'retire', name: 'guest-board-ana', reference: actorReferenceOf(guestActor),
@@ -215,9 +220,10 @@ test("a visitor has one live guest at a time: a retired guest is no one's, and t
   // Still a guest: a retired guest never reads as an ordinary hire.
   expect(guests.principalOf(guest.actorId)).toEqual(guest);
 
+  // Its successor is a new hire, under a key of its own.
+  expect(guests.creationOf('s1', 'anon:ana')).not.toBe(standing);
   const next = actors.sibling('guest-board-ana-2');
 
   guests.record({ ...guest, actorId: next.actorId });
   expect(guests.of('s1', 'anon:ana')?.actorId).toBe(next.actorId);
-  expect(guests.hired('s1', 'anon:ana')).toBe(2);
 });

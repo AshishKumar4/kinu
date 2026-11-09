@@ -249,8 +249,7 @@ export class SharedServers {
     if (ownerOnly !== null) return { kind: 'refused', error: ownerOnly };
 
     for (const { slate, authority } of servers) {
-      // A guest's call in its app's own scope acts on nothing of its owner's, so a share lending nothing still runs it.
-      if (authority.kind === 'none' && !(call.guest !== undefined && !call.effect)) return { kind: 'refused', error: this.lendsNothing(slate, owner) };
+      if (authority.kind === 'none') return { kind: 'refused', error: this.lendsNothing(slate, owner) };
 
       if (authority.kind === 'grant' && call.guest === undefined && grantAdmits(authority.grant, call.slate, call.address.namespace, call.address.member) === null) {
         return { kind: 'refused', error: new KinuError('denied', `This shared app runs on ${owner}'s access, which does not reach ${call.address.namespace}.${call.address.member}: ${owner} can add it in its share settings`) };

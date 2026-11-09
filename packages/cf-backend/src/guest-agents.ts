@@ -6,7 +6,7 @@ import * as v from 'valibot';
 import { jsonSchema, tool, type Tool } from 'ai';
 import {
   agentDynamicContext, currentDateForPrompt, isJsonAnswer, JsonValueSchema, rowText,
-  type AgentsMdSources, type ChatHistoryEntry, type DynamicContext, type JsonValue, type ResolvedTurnProfile, type RunTurnSources, type SlateSurfaceResult,
+  type AgentsMdSources, type ChatHistoryEntry, type ChatHistoryPage, type PositionPageRequest, type DynamicContext, type JsonValue, type ResolvedTurnProfile, type RunTurnSources, type SlateSurfaceResult,
 } from '@kinu.run/core';
 import { ANONYMOUS_SUBJECT_PREFIX, type GuestPrincipal } from '@kinu.run/core/slates';
 import { KinuError, settle } from '@kinu.run/core/obs';
@@ -33,8 +33,8 @@ const AppCallSchema = v.strictObject({
 /** The app's surface as the guest calls it: what its visitor's browser could call, the rest asked of the owner. */
 export function guestAppTool(app: { readonly slate: string; readonly title: string }, call: (path: readonly string[], args: readonly JsonValue[]) => Promise<SlateSurfaceResult>): Tool {
   return tool({
-    description: `Calls the app "${app.title}" as your visitor's own page would: its server's methods (path ["slates", "${app.slate}", "<method>"]), `
-      + `its files under /slates/${app.slate} (path ["fs", "read"], args [{ "path": "/slates/${app.slate}/…" }]), and ai.run. Anything else waits for the owner to approve that exact call.`,
+    description: `Calls the app "${app.title}" as your visitor's own page would: its server's methods (path ["slates", "${app.slate}", "<method>"]) `
+      + 'and ai.run (path ["ai", "run"]). Anything else waits for the owner to approve that exact call.',
     inputSchema: jsonSchema<v.InferOutput<typeof AppCallSchema>>({
       type: 'object',
       properties: {
@@ -54,6 +54,9 @@ export function guestAppTool(app: { readonly slate: string; readonly title: stri
     })),
   });
 }
+
+/** The guest's role, in place of any role of its owner's catalog, whose words are the owner's own. */
+export const GUEST_ROLE = 'Answer the person\'s questions about this app, using its one tool where the app holds the answer.';
 
 /** The guest's soul: who it is and whom it answers, and the one rule it keeps. */
 export function guestSoul(input: { readonly title: string; readonly description: string; readonly owner: string; readonly visitor: string }): string {
@@ -85,8 +88,26 @@ export function guestDynamicContext(profile: Pick<ResolvedTurnProfile, 'workMode
 }
 
 /**
- * The guest's answer to the message `key` names, once `ended` (a turn of the guest's) is the turn that message landed in:
- * its last words in that turn; null while the message has not landed in an ended turn.
+ * The entries of the guest's turn `ended`, read back from its conversation's newest page until one before the turn's
+ * first: whole however long the turn ran, and no older page read.
+ */
+export async function turnEntries(page: (request: PositionPageRequest) => Promise<ChatHistoryPage>, ended: string): Promise<ChatHistoryEntry[]> {
+  const entries: ChatHistoryEntry[] = [];
+  let request: PositionPageRequest = {};
+
+  for (;;) {
+    const read = await page(request);
+
+    entries.unshift(...read.items);
+
+    if (read.status === 'end' || read.items.findIndex((entry) => entry.turnId === ended) > 0) return entries.filter((entry) => entry.turnId === ended);
+    request = { cursor: read.next };
+  }
+}
+
+/**
+ * The guest's answer to the message `key` names, among `entries` of its turn `ended`: its last words in that turn; null
+ * while the message has not landed in it.
  */
 export function guestAnswer(entries: readonly ChatHistoryEntry[], key: string, ended: string): string | null {
   // Read by its key, not its role: a message the host delivers reads as the harness's, not the person's.

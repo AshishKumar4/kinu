@@ -16,7 +16,7 @@ import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
-import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, PROCESS_LOG, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type GuestVisit, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
+import { HIRE_CHILD_MODEL, OWNER_TASK_ROLE, hireControlUrl, hireModelsBaseUrl, JOB_GATE, PROCESS_LOG, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type GuestVisit, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { initSlateLiveShareTables, SlateLiveShareStore } from '@kinu.run/core/slates';
 
@@ -477,11 +477,26 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
    */
   async guestVisit(workspace: string, asks: readonly { readonly subject: string; readonly text: string }[]): Promise<GuestVisit> {
     const target = await this.target(workspace);
+    const caller = await ownerCaller(this.env);
+    const owner = this.owner(`${workspace}-owner`);
+    const catalog = await owner.getProfileCatalog(caller);
+
+    // The owner's own words for the role a guest is hired in, which no guest is ever told.
+    await owner.putProfileCatalog(caller, {
+      roles: { task: { description: 'Delegated work', instructions: OWNER_TASK_ROLE, tier: 'default', preset: 'research' } },
+      tiers: { default: { model: `openai-compat/${HIRE_CHILD_MODEL}` } },
+    }, catalog.version);
 
     await target.shareBoard();
     const answers: string[] = [];
 
-    for (const ask of asks) answers.push(await target.visitorAsks(ask.subject, ask.text));
+    // A visitor's first two messages at once: each finds no guest, and both are answered by the one hired.
+    const [first, ...rest] = asks;
+    const second = rest.shift();
+
+    if (first !== undefined && second !== undefined) answers.push(...await Promise.all([target.visitorAsks(first.subject, first.text), target.visitorAsks(second.subject, second.text)]));
+
+    for (const ask of rest) answers.push(await target.visitorAsks(ask.subject, ask.text));
     const response = await fetch(hireControlUrl(workspace, 'log'));
     const { calls } = v.parse(v.object({ calls: v.array(v.object({ tools: v.array(v.string()), lastUser: v.string(), system: v.string() })) }), await response.json());
     const told = calls.filter((call) => asks.some((ask) => call.lastUser.includes(ask.text)) || call.tools.includes('app'));

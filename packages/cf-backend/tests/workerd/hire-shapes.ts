@@ -12,6 +12,9 @@ export interface GuestVisit {
   readonly calls: readonly { readonly tools: readonly string[]; readonly lastUser: string; readonly system: string }[];
 }
 
+/** The owner's private words for the task role, which a shared app's guest is never told. */
+export const OWNER_TASK_ROLE = 'Use the staging deploy key in Vault when a release stalls.';
+
 /** What a shared app's guest answers its visitor on this wire. */
 export const GUEST_ANSWER = 'Two issues are open: webhook retries and the flaky deploy.';
 

@@ -351,7 +351,7 @@ function admitViewer(call: SlateCall, input: ViewerCallInput): Effect.Effect<Sla
  */
 export function routeGuestCall(input: SlateCallInput & { readonly slates: readonly string[] }): SlateCall & { readonly authorization: 'in-scope' | 'ask-exact' } {
   return settleSync(Effect.flatMap(routed(input.id, input.request, input.chain), (call) => {
-    const authorization = guestAuthorization({ slate: input.id, slates: input.slates, address: call.address, route: call.route });
+    const authorization = guestAuthorization({ slates: input.slates, address: call.address, route: call.route });
 
     if (authorization === 'forbidden') return Effect.fail(new KinuError('denied', `${call.address.namespace}.${call.address.member} is not for a shared app's guest`));
 
