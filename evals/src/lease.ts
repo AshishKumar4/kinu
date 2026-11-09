@@ -13,8 +13,13 @@ import type { SlotClaim } from './slot';
 /** Where the lock files are kept: one per deployment's host and trial account. */
 export const TRIAL_LEASES = join(homedir(), '.local', 'state', 'kinu', 'trial-leases');
 
-/** The holder: each file opened and locked without waiting, then held until its stdin closes, its run's end. */
+/**
+ * The holder: each file opened and locked without waiting, then held until its stdin closes, its run's end. It ignores
+ * the signals a terminal's Ctrl-C or a service stop sends the run's whole process group, which ignored stay ignored
+ * across its exec: the run lives on to delete its block, so the lock must too.
+ */
 const HOLDER = `set -u
+trap '' INT TERM HUP
 for file in "$@"; do
   exec {fd}>>"$file" || exit 2
   flock -n "$fd" || exit 1

@@ -1,18 +1,18 @@
 // A block of trial accounts is one run's, from its lease to its teardown's end: free only where no run's lock holds it
 // and no live armada job's label claims it. Real locks (flock, in a scratch directory) and a fake armada's live jobs.
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { leaseBlock } from './lease';
 import { DEV_IDENTITY_ACCOUNT_HEADER, parseEvalAccount } from '@kinu.run/core';
+import { scratchDir } from '@kinu.run/test-utils';
 import { claimLabel, claimOf, onTrialBlock, type SlotClaim } from './slot';
 
 const STAGING = 'staging.kinu.run';
 
 describe('a lease on trial accounts', () => {
   test('a block another run holds is skipped, its own half kept apart, and free again once its lease goes', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'trial-leases-'));
+    const dir = scratchDir('trial-leases');
     const none = async (): Promise<SlotClaim[]> => [];
     const first = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
     const second = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
@@ -30,7 +30,7 @@ describe('a lease on trial accounts', () => {
   // Main, 2026-11-09: armada keeps a job about three minutes after the map following it is gone, its trials still acting
   // as the block. A run that died lets its lock go with it; its job's label still claims the block until the job ends.
   test("a dead run's block stays out of reach while its job lives, and nothing of it is deleted until the job has ended", async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'trial-leases-'));
+    const dir = scratchDir('trial-leases');
     const jobs = new Map<string, string>();
     const live = async (): Promise<SlotClaim[]> => [...jobs.values()].map((label) => claimOf(label)).filter((claim) => claim !== null);
     const deletes: string[] = [];
@@ -77,8 +77,49 @@ describe('a lease on trial accounts', () => {
     await Promise.all([meanwhile.release(), after.release()]);
   });
 
+  // Review of 9412c5d98: Ctrl-C reaches the run's whole process group, the lock's holder too, while the run lives on to
+  // delete its block; the lock is the run's until the run itself ends.
+  test("a signal to the run's process group leaves its lock held, and the run's own end lets it go", async () => {
+    const dir = scratchDir('trial-leases');
+    const none = async (): Promise<SlotClaim[]> => [];
+
+    const run = spawn(process.execPath, ['-e', `
+      process.on('SIGINT', () => {});
+      process.on('SIGTERM', () => { console.log('signalled'); });
+      const { leaseBlock } = await import(${JSON.stringify(join(import.meta.dir, 'lease.ts'))});
+      const lease = await leaseBlock({ size: 4, pass: false, hosts: ['${STAGING}'], liveClaims: async () => [], dir: ${JSON.stringify(dir)} });
+      console.log('leased ' + lease.first);
+      await new Promise(() => {});
+    `], { detached: true, stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env } });
+
+    const said = (line: string) => new Promise<void>((heard) => { run.stdout.on('data', (out: Buffer) => { if (out.toString().includes(line)) heard(); }); });
+
+    await said('leased');
+    // The group's signals reach every member as they are sent; the run's own handler saying so means its holder has them.
+    const signalled = said('signalled');
+
+    process.kill(-(run.pid ?? 0), 'SIGINT');
+    process.kill(-(run.pid ?? 0), 'SIGTERM');
+    await signalled;
+    const during = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
+
+    run.kill('SIGKILL');
+    await new Promise((ended) => { run.on('exit', ended); });
+
+    // The holder ends once it reads its closed stdin: the first block is the next lease's then, whichever attempt that is.
+    let after = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
+
+    for (let attempt = 0; after.first !== 1 && attempt < 500; attempt += 1) {
+      await after.release();
+      after = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
+    }
+
+    expect([during.first, after.first]).toEqual([5, 1]);
+    await Promise.all([during.release(), after.release()]);
+  });
+
   test('a run that finds no block free fails at once, naming both holders', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'trial-leases-'));
+    const dir = scratchDir('trial-leases');
     const all = async (): Promise<SlotClaim[]> => [{ first: 1, last: 256, hosts: [STAGING] }];
 
     await expect(leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: all, dir })).rejects.toThrow('their locks');
