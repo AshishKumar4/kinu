@@ -164,11 +164,18 @@ export function createCloudflareVectorStore(opts: {
 
     search(text: string, topK = 10) {
       return settle(tripping('query', async () => {
-        const res = await index.query(await embedder.embed(text), {
+        const began = performance.now();
+        const vector = await embedder.embed(text);
+        const embedded = performance.now();
+
+        const res = await index.query(vector, {
           topK,
           returnMetadata: true,
           namespace,
         });
+
+        // #103: which half of a turn's semantic recall waits (embedding or the index), and on how many matches.
+        diagnostics.event('vector.search_timing', { embedMs: embedded - began, queryMs: performance.now() - embedded, matches: res.matches?.length ?? 0 });
 
         return (res.matches ?? []).flatMap((m) => {
           const located = v.safeParse(ChunkMetadataSchema, m.metadata ?? {});
