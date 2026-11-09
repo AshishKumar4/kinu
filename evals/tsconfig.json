@@ -1,6 +1,8 @@
 {
   "extends": "../tsconfig.base.json",
+  "//target": "Bun runs these programs as written, as it does scripts/ (scripts/tsconfig.scripts.json); the runners that lease trial accounts read armada's live jobs, whose pinned client's source, typechecked through its import, uses ES2024's library.",
   "compilerOptions": {
+    "target": "ES2024",
     "noEmit": true,
     "types": ["bun", "node"]
   },

@@ -16,6 +16,7 @@ import { evalWorkspaceStem } from '@kinu.run/test-utils';
 import { deleteWorkspace, listWorkspaces, webHeaders } from './workspace-roster';
 import type { EvalMatrix } from './config';
 import type { EvalTarget } from './workspace-roster';
+import { halfOf, type TrialLease } from './lease';
 
 /** A trial's place in its run. */
 export type TrialPlace = {
@@ -37,7 +38,7 @@ export function trialSlot(place: TrialPlace): EvalAccount {
 
   if (!files.includes(place.task)) throw new Error(`runner ${place.task} has no place in the run's matrix`);
   const needed = tasks * models.length * arms.length * trials;
-  const [low, high] = halfOf(firstSlot > HALF);
+  const [low, high] = halfOf(firstSlot > EVAL_TRIAL_ACCOUNTS / 2);
   const slot = firstSlot - 1 + ((taskAt * models.length + models.indexOf(place.model)) * arms.length + arms.indexOf(place.arm)) * trials + place.trial;
   const account = parseEvalAccount(`trial-${String(slot)}`);
 
@@ -48,46 +49,22 @@ export function trialSlot(place: TrialPlace): EvalAccount {
   return account;
 }
 
-const HALF = EVAL_TRIAL_ACCOUNTS / 2;
-
-/** The accounts a deploy's one-trial pass takes (the upper half), or every other run (the lower): `[first, last]`. */
-function halfOf(pass: boolean): readonly [number, number] {
-  return pass ? [HALF + 1, EVAL_TRIAL_ACCOUNTS] : [1, HALF];
-}
-
-/** A run's hold on a block of trial accounts on the deployments it drives, as its armada job's label declares it. */
+/** A run's block of trial accounts on the deployments it drives, as its armada job's label claims it: with the run's
+ *  lease (evals/src/lease.ts), one of the two facts that keep a block from every other run. */
 export type SlotClaim = { readonly first: number; readonly last: number; readonly hosts: readonly string[] };
 
-const CLAIM = /\bslots (\d+)-(\d+) on (\S+)$/u;
-
-/** The label an eval run's armada job carries: its definitions and the block it holds, read back by {@link claimOf}. */
+/** The label an eval run's armada job carries: its definitions and the block it runs on, read back by {@link claimOf}. */
 export function claimLabel(sha: string, claim: SlotClaim): string {
   return `evals ${sha.slice(0, 12)} slots ${String(claim.first)}-${String(claim.last)} on ${claim.hosts.join(',')}`;
 }
+
+const CLAIM = /\bslots (\d+)-(\d+) on (\S+)$/u;
 
 /** The block a job's label claims, or null for a job that claims none. */
 export function claimOf(label: string): SlotClaim | null {
   const [, first, last, hosts] = CLAIM.exec(label) ?? [];
 
   return first === undefined || last === undefined || hosts === undefined ? null : { first: Number(first), last: Number(last), hosts: hosts.split(',') };
-}
-
-/**
- * The first account of the lowest block of `size` in the run's half (`pass`) that no claim on any of `hosts` holds; null
- * when every such block is held, and the run waits for one to end.
- */
-export function freeBlock(size: number, pass: boolean, hosts: readonly string[], claims: readonly SlotClaim[]): number | null {
-  const [low, high] = halfOf(pass);
-  const held = claims.filter((claim) => claim.hosts.some((host) => hosts.includes(host)));
-
-  for (let first = low; first - 1 + size <= high;) {
-    const blocking = held.find((claim) => claim.first <= first - 1 + size && claim.last >= first);
-
-    if (blocking === undefined) return first;
-    first = blocking.last + 1;
-  }
-
-  return null;
 }
 
 /** Every trial account a matrix uses: the ones a deploy gives the eval provider keys. */
@@ -191,4 +168,99 @@ export async function claimTrialAccount(target: EvalTarget, own: string, now: nu
     .find((workspace) => workspace.name !== own && now - workspace.lastVisited < EVAL_WORKSPACE_LEASE_MS);
 
   if (rival !== undefined) throw new Error(`${accountOf(target)} is occupied by another run's workspace ${rival.name}; ${own} cannot claim it`);
+}
+
+const ProfileEmailSchema = v.looseObject({ email: v.string() });
+
+/** How long one call to the deployment may take while an account is deleted. */
+const DELETE_CALL_MS = 30_000;
+
+const HeldKeysSchema = v.array(v.looseObject({ key: v.string() }));
+
+/**
+ * Deletes `target`'s account through the product's own account delete, its profile's email confirming it. A finding, or
+ * null. Its credentials go first, each disconnected without revoking: an account's delete revokes what it holds at the
+ * provider, and a trial account holds logins it does not own (a plan's, OMP's; the deployment's gateway token). Nothing
+ * reads the account after: every request records the account it names again (the control plane's `observeUser`).
+ */
+export async function deleteTrialAccount(target: EvalTarget): Promise<string | null> {
+  const headers = webHeaders(target.identity);
+
+  const call = async (path: string, init: { readonly method?: string; readonly json?: unknown } = {}) => fetch(`${target.origin}${path}`, {
+    method: init.method ?? 'GET', signal: AbortSignal.timeout(DELETE_CALL_MS),
+    headers: init.json === undefined ? headers : { ...headers, 'content-type': 'application/json' },
+    ...init.json !== undefined && { body: JSON.stringify(init.json) },
+  });
+
+  const [held, profile] = await Promise.all([call('/api/user/credentials'), call('/api/user/profile')]);
+
+  if (!held.ok) return `listing ${accountOf(target)}'s credentials at ${target.origin} answered ${String(held.status)}`;
+
+  if (!profile.ok) return `reading ${accountOf(target)}'s profile at ${target.origin} answered ${String(profile.status)}`;
+
+  for (const { key } of v.parse(HeldKeysSchema, await held.json())) {
+    const dropped = await call(`/api/user/credentials/${encodeURIComponent(key)}?revoke=0`, { method: 'DELETE' });
+
+    if (!dropped.ok) return `disconnecting ${accountOf(target)}'s ${key} at ${target.origin} answered ${String(dropped.status)}`;
+  }
+
+  const { email } = v.parse(ProfileEmailSchema, await profile.json());
+  const deleted = await call('/api/user/account', { method: 'DELETE', json: { confirm: email } });
+
+  return deleted.ok ? null : `deleting ${accountOf(target)} at ${target.origin} answered ${String(deleted.status)}`;
+}
+
+/** A run's leased block as it acts as it: each origin's account of the block. */
+export interface TrialBlock {
+  readonly targets: readonly EvalTarget[];
+}
+
+/** The file a run writes in its output once it leased its block: which accounts it holds, for its plan run's holder to
+ *  renew into (scripts/eval-plan-run.ts). A description, never a lease. */
+export const LEASED_FILE = 'lease.json';
+
+/** The file a run writes in its output as its teardown begins: what renews into its accounts stops (scripts/eval-plan-run.ts). */
+export const TEARDOWN_MARK = 'tearing-down';
+
+/** The file a plan run's holder keeps in a run's output while it renews into the run's accounts; the teardown waits it out. */
+export const RENEWING_MARK = 'renewing';
+
+/** Each account of `block` deleted, eight at a time, each answering before the next eight: what that came to, in words. */
+async function deleteBlock(block: TrialBlock): Promise<string> {
+  const refused: string[] = [];
+  let deleted = 0;
+
+  for (let at = 0; at < block.targets.length; at += 8) {
+    const answers = await Promise.allSettled(block.targets.slice(at, at + 8).map(async (target) => deleteTrialAccount(target)));
+
+    deleted += answers.filter((answer) => answer.status === 'fulfilled' && answer.value === null).length;
+    refused.push(...answers.flatMap((answer) => (answer.status === 'rejected' ? [String(answer.reason)] : answer.value ?? [])));
+  }
+
+  return `evals: deleted ${String(deleted)} of the run's ${String(block.targets.length)} trial accounts${refused.length === 0 ? '' : `; refused: ${refused.join('; ')}`}`;
+}
+
+/**
+ * `run` on its leased block (evals/src/lease.ts), whose accounts are deleted when it ends, however it ends, and only then
+ * is the lease let go: trial accounts pile up otherwise (the owner, 2026-11-09: 64 left on production, 256 on staging).
+ * The lease is held from before anything touches the block, so its teardown deletes nothing another run holds. The next
+ * run's provisioning makes each account again before any trial opens on it (scripts/eval-provider-keys.ts). `before`
+ * runs first: it waits for the run's remote trials to have ended, and for anything writing to the block to stop; where
+ * it throws, the accounts are left as they are and the lease still goes. What a delete refused is said, never thrown
+ * over `run`'s end.
+ */
+export async function onTrialBlock<T>(
+  lease: TrialLease, block: TrialBlock, run: () => Promise<T>,
+  options: { readonly say?: (line: string) => void; readonly before?: () => Promise<void> } = {},
+): Promise<T> {
+  try {
+    return await run();
+  } finally {
+    try {
+      await options.before?.();
+      (options.say ?? console.log)(await deleteBlock(block));
+    } finally {
+      await lease.release();
+    }
+  }
 }

@@ -13,14 +13,25 @@ import { collectEvalTasks } from '../src/eval';
 import { learningVerdict, REACTIVE_ARMS, reactivePlan, type ArmRun } from '../src/reactive';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import { runArm } from '../src/reactive-run';
-import { trialSlot } from '../src/slot';
+import { onTrialBlock, trialAccounts, trialSlot } from '../src/slot';
+import { leaseBlock } from '../src/lease';
+import { kinuArmada, liveClaims } from '../../scripts/evals-lease';
 import { ARMS, resolveEvalTarget } from '../src/target';
 
 test('learning on beats learning off', async () => {
   const env = process.env;
   const segments = Number(env.KINU_REACTIVE_SEGMENTS ?? '200');
   const seeds = Number(env.KINU_REACTIVE_SEEDS ?? '3');
-  const matrix = { ...evalMatrix(env, ARMS.map((arm) => arm.id)), arms: [...REACTIVE_ARMS], trials: seeds };
+  const measured = { ...evalMatrix(env, ARMS.map((arm) => arm.id)), arms: [...REACTIVE_ARMS], trials: seeds };
+  const runner = basename(import.meta.filename);
+  const host = new URL(resolveEvalTarget(env).origin).host;
+
+  // Its accounts are leased as every eval run's are (evals/src/lease.ts), and deleted as it ends (`onTrialBlock`).
+  const lease = await leaseBlock({
+    size: trialAccounts([runner], measured).length, pass: false, hosts: [host], liveClaims: async () => liveClaims(kinuArmada()),
+  });
+
+  const matrix = { ...measured, firstSlot: lease.first };
   const [model] = matrix.models;
   const target = resolveEvalTarget(env);
   const tasks = new Map((await collectEvalTasks()).map((task) => [task.id, task]));
@@ -34,9 +45,10 @@ test('learning on beats learning off', async () => {
   const runs: { on: ArmRun; off: ArmRun; craftingOff: ArmRun; heldOut: string }[] = [];
   const arms: ArmRun[] = [];
 
-  for (let seed = 1; seed <= seeds; seed++) {
+  const block = { targets: trialAccounts([runner], matrix).map((account) => ({ ...target, identity: { ...target.identity, account } })) };
+
+  const runSeed = async (seed: number): Promise<void> => {
     const plan = reactivePlan(families, segments, seed, heldOut);
-    const runner = basename(import.meta.filename);
 
     // Each arm apart: one that cannot open, or stops, is recorded with why, and the others run on.
     const settled = await Promise.allSettled(REACTIVE_ARMS.map((arm) => runArm({
@@ -54,7 +66,13 @@ test('learning on beats learning off', async () => {
     if (on !== undefined && off !== undefined && craftingOff !== undefined && [on, off, craftingOff].every((arm) => arm.error === undefined)) {
       runs.push({ on, off, craftingOff, heldOut });
     }
-  }
+  };
+
+  await onTrialBlock(lease, block, async () => {
+    for (let seed = 1; seed <= seeds; seed++) {
+      await runSeed(seed);
+    }
+  });
 
   const verdict = learningVerdict(runs);
   const crafting = learningVerdict(runs.map((run) => ({ on: run.on, off: run.craftingOff, heldOut: run.heldOut })));

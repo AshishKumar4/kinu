@@ -27,7 +27,7 @@ import {
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
 import { evalMatrix } from '../evals/src/config';
 import { listWorkspaces, settleCatalog, webHeaders, type CatalogNeed, type PublicWebIdentity } from '../evals/src/workspace-roster';
-import { deletionsLanded, trialInheritedRows } from '../evals/src/slot';
+import { deleteTrialAccount, deletionsLanded, trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
 import { recordStep } from './deploy-report';
 import { deployedConfig, deploymentAt } from './infra-manifest';
@@ -182,8 +182,6 @@ export interface Provisioned {
   readonly notes?: readonly string[];
 }
 
-const EmailSchema = v.looseObject({ email: v.string() });
-
 /** What one trial account came to: given a key, reset first, or why not. */
 type TrialOutcome = { readonly given: boolean; readonly reset: boolean; readonly finding?: string; readonly note?: string };
 
@@ -195,7 +193,6 @@ type TrialOutcome = { readonly given: boolean; readonly reset: boolean; readonly
 async function readyTrialAccount(input: Provisioning & { identity: string }, account: EvalAccount, keys: Readonly<Record<string, string>>): Promise<TrialOutcome> {
   const identity: PublicWebIdentity = { kind: 'secret', secret: input.identity, account };
   const headers = webHeaders(identity);
-  const read = async (path: string) => fetch(`${input.origin}${path}`, { headers, signal: AbortSignal.timeout(CALL_MS) });
   const held = await trialInheritedRows({ origin: input.origin, identity });
 
   if ('why' in held) return { given: false, reset: false, finding: `${account}: ${held.why}` };
@@ -211,14 +208,9 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
       return { given: false, reset: false, note: `${account} at ${input.origin} holds rows a trial would inherit (${rows}), and a run is on it (${live.name}): not reset` };
     }
 
-    const { email } = v.parse(EmailSchema, await (await read('/api/user/profile')).json());
+    const refused = await deleteTrialAccount({ origin: input.origin, identity });
 
-    const deleted = await fetch(`${input.origin}/api/user/account`, {
-      method: 'DELETE', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ confirm: email }),
-      signal: AbortSignal.timeout(CALL_MS),
-    });
-
-    if (!deleted.ok) return { given: false, reset: false, finding: `resetting ${account}, which holds ${rows}, answered ${String(deleted.status)}` };
+    if (refused !== null) return { given: false, reset: false, finding: `resetting ${account}, which holds ${rows}: ${refused}` };
     reset = true;
     // The reset clears the account's keys in its own job: a key stored before it lands would go with them.
     const landed = await deletionsLanded({ origin: input.origin, identity }, true);

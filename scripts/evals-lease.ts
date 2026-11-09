@@ -1,27 +1,22 @@
-// The trial accounts eval runs hold, read from the one place every run is: armada's open jobs. Each run's job names the
-// block it holds in its label (`claimLabel`, evals/src/slot.ts), so a deploy's runs and an operator's take disjoint
-// blocks, or the later one waits; before this, each chose alone, and only a trial's own guard (prepareTrialAccount)
-// stood between two runs on one account.
+// Kinu's armada, which runs every eval trial, and the eval keys' usage windows each run reads before and after it. The
+// trial accounts a run acts as are its by its lease (evals/src/lease.ts), never by its job's label.
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { connect, type Armada } from 'armada';
 import { LimitCache, limitLines } from '@kinu.run/core';
-import { claimOf, freeBlock, type SlotClaim } from '../evals/src/slot';
 import { EVAL_PROVIDER_KEYS, keysIn } from './eval-provider-keys';
+import { claimOf, type SlotClaim } from '../evals/src/slot';
 
 /** Kinu's armada deployment, which runs every eval trial. */
 export const KINU_ARMADA = join(homedir(), '.config', 'armada', 'armada-kinu.json');
 
-/** How long a run waits between reads of the open runs while every block it could take is held. */
-const WAIT_MS = 60_000;
-
 const JobsPageSchema = v.object({
-  jobs: v.array(v.looseObject({ id: v.string(), label: v.string(), phase: v.string(), createdAt: v.number() })),
+  jobs: v.array(v.looseObject({ id: v.string(), label: v.string(), phase: v.string() })),
 });
 
-/** A claim, and the job that holds it: the earlier job keeps a block two runs took at once. */
-export type HeldClaim = SlotClaim & { readonly job: string; readonly createdAt: number };
+/** A block a live job's label claims, and that job. */
+export type HeldClaim = SlotClaim & { readonly job: string };
 
 /** Kinu's armada, whatever ARMADA_CONNECTION the caller's environment names. */
 export function kinuArmada(): Armada {
@@ -37,8 +32,12 @@ export function kinuArmada(): Armada {
   }
 }
 
-/** Every block an open job claims, read through all the jobs the deployment keeps, a page of 100 at a time. */
-export async function openClaims(armada: Armada): Promise<HeldClaim[]> {
+/**
+ * Every block a live job's label claims, read through all the jobs the deployment keeps, a page of 100 at a time. A job
+ * outlives the run that drives it (armada keeps one about three minutes after its follower is gone), so a block is free
+ * only when no run's lease holds it and no live job claims it (evals/src/lease.ts `leaseBlock`).
+ */
+export async function liveClaims(armada: Pick<Armada, 'call'>): Promise<HeldClaim[]> {
   const held: HeldClaim[] = [];
   let before: string | undefined;
 
@@ -48,36 +47,13 @@ export async function openClaims(armada: Armada): Promise<HeldClaim[]> {
     for (const job of page.jobs) {
       const claim = job.phase === 'done' ? null : claimOf(job.label);
 
-      if (claim !== null) held.push({ ...claim, job: job.id, createdAt: job.createdAt });
+      if (claim !== null) held.push({ ...claim, job: job.id });
     }
 
     before = page.jobs.at(-1)?.id;
 
     if (page.jobs.length < 100) return held;
   }
-}
-
-/** The first account of a free block of `size` on `hosts`, waiting while every block of the run's half (`pass`) is held. */
-export async function leaseBlock(armada: Armada, { size, pass, hosts }: { readonly size: number; readonly pass: boolean; readonly hosts: readonly string[] }, say: (line: string) => void): Promise<number> {
-  for (;;) {
-    const held = await openClaims(armada);
-    const first = freeBlock(size, pass, hosts, held);
-
-    if (first !== null) return first;
-    say(`evals: waiting for ${String(size)} trial accounts on ${hosts.join(', ')}: held by ${held.map((claim) => `${claim.job} (${String(claim.first)}-${String(claim.last)})`).join(', ')}`);
-    await Bun.sleep(WAIT_MS);
-  }
-}
-
-/** Whether a job that started before `job` holds part of `claim`: two runs read the same free block and both took it,
- *  and the later one gives it up. */
-export async function outranked(armada: Armada, job: string, claim: SlotClaim): Promise<boolean> {
-  const held = await openClaims(armada);
-  const own = held.find((each) => each.job === job);
-
-  return held.some((other) => other.job !== job && other.first <= claim.last && other.last >= claim.first
-    && other.hosts.some((host) => claim.hosts.includes(host))
-    && (own === undefined || other.createdAt < own.createdAt || (other.createdAt === own.createdAt && other.job < job)));
 }
 
 /**
