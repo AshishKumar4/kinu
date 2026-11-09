@@ -439,8 +439,6 @@ export interface DeferredApprovalQueueDeps {
    * on one is an approval of that call alone. Cloudflare only: the CLI hosts no shared slates, so none asks it.
    */
   preapprove?(effect: SlateEffect): Promise<void>;
-  /** A guest's own call decided (`SlateEffect.guest`): its guest is told, so it makes the call again or tells its visitor. */
-  guestDecided?(effect: SlateEffect & { readonly guest: string }, decision: 'approved' | 'denied'): Promise<void>;
   /** Durable `approval_consumed` sink; optional only for tests. */
   audit?(record: ApprovalConsumedRecord): void;
   /** Mint a request id; injected for host id vocabulary and deterministic tests. */
@@ -748,15 +746,14 @@ export class DeferredApprovalQueue {
 
     const written = await this.performWrites(decided.filter((a) => a.actor === this.deps.store.actorId));
     this.notify({ kind: 'decided', actions: decided });
+
     // A shared slate's effect is taken by its own call's next run: no agent asked it, so none is woken for it, but for a
-    // guest's own call, whose guest is told, and makes that call again to take it.
-    const told = decided.filter((a) => !blocked.includes(a) && approvalKindOf(a).kind !== 'slate-effect');
+    // guest's own call, its guest's to ask, which is woken to make that call again or tell its visitor.
+    const told = decided.filter((a) => {
+      const kind = approvalKindOf(a);
 
-    for (const action of decided) {
-      const kind = approvalKindOf(action);
-
-      if (kind.kind === 'slate-effect' && kind.effect.guest !== undefined) await this.deps.guestDecided?.({ ...kind.effect, guest: kind.effect.guest }, action.status === 'denied' ? 'denied' : 'approved');
-    }
+      return !blocked.includes(a) && (kind.kind !== 'slate-effect' || kind.effect.guest !== undefined);
+    });
 
     return settle(Effect.as(wakeEachAsker({
       answered: told,
@@ -819,7 +816,8 @@ export class DeferredApprovalQueue {
    * it ran gives the approval back and one after it never runs it twice.
    */
   slateEffect(id: string, effect: SlateEffect): SlateEffectVerdict {
-    return this.exact(this.deps.store, id, {
+    // A guest's own call is its guest's ask: the decision wakes it, as any agent's does.
+    return this.exact(this.slateEffectStore(effect.guest), id, {
       command: slateEffectText(effect), executor: slateEffectExecutor(effect.slate),
       reason: `A shared slate's server, running with your access for ${effect.viewer}, asked to call ${effect.tool} on ${effect.server}`,
     });
@@ -849,8 +847,13 @@ export class DeferredApprovalQueue {
    * and the send can take it back. The spend the call settles, or null where it is no longer approved (retired, or
    * already taken).
    */
-  takeSlateEffect(id: string): ApprovalSpend | null {
-    return this.deps.store.spend(id)?.spend ?? null;
+  takeSlateEffect(id: string, guest?: string): ApprovalSpend | null {
+    return this.slateEffectStore(guest).spend(id)?.spend ?? null;
+  }
+
+  /** Where a shared slate's effect is asked: the workspace's own, or its guest's, where a guest made the call itself. */
+  private slateEffectStore(guest: string | undefined): DeferredApprovalStore {
+    return guest === undefined ? this.deps.store : this.storeOf(guest);
   }
 
   /**
@@ -858,7 +861,7 @@ export class DeferredApprovalQueue {
    * where `only` names one standing approval its owner took back, the asks of that shape (its calling slate, tool and
    * root), approved or not, which would otherwise outlive it.
    */
-  retireSlateEffects(slate: string, only?: Omit<SharePreapproval, 'revision'>): string[] {
+  retireSlateEffects(slate: string, only?: Omit<SharePreapproval, 'revision'>, guest?: string): string[] {
     const takenBack = only === undefined ? undefined : (open: DeferredApproval) => {
       const kind = approvalKindOf(open);
 
@@ -866,7 +869,7 @@ export class DeferredApprovalQueue {
         && kind.effect.tool === only.member && canonicalRoot(kind.effect.root) === canonicalRoot(only.root);
     };
 
-    return this.deps.store.retireOpen(slateEffectExecutor(slate), takenBack);
+    return this.slateEffectStore(guest).retireOpen(slateEffectExecutor(slate), takenBack);
   }
 
   /**

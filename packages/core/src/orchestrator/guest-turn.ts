@@ -1,16 +1,24 @@
 /**
- * A shared app's guest as the workspace hosts it (core slates/guest.ts): its one tool, the prompt it is given in place of
+ * A shared app's guest's turn (slates/guest.ts): its one tool, the prompt it is given in place of
  * its owner's, and its answer to a visitor's message read back from its own conversation.
  */
 import * as v from 'valibot';
 import { jsonSchema, tool, type Tool } from 'ai';
-import {
-  agentDynamicContext, currentDateForPrompt, isJsonAnswer, JsonValueSchema, rowText,
-  type AgentsMdSources, type ChatHistoryEntry, type ChatHistoryPage, type PositionPageRequest, type DynamicContext, type JsonValue, type ResolvedTurnProfile, type RunTurnSources, type SlateSurfaceResult,
-} from '@kinu.run/core';
-import { ANONYMOUS_SUBJECT_PREFIX, type GuestPrincipal } from '@kinu.run/core/slates';
-import { KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
+import { KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
+import { agentDynamicContext, type DynamicContext } from '../prompting/volatile-context';
+import type { AgentsMdSources } from '../prompting/agents-md';
+import { currentDateForPrompt } from '../prompt';
+import type { ResolvedTurnProfile } from '../profiles/resolve';
+import type { RunTurnSources } from './turn-assembly';
+import { isJsonAnswer, type SlateSurfaceResult } from '../slates/rpc';
+import { ANONYMOUS_SUBJECT_PREFIX, type GuestPrincipal } from '../slates/guest';
+import type { ChatHistoryEntry } from '../types/chat';
+import type { ChatHistoryPage } from '../read-models/status';
+import type { PositionPageRequest } from '../session/page';
+import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { rowText } from '../utils/ui-message';
 
 /** The guest's one tool. */
 export const GUEST_APP_TOOL = 'app';

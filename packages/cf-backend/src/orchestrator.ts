@@ -1,5 +1,7 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
-import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf } from '@kinu.run/core';
+import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf,
+  GUEST_APP_TOOL, GUEST_ASK_METADATA, GUEST_ROLE, guestAnswer, turnEntries, guestAppTool, guestDynamicContext, guestSoul, guestTitle, guestVisitorLabel, NO_GUEST_INSTRUCTIONS, NO_GUEST_SKILLS,
+} from '@kinu.run/core';
 import { declareShareSpend, preapproveSlateEffect, ROOT_SLATE_CALLER, SlateShareGuests, slateRevision as builtRevision, type GuestPrincipal, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace's one Durable Object, every agent of it hosted inside as a logical actor.
@@ -109,7 +111,6 @@ import { createCodemodeToolFactory } from "./codemode-tool";
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubagentReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
-import { GUEST_APP_TOOL, GUEST_ASK_METADATA, GUEST_ROLE, guestAnswer, turnEntries, guestAppTool, guestDynamicContext, guestSoul, guestTitle, guestVisitorLabel, NO_GUEST_INSTRUCTIONS, NO_GUEST_SKILLS } from './guest-agents';
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
@@ -1055,7 +1056,12 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
   /** What `record`'s agent reaches by what it is: a guest's scope is its row in the workspace's guests, never its name. */
   protected reachOf(record: WorkspaceActor): ActorReach {
-    return actorReach(actorPolicy(record), this.guests().principalOf(record.actorId));
+    return actorReach(actorPolicy(record), this.guestOf(record));
+  }
+
+  /** Which share and visitor `record`'s agent answers; null for any other. Only a hire is ever a guest. */
+  protected guestOf(record: WorkspaceActor): GuestPrincipal | null {
+    return actorPolicy(record).hirer === null ? null : this.guests().principalOf(record.actorId);
   }
 
   protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
@@ -2717,21 +2723,12 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       const { record, handle } = this.agentBound(guest.actorId);
 
       return this.subagentRuntime().dismiss(record.name, { keepHistory: true, interrupt: true }, actorReferenceOf(handle)).pipe(
-        Effect.tap(() => Effect.sync(() => { this.guestAsksEnded(guest.actorId, new KinuError('denied', 'This app is no longer shared')); })),
+        Effect.tap(() => Effect.sync(() => {
+          this.deferrals.retireSlateEffects(guest.slate, undefined, guest.actorId);
+          this.guestAsksEnded(guest.actorId, new KinuError('denied', 'This app is no longer shared'));
+        })),
       );
     }, { discard: true }));
-  }
-
-  /** The owner decided a guest's own call: the guest is told, and makes an approved call again, which takes the approval. */
-  private async guestDecided(effect: { readonly guest: string; readonly server: string; readonly tool: string }, decision: 'approved' | 'denied'): Promise<void> {
-    if (this.guests().principalOf(effect.guest) === null || this.workspaceActors().standing(effect.guest) !== 'live') return;
-    const owner = await this.guestOwnerName();
-
-    const text = decision === 'approved'
-      ? `${owner} approved your call of ${effect.tool} on ${effect.server}. Make it again exactly as before, then tell the person what came of it.`
-      : `${owner} declined your call of ${effect.tool} on ${effect.server}. Tell the person it will not be made.`;
-
-    await this.enqueueHostedTurn(this.agentBound(effect.guest), { text });
   }
 
   /** The one adapter between a slate's `agent.send` and the turn inbox. */
@@ -4486,10 +4483,14 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       openWork: (actorId) => this.openWorkOf(actorId),
       credentialsRevision: () => this.account.openedCredentialsRevision(),
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
-      missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent || this.guests().principalOf(actorId) !== null ? this.budget : null),
+      missions: (actorId) => {
+        const record = this.agentOf(actorId);
+
+        return actorPolicy(record).workspaceAgent || this.guestOf(record) !== null ? this.budget : null;
+      },
       // A guest's model calls spend its share's day, as its visitor's calls do: one label on the workspace's governor.
       guestSpend: (actorId) => {
-        const guest = this.guests().principalOf(actorId);
+        const guest = this.guestOf(this.agentOf(actorId));
 
         return guest === null ? null : declareShareSpend(this.budget, guest.share);
       },
@@ -4540,7 +4541,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         this.admitWork();
 
         // A shared app's guest runs no program (core slates/guest.ts).
-        if (this.guests().principalOf(actorId) !== null) return settleSync(Effect.fail(new KinuError('denied', "A shared app's guest runs no program")));
+        if (this.guestOf(this.agentOf(actorId)) !== null) return settleSync(Effect.fail(new KinuError('denied', "A shared app's guest runs no program")));
 
         return await this.agentTurns.program(actorId, bound.turnId, ...args);
       },
@@ -4614,7 +4615,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       // told so far is the agent's own, kept where the turn ran. An agent with no hirer owes none.
       turnReport: async (turn, ended, relay) => {
         // A guest's conversation is its visitor's: nothing of it is reported to the agent that hired it.
-        if (actorPolicy(this.agentOf(actorId)).hirer === null || this.guests().principalOf(actorId) !== null) return 'none';
+        if (actorPolicy(this.agentOf(actorId)).hirer === null || this.guestOf(this.agentOf(actorId)) !== null) return 'none';
 
         const actor = this.agentBound(actorId);
         // A later turn its chat holds, and what is owed it here and has not crossed yet.
@@ -4638,7 +4639,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       owes: async (seq, next, holds, report) => { await this.agentOwes(actorId, { seq, next, holds, report }); },
       birthContext: async (drainTurnId) => subagentTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
       releaseForeground: async (executing) => this.foregroundRunnerOf(actorId)?.releaseForeground(executing) ?? false,
-      steerSkills: async (text, alreadyActive) => (this.guests().principalOf(actorId) !== null ? null : await steerSkillsBlock({
+      steerSkills: async (text, alreadyActive) => (this.guestOf(this.agentOf(actorId)) !== null ? null : await steerSkillsBlock({
         vfs: this.rt.storage.vfs,
         config: this.agentBound(actorId).stores.config,
         userText: text,
@@ -5091,7 +5092,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    */
   protected async actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface> {
     const { key, lane, run } = turn;
-    const guest = this.guests().principalOf(actor.handle.actorId);
+    const guest = this.guestOf(actor.record);
     const reach = surfaceReach(actorPolicy(actor.record), lane, true, guest);
     const driving = lane.driving ?? {};
     const item: ChatTurnInput = { kind: turnTags({ metadata: driving }).author === 'operator' ? 'user' : 'programmatic', text: turn.text, metadata: driving };
@@ -8027,7 +8028,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       remember: (grants) => { this.config.grantShellApproval(grants); },
       // "Always for this slate" on a shared slate's effect stands on that slate's owner shares, its sheet's to take back.
       preapprove: async (effect) => { preapproveSlateEffect((await this.slates()).controller.live, effect); },
-      guestDecided: async (effect, decision) => { await this.guestDecided(effect, decision); },
       // A spent grant's row is deleted, so this event is the only durable record of consumption, naming whose it
       // was. A hire's, or the root's outside any turn, falls back to the workspace run: the root's turn is not theirs.
       audit: (record) => {
@@ -9693,8 +9693,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       // `owner` shares' effects wait on the owner in the workspace's one queue, as every parked action does.
       ownerEffects: {
         ask: (id, effect) => this.deferrals.slateEffect(id, effect),
-        take: (id) => this.deferrals.takeSlateEffect(id),
-        settle: (spend, outcome) => this.deferrals.settle(spend, outcome),
+        take: (id, guest) => this.deferrals.takeSlateEffect(id, guest),
+        settle: (spend, outcome, guest) => this.deferrals.settle(spend, outcome, guest),
         retire: (slate, only) => { this.deferrals.retireSlateEffects(slate, only); },
       },
       // The Gallery's index is a copy of the shares listed here: told as the owner lists, unlists or revokes, and again in

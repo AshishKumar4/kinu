@@ -22,9 +22,10 @@ import { AGENT_ASK_MEMBER, shareMemberRefusal } from './members';
 /** Where a shared server's effects wait for its owner, how a send takes the approval, and how its run settles it. */
 export interface OwnerEffects {
   ask(id: string, effect: SlateEffect): SlateEffectVerdict;
-  /** Synchronous: called where the call is sent. */
-  take(id: string): ApprovalSpend | null;
-  settle(spend: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<boolean>;
+  /** Synchronous: called where the call is sent. `guest`: the guest that asked it, where one made the call itself. */
+  take(id: string, guest?: string): ApprovalSpend | null;
+  /** `guest`: as `take`'s, the guest whose ask it spent. */
+  settle(spend: ApprovalSpend, outcome: ApprovalSpendOutcome, guest?: string): Promise<boolean>;
 }
 
 /**
@@ -228,7 +229,7 @@ export class SharedServers {
       if (!call.effect || now.preapproved) return null;
 
       if (approval === null) return yield* new KinuError('denied', `${call.address.member} on ${call.address.namespace} waits for the owner to approve it`);
-      const spend = this.deps.ownerEffects?.take(approval) ?? null;
+      const spend = this.deps.ownerEffects?.take(approval, call.guest) ?? null;
 
       return spend ?? (yield* new KinuError('denied', "The owner's approval of this call was taken back before it was made"));
     });

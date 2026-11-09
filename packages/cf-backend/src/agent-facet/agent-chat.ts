@@ -231,7 +231,7 @@ export class FacetChat {
       },
     });
 
-    // A chat turn's brief is a shared app's guest's role, which stands in for its owner's catalog's (guest-agents.ts).
+    // A chat turn's brief is a shared app's guest's role, which stands in for its owner's catalog's (core orchestrator/guest-turn.ts).
     const { brief } = prepared;
 
     return await assembleActorTurn({

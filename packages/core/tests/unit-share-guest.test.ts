@@ -50,12 +50,12 @@ function world(mode: 'own' | 'owner' = 'owner') {
   initOwnerRequestsTable(execRaw);
   const live = new SlateLiveShareStore(makeSqlExec(db));
   const guests = new SlateShareGuests(makeSqlExec(db));
-  const decided: { guest: string; tool: string; decision: string }[] = [];
+  const woken: { actorId: string; text: string }[] = [];
 
   const queue = new DeferredApprovalQueue({
-    store: new DeferredApprovalStore(sql, actors.main), writes: null, remember: () => {}, wake: () => Effect.void,
+    store: new DeferredApprovalStore(sql, actors.main), writes: null, remember: () => {},
+    wake: (actorId, signal) => Effect.sync(() => { woken.push({ actorId, text: signal.text }); }),
     preapprove: async (effect) => { preapproveSlateEffect(live, effect); },
-    guestDecided: async (effect, decision) => { decided.push({ guest: effect.guest, tool: effect.tool, decision }); },
   });
 
   live.add({ id: 's1', slate: 'board', visibility: 'public', handle: '0123456789', grant });
@@ -111,7 +111,7 @@ function world(mode: 'own' | 'owner' = 'owner') {
   const asked = () => queue.list().map((row) => approvalKindOf(row));
   const decide = async (answer: 'approved' | 'always' | 'denied') => queue.decide(queue.list().map((row) => row.id), answer);
 
-  return { call, ran, routes, asked, decide, decided, guest, guests, actors, guestActor, live };
+  return { call, ran, routes, asked, decide, woken, guest, guests, actors, guestActor, live };
 }
 
 test("a guest reaches its app's code as its visitor would, and asks its owner for the exact call outside it, its files included", async () => {
@@ -138,13 +138,15 @@ test("a guest reaches its app's code as its visitor would, and asks its owner fo
 });
 
 test('the owner decides a guest\'s call for that call alone: the guest is told, its next same call runs once, "always" stands for nothing', async () => {
-  const { call, ran, asked, decide, decided, guest } = world();
+  const { call, ran, asked, decide, woken, guest } = world();
   const issue = [{ title: 'Webhook retries fail' }];
 
   expect(await cameTo(call(['mcp', 'github', 'create_issue'], { by: 'guest', args: issue }))).toBe('denied');
   await decide('always');
 
-  expect(decided).toEqual([{ guest: guest.actorId, tool: 'create_issue', decision: 'approved' }]);
+  // The guest that asked is woken with her answer, as any agent whose ask she decides.
+  expect(woken.map((wake) => wake.actorId)).toEqual([guest.actorId]);
+  expect(woken[0]?.text).toContain('APPROVED, still not run: re-issue once');
   expect(await cameTo(call(['mcp', 'github', 'create_issue'], { by: 'guest', args: issue }))).toBe('ran');
   expect(ran).toEqual(['mcp.github.create_issue']);
 
@@ -155,7 +157,8 @@ test('the owner decides a guest\'s call for that call alone: the guest is told, 
   expect(ran).toEqual(['mcp.github.create_issue']);
 
   await decide('denied');
-  expect(decided.at(-1)).toMatchObject({ decision: 'denied' });
+  expect(woken.map((wake) => wake.actorId)).toEqual([guest.actorId, guest.actorId]);
+  expect(woken[1]?.text).toContain('DENIED: do not re-issue');
   expect(ran).toEqual(['mcp.github.create_issue']);
 });
 
@@ -219,6 +222,13 @@ test("a visitor has one live guest at a time: a retired guest is no one's, and t
   expect(guests.of('s1', 'anon:ana')).toBeNull();
   // Still a guest: a retired guest never reads as an ordinary hire.
   expect(guests.principalOf(guest.actorId)).toEqual(guest);
+
+  // An agent read as no guest before its row is written reads as one after.
+  const later = actors.sibling('guest-board-cy');
+
+  expect(guests.principalOf(later.actorId)).toBeNull();
+  guests.record({ ...guest, actorId: later.actorId, subject: 'anon:cy' });
+  expect(guests.principalOf(later.actorId)).toMatchObject({ subject: 'anon:cy' });
 
   // Its successor is a new hire, under a key of its own.
   expect(guests.creationOf('s1', 'anon:ana')).not.toBe(standing);

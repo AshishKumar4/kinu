@@ -2833,3 +2833,8 @@ export type {
 export { refusedRun, writesSnapshotRows } from './subagents/agent-isolate';
 
 export { describeAgentTools } from './subagents/tool-descriptors';
+
+export {
+  GUEST_APP_TOOL, GUEST_ASK_METADATA, GUEST_ROLE, guestAnswer, guestAppTool, guestDynamicContext, guestSoul, guestTitle, guestVisitorLabel,
+  NO_GUEST_INSTRUCTIONS, NO_GUEST_SKILLS, turnEntries,
+} from './orchestrator/guest-turn';

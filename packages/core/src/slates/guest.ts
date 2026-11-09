@@ -93,6 +93,12 @@ const GuestRow = v.object({ actorId: v.string(), share: v.string(), slate: v.str
  * no one's guest any more, so a share's visitor is answered by at most one live guest.
  */
 export class SlateShareGuests {
+  /**
+   * Which share and visitor each actor read so far answers, or that it answers none: a guest's row is written once, by
+   * `record` here, before any turn of its, and never rewritten, so what was read stands, and every turn reads it free.
+   */
+  private readonly principals = new Map<string, GuestPrincipal | null>();
+
   constructor(private readonly db: SqlExec, private readonly now: () => number = () => Date.now()) {}
 
   /**
@@ -102,6 +108,7 @@ export class SlateShareGuests {
   record(principal: GuestPrincipal): void {
     this.db.exec('INSERT INTO slate_share_guests (actor_id, share_id, slate, viewer_subject, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (actor_id) DO NOTHING',
       principal.actorId, principal.share, principal.slate, principal.subject, this.now());
+    this.principals.delete(principal.actorId);
   }
 
   /**
@@ -124,9 +131,15 @@ export class SlateShareGuests {
 
   /** Which share and visitor `actorId` answers, retired or not; null for an agent that is no guest. */
   principalOf(actorId: string): GuestPrincipal | null {
-    const [row] = this.db.exec(`${GUEST_SELECT} WHERE g.actor_id = ?`, actorId).toArray();
+    const known = this.principals.get(actorId);
 
-    return row === undefined ? null : v.parse(GuestRow, row);
+    if (known !== undefined) return known;
+    const [row] = this.db.exec(`${GUEST_SELECT} WHERE g.actor_id = ?`, actorId).toArray();
+    const principal = row === undefined ? null : v.parse(GuestRow, row);
+
+    this.principals.set(actorId, principal);
+
+    return principal;
   }
 
   /** The live guests of `share`. */

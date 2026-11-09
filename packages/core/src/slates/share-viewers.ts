@@ -238,7 +238,7 @@ export class SlateShareViewers {
 
         // The approval is used once the call was handed on: a failure after that may have acted, so it never runs twice
         // on one word of the owner's. The same call made again asks again.
-        if (spend !== null) yield* Effect.promise(async () => this.deps.ownerEffects?.settle(spend, 'spent'));
+        if (spend !== null) yield* Effect.promise(async () => this.deps.ownerEffects?.settle(spend, 'spent', input.guest?.actorId));
         const surfaced = yield* ran;
         const result = yield* Effect.promise(async () => viewerAnswer(surfaced));
         row = { ...row, ok: result.ok };
