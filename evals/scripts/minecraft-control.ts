@@ -13,7 +13,7 @@ import { SCRIPTED_MODEL_KEY_ENV, SCRIPTED_MODEL_ORIGIN, SCRIPTED_MODEL_SPEC } fr
 import { registerScriptedModel } from '../../scripts/scripted-model';
 import { MINECRAFT_CONTROL } from '../../scripts/minecraft-control-script';
 import { runTurn } from '../src/harness';
-import { onTrialBlock, prepareTrialAccount, signInTrialAccount } from '../src/slot';
+import { onTrialBlock, prepareTrialAccount, signInTrialAccount, teardownSettled } from '../src/slot';
 import { leaseBlock } from '../src/lease';
 import { kinuArmada, liveClaims } from '../../scripts/evals-lease';
 import { openWorkspace, resolveEvalTarget } from '../src/target';
@@ -30,7 +30,10 @@ if (key === '') throw new Error(`${SCRIPTED_MODEL_KEY_ENV} is not set, so the sc
 const base = resolveEvalTarget(process.env);
 
 // Its account is leased as every eval run's is (evals/src/lease.ts), and deleted as it ends (`onTrialBlock`).
-const lease = await leaseBlock({ size: 1, pass: true, hosts: [new URL(base.origin).host], liveClaims: async () => liveClaims(kinuArmada()) });
+const lease = await leaseBlock({
+  size: 1, pass: true, hosts: [new URL(base.origin).host], liveClaims: async () => liveClaims(kinuArmada()),
+  settled: async ({ account }) => teardownSettled({ ...base, identity: { ...base.identity, account } }),
+});
 
 const account = parseEvalAccount(`trial-${String(lease.first)}`);
 

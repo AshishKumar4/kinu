@@ -1,9 +1,9 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { BUILTIN_PROFILE_CATALOG, DEV_IDENTITY_ACCOUNT_HEADER, EVAL_WORKSPACE_LEASE_MS, inheritedRows, parseEvalAccount, profileCatalogDigest } from '@kinu.run/core';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
 import { evalMatrix } from './config';
-import { onTrialBlock, prepareTrialAccount, trialAccounts, trialSlot, type SlotClaim } from './slot';
-import { leaseBlock } from './lease';
+import { onTrialBlock, prepareTrialAccount, teardownSettled, trialAccounts, trialSlot, type SlotClaim } from './slot';
+import { leaseBlock, type OwedAccount } from './lease';
 import type { EvalTarget } from './workspace-roster';
 
 const TASK_FILES = ['budget-board.eval.ts', 'chess.eval.ts', 'launch-prep.eval.ts', 'order-book.eval.ts'];
@@ -203,6 +203,8 @@ function accountsDeployment(holding: Readonly<Record<string, readonly string[]>>
   const calls: { account: string; call: string }[] = [];
   const deleted = new Set<string>();
   const deleting = new Map<string, number>();
+  /** Accounts whose profile reads fail, as a read lost to the network does. */
+  const unreadable = new Set<string>();
 
   const server = Bun.serve({
     port: 0,
@@ -213,6 +215,8 @@ function accountsDeployment(holding: Readonly<Record<string, readonly string[]>>
       const call = `${request.method} ${url.pathname}${url.search}`;
 
       calls.push({ account, call: deleted.has(account) || deleting.has(account) ? `${call} AFTER DELETE` : call });
+
+      if (unreadable.has(account) && url.pathname === '/api/user/profile') return new Response('upstream connect error', { status: 502 });
       const reads = deleting.get(account);
 
       if (reads !== undefined) {
@@ -236,10 +240,8 @@ function accountsDeployment(holding: Readonly<Record<string, readonly string[]>>
     },
   });
 
-  return { server, calls, deleted, deleting };
+  return { server, calls, deleted, deleting, unreadable };
 }
-
-const STAGING = 'staging.kinu.run';
 
 describe("a run's trial accounts", () => {
   const block = (origin: string, first: number, last: number) => ({
@@ -252,7 +254,11 @@ describe("a run's trial accounts", () => {
     const events: string[] = [];
 
     return {
-      events, lease: { first, last, hosts: ['127.0.0.1'], release: async () => { events.push('released'); } },
+      events, lease: {
+        first, last, hosts: ['127.0.0.1'],
+        owe: () => {}, settle: () => {},
+        release: async () => { events.push('released'); },
+      },
     };
   };
 
@@ -311,39 +317,88 @@ describe("a run's trial accounts", () => {
     }
   });
 
+  /** How a leaser reads an owed account, as the eval identity of its deployment. */
+  const settled = async ({ origin, account }: OwedAccount) => teardownSettled({ origin, identity: { kind: 'secret', secret: 's', account } });
+
+  const none = async (): Promise<SlotClaim[]> => [];
+
   // Main, 2026-11-09: the account's delete answers once it is marked, and its jobs finish it later; a run that leased
-  // the block meanwhile would be refused at its provisioning ("This account is being deleted").
-  test("the block is not free again until every account's deletion has finished", async () => {
-    const accounts = accountsDeployment({}, 3);
+  // the block meanwhile was refused at its provisioning ("This account is being deleted"), and its trials failed.
+  test("a deletion that outlasts the run's wait keeps its block from every run until it reads deleted, and the run ends anyway", async () => {
+    const accounts = accountsDeployment({}, Number.MAX_SAFE_INTEGER);
+    const host = accounts.server.url.host;
     const dir = scratchDir('trial-leases');
-    const none = async (): Promise<SlotClaim[]> => [];
-    const reads: (() => void)[] = [];
-    const pause = async () => new Promise<void>((read) => { reads.push(read); });
-    // The event loop's next turn: the teardown's reads, over a real socket, are answered on a later one.
-    const turn = async () => new Promise<void>((next) => { setImmediate(next); });
-    const lease = await leaseBlock({ size: 2, pass: false, hosts: [STAGING], liveClaims: none, dir });
-    const targets = block(accounts.server.url.origin, 1, 2).targets;
+    const said: string[] = [];
+
+    // Each wait between reads passes the whole of the run's patience.
+    const pause = async () => { setSystemTime(new Date(Date.now() + 11 * 60_000)); };
+
+    const lease = await leaseBlock({ size: 2, pass: false, hosts: [host], liveClaims: none, settled, dir });
 
     try {
-      const tearing = onTrialBlock(lease, { targets }, async () => {}, { say: () => {}, pause });
+      await onTrialBlock(lease, block(accounts.server.url.origin, 1, 2), async () => {}, { say: (line) => { said.push(line); }, pause });
+      setSystemTime();
+      expect(said).toEqual([expect.stringContaining('had not finished after 10 minutes')]);
 
-      // Each account was deleted, and reads as being deleted: its block is still the run's.
-      while (reads.length < 2) await turn();
-      const meanwhile = await leaseBlock({ size: 2, pass: false, hosts: [STAGING], liveClaims: none, dir });
+      // Still being deleted: the next run takes the block after it.
+      const meanwhile = await leaseBlock({ size: 2, pass: false, hosts: [host], liveClaims: none, settled, dir });
 
-      expect({ first: meanwhile.first, deleting: [...accounts.deleting.keys()].sort() }).toEqual({ first: 3, deleting: ['trial-1', 'trial-2'] });
+      expect(meanwhile.first).toBe(3);
       await meanwhile.release();
 
-      // Its jobs land; the run's teardown reads them deleted and lets the block go.
-      while (accounts.deleting.size > 0 || reads.length > 0) {
-        for (const read of reads.splice(0)) read();
-        await turn();
-      }
+      // Its jobs land: the block is the next run's, and stays so.
+      for (const account of accounts.deleting.keys()) accounts.deleting.set(account, 0);
+      const after = await leaseBlock({ size: 2, pass: false, hosts: [host], liveClaims: none, settled, dir });
 
-      await tearing;
-      const after = await leaseBlock({ size: 2, pass: false, hosts: [STAGING], liveClaims: none, dir });
+      expect(after.first).toBe(1);
+      await after.release();
+    } finally {
+      setSystemTime();
+      await accounts.server.stop(true);
+    }
+  });
 
-      expect({ first: after.first, deleted: [...accounts.deleted].sort() }).toEqual({ first: 1, deleted: ['trial-1', 'trial-2'] });
+  test('a deletion whose standing could not be read keeps its block until a read answers', async () => {
+    const accounts = accountsDeployment({}, 1);
+    const host = accounts.server.url.host;
+    const dir = scratchDir('trial-leases');
+    const lease = await leaseBlock({ size: 1, pass: false, hosts: [host], liveClaims: none, settled, dir });
+
+    try {
+      // Its delete is asked, then every read of how it stands is lost.
+      await onTrialBlock(lease, block(accounts.server.url.origin, 1, 1), async () => {}, { say: () => {}, pause: async () => { accounts.unreadable.add('trial-1'); } });
+      const meanwhile = await leaseBlock({ size: 1, pass: false, hosts: [host], liveClaims: none, settled, dir });
+
+      expect(meanwhile.first).toBe(2);
+      await meanwhile.release();
+
+      accounts.unreadable.delete('trial-1');
+      const after = await leaseBlock({ size: 1, pass: false, hosts: [host], liveClaims: none, settled, dir });
+
+      expect({ first: after.first, deleted: [...accounts.deleted] }).toEqual({ first: 1, deleted: ['trial-1'] });
+      await after.release();
+    } finally {
+      await accounts.server.stop(true);
+    }
+  });
+
+  test('a deletion the run saw finish leaves its block free at once', async () => {
+    const accounts = accountsDeployment({}, 2);
+    const host = accounts.server.url.host;
+    const dir = scratchDir('trial-leases');
+    const lease = await leaseBlock({ size: 2, pass: false, hosts: [host], liveClaims: none, settled, dir });
+    let reads = 0;
+
+    try {
+      await onTrialBlock(lease, block(accounts.server.url.origin, 1, 2), async () => {}, { say: () => {}, pause: async () => {} });
+
+      const after = await leaseBlock({ size: 2, pass: false, hosts: [host], liveClaims: none, settled: async (owed) => {
+        reads += 1;
+
+        return await settled(owed);
+      }, dir });
+
+      expect({ first: after.first, reads, deleted: [...accounts.deleted].sort() }).toEqual({ first: 1, reads: 0, deleted: ['trial-1', 'trial-2'] });
       await after.release();
     } finally {
       await accounts.server.stop(true);

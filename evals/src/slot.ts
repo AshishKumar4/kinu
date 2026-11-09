@@ -187,7 +187,7 @@ export async function signInTrialAccount(target: EvalTarget): Promise<string | n
   return answer.ok ? null : `signing ${accountOf(target)} in at ${target.origin} answered ${String(answer.status)}`;
 }
 
-/** How long an account's deletion may take to finish once asked, its workspaces torn down and its storage destroyed. */
+/** How long a run's teardown reads a deletion under way before it lets its lease go with the account still owed. */
 const DELETION_FINISH_MS = 10 * 60_000;
 
 /** How often a deletion under way is read again. */
@@ -204,6 +204,16 @@ function standingOf(status: number): 'live' | 'deleting' | 'deleted' | null {
 
 /** How a teardown waits between reads of a deletion under way; a test hands its own. */
 export type Pause = (ms: number) => Promise<void>;
+
+/**
+ * Whether `target`'s account has no deletion under way: it reads deleted (404), or live. One still being deleted (503), or
+ * any other answer, has not settled; a read that fails rejects.
+ */
+export async function teardownSettled(target: EvalTarget): Promise<boolean> {
+  const standing = standingOf((await fetch(`${target.origin}/api/user/profile`, { headers: webHeaders(target.identity), signal: AbortSignal.timeout(DELETE_CALL_MS) })).status);
+
+  return standing === 'deleted' || standing === 'live';
+}
 
 /**
  * Deletes `target`'s account through the product's own account delete, its profile's email confirming it, and answers
@@ -274,13 +284,28 @@ export const TEARDOWN_MARK = 'tearing-down';
 /** The file a plan run's holder keeps in a run's output while it renews into the run's accounts; the teardown waits it out. */
 export const RENEWING_MARK = 'renewing';
 
-/** Each account of `block` deleted, eight at a time, each answering before the next eight: what that came to, in words. */
-async function deleteBlock(block: TrialBlock, pause?: Pause): Promise<string> {
+/**
+ * Each account of `block` deleted, eight at a time, each answering before the next eight: what that came to, in words.
+ * Each is marked owed on `lease` before its delete is asked, and the mark cleared only once it reads deleted, so one whose
+ * deletion this run could not see finish keeps its block from the next run until a read finds it settled.
+ */
+async function deleteBlock(lease: TrialLease, block: TrialBlock, pause?: Pause): Promise<string> {
   const refused: string[] = [];
   let deleted = 0;
 
+  const deleting = async (target: EvalTarget): Promise<string | null> => {
+    const owed = { origin: target.origin, account: accountOf(target) };
+
+    lease.owe(owed);
+    const finding = await deleteTrialAccount(target, pause);
+
+    if (finding === null) lease.settle(owed);
+
+    return finding;
+  };
+
   for (let at = 0; at < block.targets.length; at += 8) {
-    const answers = await Promise.allSettled(block.targets.slice(at, at + 8).map(async (target) => deleteTrialAccount(target, pause)));
+    const answers = await Promise.allSettled(block.targets.slice(at, at + 8).map(deleting));
 
     deleted += answers.filter((answer) => answer.status === 'fulfilled' && answer.value === null).length;
     refused.push(...answers.flatMap((answer) => (answer.status === 'rejected' ? [String(answer.reason)] : answer.value ?? [])));
@@ -290,8 +315,9 @@ async function deleteBlock(block: TrialBlock, pause?: Pause): Promise<string> {
 }
 
 /**
- * `run` on its leased block (evals/src/lease.ts), whose accounts are deleted when it ends, however it ends, and only once
- * each deletion has finished is the lease let go: trial accounts pile up otherwise (the owner, 2026-11-09: 64 left on production, 256 on staging).
+ * `run` on its leased block (evals/src/lease.ts), whose accounts are deleted when it ends, however it ends, before the lease
+ * is let go: trial accounts pile up otherwise (the owner, 2026-11-09: 64 left on production, 256 on staging). An account
+ * whose deletion it could not see finish stays owed on the lease, so no run takes the block before it has settled.
  * The lease is held from before anything touches the block, so its teardown deletes nothing another run holds. The next
  * run's provisioning makes each account again before any trial opens on it (scripts/eval-provider-keys.ts). `before`
  * runs first: it waits for the run's remote trials to have ended, and for anything writing to the block to stop; where
@@ -307,7 +333,7 @@ export async function onTrialBlock<T>(
   } finally {
     try {
       await options.before?.();
-      (options.say ?? console.log)(await deleteBlock(block, options.pause));
+      (options.say ?? console.log)(await deleteBlock(lease, block, options.pause));
     } finally {
       await lease.release();
     }

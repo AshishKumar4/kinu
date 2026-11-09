@@ -10,18 +10,21 @@ import { claimLabel, claimOf, onTrialBlock, type SlotClaim } from './slot';
 
 const STAGING = 'staging.kinu.run';
 
+/** No account of any block is owed a deletion. */
+const free = async (): Promise<boolean> => true;
+
 describe('a lease on trial accounts', () => {
   test('a block another run holds is skipped, its own half kept apart, and free again once its lease goes', async () => {
     const dir = scratchDir('trial-leases');
     const none = async (): Promise<SlotClaim[]> => [];
-    const first = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
-    const second = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
-    const elsewhere = await leaseBlock({ size: 4, pass: false, hosts: ['kinu.run'], liveClaims: none, dir });
-    const pass = await leaseBlock({ size: 1, pass: true, hosts: [STAGING], liveClaims: none, dir });
+    const first = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, settled: free, dir });
+    const second = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, settled: free, dir });
+    const elsewhere = await leaseBlock({ size: 4, pass: false, hosts: ['kinu.run'], liveClaims: none, settled: free, dir });
+    const pass = await leaseBlock({ size: 1, pass: true, hosts: [STAGING], liveClaims: none, settled: free, dir });
 
     expect([first.first, second.first, elsewhere.first, pass.first]).toEqual([1, 5, 1, 257]);
     await first.release();
-    const again = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
+    const again = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, settled: free, dir });
 
     expect(again.first).toBe(1);
     await Promise.all([second, elsewhere, pass, again].map(async (lease) => lease.release()));
@@ -36,12 +39,12 @@ describe('a lease on trial accounts', () => {
     const deletes: string[] = [];
 
     // The first run leases trial-1 to trial-4, its job claims them, then the run dies: its lock goes, its job lives on.
-    const dead = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: live, dir });
+    const dead = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: live, settled: free, dir });
 
     jobs.set('j1', claimLabel('5c522f12d44f', { first: dead.first, last: dead.last, hosts: [STAGING] }));
     await dead.release();
 
-    const next = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: live, dir });
+    const next = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: live, settled: free, dir });
 
     expect([dead.first, next.first]).toEqual([1, 5]);
 
@@ -68,10 +71,10 @@ describe('a lease on trial accounts', () => {
     }
 
     // Once the dead run's job has ended, its block is free again.
-    const meanwhile = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: live, dir });
+    const meanwhile = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: live, settled: free, dir });
 
     jobs.delete('j1');
-    const after = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: live, dir });
+    const after = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: live, settled: free, dir });
 
     expect({ deletes: deletes.sort(), meanwhile: meanwhile.first, after: after.first }).toEqual({ deletes: ['trial-5', 'trial-6', 'trial-7', 'trial-8'], meanwhile: 5, after: 1 });
     await Promise.all([meanwhile.release(), after.release()]);
@@ -87,7 +90,7 @@ describe('a lease on trial accounts', () => {
       process.on('SIGINT', () => {});
       process.on('SIGTERM', () => { console.log('signalled'); });
       const { leaseBlock } = await import(${JSON.stringify(join(import.meta.dir, 'lease.ts'))});
-      const lease = await leaseBlock({ size: 4, pass: false, hosts: ['${STAGING}'], liveClaims: async () => [], dir: ${JSON.stringify(dir)} });
+      const lease = await leaseBlock({ size: 4, pass: false, hosts: ['${STAGING}'], liveClaims: async () => [], settled: async () => true, dir: ${JSON.stringify(dir)} });
       console.log('leased ' + lease.first);
       await new Promise(() => {});
     `], { detached: true, stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env } });
@@ -101,17 +104,17 @@ describe('a lease on trial accounts', () => {
     process.kill(-(run.pid ?? 0), 'SIGINT');
     process.kill(-(run.pid ?? 0), 'SIGTERM');
     await signalled;
-    const during = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
+    const during = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, settled: free, dir });
 
     run.kill('SIGKILL');
     await new Promise((ended) => { run.on('exit', ended); });
 
     // The holder ends once it reads its closed stdin: the first block is the next lease's then, whichever attempt that is.
-    let after = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
+    let after = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, settled: free, dir });
 
     for (let attempt = 0; after.first !== 1 && attempt < 500; attempt += 1) {
       await after.release();
-      after = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, dir });
+      after = await leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: none, settled: free, dir });
     }
 
     expect([during.first, after.first]).toEqual([5, 1]);
@@ -122,6 +125,6 @@ describe('a lease on trial accounts', () => {
     const dir = scratchDir('trial-leases');
     const all = async (): Promise<SlotClaim[]> => [{ first: 1, last: 256, hosts: [STAGING] }];
 
-    await expect(leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: all, dir })).rejects.toThrow('their locks');
+    await expect(leaseBlock({ size: 4, pass: false, hosts: [STAGING], liveClaims: all, settled: free, dir })).rejects.toThrow('their locks');
   });
 });

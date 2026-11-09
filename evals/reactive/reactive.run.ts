@@ -13,7 +13,7 @@ import { collectEvalTasks } from '../src/eval';
 import { learningVerdict, REACTIVE_ARMS, reactivePlan, type ArmRun } from '../src/reactive';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import { runArm } from '../src/reactive-run';
-import { onTrialBlock, trialAccounts, trialSlot } from '../src/slot';
+import { onTrialBlock, teardownSettled, trialAccounts, trialSlot } from '../src/slot';
 import { leaseBlock } from '../src/lease';
 import { kinuArmada, liveClaims } from '../../scripts/evals-lease';
 import { ARMS, resolveEvalTarget } from '../src/target';
@@ -24,16 +24,16 @@ test('learning on beats learning off', async () => {
   const seeds = Number(env.KINU_REACTIVE_SEEDS ?? '3');
   const measured = { ...evalMatrix(env, ARMS.map((arm) => arm.id)), arms: [...REACTIVE_ARMS], trials: seeds };
   const runner = basename(import.meta.filename);
-  const host = new URL(resolveEvalTarget(env).origin).host;
+  const target = resolveEvalTarget(env);
 
   // Its accounts are leased as every eval run's are (evals/src/lease.ts), and deleted as it ends (`onTrialBlock`).
   const lease = await leaseBlock({
-    size: trialAccounts([runner], measured).length, pass: false, hosts: [host], liveClaims: async () => liveClaims(kinuArmada()),
+    size: trialAccounts([runner], measured).length, pass: false, hosts: [new URL(target.origin).host], liveClaims: async () => liveClaims(kinuArmada()),
+    settled: async ({ account }) => teardownSettled({ ...target, identity: { ...target.identity, account } }),
   });
 
   const matrix = { ...measured, firstSlot: lease.first };
   const [model] = matrix.models;
-  const target = resolveEvalTarget(env);
   const tasks = new Map((await collectEvalTasks()).map((task) => [task.id, task]));
   const families = (env.KINU_REACTIVE_FAMILIES?.split(',') ?? [...tasks.keys()]).sort();
   const unknown = families.filter((family) => !tasks.has(family));

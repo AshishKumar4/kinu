@@ -5,10 +5,11 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { MUSE_CALLS_AT_ONCE, evalMatrix, type EvalMatrix } from '../evals/src/config';
-import { claimLabel, LEASED_FILE, onTrialBlock, RENEWING_MARK, TEARDOWN_MARK, trialAccounts, trialInheritedRows, type SlotClaim, type TrialBlock } from '../evals/src/slot';
+import { claimLabel, LEASED_FILE, onTrialBlock, RENEWING_MARK, TEARDOWN_MARK, teardownSettled, trialAccounts, trialInheritedRows, type SlotClaim, type TrialBlock } from '../evals/src/slot';
 import { parseEvalAccount } from '@kinu.run/core';
 import { collectEvalTasks } from '../evals/src/eval';
 import type { EvalTask } from '../evals/src/task';
+import type { EvalTarget } from '../evals/src/workspace-roster';
 import { ARMS, deployedBuild } from '../evals/src/target';
 import { evalTargetVerdict, evalWebIdentityEnv } from '../packages/test-utils/src/eval-identity';
 import { deploymentOf } from './infra-manifest';
@@ -16,7 +17,7 @@ import { gitIn } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { drainArmadaProgress } from './armada-progress';
 import { KINU_ARMADA, keysWindows, kinuArmada, liveClaims } from './evals-lease';
-import { leaseBlock } from '../evals/src/lease';
+import { leaseBlock, type OwedAccount } from '../evals/src/lease';
 import { EVAL_SUITES, suiteTasks, type EvalSuite } from './evals-suites';
 import { NETWORK_SCOPE, processEvals, resolveGh, settleEvalRun } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
@@ -255,11 +256,12 @@ function blockOf(origins: MapPlan['origins'], claim: SlotClaim): TrialBlock {
   const accounts = Array.from({ length: claim.last - claim.first + 1 }, (_, at) => parseEvalAccount(`trial-${String(claim.first + at)}`))
     .filter((account) => account !== null);
 
-  return {
-    targets: origins.flatMap(({ origin }) => accounts.map((account) => ({
-      origin, identity: { kind: 'secret' as const, secret: process.env[evalWebIdentityEnv(origin)] ?? '', account },
-    }))),
-  };
+  return { targets: origins.flatMap(({ origin }) => accounts.map((account) => trialTarget({ origin, account }))) };
+}
+
+/** A trial account at `origin`, acting as the deployment's eval identity. */
+function trialTarget({ origin, account }: OwedAccount): EvalTarget {
+  return { origin, identity: { kind: 'secret', secret: process.env[evalWebIdentityEnv(origin)] ?? '', account } };
 }
 
 /**
@@ -288,7 +290,10 @@ async function leasedMap(plan: MapPlan, started: (job: string) => void) {
   await keysWindows(console.log);
 
   try {
-    const lease = await leaseBlock({ size, pass: plan.pass, hosts, liveClaims: async () => liveClaims(kinuArmada()) });
+    const lease = await leaseBlock({
+      size, pass: plan.pass, hosts, liveClaims: async () => liveClaims(kinuArmada()), settled: async (owed) => teardownSettled(trialTarget(owed)),
+    });
+
     const { first } = lease;
     const claim = { first, last: lease.last, hosts };
     const matrix = { ...plan.matrix, firstSlot: first };
