@@ -57,7 +57,7 @@ const ACCESS: readonly AccessOption<LiveShareVisibility>[] = [
  */
 const MODES: readonly Choice<ShareMode>[] = [
   { id: "own", icon: <UserCircleIcon size={16} />, label: "Their own access", detail: "Each person sees their own data, on their own connections. Nothing of yours is used." },
-  { id: "owner", icon: <IdentificationCardIcon size={16} />, label: "My access", detail: "It acts with your connections, within the reach below. Each change waits for you. Your agent's chat stays yours alone." },
+  { id: "owner", icon: <IdentificationCardIcon size={16} />, label: "My access", detail: "Anyone who opens it acts through your account, within the reach below. Each change waits for you." },
 ];
 
 /**

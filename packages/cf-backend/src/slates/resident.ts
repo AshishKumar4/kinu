@@ -216,6 +216,8 @@ export function slateRunnerSource(
     '    super(result.reason + ": " + result.error);',
     '    this.name = "SlateRefusal";',
     '    this.reason = result.reason;',
+    // What the asker must do first, which the page's runtime acts on (a share's visitor says who they are).
+    '    if (result.needs !== undefined) this.needs = result.needs;',
     '  }',
     '}',
     'function errorText(cause) {',

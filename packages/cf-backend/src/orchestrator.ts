@@ -1,6 +1,6 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
 import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf } from '@kinu.run/core';
-import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateRevision as builtRevision, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
+import { declareShareSpend, preapproveSlateEffect, ROOT_SLATE_CALLER, SlateShareGuests, slateRevision as builtRevision, type GuestPrincipal, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace's one Durable Object, every agent of it hosted inside as a logical actor.
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -109,6 +109,7 @@ import { createCodemodeToolFactory } from "./codemode-tool";
 import { compactionDiagnostics, hostedActorCompaction } from "@kinu.run/compaction";
 import { publishSubagentReport, temporaryRunSettles, type ReportDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
+import { GUEST_APP_TOOL, GUEST_ASK_METADATA, guestAnswer, guestAppTool, guestDynamicContext, guestSoul, guestTitle, guestVisitorLabel, NO_GUEST_INSTRUCTIONS, NO_GUEST_SKILLS } from './guest-agents';
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
 } from "@kinu.run/core";
@@ -626,6 +627,12 @@ interface OpenedSurface {
 }
 
 /** What a turn's surface and a run's differ in; the rest is assembled alike. */
+/** A visitor's ask, answered once their guest's turn it landed in ends; cancelled, it waits no more. */
+interface GuestAnswer {
+  readonly stream: ReadableStream<Uint8Array>;
+  cancel(): void;
+}
+
 type AssembledSurfaceParts = Omit<ActorSurface, 'surface' | 'descriptors' | 'digest' | 'reads' | 'sources' | 'bind'> & {
   readonly sources: Omit<ActorSurface['sources'], 'wiredToolNames' | 'codemodeCapabilities'>;
   readonly codemodeCapabilities: ActorSurface['sources']['codemodeCapabilities'];
@@ -1035,6 +1042,20 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     );
 
     return this._subagentRuntime;
+  }
+
+  private _guests: SlateShareGuests | null = null;
+
+  /** The workspace's shared-app guests (`slate_share_guests`, core slates/guest.ts): which share and visitor each answers. */
+  protected guests(): SlateShareGuests {
+    this._guests ??= new SlateShareGuests(this.watchedExec);
+
+    return this._guests;
+  }
+
+  /** What `record`'s agent reaches by what it is: a guest's scope is its row in the workspace's guests, never its name. */
+  protected reachOf(record: WorkspaceActor): ActorReach {
+    return actorReach(actorPolicy(record), this.guests().principalOf(record.actorId));
   }
 
   protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
@@ -2519,15 +2540,16 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
   /** A slate's `agent.send` or `agent.ask`, delivered to this agent's turn inbox. */
   private slateAgentCall(route: Extract<SlateRoute, { kind: 'agent' }>, context: SlateDispatchContext): Effect.Effect<SlateSurfaceValue, KinuError> {
+    // A share's visitor's message reaches their own guest, never this agent.
+    if (route.viewer !== undefined) return this.guestAsk({ ...route, viewer: route.viewer }, context);
+
     return Effect.gen({ self: this }, function* () {
       // `said` is the slate's own message, for the person's card; the text adds what the agent is told.
       const metadata: JsonObject = { slate: route.slate, said: cardWords(route.text), ask: route.ask === true };
 
       if (route.data !== undefined) metadata.data = route.data;
 
-      if (route.viewer !== undefined) metadata.viewer = route.viewer;
-
-      const said = route.viewer === undefined ? `Slate ${route.slate}: ${route.text}` : `Slate ${route.slate} (viewer ${route.viewer}): ${route.text}`;
+      const said = `Slate ${route.slate}: ${route.text}`;
 
       // A program this agent's running turn waits on began the chain: the reply could come only once that turn ends,
       // and the turn waits on the program, so the ask is refused now rather than held until the turn gives up on it.
@@ -2558,6 +2580,137 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
       return { reply };
     });
+  }
+
+  /**
+   * A share's visitor's message (`agent.send`, `agent.ask`) to their own guest, hired as they first write: delivered as
+   * the visitor's words, and an ask answered with the guest's last words in the turn the message landed in.
+   */
+  private guestAsk(
+    route: Extract<SlateRoute, { kind: 'agent' }> & { readonly viewer: { readonly share: string; readonly subject: string } }, context: SlateDispatchContext,
+  ): Effect.Effect<SlateSurfaceValue, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      context.admit?.();
+      const guest = yield* this.guestFor(route.viewer.share, route.viewer.subject);
+      const key = `guest-ask:${crypto.randomUUID()}`;
+      const answer = route.ask === true ? this.guestAnswerOf(guest.actorId, key) : null;
+      const text = route.data === undefined ? route.text : `${route.text}\n\nWhat the app sent with it: ${JSON.stringify(route.data)}`;
+
+      const queued = yield* Effect.promise(async () => this.enqueueHostedTurn(this.agentBound(guest.actorId), {
+        text, idempotencyKey: key, metadata: { [GUEST_ASK_METADATA]: key, slate: route.slate },
+      }));
+
+      if (queued.status === 'failed') {
+        answer?.cancel();
+
+        return yield* new KinuError('unavailable', `The app's guest could not take the message: ${queued.reason}`);
+      }
+
+      const answered: SlateSurfaceValue = answer === null ? { outcome: queued.status } : { reply: answer.stream };
+
+      return answered;
+    });
+  }
+
+  /** The visitor's live guest on `share`, hired now where they have none (core slates/guest.ts). */
+  private guestFor(share: string, subject: string): Effect.Effect<GuestPrincipal, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const guests = this.guests();
+      const held = guests.of(share, subject);
+
+      if (held !== null) return held;
+      const { controller } = yield* Effect.promise(async () => this.slates());
+      const record = controller.live.live(share);
+      const title = (yield* Effect.promise(async () => controller.readLiveShare(share)))?.title ?? record.slate;
+      // One creation per hire of theirs: two first messages at once make one guest, and a retired one's successor is new.
+      const creationId = `guest:${share}:${subject}:${String(guests.hired(share, subject))}`;
+
+      const reference = yield* this.subagentRuntime().spawn({
+        name: `guest-${sha256Hex(creationId, 16)}`, displayName: guestTitle(title, { subject }), nameOrigin: 'user', role: 'task',
+        mission: `Answer a visitor of ${title}`, lifetime: 'durable', origin: 'agent', creationId,
+      });
+
+      const principal: GuestPrincipal = { actorId: reference.actorId, share, slate: record.slate, subject };
+
+      guests.record(principal);
+
+      return principal;
+    });
+  }
+
+  /** Visitors' asks waiting on their guest's answer, by guest, then by the key their message carries. */
+  private readonly guestAsks = new Map<string, Map<string, ReturnType<typeof Promise.withResolvers<string>>>>();
+
+  /** The answer to the message `key` names, as UTF-8 text once the guest's turn it landed in ends; cancelling it lets it go. */
+  private guestAnswerOf(actorId: string, key: string): GuestAnswer {
+    const answered = Promise.withResolvers<string>();
+    const asks = this.guestAsks.get(actorId) ?? new Map<string, typeof answered>();
+
+    asks.set(key, answered);
+    this.guestAsks.set(actorId, asks);
+    const cancel = (): void => { asks.delete(key); };
+
+    const stream = new ReadableStream<Uint8Array>({
+      start: async (controller) => {
+        controller.enqueue(new TextEncoder().encode(await answered.promise));
+        controller.close();
+      },
+      cancel,
+    });
+
+    return { stream, cancel };
+  }
+
+  /** A guest's turn ended: each ask whose message landed in it is answered with what the guest said there. */
+  private async guestTurnEnded(actorId: string, turnId: string | null): Promise<void> {
+    const asks = this.guestAsks.get(actorId);
+
+    if (asks === undefined || asks.size === 0 || turnId === null) return;
+
+    const read = await hold(attempt({ doing: "reading a shared app's guest's answer", otherwise: 'unavailable' }, async () => this.agentCall(actorId, (isolate, snapshot) => isolate.historyPage(snapshot, {}))));
+
+    // Unread, no later turn would answer them either: each ask waiting is told why.
+    if (Exit.isFailure(read)) return this.guestAsksEnded(actorId, toKinuError({ doing: "reading a shared app's guest's answer", cause: Cause.squash(read.cause), otherwise: 'unavailable' }));
+
+    for (const [key, ask] of asks) {
+      const said = guestAnswer(read.value.items, key, turnId);
+
+      if (said === null) continue;
+      asks.delete(key);
+      ask.resolve(said);
+    }
+  }
+
+  /** Every ask waiting on `actorId`'s answer ends with `cause`: its guest will not answer it. */
+  private guestAsksEnded(actorId: string, cause: KinuError): void {
+    for (const ask of this.guestAsks.get(actorId)?.values() ?? []) ask.reject(cause);
+    this.guestAsks.delete(actorId);
+  }
+
+  /**
+   * `share` ended or changed how it lends: its guests are retired, their conversations kept for the owner to read. Not
+   * `@callable`: the slate host's port alone reaches it.
+   */
+  guestsEnded(share: string): Promise<void> {
+    return settle(Effect.forEach(this.guests().live(share), (guest) => {
+      const { record, handle } = this.agentBound(guest.actorId);
+
+      return this.subagentRuntime().dismiss(record.name, { keepHistory: true, interrupt: true }, actorReferenceOf(handle)).pipe(
+        Effect.tap(() => Effect.sync(() => { this.guestAsksEnded(guest.actorId, new KinuError('denied', 'This app is no longer shared')); })),
+      );
+    }, { discard: true }));
+  }
+
+  /** The owner decided a guest's own call: the guest is told, and makes an approved call again, which takes the approval. */
+  private async guestDecided(effect: { readonly guest: string; readonly server: string; readonly tool: string }, decision: 'approved' | 'denied'): Promise<void> {
+    if (this.guests().principalOf(effect.guest) === null || this.workspaceActors().standing(effect.guest) !== 'live') return;
+    const owner = await this.guestOwnerName();
+
+    const text = decision === 'approved'
+      ? `${owner} approved your call of ${effect.tool} on ${effect.server}. Make it again exactly as before, then tell the person what came of it.`
+      : `${owner} declined your call of ${effect.tool} on ${effect.server}. Tell the person it will not be made.`;
+
+    await this.enqueueHostedTurn(this.agentBound(effect.guest), { text });
   }
 
   /** The one adapter between a slate's `agent.send` and the turn inbox. */
@@ -2697,7 +2850,10 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     actor: ActorReference, requested: WorkMode, use: (providers: readonly CodemodeProvider[]) => Promise<A>,
   ): Promise<A> {
     const record = this.actorHost().describe(actor.actorId);
-    const scope = record === null ? null : actorReach(actorPolicy(record));
+    const scope = record === null ? null : this.reachOf(record);
+
+    // A shared app's guest reaches its app through its one tool, and no operation through any outside caller.
+    if (scope?.kind === 'guest') return await use([]);
 
     // A hire reaches its own confined surface; an agent whose programs reach the workspace's program surface, that one.
     if (scope === null || scope.kind === 'confined') {
@@ -4309,7 +4465,13 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       openWork: (actorId) => this.openWorkOf(actorId),
       credentialsRevision: () => this.account.openedCredentialsRevision(),
       // The workspace agent's missions are the workspace's: owner-declared here, and charged here as its turns spend.
-      missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent ? this.budget : null),
+      missions: (actorId) => (actorPolicy(this.agentOf(actorId)).workspaceAgent || this.guests().principalOf(actorId) !== null ? this.budget : null),
+      // A guest's model calls spend its share's day, as its visitor's calls do: one label on the workspace's governor.
+      guestSpend: (actorId) => {
+        const guest = this.guests().principalOf(actorId);
+
+        return guest === null ? null : declareShareSpend(this.budget, guest.share);
+      },
       // The activation owns it, as its other detached work: a failure is logged as the release's own.
       turnsEnded: (actorId) => {
         const box = this.rt.sandboxHandle;
@@ -4355,6 +4517,9 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       memory: () => new AgentMemory(async () => (await this.agentSeat(actorId)).runtime.memory),
       program: async (bound, ...args) => {
         this.admitWork();
+
+        // A shared app's guest runs no program (core slates/guest.ts).
+        if (this.guests().principalOf(actorId) !== null) return settleSync(Effect.fail(new KinuError('denied', "A shared app's guest runs no program")));
 
         return await this.agentTurns.program(actorId, bound.turnId, ...args);
       },
@@ -4427,7 +4592,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       // The turn's report, owed once its answer committed: decided here, where its hirer's roster is, and relayed. What it
       // told so far is the agent's own, kept where the turn ran. An agent with no hirer owes none.
       turnReport: async (turn, ended, relay) => {
-        if (actorPolicy(this.agentOf(actorId)).hirer === null) return 'none';
+        // A guest's conversation is its visitor's: nothing of it is reported to the agent that hired it.
+        if (actorPolicy(this.agentOf(actorId)).hirer === null || this.guests().principalOf(actorId) !== null) return 'none';
 
         const actor = this.agentBound(actorId);
         // A later turn its chat holds, and what is owed it here and has not crossed yet.
@@ -4451,14 +4617,14 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       owes: async (seq, next, holds, report) => { await this.agentOwes(actorId, { seq, next, holds, report }); },
       birthContext: async (drainTurnId) => subagentTurnContext(new EventLog(this.watchedExec, this.agentBound(actorId).handle), drainTurnId),
       releaseForeground: async (executing) => this.foregroundRunnerOf(actorId)?.releaseForeground(executing) ?? false,
-      steerSkills: async (text, alreadyActive) => await steerSkillsBlock({
+      steerSkills: async (text, alreadyActive) => (this.guests().principalOf(actorId) !== null ? null : await steerSkillsBlock({
         vfs: this.rt.storage.vfs,
         config: this.agentBound(actorId).stores.config,
         userText: text,
         trust: this.profiles.trust(),
         limits: this.modelCatalog.window(),
         alreadyActive: new Set(alreadyActive),
-      }),
+      })),
       // Only main's conversation is kept warm: no other agent has its wake chain.
       armCacheWarm: async (input) => this.warmingOf(actorId).armAfterTurn(input),
       // Asked only by a turn that never prepared: one that did reads what its preparation and its tools answered.
@@ -4575,6 +4741,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     this.chatRooms.hostedRoom(actorId)?.closeTurn(event.turnId, window);
     fences.ended(actorId, { runId });
     await this.chatTurnClosed(actorId, figures, ended === 'unfenced' ? null : ended, ended === 'unfenced' ? this.agentTurns.chatTurn(actorId) : ended.turnId);
+    await this.guestTurnEnded(actorId, event.turnId);
   }
 
   /**
@@ -4903,7 +5070,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    */
   protected async actorSurface(actor: CFSeat, turn: SurfaceTurn): Promise<ActorSurface> {
     const { key, lane, run } = turn;
-    const reach = surfaceReach(actorPolicy(actor.record), lane, true);
+    const guest = this.guests().principalOf(actor.handle.actorId);
+    const reach = surfaceReach(actorPolicy(actor.record), lane, true, guest);
     const driving = lane.driving ?? {};
     const item: ChatTurnInput = { kind: turnTags({ metadata: driving }).author === 'operator' ? 'user' : 'programmatic', text: turn.text, metadata: driving };
 
@@ -4918,6 +5086,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     return await inTurnSurface(surface, async () => {
       // A fresh turn of the workspace agent opens on the workspace's lanes, before it draws its trial arm.
       if (reach.actor.kind === 'workspace' && lane.opening !== undefined) this.workspaceTurnOpening(driving);
+
+      if (guest !== null) return await this.guestSurfaceOf(actor, turn, guest, { surface, reach });
 
       return run === undefined ? await this.turnSurfaceOf(actor, turn, { surface, reach }) : await this.runSurfaceOf(actor, turn, run, { surface, reach });
     });
@@ -4944,6 +5114,76 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       resolved, tools: run.tools, stores: run.stores, raw: run.tools, capture: run.capture, reports: { spoke: false, settled: false },
       ownerLane, offered: { ...run.tools, ...ownerLaneDeclarations(ownerLane) }, sources: run.sources, codemodeCapabilities: () => [],
     });
+  }
+
+  /**
+   * A shared app's guest's turn (core slates/guest.ts): its one tool calls its app as its visitor's page does, and its
+   * prompt holds the app and its own conversation, nothing of its owner's: no account, memory, mail, skills, instructions,
+   * machines, secrets or advisor. It runs no program, so it reaches no network either.
+   */
+  private async guestSurfaceOf(actor: CFSeat, turn: SurfaceTurn, guest: GuestPrincipal, opened: OpenedSurface): Promise<ActorSurface> {
+    const { surface, reach } = opened;
+    const resolved = await this.surfaceProfile(actor, turn, opened);
+    const host = await this.slates();
+    const app = await host.controller.readLiveShare(guest.share);
+    const title = app?.title ?? guest.slate;
+    const tools: ToolSet = { [GUEST_APP_TOOL]: guestAppTool({ slate: guest.slate, title }, async (path, args) => await host.guestCall(guest, { path, args })) };
+    const ownerLane = { askOwner: false, submitPlan: false, replyToComment: false };
+    const stores = builtinStores(this.storeInputs(actor, reach.actor, surface.ledgers, () => null));
+    const sources = await this.guestSources(actor, surface, guestSoul({ title, description: app?.description ?? '', owner: await this.guestOwnerName(), visitor: guestVisitorLabel(guest.subject) }));
+
+    const assembled = await this.assembledSurface(actor, surface, {
+      resolved, tools, stores, raw: tools, capture: null, reports: { spoke: false, settled: false }, ownerLane, offered: tools, sources, guest: true,
+      codemodeCapabilities: () => [],
+    });
+
+    this.turnOpened(actor, { surface, reach, lane: turn.lane, text: turn.text });
+
+    return assembled;
+  }
+
+  /** A guest's turn sources: its own config, lineage and conversation, the owner's models, and `soul` for its prompt. */
+  private async guestSources(actor: CFSeat, surface: TurnSurface, soul: string): Promise<RunTurnSources> {
+    const providers = this.providerRegistry();
+    const inputs = await this.profiles.inputs();
+    const identity = await this.promptIdentity();
+
+    const sources = actorTurnSources(actor, {
+      backend: 'cf',
+      harnessMode: () => this.config.getHarnessMode(),
+      instructionTrust: this.profiles.trust(),
+      models: {
+        catalog: this.modelCatalog, normalize: (spec) => providers.normalizeSpecSync(spec), resolve: (spec) => this.ownedModelServices.resolveModel(spec), routed: routedModelReads(providers),
+      },
+      profileInputs: async () => inputs,
+      choices: ownProfileChoices(actor.stores.config, inputs, this.profiles.ancestors(actor.handle)),
+      ancestors: () => this.profiles.ancestors(actor.handle) ?? [],
+      agentsActions: () => [],
+      temporaryAsk: () => false,
+      soul: async () => soul,
+      agentsMd: async () => NO_GUEST_INSTRUCTIONS,
+      workspaceIdentity: async () => identity,
+      artifacts: { sql: this.boundSql },
+      affinity: this.ownedModelServices.affinityKey,
+      operations: this.accounting.operations,
+      report: (report) => this.accounting.reportModelCall(report),
+      attachmentBudget: surface.ledgers.context,
+      extensions: () => [],
+      dynamic: () => (profile) => guestDynamicContext(profile),
+      run: surface.key,
+    });
+
+    return { ...sources, executors: () => [], skills: async () => NO_GUEST_SKILLS, memoryTail: async () => undefined };
+  }
+
+  /** The owner's name, as a guest names them; a read that fails names no one. */
+  private async guestOwnerName(): Promise<string> {
+    let name: string | null = null;
+
+    await settleLogged('share.owner_name_unread', { doing: "reading the owner's name for a shared app's guest", otherwise: 'unavailable' },
+      async () => { name = await this.account.ownerName(); }, { workspace: this.name });
+
+    return name ?? "the app's owner";
   }
 
   /** An agent's own turn: its planes, its artifacts and its tools, built here under the turn they serve. */
@@ -5066,13 +5306,21 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     return { memory: actor.runtime.memory, vectorStore: actor.runtime.vectorStore, facts: actor.stores.facts };
   }
 
+  /** The account's memory an actor reads: the workspace's own agent's whoever owns it, a hire's once it is owned, a
+   *  shared app's guest's never. */
+  private accountMemoryOf(reach: ActorReach, proposer: { readonly by: 'agent'; readonly agent: string }) {
+    if (reach.kind === 'guest') return undefined;
+
+    return reach.kind === 'workspace' ? this.account.memory(proposer) : this.account.ownedMemory(proposer);
+  }
+
   /** What an actor's builtins read its stores from (`builtinStores`): its native tools, and a slate's call as it. */
   private storeInputs(actor: CFSeat, reach: ActorReach, ledgers: Pick<TurnLedgers, 'files' | 'context'>, profile: () => OperationProfile | null): BuiltinStoreInputs {
     const { runtime } = actor;
     const { vectorStore, facts } = this.recallSources(actor);
     // The workspace's own agent reads the account's memory whoever owns it; a hire, only once it is owned.
     const proposer = { by: 'agent', agent: actor.record.name } as const;
-    const account = reach.kind === 'workspace' ? this.account.memory(proposer) : this.account.ownedMemory(proposer);
+    const account = this.accountMemoryOf(reach, proposer);
 
     return {
       rt: runtime,
@@ -5249,7 +5497,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   private openingReads(actorId: string): void {
     const seat = this.actorHost().hosted(actorReferenceOf(this.actingAgentOf(actorId)));
 
-    if (seat !== null) this.openingPlanes.set(actorId, this.sourcePlanes(seat, actorReach(actorPolicy(seat.record)), true));
+    if (seat !== null) this.openingPlanes.set(actorId, this.sourcePlanes(seat, this.reachOf(seat.record), true));
   }
 
   /**
@@ -5302,6 +5550,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    *  unread mail, the shared Drive's skills and the owner's MCP descriptors where it reaches them; the hub's device check
    *  for an agent on the workspace's lanes. */
   private sourcePlanes(actor: CFSeat, reach: ActorReach, turn: boolean): SourcePlanes {
+    // A guest's turn reads nothing of its owner's account.
+    if (reach.kind === 'guest') return { descriptors: null, device: Promise.resolve(), facts: null, mail: null, unreadMail: null, sharedSkills: null };
     const mail = this.ownerMailRead();
 
     return {
@@ -7754,6 +8004,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       remember: (grants) => { this.config.grantShellApproval(grants); },
       // "Always for this slate" on a shared slate's effect stands on that slate's owner shares, its sheet's to take back.
       preapprove: async (effect) => { preapproveSlateEffect((await this.slates()).controller.live, effect); },
+      guestDecided: async (effect, decision) => { await this.guestDecided(effect, decision); },
       // A spent grant's row is deleted, so this event is the only durable record of consumption, naming whose it
       // was. A hire's, or the root's outside any turn, falls back to the workspace run: the root's turn is not theirs.
       audit: (record) => {
@@ -9451,6 +9702,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         if (address !== null) this.broadcastToActor(address.actorId, JSON.stringify({ type: SLATE_PUSH_EVENT, page, data }));
       },
       messageBlock: (address) => this.answerBlock(address),
+      guestsEnded: async (share) => { await this.guestsEnded(share); },
       sharesChanged: async () => {
         this.overviewChanged(true);
 

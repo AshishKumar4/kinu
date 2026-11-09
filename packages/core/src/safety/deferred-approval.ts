@@ -439,6 +439,8 @@ export interface DeferredApprovalQueueDeps {
    * on one is an approval of that call alone. Cloudflare only: the CLI hosts no shared slates, so none asks it.
    */
   preapprove?(effect: SlateEffect): Promise<void>;
+  /** A guest's own call decided (`SlateEffect.guest`): its guest is told, so it makes the call again or tells its visitor. */
+  guestDecided?(effect: SlateEffect & { readonly guest: string }, decision: 'approved' | 'denied'): Promise<void>;
   /** Durable `approval_consumed` sink; optional only for tests. */
   audit?(record: ApprovalConsumedRecord): void;
   /** Mint a request id; injected for host id vocabulary and deterministic tests. */
@@ -724,7 +726,8 @@ export class DeferredApprovalQueue {
       // A shared slate's effect stands pre-approved for its slate now, the call it was asked on included: the one-shot
       // approval would outlive a later withdrawal of that, so it goes.
       for (const { action, kind } of kinds) {
-        if (kind.kind !== 'slate-effect' || this.deps.preapprove === undefined) continue;
+        // A guest's call is approved for itself alone, whatever the answer said.
+        if (kind.kind !== 'slate-effect' || kind.effect.guest !== undefined || this.deps.preapprove === undefined) continue;
         await this.deps.preapprove(kind.effect);
         this.storeOf(action.actor).retireOpen(action.executor, (open) => open.id === action.id);
       }
@@ -745,8 +748,15 @@ export class DeferredApprovalQueue {
 
     const written = await this.performWrites(decided.filter((a) => a.actor === this.deps.store.actorId));
     this.notify({ kind: 'decided', actions: decided });
-    // A shared slate's effect is taken by its own call's next run: no agent asked it, so none is woken for it.
+    // A shared slate's effect is taken by its own call's next run: no agent asked it, so none is woken for it, but for a
+    // guest's own call, whose guest is told, and makes that call again to take it.
     const told = decided.filter((a) => !blocked.includes(a) && approvalKindOf(a).kind !== 'slate-effect');
+
+    for (const action of decided) {
+      const kind = approvalKindOf(action);
+
+      if (kind.kind === 'slate-effect' && kind.effect.guest !== undefined) await this.deps.guestDecided?.({ ...kind.effect, guest: kind.effect.guest }, action.status === 'denied' ? 'denied' : 'approved');
+    }
 
     return settle(Effect.as(wakeEachAsker({
       answered: told,

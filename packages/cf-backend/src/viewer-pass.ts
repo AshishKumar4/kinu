@@ -6,6 +6,7 @@
  * Imports nothing of the Worker's routing, so the workspace's own fetches (`codemode-egress.ts`) can mint a pass.
  */
 
+import { ANONYMOUS_SUBJECT_PREFIX } from '@kinu.run/core/slates';
 import {
   labelSigner, parseWorkspacePreviewLabel, previewHostSuffix, sandboxPreviewLabelOf, sha256Hex, workspaceOfSandbox,
   type LabelSignerEnv, type PreviewSuffixEnv,
@@ -33,6 +34,14 @@ export async function shareViewerKey(env: LabelSignerEnv, share: string, userId:
 export const VIEWER_COOKIE_NAME = '__Host-kinu_viewer';
 
 const USER_ID_RE = /^[a-f0-9]{32}$/;
+
+/** A visitor who continued anonymously: a random id, minted by the share's host and signed into its cookie. */
+const ANONYMOUS_SUBJECT_RE = new RegExp(`^${ANONYMOUS_SUBJECT_PREFIX}([a-f0-9]{32})$`, 'u');
+
+/** A fresh anonymous visitor's subject for a share's cookie. */
+export function mintAnonymousSubject(): string {
+  return `${ANONYMOUS_SUBJECT_PREFIX}${[...crypto.getRandomValues(new Uint8Array(16))].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+}
 
 /** `v4`: a token keyed by the raw secret must not verify under the subkey. */
 export function previewMessage(workspace: string, port: number, handle: string): string {
@@ -63,10 +72,10 @@ export async function mintViewerTicket(env: LabelSignerEnv, workspace: string, h
   return `${userId}.${expiresAt}.${sig}`;
 }
 
-/** A public viewer's consent subject is its source hash, so `userId` is null for it. */
+/** A public viewer's consent subject is its source hash, so `userId` is null for it; an anonymous one's is its id. */
 export async function viewerCookie(
   env: LabelSignerEnv, workspace: string, handle: string, cookieHeader: string | null,
-): Promise<{ userId: string | null; subject: string; consented: boolean } | null> {
+): Promise<{ userId: string | null; anonymous: string | null; subject: string; consented: boolean } | null> {
   const value = cookieHeader?.split(';').map((part) => part.trim())
     .find((part) => part.startsWith(`${VIEWER_COOKIE_NAME}=`))
     ?.slice(VIEWER_COOKIE_NAME.length + 1);
@@ -78,13 +87,11 @@ export async function viewerCookie(
 
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
 
-  if (await viewerSigner.verify(env, cookieMessage(workspace, handle, subject, expiresAt), sig)) {
-    return { userId: USER_ID_RE.test(subject) ? subject : null, subject, consented: false };
-  }
+  const known = { userId: USER_ID_RE.test(subject) ? subject : null, anonymous: ANONYMOUS_SUBJECT_RE.exec(subject)?.[1] ?? null, subject };
 
-  if (await viewerSigner.verify(env, consentMessage(workspace, handle, subject, expiresAt), sig)) {
-    return { userId: USER_ID_RE.test(subject) ? subject : null, subject, consented: true };
-  }
+  if (await viewerSigner.verify(env, cookieMessage(workspace, handle, subject, expiresAt), sig)) return { ...known, consented: false };
+
+  if (await viewerSigner.verify(env, consentMessage(workspace, handle, subject, expiresAt), sig)) return { ...known, consented: true };
 
   return null;
 }
@@ -107,6 +114,9 @@ export async function ticketUser(
 /** How long a viewer cookie lets its visitor back in without a new ticket. */
 const VIEWER_COOKIE_LIFE_MS = 12 * 60 * 60 * 1000;
 
+/** How long an anonymous visitor keeps their id, renewed each time they continue anonymously: past it, they are new. */
+const ANONYMOUS_COOKIE_LIFE_MS = 30 * 24 * 60 * 60 * 1000;
+
 /** The viewer cookie's signed value, `subject.expiresAt.sig`, or null on a deployment with no signing secret. */
 async function signedViewerCookie(
   env: LabelSignerEnv, scope: { readonly workspace: string; readonly handle: string; readonly subject: string; readonly consent?: boolean }, lifeMs = VIEWER_COOKIE_LIFE_MS,
@@ -124,7 +134,8 @@ async function signedViewerCookie(
 export async function viewerCookieResponse(
   env: LabelSignerEnv, scope: { readonly workspace: string; readonly handle: string; readonly subject: string; readonly consent?: boolean }, location: string,
 ): Promise<Response> {
-  const value = await signedViewerCookie(env, scope);
+  const lifeMs = ANONYMOUS_SUBJECT_RE.test(scope.subject) ? ANONYMOUS_COOKIE_LIFE_MS : VIEWER_COOKIE_LIFE_MS;
+  const value = await signedViewerCookie(env, scope, lifeMs);
 
   if (value === null) {
     return new Response('Share authentication is unavailable.', { status: 503, headers: { 'cache-control': 'no-store' } });
@@ -134,7 +145,7 @@ export async function viewerCookieResponse(
     status: 303,
     headers: {
       location,
-      'set-cookie': `${VIEWER_COOKIE_NAME}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${String(VIEWER_COOKIE_LIFE_MS / 1000)}`,
+      'set-cookie': `${VIEWER_COOKIE_NAME}=${value}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${String(lifeMs / 1000)}`,
       'cache-control': 'no-store',
     },
   });

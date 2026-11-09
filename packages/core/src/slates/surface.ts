@@ -14,6 +14,7 @@ import { AGENT_ASK_MEMBER, AI_RUN_MEMBER, AI_STREAM_MEMBER, shareMemberRefusal, 
 import { retiredMember } from '../operations/retired';
 import type { Impact } from '@agent-core/core/facets';
 import type { ShareGrant } from './sharing';
+import { guestAuthorization, type GuestPrincipal } from './guest';
 import { WEB_SANDBOX_IMPACTS } from '../operations/web';
 import { MACHINE_FILES } from '../operations/executors';
 import { DB } from '../operations/db';
@@ -89,6 +90,8 @@ export interface SlateViewer {
   readonly share: string;
   readonly subject: string;
   readonly request: number;
+  /** The visitor's guest agent, where its own call began the chain (slates/guest.ts): every call on it is held to its scope. */
+  readonly guest?: GuestPrincipal;
 }
 
 /** Resolved from the host's own record, never off the wire: retired or foreign ids are refused. */
@@ -125,8 +128,11 @@ export type SlateRoute =
   | { readonly kind: 'tool'; readonly name: string; readonly input: JsonObject }
   | { readonly kind: 'rpc'; readonly method: SlateReadModel }
   | { readonly kind: 'mcp'; readonly server: string; readonly tool: string; readonly args: JsonObject; readonly readOnly?: true }
-  /** `ask`: the answer carries a stream of the agent's own reply, the text of the turn the message lands in. */
-  | { readonly kind: 'agent'; readonly slate: string; readonly text: string; readonly data?: JsonValue; readonly viewer?: string; readonly ask?: true }
+  /**
+   * `ask`: the answer carries a stream of the agent's own reply, the text of the turn the message lands in. `viewer`: a
+   * share's visitor's message, which their guest answers, never the owner's agent.
+   */
+  | { readonly kind: 'agent'; readonly slate: string; readonly text: string; readonly data?: JsonValue; readonly viewer?: Pick<SlateViewer, 'share' | 'subject'>; readonly ask?: true }
   /** `stream`: the answer is its text as a byte stream, written as the model writes it, not one value at the end. */
   | { readonly kind: 'ai'; readonly prompt: string; readonly system?: string; readonly tier?: string; readonly stream?: true }
   | {
@@ -328,7 +334,7 @@ function admitViewer(call: SlateCall, input: ViewerCallInput): Effect.Effect<Sla
   // Granted as observing because its server marks it read-only; the actor holds the call to that.
   if (found.kind === 'mcp') return Effect.succeed(entry.impact === 'observe' ? { ...call, route: { ...found, readOnly: true }, impact: 'observe' } : call);
 
-  if (found.kind === 'agent') return Effect.succeed({ ...call, route: { ...found, viewer: input.viewer.subject } });
+  if (found.kind === 'agent') return Effect.succeed({ ...call, route: { ...found, viewer: { share: input.viewer.share, subject: input.viewer.subject } } });
 
   // A share's daily spend is debited from the answer's own usage, which a streamed answer has only once it drains.
   if (found.kind === 'ai' && found.stream === true) {
@@ -337,6 +343,20 @@ function admitViewer(call: SlateCall, input: ViewerCallInput): Effect.Effect<Sla
 
   // Granted as its catalog declares it: a statement that reads is the same member as one that writes.
   return entry.impact === slateAddressImpact(address) ? Effect.succeed(call) : Effect.fail(refused);
+}
+
+/**
+ * A guest's own call (slates/guest.ts), routed as the owner's is and classified once: what it may reach is its app's own
+ * scope, anything else its owner's exact approval, and some members never. A call the guest may not make is refused here.
+ */
+export function routeGuestCall(input: SlateCallInput & { readonly slates: readonly string[] }): SlateCall & { readonly authorization: 'in-scope' | 'ask-exact' } {
+  return settleSync(Effect.flatMap(routed(input.id, input.request, input.chain), (call) => {
+    const authorization = guestAuthorization({ slate: input.id, slates: input.slates, address: call.address, route: call.route });
+
+    if (authorization === 'forbidden') return Effect.fail(new KinuError('denied', `${call.address.namespace}.${call.address.member} is not for a shared app's guest`));
+
+    return Effect.succeed({ ...call, authorization });
+  }));
 }
 
 /**

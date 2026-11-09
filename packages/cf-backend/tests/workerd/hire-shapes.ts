@@ -5,6 +5,16 @@
 
 export const CHILD_ANSWER = 'CHILD-ANSWER-42';
 
+/** A shared board's visit, as the probe read it after (hire-probe.ts `guestVisit`). */
+export interface GuestVisit {
+  readonly answers: readonly string[];
+  readonly guests: readonly { readonly actorId: string; readonly subject: string; readonly live: boolean }[];
+  readonly calls: readonly { readonly tools: readonly string[]; readonly lastUser: string; readonly system: string }[];
+}
+
+/** What a shared app's guest answers its visitor on this wire. */
+export const GUEST_ANSWER = 'Two issues are open: webhook retries and the flaky deploy.';
+
 export const HIRE_MISSION = 'HIRE-BRIEF-ONE-LINE';
 
 /** The owner's Plan-mode ask in a hired agent's own pane. */

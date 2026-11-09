@@ -7,8 +7,9 @@
  * site, so the ticket's cookie reaches it inside the frame.
  */
 import { Button } from "@/components/ui/Button";
-import { slateFrameSrc, type LiveShareOpen } from "@kinu.run/core";
-import { useCallback, useMemo, useRef } from "react";
+import { readSlateIdentityAsk, slateFrameSrc, VIEWER_EXCHANGE_PATH, type LiveShareOpen } from "@kinu.run/core";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Modal } from "@/components/ui/Modal";
 import { useParams } from "react-router-dom";
 import { Loader } from "@/components/ui/Loader";
 import { useSlateHostContext } from "@/components/slates/InlineSlate";
@@ -31,12 +32,52 @@ function SharedSlate({ workspace, opened }: { workspace: string; opened: LiveSha
   const contextRef = useRef(context);
   // A snapshot, as the previews' is: a theme flip after it never reloads the slate.
   const src = useMemo(() => slateFrameSrc(opened.url, contextRef.current), [opened.url]);
+  const [asking, setAsking] = useState(false);
+  // Where the frame goes once its visitor continues anonymously: the share's host gives this browser an id, then the app.
+  const [anonymous, setAnonymous] = useState<string | null>(null);
+
+  useEffect(() => {
+    const origin = new URL(opened.url).origin;
+
+    const heard = (event: MessageEvent) => {
+      if (readSlateIdentityAsk(event, frame.current?.contentWindow, origin)) setAsking(true);
+    };
+
+    window.addEventListener("message", heard);
+
+    return () => window.removeEventListener("message", heard);
+  }, [opened.url]);
+
+  const continueAnonymously = (): void => {
+    const exchange = new URL(VIEWER_EXCHANGE_PATH, opened.url);
+
+    exchange.searchParams.set("anonymous", "1");
+    setAnonymous(slateFrameSrc(exchange.toString(), contextRef.current));
+    setAsking(false);
+  };
 
   return (
     <>
-      <iframe ref={frame} src={src} title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
+      <iframe ref={frame} src={anonymous ?? src} title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
       {decision}
+      {asking && <IdentitySheet onClose={() => setAsking(false)} onAnonymous={continueAnonymously} />}
     </>
+  );
+}
+
+/** What a shared app asked of its visitor needs to know who asks: they sign in, or go on as this browser, anonymously. */
+function IdentitySheet({ onClose, onAnonymous }: { onClose: () => void; onAnonymous: () => void }) {
+  return (
+    <Modal title="Say who's asking" width="md" onClose={onClose}
+      footer={(
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose}>Not now</Button>
+          <Button variant="secondary" size="sm" onClick={onAnonymous}>Continue anonymously</Button>
+          <Button variant="primary" size="sm" onClick={() => signInAndReturn()}>Sign in</Button>
+        </>
+      )}>
+      <p className="t-body p-text-2">This app talks to its owner&apos;s agent for you, and the owner sees the conversation. Sign in, or continue anonymously: this browser keeps your conversation for 30 days.</p>
+    </Modal>
   );
 }
 

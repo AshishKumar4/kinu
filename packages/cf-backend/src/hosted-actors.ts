@@ -100,6 +100,8 @@ export interface ActorSurface {
   readonly digest: string;
   /** The owner's lane its turn reaches, which its isolate builds over its own store; declared in `offered` alone. */
   readonly ownerLane: PreparedAgentTurn['ownerLane'];
+  /** A shared app's guest's turn (slates/guest.ts): it reads nothing beside its one tool, an advisor's reads included. */
+  readonly guest?: true;
   /** The profile its isolate assembled on: its tools run under it, and its eval reaches what that profile allows. */
   bind(profile: ResolvedTurnProfile): void;
 }

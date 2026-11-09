@@ -37,7 +37,11 @@ export interface PendingAction {
    * A shared slate's effect: the shared slate, the slate whose call it is, and the tool on its root. Answered "always",
    * that tool on that root stands allowed on the shared slate's shares on its owner's access until its code changes.
    */
-  readonly effect?: { readonly slate: string; readonly caller: string; readonly server: string; readonly tool: string; readonly root: Readonly<Record<string, string>> };
+  readonly effect?: {
+    readonly slate: string; readonly caller: string; readonly server: string; readonly tool: string; readonly root: Readonly<Record<string, string>>;
+    /** A shared app's guest asked this one call itself: approving runs it once, and "always" is never offered. */
+    readonly guest?: true;
+  };
   /** An agent's message, exactly as approving lets it leave once (docs/MAIL.md §3). Never answered "always". */
   readonly mail?: Omit<MailSend, 'thread'>;
   /** A call an agent asked to make at Google that writes, exactly as approving lets it go once. Never answered "always". */
@@ -128,7 +132,7 @@ function deferredCard(action: PendingActionInputs['deferredActions'][number]): P
       return {
         ...card, title: `Approve: ${effect.tool} on ${effect.server}, for ${effect.viewer} through a share of ${effect.slate}`,
         detail: JSON.stringify(effect.payload, null, 2),
-        effect: { slate: effect.slate, caller: effect.caller, server: effect.server, tool: effect.tool, root: effect.root },
+        effect: { slate: effect.slate, caller: effect.caller, server: effect.server, tool: effect.tool, root: effect.root, ...(effect.guest !== undefined && { guest: true as const }) },
       };
     }
 

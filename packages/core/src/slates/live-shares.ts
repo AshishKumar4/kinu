@@ -39,6 +39,16 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
     opens INTEGER NOT NULL,
     PRIMARY KEY (share, viewer)
   )`);
+  // Which share and visitor each guest agent answers (guest.ts): written by the share's host as the guest is hired, and
+  // never rewritten. A guest stands while its actor does; once that actor is retired, the visitor's next ask hires another.
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_share_guests (
+    actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id),
+    share_id TEXT NOT NULL,
+    slate TEXT NOT NULL,
+    viewer_subject TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  )`);
+  execRaw('CREATE INDEX IF NOT EXISTS idx_slate_share_guests_viewer ON slate_share_guests(share_id, viewer_subject)');
 }
 
 /** The key of every open by someone signed out: one bucket, which never counts as a viewer. */

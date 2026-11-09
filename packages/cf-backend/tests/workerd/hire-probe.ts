@@ -16,8 +16,12 @@ import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
-import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, PROCESS_LOG, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
+import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, JOB_GATE, PROCESS_LOG, REPORT_MARK, type ActorRow, type JobRow, type JobWatchState, type ArchiveSections, type ChildScript, type GuestVisit, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 import { hostedActorPlacement } from '../../src/actor-hosting';
+import { initSlateLiveShareTables, SlateLiveShareStore } from '@kinu.run/core/slates';
+
+/** The board's one share, which a visitor's guest answers on. */
+const GUEST_SHARE = 'board-share';
 
 export * from '../../src/server';
 
@@ -51,7 +55,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `OrchestratorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'jobWatchState', 'jobRows', 'pendingAlarm', 'watchRelays', 'relayLost', 'runStatuses', 'processTicks'];
+    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections', 'jobWindowArmed', 'outrunJobWindow', 'openJobGate', 'redeliverJobWake', 'jobWatchState', 'jobRows', 'pendingAlarm', 'watchRelays', 'relayLost', 'runStatuses', 'processTicks', 'shareBoard', 'visitorAsks', 'boardGuests', 'unshareBoard'];
 
     for (const name of reads) Reflect.deleteProperty(this, name);
 
@@ -101,6 +105,40 @@ export class HireOrchestrator extends ProductionOrchestrator {
     }
 
     return statuses;
+  }
+
+  /** Dana's issue board, shared with anyone on her access and its chat ticked, as her share sheet writes the share. */
+  async shareBoard(): Promise<void> {
+    const sql = this.probeState.storage.sql;
+
+    initSlateLiveShareTables((ddl) => { sql.exec(ddl); });
+    const live = new SlateLiveShareStore(sql);
+    const grant = { slates: ['board'], members: [{ slate: 'board', namespace: 'agent', member: 'ask', impact: 'externalSend' as const }] };
+
+    live.add({ id: GUEST_SHARE, slate: 'board', visibility: 'public', handle: 'board12345', grant });
+    live.setAuthority(GUEST_SHARE, { mode: 'owner', grantRevision: 'rev-1' }, grant);
+  }
+
+  /** A visitor's message to the board's chat, as its page's `agent.ask` reaches this workspace for them: the reply's text. */
+  async visitorAsks(subject: string, text: string): Promise<string> {
+    const answered = await this.slateCallDispatch([], { kind: 'agent', slate: 'board', text, ask: true, viewer: { share: GUEST_SHARE, subject } }, 'build', {
+      nested: () => {}, viewer: true,
+    });
+
+    return v.is(v.object({ reply: v.instance(ReadableStream) }), answered) ? await new Response(answered.reply).text() : JSON.stringify(answered);
+  }
+
+  /** The board's guests, retired ones too: whom each answers, and whether it still stands. */
+  async boardGuests(): Promise<{ readonly actorId: string; readonly subject: string; readonly live: boolean }[]> {
+    return this.probeState.storage.sql.exec<{ actorId: string; subject: string; live: number }>(
+      `SELECT g.actor_id AS actorId, g.viewer_subject AS subject, a.retiring_at IS NULL AND a.deleted_at IS NULL AS live
+         FROM slate_share_guests g JOIN workspace_actors a ON a.actor_id = g.actor_id ORDER BY g.created_at, g.actor_id`,
+    ).toArray().map((row) => ({ actorId: row.actorId, subject: row.subject, live: row.live === 1 }));
+  }
+
+  /** Dana stops sharing the board, as her share sheet does. */
+  async unshareBoard(): Promise<void> {
+    await this.slate({ op: 'unshare', share: GUEST_SHARE });
   }
 
   /** The job's command ends: the file it waits on now exists in the workspace's home. */
@@ -357,7 +395,7 @@ type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setS
   & Pick<HireOrchestrator,
     'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'
     | 'jobWindowArmed' | 'outrunJobWindow' | 'openJobGate' | 'redeliverJobWake' | 'jobWatchState' | 'jobRows' | 'pendingAlarm'
-    | 'watchRelays' | 'relayLost' | 'runStatuses' | 'processTicks'>;
+    | 'watchRelays' | 'relayLost' | 'runStatuses' | 'processTicks' | 'shareBoard' | 'visitorAsks' | 'boardGuests' | 'unshareBoard'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -431,6 +469,33 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     for (const text of texts) url.searchParams.append('text', text);
 
     await fetch(url);
+  }
+
+  /**
+   * Visitors of `workspace`'s shared board ask its chat: each asks in turn, as `asks` names them. What each was answered,
+   * the board's guests, and every model request that carried a visitor's words or answered as a guest.
+   */
+  async guestVisit(workspace: string, asks: readonly { readonly subject: string; readonly text: string }[]): Promise<GuestVisit> {
+    const target = await this.target(workspace);
+
+    await target.shareBoard();
+    const answers: string[] = [];
+
+    for (const ask of asks) answers.push(await target.visitorAsks(ask.subject, ask.text));
+    const response = await fetch(hireControlUrl(workspace, 'log'));
+    const { calls } = v.parse(v.object({ calls: v.array(v.object({ tools: v.array(v.string()), lastUser: v.string(), system: v.string() })) }), await response.json());
+    const told = calls.filter((call) => asks.some((ask) => call.lastUser.includes(ask.text)) || call.tools.includes('app'));
+
+    return { answers, guests: await target.boardGuests(), calls: told };
+  }
+
+  /** The owner stops sharing `workspace`'s board: its guests, after. */
+  async guestShareEnded(workspace: string): Promise<GuestVisit['guests']> {
+    const target = await this.target(workspace);
+
+    await target.unshareBoard();
+
+    return await target.boardGuests();
   }
 
   /** Settles when the caller's own `agents` call resolved into its next model

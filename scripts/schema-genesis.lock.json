@@ -1390,6 +1390,13 @@
     "slate_id TEXT NOT NULL",
     "bytes BLOB NOT NULL"
   ],
+  "slate_share_guests@packages/core/src/slates/live-shares.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "share_id TEXT NOT NULL",
+    "slate TEXT NOT NULL",
+    "viewer_subject TEXT NOT NULL",
+    "created_at INTEGER NOT NULL"
+  ],
   "slate_share_users@packages/core/src/slates/shares.ts": [
     "share_id TEXT NOT NULL REFERENCES slate_shares(id)",
     "user_id TEXT NOT NULL",

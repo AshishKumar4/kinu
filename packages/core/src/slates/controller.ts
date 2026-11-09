@@ -116,6 +116,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   sharesChanged?(): Promise<'current' | 'pending'>;
   /** A live share of `slate` started or stopped: its server's authority changed, so its running app ends. */
   shareChanged?(slate: string): Promise<void>;
+  /** `share` ended or changed how it lends: its guests (slates/guest.ts) are retired, their conversations kept. */
+  guestsEnded?(share: string): Promise<void>;
   /** The name the workspace's owner gave their account, as people a share refuses are told it; absent or null, "its owner". */
   ownerName?(): Promise<string | null>;
   /** Where `owner` shares' effects wait for the owner, and how a share's open ones retire with it; `only`, those of one
@@ -621,6 +623,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     if (held.gallery !== null) await this.ports.listingChanged?.(revoked);
 
     await this.processes.stopWhere((running) => running.caller.share === revoked.id);
+    await this.ports.guestsEnded?.(revoked.id);
     await this.sharingChanged(revoked.slate);
 
     return revoked;
@@ -710,6 +713,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
         if (input.mode === 'owner' && mark !== null) this.live.restoreEditMark(held.slate, null);
       }))));
       this.ports.ownerEffects?.retire(held.slate);
+      yield* Effect.promise(async () => this.ports.guestsEnded?.(held.id));
       yield* Effect.promise(async () => this.sharingChanged(held.slate));
 
       return this.owned(this.live.get(held.id) ?? held);

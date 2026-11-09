@@ -7,11 +7,11 @@ import {
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, turnTags,
   openingCacheCold, type OpenWork, advisorReadTool, advisorReadTools, describeAgentTools, renderToolResult, type AdvisorReadTools, type AgentAdvisorRead,
-  type AgentToolDescriptor, type ServedStores,
+  type AgentToolDescriptor,
 } from '@kinu.run/core';
 import type { TurnCall } from './agent-facets';
 import type { TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
-import { prepareHostedTurn, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
+import { prepareHostedTurn, type ActorSurface, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
 import type { AgentHeadDelta, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, AgentOwes, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpeningAsk, TurnReads } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
@@ -44,6 +44,8 @@ export interface AgentTurnsDeps {
   credentialsRevision(): number | null;
   /** The governor an agent's chat turns spend under, when its missions are the workspace's: main's (D9). */
   missions(actorId: string): MissionGovernor | null;
+  /** What a shared app's guest's chat turn spends under (its share's daily label, slates/guest.ts); null for any other agent. */
+  guestSpend(actorId: string): string | null;
   /** The agent has no turn open here any more, or it was stopped: what it held for its turns lets go, the computer's
    *  desktop among it (D89). Its owner runs it detached: nothing of the turn waits on it. */
   turnsEnded(actorId: string): void;
@@ -589,7 +591,7 @@ export class AgentTurns {
     turn.recalled = recalled;
 
     turn.memoryTail = sources.memoryTail ?? undefined;
-    const advisorTools = await this.advisorTools(turn, surface.stores);
+    const advisorTools = await this.advisorTools(turn, surface);
 
     lap('advisor');
     const brief = run?.brief?.(callableToolNames(mode, surface.offered));
@@ -714,7 +716,10 @@ export class AgentTurns {
 
   /** Main's chat turn names its missions when it is prepared under any. */
   private chatMission(actorId: string, turn: OpenTurn): readonly string[] {
-    return turn.request.run === undefined && this.deps.missions(actorId) !== null ? [...turnTags({ metadata: turn.request.driving }).missionLabels] : [];
+    if (turn.request.run !== undefined || this.deps.missions(actorId) === null) return [];
+    const guest = this.deps.guestSpend(actorId);
+
+    return guest === null ? [...turnTags({ metadata: turn.request.driving }).missionLabels] : [guest];
   }
 
   async program(actorId: string, turnId: string, ...[code, providers, opts]: Parameters<Executor['execute']>) {
@@ -730,7 +735,11 @@ export class AgentTurns {
   }
 
   /** The turn's advisor's read tools over the agent's stores, kept on the turn, and as its isolate is told of them. */
-  private async advisorTools(turn: OpenTurn, stores: ServedStores): Promise<readonly AgentToolDescriptor[]> {
+  private async advisorTools(turn: OpenTurn, surface: Pick<ActorSurface, 'stores' | 'guest'>): Promise<readonly AgentToolDescriptor[]> {
+    // A shared app's guest has no advisor: its reads would reach what the guest does not.
+    if (surface.guest === true) return [];
+    const { stores } = surface;
+
     turn.advisor = advisorReadTools({ files: stores.deps.files, memory: stores.deps.memory });
     const { file, memory } = turn.advisor;
 

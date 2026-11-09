@@ -19,7 +19,8 @@ import {
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel,
   type LiveShareRecord, type ShareViewerClaim, type ViewerCall,
 } from './sharing';
-import { admitNestedViewerCall, routeViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
+import { admitNestedViewerCall, routeGuestCall, routeViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, type SlateCall, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
+import { admitGuestNested, ANONYMOUS_SUBJECT_PREFIX, identifiedOnlyBySource, type GuestPrincipal } from './guest';
 
 /** Every signed-in viewer, where the deployment keeps no key to tell them apart by. */
 const SIGNED_IN_VIEWER = 'viewer';
@@ -60,13 +61,19 @@ export type ViewerAdmission =
  */
 export type ViewerRun = (route: SlateRoute, nested: (namespace: string, member: string) => void, admit: () => void) => Promise<SlateSurfaceResult>;
 
-/** A viewer's answer is JSON: routing refuses a viewer every streamed member, so a stream here is a routing fault. */
-function viewerAnswer(result: SlateSurfaceResult): SlateCallResult {
+/**
+ * A viewer's answer is JSON: their guest's reply arrives as its whole text, and routing refuses a viewer every other
+ * streamed member, so any other stream here is a routing fault.
+ */
+async function viewerAnswer(result: SlateSurfaceResult): Promise<SlateCallResult> {
   if (!result.ok) return result;
+  const { value } = result;
 
-  return isJsonAnswer(result.value)
-    ? { ...result, value: result.value }
-    : { ok: false, ...refusalOf(new KinuError('io', 'A share viewer\'s call answered a stream')) };
+  if (isJsonAnswer(value)) return { ...result, value };
+
+  if (!(value instanceof ReadableStream)) return { ok: true, value: { reply: await new Response(value.reply).text() } };
+
+  return { ok: false, ...refusalOf(new KinuError('io', 'A share viewer\'s call answered a stream')) };
 }
 
 export class SlateShareViewers {
@@ -83,6 +90,13 @@ export class SlateShareViewers {
     return key === null ? SIGNED_IN_VIEWER : `viewer:${key}`;
   }
 
+  /** Whom a share's visitor is to it: their account's key signed in, their browser's anonymous id, else where they came from. */
+  private async subjectOf(share: string, claim: ShareViewerClaim): Promise<string> {
+    if (claim.userId !== null) return await this.signedIn(share, claim.userId);
+
+    return claim.anonymous === undefined ? `source:${claim.source}` : `${ANONYMOUS_SUBJECT_PREFIX}${claim.anonymous}`;
+  }
+
   /** Re-reads the share row now (S6: a revoked share refuses before a process starts). */
   async admit(input: { readonly handle: string; readonly claim: ShareViewerClaim; readonly pathname: string }): Promise<ViewerAdmission> {
     const share = this.deps.live.byHandle(input.handle);
@@ -93,7 +107,7 @@ export class SlateShareViewers {
     if (entry !== null) return { kind: 'sign-in', entry };
 
     if (share.visibility === 'users' && (input.claim.userId === null || !this.admits(share.id, input.claim.userId))) return { kind: 'missing' };
-    const subject = input.claim.userId === null ? `source:${input.claim.source}` : await this.signedIn(share.id, input.claim.userId);
+    const subject = await this.subjectOf(share.id, input.claim);
 
     // S2: a viewer past the bound is refused; the share is never paused.
     if (this.deps.admitted !== undefined && !await this.deps.admitted(`${share.id}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) return { kind: 'too-many' };
@@ -106,6 +120,44 @@ export class SlateShareViewers {
 
     return { kind: 'admitted', caller: shareCaller(share.id), share, viewer: { share: share.id, subject, request } };
   }
+
+  /**
+   * A viewer's call routed and weighed before anything of the owner's is asked: a guest's own call as its scope says
+   * (slates/guest.ts), any other as the grant admits it, held first to the shared server's bound; whether it acts; or
+   * what its visitor must do first, where one known only by where they came from talks to a guest.
+   */
+  private routed(input: Parameters<SlateShareViewers['call']>[0], share: LiveShareRecord, viewer: SlateViewer)
+    : Effect.Effect<{ readonly call: SlateCall; readonly effect: boolean } | { readonly needs: 'identity' }, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const { id, request, chain, guest } = input;
+
+      // The guest's own call: what its scope admits runs as its visitor's, anything else on its owner's exact approval.
+      if (guest !== undefined) {
+        const call = routeGuestCall({ id, request, chain, slates: share.grant.slates });
+
+        return { call, effect: call.authorization === 'ask-exact' };
+      }
+
+      const beyond = yield* input.bound(slateCallAddress(request.path));
+
+      if (beyond !== null) return yield* beyond;
+      const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
+
+      // A call on a guest's way (its app's server answering it) reaches only what the guest's scope names alone.
+      admitGuestNested(viewer.guest, share.grant.slates, call.address);
+      // A browser member the class runs acts there once the host authorizes it, so that ask is what acts; its host
+      // member only ever reports the class's refusal (web-operations.ts), which acts on nothing.
+      const reportOnly = request.authorize !== true && call.address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(call.address.member);
+      const acts = call.impact !== 'observe' && !reportOnly;
+
+      // Talking to a guest needs to know who talks: its guest is theirs alone, signed in or anonymous.
+      if (identifiedOnlyBySource(viewer.subject) && call.route.kind === 'agent') return { needs: 'identity' as const };
+
+      // A message reaches the visitor's own guest, which acts on nothing itself: what the guest then calls is what asks.
+      return { call, effect: acts && call.route.kind !== 'agent' };
+    });
+  }
+
 
   /** Reads the ledger row, never `guard`, which stamps exhaustion and fires the once-per-label event. */
   paused(share: LiveShareRecord): boolean {
@@ -126,17 +178,19 @@ export class SlateShareViewers {
     readonly request: SlateCallRequest;
     readonly chain: readonly string[];
     readonly issued: SlateInvocation | null;
+    /** The guest agent making this call itself (slates/guest.ts); absent for its visitor's browser and every call on its way. */
+    readonly guest?: GuestPrincipal;
     readonly run: ViewerRun;
     /**
      * The shared server's word on the routed call (shared-server.ts `SharedServers.gate`): refused where it lends nothing
      * or does not reach it, or where its owner has not approved the effect; else the send, which weighs it again.
      */
-    readonly gate: (call: { readonly address: { readonly namespace: string; readonly member: string }; readonly effect: boolean }) => Effect.Effect<ServerSend, KinuError>;
+    readonly gate: (call: { readonly address: { readonly namespace: string; readonly member: string }; readonly effect: boolean; readonly guest?: string }) => Effect.Effect<ServerSend, KinuError>;
     /** The shared server's bound alone, met first (it asks no one): why it lends nothing or no reach here, or null. */
     readonly bound: (address: { readonly namespace: string; readonly member: string }) => Effect.Effect<KinuError | null>;
   }): Promise<SlateCallResult> {
     return settle(Effect.gen({ self: this }, function* () {
-      const { id, request, chain, issued } = input;
+      const { id, request, issued } = input;
 
       if (issued?.viewer === undefined) return yield* new KinuError('denied', 'A viewer call must name the invocation it was issued under');
       const viewer = issued.viewer;
@@ -152,15 +206,13 @@ export class SlateShareViewers {
           return yield* new KinuError('budget', 'This share is paused for today');
         }
 
-        const beyond = yield* input.bound(named);
+        const routed = yield* this.routed(input, share, viewer);
 
-        if (beyond !== null) return yield* beyond;
-        const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
+        // Answered as a value: the share's page reads `needs` to ask its visitor who they are.
+        if ('needs' in routed) return { ok: false as const, ...refusalOf(new KinuError('denied', 'Sign in, or continue anonymously, to talk to this app\'s assistant')), needs: routed.needs };
+        const { call } = routed;
         row = { slate: id, ...call.address, impact: call.impact, ok: false };
-        // A browser member the class runs acts there once the host authorizes it, so that ask is what acts; its host
-        // member only ever reports the class's refusal (web-operations.ts), which acts on nothing.
-        const reportOnly = request.authorize !== true && call.address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(call.address.member);
-        const send = yield* input.gate({ address: call.address, effect: call.impact !== 'observe' && !reportOnly });
+        const send = yield* input.gate({ address: call.address, effect: routed.effect, ...(input.guest !== undefined && { guest: input.guest.actorId }) });
         const taken: ApprovalSpend[] = [];
 
         // The share's and the server's word read again where the call acts: a revoke, a mode change or an approval
@@ -172,8 +224,14 @@ export class SlateShareViewers {
           if (spend !== null) taken.push(spend);
         };
 
-        // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
-        const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.deps.live.live(input.share).grant, id, { namespace, member }); };
+        // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there. On a
+        // guest's way, it meets the guest's scope too.
+        const nested = (namespace: string, member: string) => {
+          const grant = this.deps.live.live(input.share).grant;
+
+          admitNestedViewerCall(grant, id, { namespace, member });
+          admitGuestNested(viewer.guest, grant.slates, { namespace, member });
+        };
 
         const ran = yield* Effect.exit(Effect.promise(async () => input.run(call.route, nested, admit)));
         const [spend = null] = taken;
@@ -181,7 +239,8 @@ export class SlateShareViewers {
         // The approval is used once the call was handed on: a failure after that may have acted, so it never runs twice
         // on one word of the owner's. The same call made again asks again.
         if (spend !== null) yield* Effect.promise(async () => this.deps.ownerEffects?.settle(spend, 'spent'));
-        const result = viewerAnswer(yield* ran);
+        const surfaced = yield* ran;
+        const result = yield* Effect.promise(async () => viewerAnswer(surfaced));
         row = { ...row, ok: result.ok };
 
         if (result.ok) this.debit(share, result.value);
@@ -209,12 +268,25 @@ export class SlateShareViewers {
     const governor = this.deps.budget?.();
 
     if (governor === undefined) return;
-    governor.declare(shareSpendLabel(share.id), { usd: SHARE_SPEND_CAP_USD_PER_DAY }, { parent: '' });
+    const label = declareShareSpend(governor, share.id);
     const usage = v.safeParse(v.object({ usage: v.optional(UsageSchema) }), value);
 
     governor.debit(usage.success && usage.output.usage !== undefined ? usageTotal(usage.output.usage) ?? 0 : 0, {
-      labels: [shareSpendLabel(share.id)], calls: 1,
+      labels: [label], calls: 1,
       usage: usage.success ? usage.output.usage : undefined,
     });
   }
+}
+
+
+/**
+ * `share`'s spend label for today, declared on `governor` at the share's daily cap: what its viewers' calls and their
+ * guests' model calls spend, one label on the workspace's one governor. Unparented, so no turn owns it.
+ */
+export function declareShareSpend(governor: MissionGovernor, share: string): string {
+  const label = shareSpendLabel(share);
+
+  governor.declare(label, { usd: SHARE_SPEND_CAP_USD_PER_DAY }, { parent: '' });
+
+  return label;
 }

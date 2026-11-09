@@ -7,7 +7,7 @@
 
 import * as v from 'valibot';
 import {
-  CHAIN_BOTTOM, CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, JOB_COMMAND, JOB_MISSION, JOB_NOTED,
+  CHAIN_BOTTOM, CHILD_ANSWER, GUEST_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, JOB_COMMAND, JOB_MISSION, JOB_NOTED,
   HIRE_PLAN_ASK, JOB_STARTED, NEST_MISSION, NEST_RELAY, PROCESS_COMMAND, PROCESS_NOTED, PROCESS_STARTED, REPORT_MARK, type ChildScript,
 } from './hire-shapes';
 
@@ -18,6 +18,8 @@ export interface HireCall {
   /** Tool-result bodies carried into this request: the caller's resolved `agents` value. */
   readonly toolResults: readonly string[];
   readonly lastUser: string;
+  /** Every system message of the request, one string: what the speaker was told it is. */
+  readonly system: string;
 }
 
 /**
@@ -483,6 +485,33 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
 
 const ModelsPathSchema = v.tuple([v.literal(''), v.literal('w'), v.pipe(v.string(), v.minLength(1)), v.literal('v1')]);
 
+/** An actor's streamed turn, answered in the lane of whoever speaks. */
+async function speakerLane(run: HireRun, body: OutboundBody, results: readonly string[]): Promise<Response> {
+  // The hire runs on the workspace's pin too: it is the conversation that opened on the brief.
+  if (run.childScript === 'job' && openedOn(body) === JOB_MISSION) return jobLane(body, results);
+
+  // A shared app's guest: its one tool is `app`, which no other speaker carries.
+  if (toolNames(body).includes('app')) return textBody(body.model ?? HIRE_CHILD_MODEL, GUEST_ANSWER);
+
+  // The child's lane: `report` is deps-gated, so only a hired actor carries it.
+  if (toolNames(body).includes('report')) return await childLane(run, body, results);
+
+  // The owner's Plan turn in a hired agent's pane submits its plan, and the feedback turn revises it, each once.
+  if (toolNames(body).includes('submit_plan') && (lastUser(body).includes(HIRE_PLAN_ASK) || lastUser(body).includes('The owner requested changes to plan'))) {
+    const model = body.model ?? HIRE_CHILD_MODEL;
+
+    if (body.messages?.at(-1)?.role === 'tool') return textBody(model, CHILD_ANSWER);
+
+    return lastUser(body).includes(HIRE_PLAN_ASK)
+      ? toolCallBody(model, 'hire-plan', 'submit_plan', { edits: [{ start: 1, content: '# Audit plan\n\n1. Read the ledger.' }] })
+      : toolCallBody(model, 'hire-plan-revised', 'submit_plan', { edits: [{ start: 3, content: '1. Read the ledger files: ledger.csv.' }] });
+  }
+
+  if (body.model === HIRE_DURABLE_MODEL) return await durableLane(run, body, results);
+
+  return rootLane(run, body, results);
+}
+
 export async function hireOutbound(request: Request): Promise<Response> {
   const url = new URL(request.url);
 
@@ -515,6 +544,7 @@ export async function hireOutbound(request: Request): Promise<Response> {
     tools: toolNames(body),
     toolResults: results,
     lastUser: lastUser(body),
+    system: (body.messages ?? []).filter((message) => message.role === 'system').map((message) => contentText(message.content ?? '')).join('\n'),
   });
 
   for (const sighting of run.sightings) {
@@ -524,24 +554,5 @@ export async function hireOutbound(request: Request): Promise<Response> {
   // No actor turn arrives unstreamed on this wire, so non-streamed is auxiliary.
   if (body.stream !== true) return auxLane(body);
 
-  // The hire runs on the workspace's pin too: it is the conversation that opened on the brief.
-  if (run.childScript === 'job' && openedOn(body) === JOB_MISSION) return jobLane(body, results);
-
-  // The child's lane: `report` is deps-gated, so only a hired actor carries it.
-  if (toolNames(body).includes('report')) return await childLane(run, body, results);
-
-  // The owner's Plan turn in a hired agent's pane submits its plan, and the feedback turn revises it, each once.
-  if (toolNames(body).includes('submit_plan') && (lastUser(body).includes(HIRE_PLAN_ASK) || lastUser(body).includes('The owner requested changes to plan'))) {
-    const model = body.model ?? HIRE_CHILD_MODEL;
-
-    if (body.messages?.at(-1)?.role === 'tool') return textBody(model, CHILD_ANSWER);
-
-    return lastUser(body).includes(HIRE_PLAN_ASK)
-      ? toolCallBody(model, 'hire-plan', 'submit_plan', { edits: [{ start: 1, content: '# Audit plan\n\n1. Read the ledger.' }] })
-      : toolCallBody(model, 'hire-plan-revised', 'submit_plan', { edits: [{ start: 3, content: '1. Read the ledger files: ledger.csv.' }] });
-  }
-
-  if (body.model === HIRE_DURABLE_MODEL) return await durableLane(run, body, results);
-
-  return rootLane(run, body, results);
+  return await speakerLane(run, body, results);
 }

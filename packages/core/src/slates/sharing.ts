@@ -264,6 +264,8 @@ export type ViewerRequestRecord = v.InferOutput<typeof ViewerRequestRecordSchema
 /** `consented` is true only for the consent-page cookie; a ticket-minted cookie has not seen the disclaimer. */
 export const ShareViewerClaimSchema = v.object({
   userId: v.nullable(v.string()),
+  /** The random id a visitor who continued anonymously carries in the share's cookie; absent otherwise. */
+  anonymous: v.optional(v.string()),
   source: v.string(),
   consented: v.boolean(),
 });
