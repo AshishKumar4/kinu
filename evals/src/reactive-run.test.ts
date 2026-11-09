@@ -37,8 +37,19 @@ test('each reactive arm and seed prepares its own real-runner slot before creati
       }));
     }
 
-    expect(requests.map((request) => request.account).sort((a, b) => (a ?? '').localeCompare(b ?? ''))).toEqual(Array.from({ length: 9 }, (_, at) => `trial-${String(at + 1)}`));
-    expect(requests.every((request) => request.method === 'GET' && request.path === '/api/user/workspaces')).toBe(true);
+    const reads = requests.filter((request) => request.path === '/api/user/workspaces');
+
+    expect(reads.map((request) => request.account).sort((a, b) => (a ?? '').localeCompare(b ?? ''))).toEqual(Array.from({ length: 9 }, (_, at) => `trial-${String(at + 1)}`));
+
+    // Each account is signed in before it is read: a deleted trial account is made again only so (evals/src/slot.ts).
+    for (const read of reads) {
+      const signedIn = requests.findIndex((request) => request.method === 'POST' && request.path === '/api/auth/dev-session' && request.account === read.account);
+
+      expect(signedIn).toBeGreaterThan(-1);
+      expect(signedIn).toBeLessThan(requests.indexOf(read));
+    }
+
+    expect(requests.every((request) => (request.method === 'GET' && request.path === '/api/user/workspaces') || request.path === '/api/auth/dev-session')).toBe(true);
   } finally {
     await server.stop(true);
   }

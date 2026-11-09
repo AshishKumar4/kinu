@@ -56,7 +56,7 @@ function setupEnv(options: { resetAccount?: 'before' | 'after' } = {}) {
   const account = <T>(operation: string, run: () => Promise<T>): Promise<T> => (options.resetAccount === undefined ? run() : once(operation, run));
 
   const userDO = cliAccount({
-    async ensureProfile(_caller: UserCaller, email: string) { return await account('ensureProfile', async () => bootstrappedProfile(email)); },
+    async signIn(_caller: UserCaller, email: string) { return await account('signIn', async () => bootstrappedProfile(email)); },
     async mintCliToken(_caller: UserCaller, userId: string, authorizationHash: string, label?: string) {
       return await account('mintCliToken', async () => {
         // Refuses like the real UserDO's unique index (unit-user-authority-races.test.ts), so this
