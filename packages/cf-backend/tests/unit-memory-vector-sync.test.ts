@@ -7,7 +7,7 @@ import { createWorkspaceBundle, makeSql } from '../../core/tests/helpers';
 import { MemoryStore } from '@kinu.run/agent-utils/memory';
 import {
   createCloudflareVectorStore, VECTOR_BACKEND_COOLDOWN_MS,
-  type Embedder, type VectorizeIndex, type VectorStore, type IndexedChunk,
+  type Embedder, type JsonObject, type VectorizeIndex, type VectorStore, type IndexedChunk,
 } from '@kinu.run/core';
 import { adaptMemory, backfillMemoryVectors, searchMemoryHits } from '@kinu.run/core';
 
@@ -78,6 +78,35 @@ test('a memory search embeds and queries the index only once the workspace holds
   await searchMemoryHits(memory, vectors, 'dinner plans', { limit: 5 });
 
   expect({ empty, held: asked }).toEqual({ empty: [], held: ['embed', 'query'] });
+});
+
+// A note a shell wrote is taken in by the first search's refresh, which runs beside the semantic arm: that search finds it
+// by its words, and the next by its meaning, from what the index really holds.
+test('a note a shell wrote is found by its words at once and by its meaning once indexed', async () => {
+  const { store, files } = createStore();
+  const held = new Map<string, { metadata?: JsonObject }>();
+
+  const index: VectorizeIndex = {
+    upsert: async (records) => {
+      for (const record of records) held.set(record.id, { metadata: record.metadata });
+
+      return { ids: records.map((record) => record.id) };
+    },
+    deleteByIds: async (ids) => {
+      for (const id of ids) held.delete(id);
+
+      return { ids };
+    },
+    query: async () => ({ matches: [...held].map(([id, record]) => ({ id, score: 0.9, metadata: record.metadata })) }),
+  };
+
+  const vectors = createCloudflareVectorStore({ index, embedder: { dimensions: 3, embed: async () => [0, 0, 1] }, namespace: 'ws', holds: () => store.holdsChunks() });
+  const memory = adaptMemory(store, files, { store: vectors });
+  const sources = async (query: string) => (await searchMemoryHits(memory, vectors, query, { limit: 5 })).hits.flatMap((hit) => hit.sources);
+
+  await writeText(files, PATH, 'kubernetes ingress now fronts staging');
+
+  expect({ first: await sources('kubernetes'), meaning: await sources('cluster routing') }).toEqual({ first: ['lexical'], meaning: ['semantic'] });
 });
 
 describe('adaptMemory — semantic index sync on write', () => {
