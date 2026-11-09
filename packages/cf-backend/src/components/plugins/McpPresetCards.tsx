@@ -169,6 +169,9 @@ export function PresetRow({ preset, server, appConfigured, onChanged, onConnecte
   const connect = (): void => {
     if (signIn) {
       add({ presetId: preset.id }, beginConnect());
+    } else if (preset.auth === 'none') {
+      // A public server is added and connected at once, with nothing to sign in to or paste.
+      add({ presetId: preset.id });
     } else {
       setOpenToken(true);
     }

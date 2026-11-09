@@ -320,6 +320,7 @@ describe('the deploy page', () => {
         listed: [
           ['github', null], ['google', null],
           ['cloudflare', 'https://kinu.ada.workers.dev/plugins'], ['composio', 'https://kinu.ada.workers.dev/plugins'],
+          ['kiwi', 'https://kinu.ada.workers.dev/plugins'], ['trivago', 'https://kinu.ada.workers.dev/plugins'],
         ],
         to: 'https://github.com/settings/apps/new',
         manifest: { url: 'https://kinu.ada.workers.dev', callbacks: ['https://kinu.ada.workers.dev/api/user/mcp/callback'], setup: 'https://kinu.ada.workers.dev/plugins', back: '/deploy/github' },

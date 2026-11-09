@@ -1,6 +1,6 @@
 // One-click MCP server catalog, shared by the add surface, `preset_id` tagging, and preset validation.
 
-export type McpPresetId = 'github' | 'cloudflare' | 'composio';
+export type McpPresetId = 'github' | 'cloudflare' | 'composio' | 'kiwi' | 'trivago';
 
 export interface McpPreset {
   readonly id: McpPresetId;
@@ -11,8 +11,9 @@ export interface McpPreset {
   readonly serverUrl: string;
   readonly transport: 'sse' | 'streamable-http';
   /** 'oauth': dynamic client registration (verified 2026-09-15). 'oauth-app': pre-registered app via deployment
-   *  secrets named by cf-backend `mcpAppEnvNames`, else `tokenFallback` or hidden. 'token': sealed bearer. */
-  readonly auth: 'oauth' | 'oauth-app' | 'token';
+   *  secrets named by cf-backend `mcpAppEnvNames`, else `tokenFallback` or hidden. 'token': sealed bearer. 'none': a
+   *  public server that answers anyone, added and connected as a server added by its address is, with nothing stored. */
+  readonly auth: 'oauth' | 'oauth-app' | 'token' | 'none';
   /** Asked for when an `oauth-app` deployment carries no app credentials. */
   readonly tokenFallback?: { label: string };
   readonly tokenLabel?: string;
@@ -97,6 +98,26 @@ export const MCP_PRESETS: readonly McpPreset[] = [
     auth: 'oauth',
     scope: 'openid profile email offline_access',
     docsUrl: 'https://docs.composio.dev/docs/composio-connect',
+  },
+  {
+    // Kiwi.com's public flight search: no sign-in (initialize and tools/list answered anyone, 2026-11-09).
+    id: 'kiwi',
+    title: 'Kiwi.com',
+    description: 'Flight search',
+    serverUrl: 'https://mcp.kiwi.com',
+    transport: 'streamable-http',
+    auth: 'none',
+    docsUrl: 'https://mcp.kiwi.com',
+  },
+  {
+    // trivago's public accommodation search: no sign-in (initialize and tools/list answered anyone, 2026-11-09).
+    id: 'trivago',
+    title: 'trivago',
+    description: 'Hotel and accommodation search',
+    serverUrl: 'https://mcp.trivago.com/mcp',
+    transport: 'streamable-http',
+    auth: 'none',
+    docsUrl: 'https://mcp.trivago.com',
   },
 ];
 

@@ -101,6 +101,30 @@ describe('an MCP preset add', () => {
     });
   });
 
+  // The owner, 2026-11-09: Kiwi.com's and trivago's public servers answer anyone, so their presets ask nothing of the
+  // person: added, connected and listing their tools at once, with no credential and no header stored.
+  test('a preset that needs no sign-in is connected at once, and the account stores nothing for it', async () => {
+    const server = mcpTestServer({ tools: [{ name: 'search-flight', inputSchema: { type: 'object' } }] });
+    const h = createTestUserDO();
+    const kiwi = present(mcpPresetById('kiwi'), 'the Kiwi.com preset');
+
+    // Its address has no path, so the client asks it with the root's slash; nothing reaches the live server.
+    const asked = network({ [kiwi.serverUrl]: server, [`${kiwi.serverUrl}/`]: server }, () => Promise.reject(new Error('the test reaches no other server')));
+
+    try {
+      const added = await add(h, { presetId: 'kiwi' });
+      const [row] = sqlExec(h.db).exec(`SELECT headers FROM user_mcp_servers WHERE id = ?`, added.id).toArray();
+      const listed = (await h.userDO.userMcp_list(await testOwner())).map((s) => [s.presetId, s.name, s.status, s.signIn, s.toolsCount]);
+
+      expect({ signIn: added.signIn, row, listed }).toEqual({ signIn: false, row: { headers: null }, listed: [['kiwi', 'Kiwi.com', 'connected', false, 1]] });
+      expect(sqlExec(h.db).exec('SELECT COUNT(*) AS n FROM user_credentials').toArray()).toEqual([{ n: 0 }]);
+      expect(asked.length).toBeGreaterThan(0);
+    } finally {
+      await server.stop();
+      h.close();
+    }
+  });
+
   // Sol-round review (2026-10-23): a token preset holds the deployment's app client id too, and a failed connection then
   // offered Authorize, which its token never needs.
   test('a token preset whose token is refused reads failed and offers no sign-in, though the deployment holds its app', async () => {
@@ -131,7 +155,10 @@ describe('an MCP preset add', () => {
   test('userMcp_presets reports which oauth-app presets the deployment carries', async () => {
     const h = createTestUserDO({ mcpAppCredentials: ['github'] });
 
-    expect(await h.userDO.userMcp_presets(await testOwner())).toEqual([{ id: 'github', appConfigured: true }, { id: 'cloudflare', appConfigured: true }, { id: 'composio', appConfigured: true }]);
+    expect(await h.userDO.userMcp_presets(await testOwner())).toEqual([
+      { id: 'github', appConfigured: true }, { id: 'cloudflare', appConfigured: true }, { id: 'composio', appConfigured: true },
+      { id: 'kiwi', appConfigured: true }, { id: 'trivago', appConfigured: true },
+    ]);
     h.close();
   });
 });
