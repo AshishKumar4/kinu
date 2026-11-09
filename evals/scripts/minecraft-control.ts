@@ -13,7 +13,7 @@ import { SCRIPTED_MODEL_KEY_ENV, SCRIPTED_MODEL_ORIGIN, SCRIPTED_MODEL_SPEC } fr
 import { registerScriptedModel } from '../../scripts/scripted-model';
 import { MINECRAFT_CONTROL } from '../../scripts/minecraft-control-script';
 import { runTurn } from '../src/harness';
-import { prepareTrialAccount } from '../src/slot';
+import { deleteTrialAccount, prepareTrialAccount } from '../src/slot';
 import { openWorkspace, resolveEvalTarget } from '../src/target';
 import { TrialTimeline } from '../src/timeline';
 import { webHeaders } from '../src/workspace-roster';
@@ -58,4 +58,8 @@ try {
   process.exitCode = shortfalls.length === 0 ? 0 : 1;
 } finally {
   await session.teardown();
+  // The control's trial account goes with it, as an eval run's block does (evals/src/slot.ts `onTrialBlock`).
+  const refused = await deleteTrialAccount(target);
+
+  if (refused !== null) say(`its trial account was left: ${refused}`);
 }

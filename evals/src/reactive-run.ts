@@ -5,7 +5,7 @@ import { runTurn } from './harness';
 import { armEvolution, LAST_SEGMENTS, REACTIVE_ARMS, reactiveReply, THUMB_RATE, type ArmRun, type ReactiveArm, type SegmentResult } from './reactive';
 import type { KinuPublicSession } from './session';
 import { ARMS, openWorkspace } from './target';
-import { prepareTrialAccount } from './slot';
+import { deleteTrialAccount, prepareTrialAccount } from './slot';
 import { type EvalTarget } from './workspace-roster';
 import { graded, taskTurns, type EvalTask, type EvalTurn } from './task';
 import { TrialTimeline } from './timeline';
@@ -113,6 +113,10 @@ export async function runArm(input: {
     };
   } finally {
     await session.teardown();
+    // The arm's own trial account goes with it, as an eval run's block does (evals/src/slot.ts `onTrialBlock`).
+    const refused = await deleteTrialAccount(target);
+
+    if (refused !== null) say(`its trial account was left: ${refused}`);
   }
 }
 

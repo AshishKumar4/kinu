@@ -247,6 +247,9 @@ export const TRIAL_TEARDOWN_MS = 20 * 60_000;
 /** The file a run writes in its output as its teardown begins: what renews into its accounts stops (scripts/eval-plan-run.ts). */
 export const TEARDOWN_MARK = 'tearing-down';
 
+/** The file a plan run's holder keeps in a run's output while it renews into the run's accounts; the teardown waits it out. */
+export const RENEWING_MARK = 'renewing';
+
 /** How long a teardown may take: its deletes stop well inside the hold, and what was left is said. */
 const TEARDOWN_DEADLINE_MS = 15 * 60_000;
 
@@ -266,29 +269,33 @@ async function deleteBlock(block: TrialBlock, now: () => number): Promise<string
   return `evals: deleted ${String(deleted)} of the run's ${String(block.targets.length)} trial accounts${refused.length === 0 ? '' : `; refused: ${refused.join('; ')}`}`;
 }
 
+/** Whose a leased block is: leased only, the run's from its job's claim, or lost to an earlier run. */
+interface BlockHold { held: 'leased' | 'own' | 'lost' }
+
 /**
- * `run` on a leased block of trial accounts, each of which is deleted when it ends, however it ends, once the block is
- * the run's: trial accounts pile up otherwise (the owner, 2026-11-09: 64 left on production, 256 on staging). The block
- * is the run's from `release.own()`, called as its armada job claims it, to `release.lost()`, called the moment an
- * earlier run is found to hold it too; before its job, two runs may have leased it at once, so nothing is deleted. The
- * next run's provisioning makes each account again before any trial opens on it (scripts/eval-provider-keys.ts). What
- * a delete refused is said, never thrown over `run`'s end. `before` runs first: whatever writes to the block stops.
+ * `run` on a leased block of trial accounts, each of which is deleted when it ends, however it ends: trial accounts pile
+ * up otherwise (the owner, 2026-11-09: 64 left on production, 256 on staging). The block is the run's from
+ * `release.own()`, called as its armada job claims it, until `release.lost()`, called the moment an earlier job is found
+ * to claim it too, whose accounts are then that run's. A run that ends before its job (its provisioning refused, or it
+ * was stopped) deletes the block only where `unclaimed` finds no job of another run claiming it. The next run's
+ * provisioning makes each account again before any trial opens on it (scripts/eval-provider-keys.ts). `before` runs
+ * first, and stops the teardown where it throws. What a delete refused is said, never thrown over `run`'s end.
  */
 export async function onTrialBlock<T>(
   block: TrialBlock, run: (release: { own(): void; lost(): void }) => Promise<T>,
-  options: { readonly say?: (line: string) => void; readonly before?: () => Promise<void>; readonly now?: () => number } = {},
+  options: {
+    readonly say?: (line: string) => void; readonly before?: () => Promise<void>; readonly unclaimed?: () => Promise<boolean>; readonly now?: () => number;
+  } = {},
 ): Promise<T> {
   const say = options.say ?? console.log;
-  const now = options.now ?? Date.now;
-  let ours = false;
-  let lost = false;
+  const hold: BlockHold = { held: 'leased' };
 
   try {
-    return await run({ own: () => { ours = !lost; }, lost: () => { lost = true; ours = false; } });
+    return await run({ own: () => { if (hold.held === 'leased') hold.held = 'own'; }, lost: () => { hold.held = 'lost'; } });
   } finally {
-    if (ours) {
+    if (hold.held === 'own' || (hold.held === 'leased' && await (options.unclaimed?.() ?? Promise.resolve(false)))) {
       await options.before?.();
-      say(await deleteBlock(block, now));
+      say(await deleteBlock(block, options.now ?? Date.now));
     }
   }
 }

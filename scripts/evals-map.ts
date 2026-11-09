@@ -1,11 +1,11 @@
 #!/usr/bin/env bun
 // Opt-in evaluations: native armada CLI map tasks and its artifact extractor; light post-steps read those outputs.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
 import { MUSE_CALLS_AT_ONCE, evalMatrix, type EvalMatrix } from '../evals/src/config';
-import { claimLabel, onTrialBlock, TEARDOWN_MARK, trialAccounts, trialInheritedRows, type SlotClaim, type TrialBlock } from '../evals/src/slot';
+import { claimLabel, onTrialBlock, RENEWING_MARK, TEARDOWN_MARK, trialAccounts, trialInheritedRows, type SlotClaim, type TrialBlock } from '../evals/src/slot';
 import { parseEvalAccount } from '@kinu.run/core';
 import { collectEvalTasks } from '../evals/src/eval';
 import type { EvalTask } from '../evals/src/task';
@@ -15,7 +15,7 @@ import { deploymentOf } from './infra-manifest';
 import { gitIn } from '../packages/test-utils/src/git-env';
 import { MapResultSchema, type EvalRun, type MapResult, type TrialItem } from './evals-artifacts';
 import { drainArmadaProgress } from './armada-progress';
-import { KINU_ARMADA, keysWindows, kinuArmada, leaseBlock, outranked } from './evals-lease';
+import { KINU_ARMADA, keysWindows, kinuArmada, leaseBlock, openClaims, outranked } from './evals-lease';
 import { EVAL_SUITES, suiteTasks, type EvalSuite } from './evals-suites';
 import { NETWORK_SCOPE, processEvals, resolveGh, settleEvalRun } from './evals-post';
 import { isEvalTask, trackedFiles } from './sources';
@@ -223,18 +223,23 @@ async function settled<T>(work: Promise<T>, after: () => Promise<void>): Promise
   }
 }
 
-/** How long a run waits, once it says it is tearing down, for a plan login's renewal under way to land. */
-const RENEWAL_SETTLE_MS = 60_000;
+/** The longest a run waits, once it says it is tearing down, for a plan login's renewal under way to end. */
+const RENEWAL_DRAIN_MS = 10 * 60_000;
 
 /**
- * Before a run's accounts go: one that holds a plan login (scripts/eval-plan-run.ts) says it is tearing down, so its
- * holder renews it no more, and waits out a renewal already sent. A renewal landing after the account's logins were
- * disconnected would be revoked at its provider by the account's delete.
+ * Before a run's accounts go: one that holds a plan login (scripts/eval-plan-run.ts) says it is tearing down, then waits
+ * out a renewal already under way, which the holder marks before it reads this run's mark (`whileRenewing`), so none
+ * starts after. A renewal landing after the account's logins were disconnected would be revoked by the account's delete.
  */
 async function stopRenewals(out: string): Promise<void> {
   if ((process.env['KINU_EVAL_PLAN_GRANTS'] ?? '') === '') return;
   writeFileSync(join(out, TEARDOWN_MARK), `${String(Date.now())}\n`);
-  await Bun.sleep(RENEWAL_SETTLE_MS);
+  const deadline = Date.now() + RENEWAL_DRAIN_MS;
+
+  while (existsSync(join(out, RENEWING_MARK))) {
+    if (Date.now() > deadline) throw new Error(`a plan login's renewal into this run's accounts never ended; its accounts are left: ${out}`);
+    await Bun.sleep(1_000);
+  }
 }
 
 /** Each account of `claim`'s block on each of `origins`, as a trial acts as it there. */
@@ -331,7 +336,12 @@ async function leasedMap(plan: MapPlan, started: (job: string) => void) {
         }), () => checked);
 
         return lost ? null : { items, ...mapped };
-      }, { before: async () => { await stopRenewals(plan.out); } });
+      }, {
+        before: async () => { await stopRenewals(plan.out); },
+        // Ended before its job claimed the block: deleted only where no other run's job claims any of it.
+        unclaimed: async () => !(await openClaims(armada)).some((other) => other.first <= claim.last && other.last >= claim.first
+          && other.hosts.some((host) => hosts.includes(host))),
+      });
 
       holding = false;
 

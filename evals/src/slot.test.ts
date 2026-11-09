@@ -278,6 +278,11 @@ describe("a run's trial accounts", () => {
       await expect(onTrialBlock(block(origin, 3, 4), async () => { throw new Error('provisioning refused'); }, { say: () => {} })).rejects.toThrow('provisioning refused');
 
       expect(accounts.calls).toEqual([]);
+
+      // Ended before its job, where no other run's job claims the block: its provisioned accounts are deleted.
+      await expect(onTrialBlock(block(origin, 5, 5), async () => { throw new Error('stopped by SIGTERM'); }, { say: () => {}, unclaimed: async () => true }))
+        .rejects.toThrow('stopped by SIGTERM');
+      expect([...accounts.deleted]).toEqual(['trial-5']);
     } finally {
       await accounts.server.stop(true);
     }

@@ -3,7 +3,9 @@ import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import { DEV_IDENTITY_ACCOUNT_HEADER } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
-import { claimedAccounts, giveAgain, modelsNamed, ompGrant, planLogins, trialSelection } from './eval-plan-run';
+import { claimedAccounts, giveAgain, modelsNamed, ompGrant, planLogins, trialSelection, whileRenewing } from './eval-plan-run';
+import { RENEWING_MARK, TEARDOWN_MARK } from '../evals/src/slot';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 
 const held = new Map<string, string[]>([
   ['eval-service', ['opencode-go.bearer']], ['trial-1', ['opencode-go.bearer', 'claude.oauth', 'chatgpt.oauth@compare']], ['trial-2', ['codex.oauth']],
@@ -107,4 +109,23 @@ test("the accounts a run reads are its sequences' claimed blocks on its deployme
   ];
 
   expect(claimedAccounts(claims, new Set(['mine']), 'staging.kinu.run')).toEqual(['trial-3', 'trial-4']);
+});
+
+// A renewal landing after a sequence disconnected its accounts' logins would be revoked by the accounts' delete. Each side
+// marks itself before reading the other's: a sequence tearing down gets no renewal, and one under way is marked until done.
+test('a renewal reaches no sequence tearing down, and marks itself while it runs into one that is not', async () => {
+  const sequence = join(scratchDir('plan-run-renewal'), 'haiku');
+  let marked = false;
+
+  mkdirSync(sequence, { recursive: true });
+  expect(await whileRenewing(sequence, async () => {
+    marked = existsSync(join(sequence, RENEWING_MARK));
+
+    return ['trial-3'];
+  })).toEqual(['trial-3']);
+  expect({ marked, after: existsSync(join(sequence, RENEWING_MARK)) }).toEqual({ marked: true, after: false });
+
+  writeFileSync(join(sequence, TEARDOWN_MARK), '1\n');
+  expect(await whileRenewing(sequence, async () => ['trial-3'])).toBeNull();
+  expect(existsSync(join(sequence, RENEWING_MARK))).toBe(false);
 });

@@ -34,7 +34,7 @@ import {
 import { DEFAULT_MODELS } from '../evals/src/config';
 import { deployedBuild } from '../evals/src/target';
 import { kinuArmada, keysWindows, openClaims, type HeldClaim } from './evals-lease';
-import { TEARDOWN_MARK } from '../evals/src/slot';
+import { RENEWING_MARK, TEARDOWN_MARK } from '../evals/src/slot';
 import { deploymentOf } from './infra-manifest';
 import { REPO_ROOT as ROOT } from './repo-root';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -138,6 +138,24 @@ export async function giveAgain(input: {
   }
 
   return given;
+}
+
+/**
+ * `renewal` into a sequence's accounts, unless that sequence is tearing down: null then. Its mark is written before the
+ * sequence's own is read, as the sequence writes its own before reading this one (scripts/evals-map.ts `stopRenewals`),
+ * so the two never both go ahead: a renewal under way is waited out by the teardown, never revoked by it.
+ */
+export async function whileRenewing<T>(sequence: string, renewal: () => Promise<T>): Promise<T | null> {
+  const mark = join(sequence, RENEWING_MARK);
+
+  mkdirSync(sequence, { recursive: true });
+  writeFileSync(mark, `${String(Date.now())}\n`);
+
+  try {
+    return existsSync(join(sequence, TEARDOWN_MARK)) ? null : await renewal();
+  } finally {
+    rmSync(mark, { force: true });
+  }
 }
 
 /** The trial accounts `jobs` hold on `host`, as each one's armada label claims its block: nothing else is read. */
@@ -252,18 +270,12 @@ async function hold(argv: readonly string[]): Promise<number> {
     return 0;
   }
 
-  /** The armada jobs the sequences' runs hold, as each one's `run.json` names them; `renewable`: only those of a run not
-   *  yet tearing down, whose accounts a renewal may still reach. */
-  const sequenceJobs = (renewable = false): string[] => models.flatMap(({ slug }) => {
+  /** The armada jobs `slugs`' sequences hold, as each one's `run.json` names them. */
+  const sequenceJobs = (slugs: readonly string[] = models.map((each) => each.slug)): string[] => slugs.flatMap((slug) => {
     const run = join(out, slug, 'run.json');
 
-    if (!existsSync(run) || (renewable && existsSync(join(out, slug, TEARDOWN_MARK)))) return [];
-
-    return v.parse(v.looseObject({ jobs: v.array(v.string()) }), JSON.parse(readFileSync(run, 'utf8'))).jobs;
+    return existsSync(run) ? v.parse(v.looseObject({ jobs: v.array(v.string()) }), JSON.parse(readFileSync(run, 'utf8'))).jobs : [];
   });
-
-  /** The trial accounts the sequences hold and a renewal may reach, on the run's deployment: those their jobs claim. */
-  const sequencesAccounts = async (): Promise<string[]> => claimedAccounts(await openClaims(kinuArmada()), new Set(sequenceJobs(true)), new URL(origin).host);
 
   // Each sequence hears the stop and deletes the accounts it holds before it exits (evals-map, `onTrialBlock`); its jobs
   // are cancelled after, should one have outlived it.
@@ -282,19 +294,29 @@ async function hold(argv: readonly string[]): Promise<number> {
 
   process.on('SIGTERM', requestStop);
 
-  /** Each token OMP has renewed since it was given, given again to the account that holds the old one. */
+  /**
+   * Each token OMP has renewed since it was given, given again to the accounts of its own sequence that hold the old
+   * one, and to no other account. A sequence tearing down takes none (`whileRenewing`).
+   */
   const renew = async (): Promise<void> => {
     for (const each of models) {
-      if (each.omp === null) continue;
+      if (each.omp === null || each.key === null) continue;
       const now = ompGrant(OMP_STORE, each.omp);
+      const { key, slug } = each;
 
-      if (now.accessToken === given.get(each.key)?.accessToken) continue;
-      const holders = await planLogins(origin, secret, await sequencesAccounts());
-      const reached = await giveAgain({ origin, secret, holders, key: each.key, grant: now });
+      if (now.accessToken === given.get(key)?.accessToken) continue;
+
+      const reached = await whileRenewing(join(out, slug), async () => {
+        const accounts = claimedAccounts(await openClaims(kinuArmada()), new Set(sequenceJobs([slug])), new URL(origin).host);
+
+        return await giveAgain({ origin, secret, holders: await planLogins(origin, secret, accounts), key, grant: now });
+      });
 
       // Given once an account holds it: a sequence still provisioning is given it at the next look.
-      if (reached.length > 0) given.set(each.key, now);
-      say('running', `${each.key}: OMP renewed its login, to ${new Date(now.expiresAt ?? 0).toISOString()}; given again to ${reached.join(', ') || 'no account yet'}.`);
+      if (reached !== null && reached.length > 0) given.set(key, now);
+      const to = reached === null ? 'no account: its sequence is tearing down' : reached.join(', ');
+
+      say('running', `${key}: OMP renewed its login, to ${new Date(now.expiresAt ?? 0).toISOString()}; given again to ${to === '' ? 'no account yet' : to}.`);
     }
   };
 
