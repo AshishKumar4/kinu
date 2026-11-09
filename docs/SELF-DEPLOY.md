@@ -110,7 +110,7 @@ same day, against 59.3 MiB and 28.3 MiB computed from its manifest.
    public with PKCE, so a deployment can refresh its own token without a
    client secret. Scopes (`CLOUDFLARE_DEPLOY_SCOPES` in
    `packages/core/src/deploy/pkce.ts`) are the OAuth catalog's dot ids
-   (`GET /oauth/scopes`): workers scripts, routes, KV, R2, Vectorize, AI
+   (`GET /oauth/scopes`): workers scripts, routes, KV, R2, AI
    Gateway, zone read, DNS write, the three mail scopes, user details,
    account settings and offline access. The authorize endpoint refuses the
    old colon names (`invalid_scope` for `account:read`, kinu.run 2026-10-20).
@@ -159,8 +159,7 @@ same day, against 59.3 MiB and 28.3 MiB computed from its manifest.
    Workers Paid, a refused sign-in) pauses the run, which asks again every
    15 s; an hour into the pause it lets go of the grant, and keeps what it
    minted and its setup link for seven days before deleting itself. In order: read the account and settle the
-   address; create KV, the R2 buckets, the Vectorize index with the geometry
-   `release.json` states, the AI Gateway; seed the runtime cache; mint the
+   address; create KV, the R2 buckets, the AI Gateway; seed the runtime cache; mint the
    secrets and the first owner's setup link; upload the Worker version with the
    bindings and migrations from `release.json`; bind the address and deploy
    the new version at 0% beside the one serving; smoke-check `/api/health`
@@ -313,7 +312,7 @@ Cloudflare door. No user repository and no Workers Builds.
    answer, and Kinu's keys are `session:`, `oauth-state:` and `ingress:`).
    R2 is not hosted: `r2Bucket` speaks R2's own protocol, which a disk
    directory does not implement. So the install prints each bucket by name,
-   beside Vectorize, AI, the Worker loader, Analytics Engine and the
+   beside AI, the Worker loader, Analytics Engine and the
    container, as what a local instance goes without. Proved end to end against
    the real workerd binary in `packages/cli/tests/deploy-local.test.ts` (the
    instance answers on its own port and round-trips its own KV binding), the
@@ -373,5 +372,5 @@ Cloudflare door. No user repository and no Workers Builds.
    none of the premises in `packages/core/src/deploy/steps.ts` (`migrations`
    only on the first upload, `keep_bindings` carrying the live secrets, a
    deployment taking a version at 0%, a version override reaching it). The
-   next run needs one credential that can reach Vectorize; nothing else was
-   missing.
+   Vectorize step left the flow on 2026-11-09 (#103), so that refusal no
+   longer stops a run.

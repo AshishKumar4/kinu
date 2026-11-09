@@ -94,14 +94,6 @@ describe('the manifest is the config', () => {
     expect(MANIFEST.migrations.flatMap((migration) => migration.newSqliteClasses).sort()).toEqual(classes);
   });
 
-  test('the Vectorize geometry is the embedder\'s, not a number retyped here', () => {
-    // A wrong width binds and then rejects every insert, which is why the
-    // release carries it at all.
-    expect(MANIFEST.vectorIndexes.every((index) => index.dimensions === 384 && index.metric === 'cosine')).toBe(true);
-    expect(MANIFEST.vectorIndexes.map((index) => index.name))
-      .toEqual((CONFIG.vectorize ?? []).map((index) => index.index_name));
-  });
-
   test('the artifact it names is the route the Worker serves from R2', () => {
     // The tarball is over Cloudflare's per-file asset limit, so it is an R2
     // object behind `/downloads/kinu-worker-<version>.tar.gz`

@@ -4,7 +4,7 @@
 import * as v from 'valibot';
 
 const BINDING_KINDS = [
-  'kv', 'r2', 'vectorize', 'durable-object', 'analytics-engine', 'ai', 'browser', 'assets',
+  'kv', 'r2', 'durable-object', 'analytics-engine', 'ai', 'browser', 'assets',
   'version-metadata', 'send-email', 'worker-loader', 'container',
 ] as const;
 
@@ -17,13 +17,6 @@ export interface ReleaseBinding {
   readonly resource: string;
   /** False where `env.d.ts` marks it optional; creation failure is reported, not fatal. */
   readonly required: boolean;
-}
-
-/** A wrong-width index binds fine and rejects every insert, so geometry ships with the release. */
-export interface ReleaseVectorIndex {
-  readonly name: string;
-  readonly dimensions: number;
-  readonly metric: string;
 }
 
 export interface ReleaseMigration {
@@ -112,7 +105,6 @@ export interface ReleaseManifest {
   /** The front Worker that answers a self-hosted deployment's address (front.ts); its bindings are derived. */
   readonly front: ReleaseModules;
   readonly bindings: readonly ReleaseBinding[];
-  readonly vectorIndexes: readonly ReleaseVectorIndex[];
   readonly migrations: readonly ReleaseMigration[];
   readonly secrets: readonly ReleaseSecret[];
   readonly vars: readonly ReleaseVar[];
@@ -173,11 +165,6 @@ export const ReleaseManifestSchema: v.GenericSchema<PublishedManifest, ReleaseMa
     kind: v.picklist(BINDING_KINDS),
     resource: v.string(),
     required: v.boolean(),
-  })),
-  vectorIndexes: v.array(v.object({
-    name: v.pipe(v.string(), v.minLength(1)),
-    dimensions: v.pipe(v.number(), v.integer(), v.minValue(1)),
-    metric: v.pipe(v.string(), v.minLength(1)),
   })),
   migrations: v.array(v.object({
     tag: v.pipe(v.string(), v.minLength(1)),

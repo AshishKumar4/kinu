@@ -228,12 +228,10 @@ function manifestText(build: DeployFakeServedBuild): string {
     bindings: [
       { binding: 'AUTH_KV', kind: 'kv', resource: 'kinu-auth-kv', required: true },
       { binding: 'BACKUP_BUCKET', kind: 'r2', resource: 'kinu-backups', required: false },
-      { binding: 'MEMORY_VECTORS', kind: 'vectorize', resource: 'kinu-memory', required: false },
       { binding: 'OrchestratorAgent', kind: 'durable-object', resource: 'OrchestratorAgent', required: true },
       { binding: 'ASSETS', kind: 'assets', resource: '', required: true },
       { binding: 'LOADER', kind: 'worker-loader', resource: '', required: true },
     ],
-    vectorIndexes: [{ name: 'kinu-memory', dimensions: 384, metric: 'cosine' }],
     migrations: [{ tag: 'v1', newSqliteClasses: ['OrchestratorAgent'] }],
     secrets: [
       { name: 'CREDENTIAL_ENCRYPTION_KEY', handling: 'prompted', required: true, prompt: '32 random bytes' },
@@ -331,7 +329,6 @@ export const DeployFakeStateSchema = v.object({
   liveRefresh: v.string(),
   namespaces: v.array(v.string()),
   buckets: v.array(v.string()),
-  indexes: v.array(v.string()),
   gateways: v.array(v.string()),
   secrets: v.record(v.string(), v.string()),
   uploads: v.number(),
@@ -358,7 +355,6 @@ export interface DeployFakeState {
   readonly liveRefresh: string;
   readonly namespaces: readonly string[];
   readonly buckets: readonly string[];
-  readonly indexes: readonly string[];
   readonly gateways: readonly string[];
   /** Values are this plane's fakes: they prove the handover wrote the token and record it was meant to. */
   readonly secrets: Readonly<Record<string, string>>;
@@ -408,9 +404,6 @@ interface Held {
   liveRefresh: string;
   namespaces: string[];
   buckets: string[];
-  indexes: string[];
-  /** Each index's shape, as Vectorize reports it. */
-  indexConfigs: Map<string, { dimensions: number; metric: string }>;
   gateways: string[];
   /** The account's tokens by name, each with the values it was minted and rolled to. */
   tokens: Map<string, string[]>;
@@ -468,8 +461,6 @@ function fresh(): Held {
     liveRefresh: DEPLOY_FAKE_REFRESH_TOKEN,
     namespaces: [],
     buckets: [],
-    indexes: [],
-    indexConfigs: new Map(),
     gateways: [],
     tokens: new Map(),
     secrets: new Map<string, string>(),
@@ -508,8 +499,6 @@ function reset(): void {
   held.liveRefresh = empty.liveRefresh;
   held.namespaces = empty.namespaces;
   held.buckets = empty.buckets;
-  held.indexes = empty.indexes;
-  held.indexConfigs = empty.indexConfigs;
   held.gateways = empty.gateways;
   held.secrets = empty.secrets;
   held.uploads = 0;
@@ -545,7 +534,6 @@ function snapshot(): DeployFakeState {
     liveRefresh: held.liveRefresh,
     namespaces: [...held.namespaces],
     buckets: [...held.buckets],
-    indexes: [...held.indexes],
     gateways: [...held.gateways],
     secrets: Object.fromEntries(held.secrets),
     uploads: held.uploads,
@@ -703,8 +691,7 @@ async function api(url: URL, request: Request): Promise<Response> {
 
   if (path.startsWith(`/accounts/${ACCOUNT_ID}/email/sending/suppressions`)) return envelope([]);
 
-  const indexed = v.safeParse(v.object({ dimensions: v.number(), metric: v.string() }), body.config);
-  const stored = storageApi(path, request, named, indexed.success ? indexed.output : null);
+  const stored = storageApi(path, request, named);
 
   if (stored !== undefined) return stored;
 
@@ -720,9 +707,9 @@ async function api(url: URL, request: Request): Promise<Response> {
   throw new Error(`the deploy fake has no answer for ${request.method} ${path}`);
 }
 
-/** The run's storage: KV namespaces, buckets, Vectorize indexes and the AI Gateway, each listed or made; then the
+/** The run's storage: KV namespaces, buckets and the AI Gateway, each listed or made; then the
  *  account's tokens. */
-function storageApi(path: string, request: Request, named: (key: string) => string, config: { readonly dimensions: number; readonly metric: string } | null): Response | undefined {
+function storageApi(path: string, request: Request, named: (key: string) => string): Response | undefined {
   if (path.endsWith('/storage/kv/namespaces?per_page=100')) {
     return envelope(held.namespaces.map((title) => ({ id: `id-${title}`, title })));
   }
@@ -741,20 +728,6 @@ function storageApi(path: string, request: Request, named: (key: string) => stri
   if (path.endsWith('/r2/buckets')) {
     held.buckets.push(named('name'));
     held.creates.push(`r2:${named('name')}`);
-
-    return envelope({ name: named('name') });
-  }
-
-  if (path.endsWith('/vectorize/v2/indexes') && request.method === 'GET') {
-    return envelope(held.indexes.map((name) => ({ name, config: held.indexConfigs.get(name) ?? null })));
-  }
-
-  if (path.endsWith('/vectorize/v2/indexes')) {
-    if (config === null) throw new Error('the deploy fake was asked for an index with no dimensions and metric');
-
-    held.indexes.push(named('name'));
-    held.indexConfigs.set(named('name'), config);
-    held.creates.push(`vectorize:${named('name')}`);
 
     return envelope({ name: named('name') });
   }

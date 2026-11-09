@@ -359,7 +359,7 @@ mock.module(${JSON.stringify(cloudflare)}, () => ({
   wrangler: () => ({ ok: true, stdout: ${JSON.stringify(JSON.stringify(account.reset))}, stderr: '', code: 0 }),
   container: (name: string) => ${JSON.stringify(account.missingContainers)}.includes(name) ? { state: 'absent' } : present(),
   r2: (name: string) => ${JSON.stringify(account.missingBuckets ?? [])}.includes(name) ? { state: 'absent' } : present(),
-  kvNamespace: present, vectorize: present, containerNamespace: present,
+  kvNamespace: present, containerNamespace: present,
   servesWorker: present, edgeResponds: present, wildcardDns: present, hostResolves: present,
   emailRoutingToWorker: present, accessOrganization: present, accessApplication: present,
   accessPolicies: present, accessScope: present,

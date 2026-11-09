@@ -41,8 +41,7 @@ const MANIFEST: ReleaseManifest = {
   bindings: [
     { binding: 'AUTH_KV', kind: 'kv', resource: 'kinu-auth-kv', required: true },
     { binding: 'BACKUP_BUCKET', kind: 'r2', resource: 'kinu-backups', required: false },
-    { binding: 'MEMORY_VECTORS', kind: 'vectorize', resource: 'kinu-memory', required: false },
-    { binding: 'OrchestratorAgent', kind: 'durable-object', resource: 'OrchestratorAgent', required: true },
+      { binding: 'OrchestratorAgent', kind: 'durable-object', resource: 'OrchestratorAgent', required: true },
     { binding: 'KinuDevbox', kind: 'durable-object', resource: 'KinuDevbox', required: false },
     { binding: 'AGENT_METRICS', kind: 'analytics-engine', resource: 'kinu_agent_metrics', required: false },
     { binding: 'AI', kind: 'ai', resource: '', required: false },
@@ -50,7 +49,6 @@ const MANIFEST: ReleaseManifest = {
     { binding: 'ASSETS', kind: 'assets', resource: '', required: true },
     { binding: 'LOADER', kind: 'worker-loader', resource: '', required: true },
   ],
-  vectorIndexes: [{ name: 'kinu-memory', dimensions: 384, metric: 'cosine' }],
   migrations: [{ tag: 'v1', newSqliteClasses: ['OrchestratorAgent', 'KinuDevbox'] }],
   secrets: [
     { name: 'CREDENTIAL_ENCRYPTION_KEY', handling: 'prompted', required: true, prompt: '32 random bytes' },
@@ -139,11 +137,6 @@ class FakeCloudflare implements CloudflareTransport {
   readonly namespaces: string[] = [];
 
   readonly buckets: string[] = [];
-
-  readonly indexes: string[] = [];
-
-  /** Each index's shape, as Vectorize reports it. */
-  readonly indexConfigs = new Map<string, { dimensions: number; metric: string }>();
 
   readonly gateways: string[] = [];
 
@@ -817,17 +810,6 @@ class FakeCloudflare implements CloudflareTransport {
       return { name: body.name ?? '' };
     }
 
-    if (path.endsWith('/vectorize/v2/indexes') && call.method === 'GET') {
-      return this.indexes.map((name) => ({ name, config: this.indexConfigs.get(name) ?? null }));
-    }
-
-    if (path.endsWith('/vectorize/v2/indexes')) {
-      this.indexes.push(bodyText(body, 'name'));
-      this.indexConfigs.set(bodyText(body, 'name'), v.parse(v.object({ dimensions: v.number(), metric: v.string() }), body.config));
-
-      return { name: body.name ?? '' };
-    }
-
     if (path.includes('/ai-gateway/gateways?')) return this.gateways.map((id) => ({ id }));
 
     if (path.endsWith('/ai-gateway/gateways')) {
@@ -1081,7 +1063,6 @@ describe('a guided run', () => {
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     expect(cloudflare.namespaces).toEqual(['kinu-auth-kv']);
     expect(cloudflare.buckets).toEqual(['kinu-backups']);
-    expect(cloudflare.indexes).toEqual(['kinu-memory']);
     expect(cloudflare.secrets.get(DEPLOYMENT_REFRESH_SECRET)).toBe('refresh-token-value');
     expect(JSON.parse(cloudflare.secrets.get(DEPLOYMENT_RECORD_SECRET) ?? '{}')).toMatchObject({
       inputs: { accountId: INPUTS.accountId, instanceName: 'kinu', ownerEmail: INPUTS.ownerEmail },
@@ -1101,7 +1082,7 @@ describe('a guided run', () => {
     const namespaceMade = at((call) => call.method === 'POST' && call.path.endsWith('/storage/kv/namespaces'));
 
     const lastStorage = cloudflare.calls.reduce((last, call, index) => (
-      ['/storage/kv/namespaces', '/r2/buckets', '/vectorize/v2/indexes', '/ai-gateway/gateways'].some((path) => call.path.includes(path)) ? index : last
+      ['/storage/kv/namespaces', '/r2/buckets', '/ai-gateway/gateways'].some((path) => call.path.includes(path)) ? index : last
     ), -1);
 
     const uploaded = at((call) => call.path.endsWith('/workers/scripts/kinu-app'));
@@ -1695,7 +1676,6 @@ describe('a second sitting on the same account', () => {
     expect(rows.every((row) => row.state === 'done')).toBe(true);
     expect(cloudflare.namespaces).toEqual(['kinu-auth-kv']);
     expect(cloudflare.buckets).toEqual(['kinu-backups']);
-    expect(cloudflare.indexes).toEqual(['kinu-memory']);
     expect(cloudflare.calls.filter((call) => call.method === 'POST' && call.path.endsWith('/storage/kv/namespaces')))
       .toEqual([]);
     expect(cloudflare.calls.filter((call) => call.method === 'PUT' && call.path.includes('/r2/buckets/')))
@@ -1728,7 +1708,7 @@ describe('a refusal', () => {
 
     expect({
       account: rows.find((row) => row.id === 'account')?.state,
-      made: [...cloudflare.namespaces, ...cloudflare.buckets, ...cloudflare.indexes],
+      made: [...cloudflare.namespaces, ...cloudflare.buckets, ...cloudflare.gateways],
     }).toEqual({ account: 'failed', made: [] });
   });
 
@@ -1757,10 +1737,11 @@ describe('a refusal', () => {
 
   test('is retried by running the plan again: that step, not the ones before it', async () => {
     cloudflare.refusal = {
-      path: `/accounts/${INPUTS.accountId}/vectorize/v2/indexes`,
-      status: 409,
-      code: 10014,
-      message: 'vectorize.index.create: index already exists with a different dimension',
+      method: 'POST',
+      path: `/accounts/${INPUTS.accountId}/ai-gateway/gateways`,
+      status: 500,
+      code: 10000,
+      message: 'internal error',
     };
     await run();
     cloudflare.calls.length = 0;
@@ -1768,24 +1749,10 @@ describe('a refusal', () => {
     const rows = await run();
 
     expect(rows.every((row) => row.state === 'done')).toBe(true);
-    expect(rows.find((row) => row.id === 'vectorize')?.attempt).toBe(2);
+    expect(rows.find((row) => row.id === 'ai-gateway')?.attempt).toBe(2);
     expect(rows.find((row) => row.id === 'kv')?.attempt).toBe(1);
     expect(cloudflare.calls.some((call) => call.path.endsWith('/storage/kv/namespaces') && call.method === 'POST')).toBe(false);
-    expect(cloudflare.indexes).toEqual(['kinu-memory']);
-  });
-
-  // core-rest review P1-23: a same-name index of another shape read as ready, and every vector written to it was refused.
-  test('an index of another shape under the release\'s name stops the run there, naming both shapes', async () => {
-    cloudflare.indexes.push('kinu-memory');
-    cloudflare.indexConfigs.set('kinu-memory', { dimensions: 768, metric: 'cosine' });
-
-    const rows = await run();
-    const refused = rows.find((row) => row.id === 'vectorize');
-
-    expect(refused?.state).toBe('failed');
-    expect(refused?.failure?.detail).toContain('768 dimensions');
-    expect(refused?.failure?.detail).toContain('384-dimension');
-    expect(cloudflare.calls.some((call) => call.method === 'POST' && call.path.endsWith('/vectorize/v2/indexes'))).toBe(false);
+    expect(cloudflare.gateways).toEqual(['kinu']);
   });
 
   test('a local failure is reported with no Cloudflare code', async () => {
@@ -1989,9 +1956,8 @@ describe('the workerd configuration for a local instance', () => {
     expect(config).not.toContain('CLI_PUBLIC_ORIGIN');
     expect(config).not.toContain('DEV_USER_EMAIL');
 
-    expect(config).not.toContain('MEMORY_VECTORS');
     expect(config).not.toContain('LOADER');
-    expect(unhostedBindings(MANIFEST)).toEqual(['BACKUP_BUCKET', 'MEMORY_VECTORS', 'AGENT_METRICS', 'AI', 'BROWSER', 'LOADER']);
+    expect(unhostedBindings(MANIFEST)).toEqual(['BACKUP_BUCKET', 'AGENT_METRICS', 'AI', 'BROWSER', 'LOADER']);
 
     // workerd refuses to start on a disk service whose directory is absent.
     expect(workerdDirectories(MANIFEST)).toEqual(['state/do', 'state/kv/kinu-auth-kv']);
@@ -2202,14 +2168,14 @@ describe('the page\'s view of a run', () => {
   });
 
   test('a refusal the catalog does not name stops the run with its words and "Retry this step"', async () => {
-    cloudflare.refusal = { path: `/accounts/${ACCOUNT}/vectorize/v2/indexes`, status: 400, code: 40_026, message: 'vectorize.index.invalid_config' };
+    cloudflare.refusal = { method: 'POST', path: `/accounts/${ACCOUNT}/ai-gateway/gateways`, status: 400, code: 40_026, message: 'gateway.invalid_config' };
     const view = viewOf(await run());
 
-    expect({ state: view.state, vectorize: view.phases[1]?.state, refused: view.refused }).toEqual({
-      state: 'refused', vectorize: 'refused',
+    expect({ state: view.state, storage: view.phases[1]?.state, refused: view.refused }).toEqual({
+      state: 'refused', storage: 'refused',
       refused: {
         sentence: 'This step did not finish.', action: { label: 'Retry this step' },
-        details: { message: 'vectorize.index.invalid_config', code: 40_026, status: 400, endpoint: `/accounts/${ACCOUNT}/vectorize/v2/indexes` },
+        details: { message: 'gateway.invalid_config', code: 40_026, status: 400, endpoint: `/accounts/${ACCOUNT}/ai-gateway/gateways` },
       },
     });
   });

@@ -2582,7 +2582,7 @@ export const LADDER: readonly Gate[] = [
       + 'has no `ai-gateway` command and the OAuth session has no `aig` scope) and the cron '
       + 'trigger (writable, never readable) are DECLARED blind spots pinned by equality, so the '
       + 'list can only shrink and only on purpose, and an undeclared one fails. Also blind to '
-      + 'whether a resource that exists is CORRECT beyond its name — a Vectorize geometry '
+      + 'whether a resource that exists is CORRECT beyond its name — a container image '
       + 'mismatch is reported, an R2 lifecycle rule is not. The four Access rows need an API token with `Access: Apps and Policies Read` '
       + 'rather than the wrangler login, which has no Access scope; without one they report '
       + 'UNKNOWN and fail, because a machine that could not look at the admin plane\'s outer gate '

@@ -150,7 +150,7 @@ KINU_WRANGLER_ARGS=()
 # WHAT THIS FLAG DOES NOT DO. It skips no verification and it cannot. It moves
 # the pre-deploy phase to `bootstrap`, which defers ONLY resources the
 # infrastructure manifest marks `wrangler-deploy`; every external prerequisite —
-# secrets, KV, R2, Vectorize, DNS, the AI Gateway — still refuses the deploy
+# secrets, KV, R2, DNS, the AI Gateway — still refuses the deploy
 # before the upload, and so does any lookup that merely failed. Step 5 below
 # runs the full phase with no tolerance at all, unconditionally, and its
 # findings fail the deployment.
@@ -630,8 +630,8 @@ if ! npx wrangler whoami >/dev/null 2>&1; then
   echo "  On your own machine:  npx wrangler login"
   echo "  In CI: set the CLOUDFLARE_API_TOKEN secret. Cloudflare dashboard →"
   echo "  My Profile → API Tokens → Create Token → Edit Cloudflare Workers,"
-  echo "  then add Workers R2 Storage: Edit, Workers KV Storage: Edit and"
-  echo "  Vectorize: Edit, scoped to account $CLOUDFLARE_ACCOUNT_ID."
+  echo "  then add Workers R2 Storage: Edit and Workers KV Storage: Edit,"
+  echo "  scoped to account $CLOUDFLARE_ACCOUNT_ID."
   echo "  Only a person with dashboard access can mint it; this script will not"
   echo "  deploy part of the way without it."
   finish
@@ -652,7 +652,7 @@ if [ "$KINU_BOOTSTRAP" = "1" ]; then
   echo -e "${BOLD}BOOTSTRAP: the pre-deploy infrastructure phase will DEFER resources this deploy creates.${NC}"
   echo "  Deferred: only what the manifest marks \`wrangler-deploy\` — Durable Object namespaces,"
   echo "            container applications, routes, crons, inert bindings, the Worker itself."
-  echo "  Still refused before the upload: every secret, KV namespace, R2 bucket, Vectorize index,"
+  echo "  Still refused before the upload: every secret, KV namespace, R2 bucket,"
   echo "            DNS record and AI Gateway, and any lookup that merely failed."
   echo "  Step 5 re-checks all of it after the upload with no tolerance, and fails this deploy if"
   echo "            anything deferred did not appear."

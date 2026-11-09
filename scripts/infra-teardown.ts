@@ -46,10 +46,10 @@ export function confirmationPhrase(workerName: string): string {
  *
  * The Worker first: it holds the Durable Object namespaces, and a DO namespace
  * has no delete command of its own. Then the container application, then the
- * index, then buckets, then the session store last, because it is the store an
+ * buckets, then the session store last, because it is the store an
  * operator is likeliest to be signed in through while confirming.
  */
-const ORDER: readonly string[] = ['worker', 'container', 'vectorize', 'r2', 'kv'];
+const ORDER: readonly string[] = ['worker', 'container', 'r2', 'kv'];
 
 export interface Partition {
   /** Deleted by their own wrangler command, in the order given. */

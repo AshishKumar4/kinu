@@ -1,9 +1,9 @@
 {
-  "measuredAt": "2026-11-05",
-  "files": 3962,
-  "functions": 104693,
+  "measuredAt": "2026-11-09",
+  "files": 3985,
+  "functions": 105697,
   "ceiling": 87,
-  "line": 25,
+  "line": 24,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -46,10 +46,6 @@
       "complexity": 35
     },
     {
-      "key": "scripts/infra-manifest.ts#draftsFor",
-      "complexity": 35
-    },
-    {
       "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission>gen",
       "complexity": 34
     },
@@ -58,11 +54,11 @@
       "complexity": 34
     },
     {
-      "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
-      "complexity": 32
+      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "complexity": 33
     },
     {
-      "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
+      "key": "scripts/infra-manifest.ts#draftsFor",
       "complexity": 33
     },
     {
@@ -83,6 +79,10 @@
     },
     {
       "key": "tests/first-run/deploy-door.first-run.ts#authorizeHandoff",
+      "complexity": 32
+    },
+    {
+      "key": "tests/first-run/share-capability-cut.first-run.ts#describe>liveTest>run",
       "complexity": 32
     },
     {
@@ -150,10 +150,6 @@
       "complexity": 28
     },
     {
-      "key": "scripts/infra-verify.ts#observe",
-      "complexity": 28
-    },
-    {
       "key": "scripts/syntax.ts#importUses>visit",
       "complexity": 28
     },
@@ -206,8 +202,8 @@
       "complexity": 27
     },
     {
-      "key": "scripts/error-model.ts#bridgeSites>walk#2",
-      "complexity": 25
+      "key": "scripts/infra-verify.ts#observe",
+      "complexity": 27
     },
     {
       "key": "scripts/module-edges.ts#moduleEdges>walk",
@@ -346,10 +342,6 @@
       "complexity": 25
     },
     {
-      "key": "packages/core/src/chat.ts#runChat>callModelOnce",
-      "complexity": 24
-    },
-    {
       "key": "packages/core/src/evolution/refinement-lane.ts#settleRoutes",
       "complexity": 25
     },
@@ -375,6 +367,10 @@
     },
     {
       "key": "packages/devbox/src/supervised-processes.ts#SupervisedProcesses.start>gen",
+      "complexity": 25
+    },
+    {
+      "key": "scripts/error-model.ts#bridgeSites>walk#2",
       "complexity": 25
     },
     {
@@ -424,6 +420,206 @@
     {
       "key": "tools/oxlint/anti-slop/shared/dictionary-types.ts#unsafeDirectValue",
       "complexity": 25
+    },
+    {
+      "key": "packages/cf-backend/src/components/ChatColumn.tsx#ChatColumn",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/components/Composer.tsx#Composer",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/components/mail/MailMessage.tsx#MailMessage",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/components/slates/InlineSlate.tsx#InlineSlate",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/gallery-deploy-fixture.ts#deployFixture",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/gallery-diff-design.tsx#Scene",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/gallery-mailpage.tsx#installMailPageFixture>mailAnswer",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/gallery-secrets.tsx#secretsFixture",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/gallery-stubs.tsx#chatgptFixture",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/hooks/use-chat-thread.ts#useChatThread",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/hooks/use-workspace-reads.ts#useWorkspaceReads>paneFrame",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/orchestrator.ts#OrchestratorAgent.agentOwes",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/pages/GallerySlatePage.tsx#GallerySlatePage",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/src/user/devices.ts#UserDevices.deviceRpc>gen",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cf-backend/tests/workerd/deploy-fake.ts#deployOutbound",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cli/src/tui/home-app.tsx#HomeScene>useKeyboard",
+      "complexity": 24
+    },
+    {
+      "key": "packages/cli/src/tui/status-bar.tsx#StatusBar",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/chat.ts#runChat>callModelOnce",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/evolution/refinement-lane.ts#plan>gen",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/execution/hub-device-transport.ts#createHubDeviceTransport>rpc>suspend>try",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/mcp/servers.ts#validateMcpServerInput>gen",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/memory/hybrid-search.ts#fusedHit",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/orchestrator/turn-accumulator.ts#TurnAccumulator.writeStep",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/orchestrator/turn-assembly.ts#assembleActorTurn",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/prompting/cache-breakpoints.ts#resolvePromptCacheStrategy",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/providers/util.ts#readProviderFailure",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/safety/command-review.ts#overwritesUserFiles",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/safety/shell-reading.ts#commandsRun>run",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/safety/shell-reading.ts#readCompound",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/safety/shell-reading.ts#wrappedSuffixes>startsAfter",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/slates/files.ts#SlateFiles.restoreAt",
+      "complexity": 24
+    },
+    {
+      "key": "packages/core/src/subagents/support.ts#createTeamToolDeps>provision>gen",
+      "complexity": 24
+    },
+    {
+      "key": "packages/devbox/src/store-gateway.ts#serveList>gen",
+      "complexity": 24
+    },
+    {
+      "key": "packages/devbox/tests/support/devbox-harness.ts#FakeSandbox.nativeCommand",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/deploy.test.ts#runDeploy",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/durability-canary-telemetry.ts#activationDisruptions",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/evals-post.ts#processEvals",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/gate-set-equality.ts#gatePrograms",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/ladder.ts#recordArmadaRow",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/live-app-rows.ts#liveRows>run>startScriptedModel",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/prod-logs.test.ts#describe#5>read>fetch",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/prod-logs.ts#versionCommand",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/reset.ts#main",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/test-census.ts#bindPaths>walk#2",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/test-census.ts#main",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/test-census.ts#renderedPins>expectedValues",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/worker-heap.ts#main",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/worker-heap.ts#measure",
+      "complexity": 24
+    },
+    {
+      "key": "scripts/worker-heap/driver.ts#fetch",
+      "complexity": 24
+    },
+    {
+      "key": "tools/oxlint/anti-slop/shared/dictionary-types.ts#classifyWideningTarget",
+      "complexity": 24
     }
   ]
 }

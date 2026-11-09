@@ -58,7 +58,7 @@ From source I run `bun run cli -- setup`, then `bun run cli -- ...`. Origin defa
 This assumes an empty Cloudflare account. Two commands bring up each environment, staging first because every build lands there, and a third proves it:
 
 ```bash
-bun run infra:provision staging      # staging's R2 buckets, Vectorize index and secrets
+bun run infra:provision staging      # staging's R2 buckets and secrets
 bun run deploy --bootstrap           # kinu-staging, its DO namespaces, containers, routes, cron
 bun run gate:infra staging           # every resource staging declares exists and is bound
 
@@ -98,7 +98,7 @@ Provisioning cannot create these. A fresh account fails without them. The provis
 | --- | --- |
 | A Cloudflare account on the **Workers Paid** plan | SQLite Durable Objects, Containers, `worker_loaders` and 7-day Workers Logs retention are all plan-gated. No wrangler command reports or changes a plan. |
 | The `account_id`, in `packages/cf-backend/wrangler.jsonc` | It names the account. It does not create one. |
-| A wrangler login (`npx wrangler login`) with Workers, KV, R2, Vectorize, Containers and Email scopes | Every command below rides it. `npx wrangler whoami` lists what you have. |
+| A wrangler login (`npx wrangler login`) with Workers, KV, R2, Containers and Email scopes | Every command below rides it. `npx wrangler whoami` lists what you have. |
 | The `kinu.run` **zone**, active on the account the Worker runs in | `zone_name` in `routes` assumes an active zone, and a Workers custom domain only lands in a zone that account holds. wrangler has no DNS command at all. |
 | A proxied wildcard DNS record `*.kinu.run` | The `*.kinu.run/*` route matches preview requests. It does not make a preview hostname resolve. Without it every preview URL is NXDOMAIN while the route reads as present. `custom_domain: true` cannot express a wildcard, so this record is made by hand. |
 | A **KV namespace** `kinu-auth` | The sign-in handoff store. `wrangler kv namespace create kinu-auth` prints an id you paste into `kv_namespaces`. Provisioning will not run it: KV titles are not unique, so a second run makes a second namespace instead of finding the first. |
@@ -118,7 +118,7 @@ Universal SSL on `kinu.run` covers both app hosts and production's previews. Sta
 
 ### What each command does
 
-`infra:provision` reads its inventory from `wrangler.jsonc`. There is no second list. It creates what is missing in dependency order (R2 buckets, then Vectorize indexes). It prints `CREATED` or `existed` per resource, so a second run is visibly a no-op. A failed lookup refuses rather than creates: "network down" and "does not exist" differ, and creating through the first would leave two candidate snapshot buckets. What wrangler cannot create prints as a manual worklist on every run.
+`infra:provision` reads its inventory from `wrangler.jsonc`. There is no second list. It creates the R2 buckets that are missing. It prints `CREATED` or `existed` per resource, so a second run is visibly a no-op. A failed lookup refuses rather than creates: "network down" and "does not exist" differ, and creating through the first would leave two candidate snapshot buckets. What wrangler cannot create prints as a manual worklist on every run.
 
 `gate:infra` checks that every declared resource exists and that the deployed Worker binds it, and exits non-zero otherwise. The deploy script runs it before the build, in the upload phase beside the secret scan, whose red stops the deploy. Its one argument names the environment, `production` or `staging`; without one it takes `KINU_INFRA_ENVIRONMENT`, which the deploy script always sets, and then production; staging reads `env.staging` in `wrangler.jsonc` the way Wrangler does, and refuses one that names no routes of its own. `infra:provision` and `infra:teardown` take the same argument. It reports one verdict per resource instead of dying on the first failure (`scripts/infra-verify.ts` has the reasoning):
 
@@ -166,7 +166,6 @@ Three Analytics Engine bindings exist. Cloudflare creates each dataset on first 
 These dependencies have no field in `wrangler.jsonc`. I verified them against the live account on 2026-08-18, unless an entry names its own date. `UNCAPTURED` in `scripts/infra-manifest.ts` carries the same list with a re-check command each.
 
 - AI Gateway `kinu-ai-gateway`: exists only inside the `AI_GATEWAY_URL` string. Nothing here creates or reads it.
-- Vectorize geometry: `kinu-memory` needs `--dimensions=384 --metric=cosine`. Wrong width binds fine, then rejects every insert. Provisioning reads the dimension from the embedder in `runtime.ts`, so they cannot drift. The metric lives only in a wrangler.jsonc comment.
 - DNS records and zone: wrangler has no DNS command, and the zone DNS API answers 403 under the OAuth token. Verification resolves each name instead.
 - KV title: `kv_namespaces` binds by id. `kinu-auth` exists only in the account. `npx wrangler kv namespace list` reports titles.
 - Email Routing: verified 2026-08-20. The `kinu.run` zone held zero DNS records, and neither Email Routing nor Email Sending was onboarded, so mail is dead despite a correct binding, var and handler. One-time owner action; [EMAIL-INGRESS.md](EMAIL-INGRESS.md).
@@ -451,7 +450,6 @@ Requests follow the preview limits (developers.openai.com/siwc/token-sharing-ope
 | `AUTH_KV` | KV namespace | `kinu-auth`. One-time OAuth handoff state and CLI sign-in rate limits, both expiring on their own. Identities and sessions live in `UserDO`: one row says a session is still live and what it stands for |
 | `LOADER` | Worker Loader | Sandboxed code execution (codemode) |
 | `AI` | Workers AI | Platform-side embeddings (chat models use the user's OAuth credential) |
-| `MEMORY_VECTORS` | Vectorize | `kinu-memory` (384-dim, cosine); optional hybrid recall on top of FTS5 |
 | `EMAIL` | `send_email` | Outbound Mission Inbox replies and owner notifications |
 | `BACKUP_BUCKET` | R2 bucket | `kinu-backups`. Sandbox `/workspace` backups (squashfs archives) |
 | `NIMBUS_RUNTIME_CACHE` | R2 bucket | `nimbus-runtime-cache`, the artifact store a hosted workspace installs its toolchain from. Absent means a hosted `python3`, `ruby` or `clang` exits 127 |
@@ -607,7 +605,7 @@ No workflow holds a credential. Two things only an operator can do:
 
 | Operator setup required | Where | Why the repository cannot do it |
 |---|---|---|
-| For a deploy from CI, mint `CLOUDFLARE_API_TOKEN` with Edit Cloudflare Workers, plus Workers R2 Storage: Edit, Workers KV Storage: Edit and Vectorize: Edit, scoped to the deploy account. | Cloudflare → My Profile → API Tokens | Nothing in a repository can reduce what an account-scoped token may do. `scripts/deploy.sh` prints this list when wrangler is not authenticated, and stops before the build. |
+| For a deploy from CI, mint `CLOUDFLARE_API_TOKEN` with Edit Cloudflare Workers, plus Workers R2 Storage: Edit and Workers KV Storage: Edit, scoped to the deploy account. | Cloudflare → My Profile → API Tokens | Nothing in a repository can reduce what an account-scoped token may do. `scripts/deploy.sh` prints this list when wrangler is not authenticated, and stops before the build. |
 
 `scripts/release-config.test.ts` (required gate) holds these properties. Every workflow declares its token permissions. No workflow pipes a download into a shell. No action is used from a moving ref.
 

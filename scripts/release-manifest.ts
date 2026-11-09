@@ -3,8 +3,8 @@
  * has to be given.
  *
  * DERIVED, NOT WRITTEN DOWN. The bindings come from `packages/cf-backend/wrangler.jsonc`,
- * the requiredness from `env.d.ts` through `envFields()`, the Vectorize geometry from
- * the embedder, and the secrets census from `SUPPLY` — the same four sources
+ * the requiredness from `env.d.ts` through `envFields()`, and the secrets census
+ * from `SUPPLY` — the same three sources
  * `scripts/infra-manifest.ts` reads. A second hand-kept list of "what a Kinu
  * deployment is made of" would drift from the config that deploys kinu.run, and
  * the drift would be invisible until somebody's deployment came up missing a
@@ -24,11 +24,11 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  ENV_TYPES, WRANGLER_CONFIG, deployedConfig, deploymentOf, envFields, vectorizeGeometry, SUPPLY, type DeployedConfig, type Supply,
+  ENV_TYPES, WRANGLER_CONFIG, deployedConfig, deploymentOf, envFields, SUPPLY, type DeployedConfig, type Supply,
 } from './infra-manifest';
 import type {
   BindingKind, ReleaseBinding, ReleaseComputer, ReleaseFile, ReleaseManifest, ReleaseMigration,
-  ReleaseSecret, ReleaseSeed, ReleaseVar, ReleaseVectorIndex, VarPolicy,
+  ReleaseSecret, ReleaseSeed, ReleaseVar, VarPolicy,
 } from '../packages/core/src/deploy/manifest';
 import { REPO_ROOT as REPO } from './repo-root';
 import { partsOf, type Tools } from './devbox-tools-pin';
@@ -126,8 +126,6 @@ export function releaseBindings(config: DeployedConfig, optional: ReadonlySet<st
   }
 
   for (const bucket of config.r2_buckets ?? []) add(bucket.binding, 'r2', bucket.bucket_name);
-
-  for (const index of config.vectorize ?? []) add(index.binding, 'vectorize', index.index_name);
 
   for (const dataset of config.analytics_engine_datasets ?? []) {
     add(dataset.binding, 'analytics-engine', dataset.dataset ?? dataset.binding);
@@ -236,14 +234,6 @@ export function buildReleaseManifest(build: ReleaseBuild, configPath = WRANGLER_
     .filter((field) => field.optional)
     .map((field) => field.name));
 
-  const geometry = vectorizeGeometry();
-
-  const indexes: ReleaseVectorIndex[] = (config.vectorize ?? []).map((index) => ({
-    name: index.index_name,
-    dimensions: geometry.dimensions,
-    metric: geometry.metric,
-  }));
-
   // A self-hosted Worker is created whole on its first upload, so every class it carries is new at its `v1`.
   const migrations: ReleaseMigration[] = [{
     tag: 'v1',
@@ -269,7 +259,6 @@ export function buildReleaseManifest(build: ReleaseBuild, configPath = WRANGLER_
     },
     front: { mainModule: build.frontModules[0] ?? 'index.js', modules: build.frontModules, modulesPath: 'front' },
     bindings: releaseBindings(config, optional),
-    vectorIndexes: indexes,
     migrations,
     secrets: releaseSecrets(vars),
     vars,
