@@ -16,7 +16,7 @@ import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { rawPath, routeError, type FamilyEnv } from './api/context';
-import { mintViewerTicket, ticketUser, viewerCookie, viewerCookieResponse, viewerSigner } from './viewer-pass';
+import { mintAnonymousSubject, mintViewerTicket, ticketUser, viewerCookie, viewerCookieResponse, viewerSigner } from './viewer-pass';
 
 const shareSigner = labelSigner('kinu.slate-share.salt', 'kinu.slate-share.v1');
 
@@ -88,11 +88,19 @@ shareHostRoutes.all(VIEWER_EXCHANGE_PATH, async (c) => {
   const url = new URL(request.url);
   const source = await viewerSource(viewerSecret, request);
   const consent = url.searchParams.has('consent');
-  const ticket = consent ? null : await ticketUser(env, workspace, handle, url.searchParams.get('ticket') ?? '');
+  const anonymous = url.searchParams.has('anonymous');
+  const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
+  const ticket = consent || anonymous ? null : await ticketUser(env, workspace, handle, url.searchParams.get('ticket') ?? '');
+  // Continuing anonymously keeps who the visitor already is, signed in or anonymous, and their consent; only a visitor
+  // known by nothing yet is given an id, which is bounded by where they come from, as every exchange of theirs is.
+  const known = held !== null && (held.userId !== null || held.anonymous !== null) ? held.subject : null;
+  const minted = anonymous && known === null;
 
-  const subject = consent
-    ? (await viewerCookie(env, workspace, handle, request.headers.get('cookie')))?.subject ?? source
-    : ticket?.userId;
+  const subject = (() => {
+    if (consent) return held?.subject ?? source;
+
+    return anonymous ? known ?? source : ticket?.userId;
+  })();
 
   if (subject === undefined) {
     return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
@@ -106,7 +114,9 @@ shareHostRoutes.all(VIEWER_EXCHANGE_PATH, async (c) => {
   const kept = keptSlateContext(url);
 
   // On to the slate's page, framed as it was asked for.
-  return await viewerCookieResponse(env, { workspace, handle, subject, consent }, kept === '' ? '/' : `/?${kept}`);
+  return await viewerCookieResponse(env, {
+    workspace, handle, subject: minted ? mintAnonymousSubject() : subject, consent: consent || (anonymous && held?.consented === true),
+  }, kept === '' ? '/' : `/?${kept}`);
 });
 
 
@@ -133,7 +143,11 @@ shareHostRoutes.all('*', async (c) => {
     return new Response('A share acts on its viewer\'s behalf only from its own page', { status: 403, headers: { 'cache-control': 'no-store' } });
   }
 
-  const claim: ShareViewerClaim = { userId: cookie?.userId ?? null, source: await viewerSource(viewerSecret, request), consented: cookie?.consented === true };
+  const claim: ShareViewerClaim = {
+    userId: cookie?.userId ?? null, source: await viewerSource(viewerSecret, request), consented: cookie?.consented === true,
+    ...(cookie !== null && cookie.anonymous !== null && { anonymous: cookie.anonymous }),
+  };
+
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');
   const stub: SlateShareHost = objectNamed(env.OrchestratorAgent, workspace);

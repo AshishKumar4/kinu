@@ -97,6 +97,23 @@ CREATE TABLE IF NOT EXISTS slate_consents (
 
 A consent names the revision it was given for. A part run at another revision answers `needs-consent`.
 
+## 2a. The app's guest (owner, 2026-11-08)
+
+A shared app's chat (`agent.ask`, `agent.send`) reaches a guest of the owner's agent, never the agent itself, once the
+owner ticks it in the share sheet. Each visitor gets their own guest: a hire of the workspace's agent, recorded in
+`slate_share_guests` (share, visitor subject), which the actor's reach reads (`core/src/slates/guest.ts`). A visitor known
+only by where they came from is first asked to sign in or continue anonymously (an `anon:` subject in the share's signed
+cookie, kept 30 days).
+
+The guest runs no program. Its one tool, `app`, calls the app as the visitor's page does, so it has no network, no MCP
+discovery and none of the owner's secrets. Its prompt holds the app and its own conversation, nothing of the owner's. One
+table decides each call: the app's own methods and granted slates, and `ai.run`, run as the visitor's would; anything
+else of the owner's, its files and MCP tools included, runs only on the owner's approval of that exact call,
+once ("always" never stands for a guest); `agent.*`, `agents.*`, `computer` and `device` never. A member reached inside a
+call on a guest's way runs only where its address alone is in scope. Ending the share, or changing its mode, retires its
+guests, and their conversations stay for the owner. Their model calls spend the share's daily label. A share on each
+visitor's own access has no guest: a guest's model is its owner's.
+
 ## 3. Personal parts
 
 The slate's `package.json` declares each part as `slate.parts.<name> = { fn, input?, show? }`. Each part is drawn as follows:

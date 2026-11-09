@@ -1,7 +1,7 @@
 /** Authored-facing `kinu:slate` modules: `server.js` under `/usr/lib/kinu/slate/`, `client.js` at `/__kinu/slate.js`. */
 
 import { PREFERS_LIGHT } from '../utils/color-mode';
-import { SLATE_BRIDGE_ATTRIBUTE, SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
+import { SLATE_BRIDGE_ATTRIBUTE, SLATE_HOST_CONTEXT_MESSAGE, SLATE_NEEDS_IDENTITY_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
 
 /** The prototype marker lets the runner verify the contract without importing this module twice. Client-only names throw on the server. */
 export const SLATE_SERVER_MODULE = `export class SlateObject {
@@ -133,16 +133,29 @@ const bridged = () => document.documentElement.hasAttribute("${SLATE_BRIDGE_ATTR
 export const slate = new Proxy(Object.create(null), {
   get(_target, member) {
     if (typeof member !== "string" || member === "then") return undefined;
-    return (...args) => (bridged() ? session().$method(member, args) : session()[member](...args));
+    return (...args) => asked(bridged() ? session().$method(member, args) : session()[member](...args));
   },
 });
+
+// A shared app's call that needs its visitor to say who they are tells the page's host, which asks them; the call still
+// fails, so the page says so its own way.
+async function asked(call) {
+  try {
+    return await call;
+  } catch (cause) {
+    if (cause !== null && typeof cause === "object" && cause.needs === "identity" && window.parent !== window && hostOrigin !== null) {
+      window.parent.postMessage({ kinu: "${SLATE_NEEDS_IDENTITY_MESSAGE}" }, hostOrigin);
+    }
+    throw cause;
+  }
+}
 
 /** A slate's one surface, as a program reaches its namespaces: workspace.memory.search(query),
  *  workspace.mcp.github.list_issues({ state: "open" }), workspace.agent.send({ text }). The workspace executor's own
  *  members sit at the top too, so workspace.fs.text(path) reads as it does in a program. */
 function surface(path) {
   return new Proxy(function () {}, {
-    apply(_fn, _self, args) { return session().$workspace(path, args); },
+    apply(_fn, _self, args) { return asked(session().$workspace(path, args)); },
     get(_fn, name) {
       if (typeof name !== "string" || name === "then") return undefined;
       return surface([...path, name]);

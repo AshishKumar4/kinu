@@ -71,6 +71,20 @@ export function readSlateFrameMessage(
   return parsed.success ? { ...parsed.output, height: Math.min(parsed.output.height, SLATE_INLINE_HEIGHT_LIMIT) } : null;
 }
 
+/** A shared app's page tells its host that a call of its visitor's needs them to say who they are (slates/guest.ts). */
+export const SLATE_NEEDS_IDENTITY_MESSAGE = 'needs-identity';
+
+const SlateIdentityAskSchema = v.strictObject({ kinu: v.literal(SLATE_NEEDS_IDENTITY_MESSAGE) });
+
+/** Whether `event` is the slate's own window asking its host for its visitor's identity. */
+export function readSlateIdentityAsk(
+  event: { readonly source: unknown; readonly origin: string; readonly data: unknown },
+  source: Window | MessagePort | null | undefined,
+  origin: string,
+): boolean {
+  return event.source === source && event.origin === origin && v.is(SlateIdentityAskSchema, event.data);
+}
+
 export function buildSlateHostContext(input: {
   readonly theme: 'dark' | 'light';
   readonly variables: Record<string, string>;

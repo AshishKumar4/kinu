@@ -391,7 +391,7 @@ export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, slateSt
 
 // Browser-safe slate vocabulary, so it belongs on this value-imported barrel.
 export {
-  buildSlateHostContext, readSlateFrameMessage, keptSlateContext, slateFrameSrc, slateLinkId, SLATE_BRIDGE_MESSAGE,
+  buildSlateHostContext, readSlateFrameMessage, readSlateIdentityAsk, keptSlateContext, slateFrameSrc, slateLinkId, SLATE_BRIDGE_MESSAGE,
   SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
   type SlateHostContext,
 } from './slates/host-context';
@@ -2833,3 +2833,8 @@ export type {
 export { refusedRun, writesSnapshotRows } from './subagents/agent-isolate';
 
 export { describeAgentTools } from './subagents/tool-descriptors';
+
+export {
+  GUEST_APP_TOOL, GUEST_ASK_METADATA, GUEST_ROLE, guestAnswer, guestAppTool, guestDynamicContext, guestSoul, guestTitle, guestVisitorLabel,
+  NO_GUEST_INSTRUCTIONS, NO_GUEST_SKILLS, turnEntries,
+} from './orchestrator/guest-turn';

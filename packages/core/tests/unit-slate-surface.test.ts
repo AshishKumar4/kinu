@@ -101,12 +101,13 @@ test('agent.send routes one inbox message carrying its slate id', () => {
   }
 });
 
-test('agent.ask routes the same message, asking for the agent\'s own reply; a share\'s viewer is never handed it', () => {
+test('agent.ask routes the same message, asking for the agent\'s own reply; a share\'s viewer reaches it only as its grant names it', () => {
   expect(call(['agent', 'ask'], [{ text: 'hi', data: { n: 1 } }])).toMatchObject({
     route: { kind: 'agent', slate: 'notes', text: 'hi', data: { n: 1 }, ask: true }, address: { namespace: 'agent', member: 'ask' }, impact: 'externalSend',
   });
   expect(() => call(['agent', 'ask'], [{ text: '' }])).toThrow('agent.ask takes one { text, data? } object');
-  expect(() => viewerCall(['agent', 'ask'], [{ text: 'hi' }])).toThrow("agent.ask runs only in its owner's own slate, never for a share's viewer");
+  // Owner, 2026-11-08: a visitor's message reaches their own guest of the agent (slates/guest.ts), where the share lends it.
+  expect(() => viewerCall(['agent', 'ask'], [{ text: 'hi' }])).toThrow('Slate issues does not grant agent.ask to viewers');
 });
 
 test('ai.run routes one model call, the tier the call names', () => {
@@ -178,7 +179,7 @@ test('a granted member routes with the impact the grant admits', () => {
   });
   expect(viewerCall(['mcp', 'github', 'create_issue'], [{}])).toMatchObject({ route: { kind: 'mcp', tool: 'create_issue' }, impact: 'externalSend' });
   expect(viewerCall(['agent', 'send'], [{ text: 'hi' }])).toMatchObject({
-    route: { kind: 'agent', slate: 'issues', text: 'hi', viewer: 'user:u7' }, impact: 'externalSend',
+    route: { kind: 'agent', slate: 'issues', text: 'hi', viewer: { share: 's1', subject: 'user:u7' } }, impact: 'externalSend',
   });
 });
 

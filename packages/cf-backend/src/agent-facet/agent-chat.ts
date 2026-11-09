@@ -231,9 +231,13 @@ export class FacetChat {
       },
     });
 
+    // A chat turn's brief is a shared app's guest's role, which stands in for its owner's catalog's (core orchestrator/guest-turn.ts).
+    const { brief } = prepared;
+
     return await assembleActorTurn({
       ...bundle,
       ...(mission !== null && { budget: mission }),
+      ...(brief !== undefined && { brief: () => ({ id: 'guest', label: 'Guest', instructions: brief }) }),
       // Its tools are the workspace's, run there, and so is its scaffold's program; so are its advisor's reads.
       toolset: () => ({
         tools, stores: null,

@@ -20,7 +20,7 @@ export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, SqliteS
 export { SLATE_SERVER_MODULE, SLATE_CLIENT_MODULE } from './runtime-modules';
 
 export {
-  buildSlateHostContext, readSlateFrameMessage, keptSlateContext, slateFrameSrc, slateLinkId,
+  buildSlateHostContext, readSlateFrameMessage, readSlateIdentityAsk, SLATE_NEEDS_IDENTITY_MESSAGE, keptSlateContext, slateFrameSrc, slateLinkId,
   SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
   type SlateHostContext,
 } from './host-context';
@@ -32,6 +32,10 @@ export { WorkspaceBlueprints, type WorkspaceBlueprintsDeps, type BlueprintReadin
 export type { DurableAppIdentity, DurableApps } from './durable-app';
 
 export { SIGNED_OUT_VIEWER, SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
+
+export { declareShareSpend } from './share-viewers';
+
+export { ANONYMOUS_SUBJECT_PREFIX, SlateShareGuests, guestAuthorization, identifiedOnlyBySource, type GuestAuthorization, type GuestPrincipal } from './guest';
 
 export { confinedTo } from './scoped-reader';
 

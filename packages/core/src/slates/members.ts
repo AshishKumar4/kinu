@@ -85,7 +85,8 @@ export function declaredImpact(address: { readonly namespace: string; readonly m
   return sandboxWeb ?? WIRED.get(address.namespace)?.impacts.get(address.member) ?? DECLARED.get(address.namespace)?.get(address.member)?.impact ?? null;
 }
 
-/** A member only the owner's own slate reaches, as the owner: a share never grants it, a hosted actor's slate never holds it. */
+/** A member only the owner's own slate reaches, as the owner: a hosted actor's slate never holds it, and a share grants it
+ *  only where `shareMemberRefusal` says. */
 export function slateOwnerOnly(address: { readonly namespace: string; readonly member: string }): boolean {
   // A reply is the owner's agent speaking to the owner: no share's viewer is handed it.
   if (address.namespace === 'agent' && address.member === AGENT_ASK_MEMBER) return true;
@@ -100,6 +101,9 @@ export function slateOwnerOnly(address: { readonly namespace: string; readonly m
 /** What a share cannot grant or run, including a member named in an older grant. */
 export function shareMemberRefusal(address: { readonly namespace: string; readonly member: string }): string | null {
   if (address.namespace === 'computer') return COMPUTER_OWNER_ONLY;
+
+  // A share's visitor asks their own guest (slates/guest.ts), never the owner's agent: a share may grant it.
+  if (address.namespace === 'agent' && address.member === AGENT_ASK_MEMBER) return null;
 
   return slateOwnerOnly(address) ? `${address.namespace}.${address.member} runs only in its owner's own slate` : null;
 }
