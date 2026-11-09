@@ -166,6 +166,7 @@ function accountsDeployment() {
 
   const accounts = new Map<string, Account>();
   const resets: string[] = [];
+  const disconnected: string[] = [];
 
   const of = (request: Request): Account => {
     const name = request.headers.get('x-kinu-dev-identity-account') ?? 'eval-service';
@@ -182,11 +183,20 @@ function accountsDeployment() {
 
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
     routes: {
-      '/api/user/credentials/:key': { POST: async (request) => {
-        of(request).keys.set(decodeURIComponent(request.params.key), v.parse(JsonValueSchema, await request.json()));
+      '/api/user/credentials/:key': {
+        POST: async (request) => {
+          of(request).keys.set(decodeURIComponent(request.params.key), v.parse(JsonValueSchema, await request.json()));
 
-        return Response.json({ ok: true });
-      } },
+          return Response.json({ ok: true });
+        },
+        // A reset disconnects each login unrevoked before the account goes: its delete would revoke it at its provider.
+        DELETE: (request) => {
+          disconnected.push(`${request.headers.get('x-kinu-dev-identity-account') ?? 'eval-service'} ${decodeURIComponent(request.params.key)} revoke=${new URL(request.url).searchParams.get('revoke') ?? ''}`);
+          of(request).keys.delete(decodeURIComponent(request.params.key));
+
+          return Response.json({ ok: true });
+        },
+      },
       '/api/user/credentials': (request) => Response.json([...of(request).keys.keys()].map((key) => ({ key, kind: 'bearer' }))),
       '/api/user/profile-catalog': {
         GET: (request) => Response.json(of(request).catalog),
@@ -234,7 +244,7 @@ function accountsDeployment() {
     },
   });
 
-  return { server, accounts, resets, at: `http://127.0.0.1:${String(server.port)}` };
+  return { server, accounts, resets, disconnected, at: `http://127.0.0.1:${String(server.port)}` };
 }
 
 describe('every trial account a run acts as', () => {
@@ -409,7 +419,7 @@ describe('every trial account a run acts as', () => {
   });
 
   test('a trial account holding a row a trial would inherit is reset and given its keys again, unless a run is on it', async () => {
-    const { server, accounts, resets, at } = accountsDeployment();
+    const { server, accounts, resets, disconnected, at } = accountsDeployment();
 
     try {
       const input = {
@@ -429,6 +439,8 @@ describe('every trial account a run acts as', () => {
       const provisioned = await provisionEvalProviderKeys(input);
 
       expect(resets).toEqual(['trial-1']);
+      // Its key went unrevoked before the account: the account's own delete revokes what it still holds.
+      expect(disconnected).toEqual(['trial-1 opencode-go.bearer revoke=0']);
       expect(provisioned.trials).toEqual({ given: 1, reset: ['trial-1'] });
       expect(provisioned.findings).toEqual([]);
 

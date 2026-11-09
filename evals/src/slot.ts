@@ -192,3 +192,75 @@ export async function claimTrialAccount(target: EvalTarget, own: string, now: nu
 
   if (rival !== undefined) throw new Error(`${accountOf(target)} is occupied by another run's workspace ${rival.name}; ${own} cannot claim it`);
 }
+
+const ProfileEmailSchema = v.looseObject({ email: v.string() });
+
+/** How long one call to the deployment may take while an account is deleted. */
+const DELETE_CALL_MS = 30_000;
+
+const HeldKeysSchema = v.array(v.looseObject({ key: v.string() }));
+
+/**
+ * Deletes `target`'s account through the product's own account delete, its profile's email confirming it. A finding, or
+ * null. Its credentials go first, each disconnected without revoking: an account's delete revokes what it holds at the
+ * provider, and a trial account holds logins it does not own (a plan's, OMP's; the deployment's gateway token). Nothing
+ * reads the account after: every request records the account it names again (the control plane's `observeUser`).
+ */
+export async function deleteTrialAccount(target: EvalTarget): Promise<string | null> {
+  const headers = webHeaders(target.identity);
+
+  const call = async (path: string, init: { readonly method?: string; readonly json?: unknown } = {}) => fetch(`${target.origin}${path}`, {
+    method: init.method ?? 'GET', signal: AbortSignal.timeout(DELETE_CALL_MS),
+    headers: init.json === undefined ? headers : { ...headers, 'content-type': 'application/json' },
+    ...init.json !== undefined && { body: JSON.stringify(init.json) },
+  });
+
+  const [held, profile] = await Promise.all([call('/api/user/credentials'), call('/api/user/profile')]);
+
+  if (!held.ok) return `listing ${accountOf(target)}'s credentials at ${target.origin} answered ${String(held.status)}`;
+
+  if (!profile.ok) return `reading ${accountOf(target)}'s profile at ${target.origin} answered ${String(profile.status)}`;
+
+  for (const { key } of v.parse(HeldKeysSchema, await held.json())) {
+    const dropped = await call(`/api/user/credentials/${encodeURIComponent(key)}?revoke=0`, { method: 'DELETE' });
+
+    if (!dropped.ok) return `disconnecting ${accountOf(target)}'s ${key} at ${target.origin} answered ${String(dropped.status)}`;
+  }
+
+  const { email } = v.parse(ProfileEmailSchema, await profile.json());
+  const deleted = await call('/api/user/account', { method: 'DELETE', json: { confirm: email } });
+
+  return deleted.ok ? null : `deleting ${accountOf(target)} at ${target.origin} answered ${String(deleted.status)}`;
+}
+
+/** A run's hold on its leased block: `targets` each origin's account of the block, as the run acts as it. */
+export interface TrialBlock {
+  readonly targets: readonly EvalTarget[];
+}
+
+/**
+ * `run` on a leased block of trial accounts, each of which is deleted when it ends, however it ends: trial accounts
+ * pile up otherwise (the owner, 2026-11-09: 64 left on production, 256 on staging). The next run's provisioning makes
+ * each again before any trial opens on it (scripts/eval-provider-keys.ts). `release.lost()` gives the block up instead:
+ * another run holds it, and its accounts are that run's. What a delete refused is said, never thrown over `run`'s end.
+ */
+export async function onTrialBlock<T>(block: TrialBlock, run: (release: { lost(): void }) => Promise<T>, say: (line: string) => void = console.log): Promise<T> {
+  let ours = true;
+
+  try {
+    return await run({ lost: () => { ours = false; } });
+  } finally {
+    if (ours) {
+      const refused: string[] = [];
+
+      for (let at = 0; at < block.targets.length; at += 8) {
+        const answers = await Promise.allSettled(block.targets.slice(at, at + 8).map(async (target) => deleteTrialAccount(target)));
+
+        refused.push(...answers.flatMap((answer) => (answer.status === 'rejected' ? [String(answer.reason)] : answer.value ?? [])));
+      }
+
+      say(`evals: deleted ${String(block.targets.length - refused.length)} of the run's ${String(block.targets.length)} trial accounts`
+        + `${refused.length === 0 ? '' : `; refused: ${refused.join('; ')}`}`);
+    }
+  }
+}

@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
 import { DEV_IDENTITY_ACCOUNT_HEADER } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
-import { giveAgain, modelsNamed, ompGrant, planLogins, trialSelection } from './eval-plan-run';
+import { claimedAccounts, giveAgain, modelsNamed, ompGrant, planLogins, trialSelection } from './eval-plan-run';
 
 const held = new Map<string, string[]>([
   ['eval-service', ['opencode-go.bearer']], ['trial-1', ['opencode-go.bearer', 'claude.oauth', 'chatgpt.oauth@compare']], ['trial-2', ['codex.oauth']],
@@ -83,23 +83,28 @@ test('a run passes its tasks and trials to each sequence, and its effort to the 
 // A token OMP renewed reaches the account using the old one, and no other.
 test('a renewed token is given again to the account holding its key alone', async () => {
   const origin = deployment.url.origin;
-  const holders = await planLogins(origin, 'secret', ['eval-service', 'trial-1', 'trial-2'], false);
+  const holders = await planLogins(origin, 'secret', ['eval-service', 'trial-1', 'trial-2']);
 
   expect(await giveAgain({ origin, secret: 'secret', holders, key: 'codex.oauth', grant: { kind: 'oauth', accessToken: 'renewed', expiresAt: 2 } })).toEqual(['trial-2']);
   expect(posted).toEqual(['trial-2 codex.oauth']);
 });
 
-// The run's plan logins end with it: every eval account's copy found and deleted. Only this run's own ChatGPT sign-in is
-// revoked; OMP's logins are OMP's.
-test('a read finds every copy of a plan login and leaves it; a clear deletes each, revoking none of OMP\'s', async () => {
-  const accounts = ['eval-service', 'trial-1', 'trial-2'];
+// A read finds each copy of a plan login among the accounts named, and leaves every one as it was.
+test('a read finds every copy of a plan login among the accounts it names, and deletes none', async () => {
   const origin = deployment.url.origin;
-  const found = ['trial-1 claude.oauth', 'trial-1 chatgpt.oauth@compare', 'trial-2 codex.oauth'];
 
-  expect(await planLogins(origin, 'secret', accounts, false)).toEqual(found);
+  expect(await planLogins(origin, 'secret', ['eval-service', 'trial-1', 'trial-2'])).toEqual(['trial-1 claude.oauth', 'trial-1 chatgpt.oauth@compare', 'trial-2 codex.oauth']);
   expect(deleted).toEqual([]);
-  expect(await planLogins(origin, 'secret', accounts, true)).toEqual(found);
-  // Accounts are cleared side by side, so only the set is the claim.
-  expect(deleted.toSorted()).toEqual(['trial-1 chatgpt.oauth@compare revoke=1', 'trial-1 claude.oauth revoke=0', 'trial-2 codex.oauth revoke=0']);
-  expect(held.get('trial-1')).toEqual(['opencode-go.bearer']);
+});
+
+// The owner, 2026-11-09: staging held 256 trial accounts no run used. Every read of an account records it as one of the
+// deployment's, and the run read trial-1 to trial-256 for plan logins; it reads only the blocks its sequences' jobs claim.
+test("the accounts a run reads are its sequences' claimed blocks on its deployment, and no other", () => {
+  const claims = [
+    { job: 'mine', first: 3, last: 4, hosts: ['staging.kinu.run'], createdAt: 1 },
+    { job: 'mine', first: 9, last: 9, hosts: ['kinu.run'], createdAt: 1 },
+    { job: 'theirs', first: 5, last: 6, hosts: ['staging.kinu.run'], createdAt: 2 },
+  ];
+
+  expect(claimedAccounts(claims, new Set(['mine']), 'staging.kinu.run')).toEqual(['trial-3', 'trial-4']);
 });

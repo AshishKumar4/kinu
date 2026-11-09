@@ -18,8 +18,9 @@
  * store, read-only and its access token alone: OMP renews its logins under its own lease, which nothing here touches,
  * and no refresh token leaves its store. The trial account a model's sequence runs in is given that access token
  * (scripts/eval-provider-keys.ts), which it uses as it is until it expires and never renews; while the run lasts, each
- * token OMP has renewed since is given again to the account that holds the old one. At the end, or on a stop, every
- * eval account's copy on the deployment is deleted.
+ * token OMP has renewed since is given again to the account that holds the old one. Each sequence's run deletes the
+ * trial accounts it leased as it ends, their copies with them (evals/src/slot.ts `onTrialBlock`); nothing here reads any
+ * other account, since a read of one records it as an account of the deployment again.
  */
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -28,11 +29,11 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import {
   accountCredentialKey, CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, CODEX_CRED_KEY, DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER,
-  EVAL_TRIAL_ACCOUNTS, type OAuthCredential,
+  type OAuthCredential,
 } from '@kinu.run/core';
 import { DEFAULT_MODELS } from '../evals/src/config';
 import { deployedBuild } from '../evals/src/target';
-import { kinuArmada, keysWindows } from './evals-lease';
+import { kinuArmada, keysWindows, openClaims, type HeldClaim } from './evals-lease';
 import { deploymentOf } from './infra-manifest';
 import { REPO_ROOT as ROOT } from './repo-root';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -97,29 +98,20 @@ export function ompGrant(store: string, login: OmpLogin): OAuthCredential {
   }
 }
 
-/** A deployment's eval accounts' copies of a plan login: read, or (`clear`) deleted. */
-export async function planLogins(origin: string, secret: string, accounts: readonly string[], clear: boolean): Promise<string[]> {
-  const cleared: string[] = [];
+/** Which of `accounts` hold a copy of a plan login, as `<account> <key>`: read only. */
+export async function planLogins(origin: string, secret: string, accounts: readonly string[]): Promise<string[]> {
+  const found: string[] = [];
 
-  // 32 at a time: a stop's clear of every eval account finishes well inside systemd's stop timeout.
   for (let at = 0; at < accounts.length; at += 32) {
-    cleared.push(...(await Promise.all(accounts.slice(at, at + 32).map(async (account) => {
+    found.push(...(await Promise.all(accounts.slice(at, at + 32).map(async (account) => {
       const headers = { [DEV_IDENTITY_HEADER]: secret, ...account !== 'eval-service' && { [DEV_IDENTITY_ACCOUNT_HEADER]: account } };
       const held = v.parse(v.array(v.object({ key: v.string() })), await (await fetch(`${origin}/api/user/credentials`, { headers })).json());
-      const plans = held.map(({ key }) => key).filter((key) => key === CLAUDE_CRED_KEY || key === CODEX_CRED_KEY || key === CHATGPT_KEY);
 
-      // Only a grant of this run's own sign-in is revoked: OMP's logins are OMP's, and revoking one would end it there.
-      for (const key of clear ? plans : []) {
-        const gone = await fetch(`${origin}/api/user/credentials/${encodeURIComponent(key)}?revoke=${key === CHATGPT_KEY ? '1' : '0'}`, { method: 'DELETE', headers });
-
-        if (!gone.ok) throw new Error(`deleting ${key} from ${account} answered ${String(gone.status)}`);
-      }
-
-      return plans.map((key) => `${account} ${key}`);
+      return held.map(({ key }) => key).filter((key) => key === CLAUDE_CRED_KEY || key === CODEX_CRED_KEY || key === CHATGPT_KEY).map((key) => `${account} ${key}`);
     }))).flat());
   }
 
-  return cleared;
+  return found;
 }
 
 /** `grant` given again to each account that holds `key`, for a token OMP has renewed; the accounts it reached. */
@@ -143,9 +135,10 @@ export async function giveAgain(input: {
   return given;
 }
 
-/** Every eval account a run can act as, on either deployment: eval-service and the lower half of the trial accounts. */
-function evalAccounts(): string[] {
-  return ['eval-service', ...Array.from({ length: EVAL_TRIAL_ACCOUNTS / 2 }, (_, at) => `trial-${String(at + 1)}`)];
+/** The trial accounts `jobs` hold on `host`, as each one's armada label claims its block: nothing else is read. */
+export function claimedAccounts(claims: readonly HeldClaim[], jobs: ReadonlySet<string>, host: string): string[] {
+  return claims.filter((claim) => jobs.has(claim.job) && claim.hosts.includes(host))
+    .flatMap((claim) => Array.from({ length: claim.last - claim.first + 1 }, (_, at) => `trial-${String(claim.first + at)}`));
 }
 
 /** Starts the holder, or reads the running one; prints what it says. */
@@ -249,24 +242,28 @@ async function hold(argv: readonly string[]): Promise<number> {
   for (const [key, grant] of given) say('preflight', `${key}: OMP's login ends at ${new Date(grant.expiresAt ?? 0).toISOString()}.`);
 
   if (argv.includes('--dry-run')) {
-    const held = await planLogins(origin, secret, evalAccounts(), false);
-
-    say('dry-run', `dry run: ${String(evalAccounts().length)} ${selection.on} eval accounts read, ${held.length === 0 ? 'none holding' : held.join(', ')} a plan login.`);
     say('dry-run', `dry run: the run would be, per model: ${selection.effort === null ? '' : `KINU_EVAL_EFFORT=${selection.effort} `}bun scripts/evals-map.ts --sequence ${selection.map.join(' ')} --calls-at-once=${String(CALLS_AT_ONCE)} --out=${out}/<model>`);
 
     return 0;
   }
 
+  /** The armada jobs the sequences' runs hold, as each one's `run.json` names them. */
+  const sequenceJobs = (): string[] => models.flatMap(({ slug }) => {
+    const run = join(out, slug, 'run.json');
+
+    return existsSync(run) ? v.parse(v.looseObject({ jobs: v.array(v.string()) }), JSON.parse(readFileSync(run, 'utf8'))).jobs : [];
+  });
+
+  /** The trial accounts the sequences hold now, on the run's deployment: those their jobs claim, and no other. */
+  const sequencesAccounts = async (): Promise<string[]> => claimedAccounts(await openClaims(kinuArmada()), new Set(sequenceJobs()), new URL(origin).host);
+
+  // Each sequence hears the stop and deletes the accounts it holds before it exits (evals-map, `onTrialBlock`); its jobs
+  // are cancelled after, should one have outlived it.
   const stop = async (why: string): Promise<void> => {
     for (const child of children) child.kill();
-    // Gone before the logins are cleared: a sequence still provisioning could store a grant after the clear.
     await Promise.all(children.map(async (child) => await child.exited));
 
-    for (const slug of models.map((each) => each.slug)) {
-      const run = join(out, slug, 'run.json');
-
-      if (existsSync(run)) for (const job of v.parse(v.looseObject({ jobs: v.array(v.string()) }), JSON.parse(readFileSync(run, 'utf8'))).jobs) await kinuArmada().cancel(job);
-    }
+    for (const job of sequenceJobs()) await kinuArmada().cancel(job);
 
     say('stopping', why);
   };
@@ -284,10 +281,11 @@ async function hold(argv: readonly string[]): Promise<number> {
       const now = ompGrant(OMP_STORE, each.omp);
 
       if (now.accessToken === given.get(each.key)?.accessToken) continue;
-      const holders = await planLogins(origin, secret, evalAccounts(), false);
+      const holders = await planLogins(origin, secret, await sequencesAccounts());
       const reached = await giveAgain({ origin, secret, holders, key: each.key, grant: now });
 
-      given.set(each.key, now);
+      // Given once an account holds it: a sequence still provisioning is given it at the next look.
+      if (reached.length > 0) given.set(each.key, now);
       say('running', `${each.key}: OMP renewed its login, to ${new Date(now.expiresAt ?? 0).toISOString()}; given again to ${reached.join(', ') || 'no account yet'}.`);
     }
   };
@@ -302,10 +300,6 @@ async function hold(argv: readonly string[]): Promise<number> {
   };
 
   try {
-    // A copy an earlier run left would be kept as the account's own (eval-provider-keys gives a grant once).
-    const stale = await planLogins(origin, secret, evalAccounts(), true);
-
-    if (stale.length > 0) say('running', `cleared what an earlier run left: ${stale.join(', ')}`);
     mkdirSync(out, { recursive: true });
     stopping.signal.throwIfAborted();
     say('running', `the sequences start, their work under ${out}`);
@@ -340,10 +334,8 @@ async function hold(argv: readonly string[]): Promise<number> {
 
     return 1;
   } finally {
-    const cleared = await planLogins(origin, secret, evalAccounts(), true);
-
     process.off('SIGTERM', requestStop);
-    say('done', `cleared every plan login: ${cleared.length === 0 ? 'none was held' : cleared.join(', ')}`);
+    say('done', 'each sequence deleted the trial accounts it held, and their plan logins with them');
   }
 }
 
