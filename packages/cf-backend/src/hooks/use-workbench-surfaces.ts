@@ -1,7 +1,9 @@
 /**
  * Which surface the workspace's inspector shows, and every way something asks for one: a chat's file link, a change
  * note, a slate, a plan, and the `?file=`, `?slate=` and fork landings a URL carries. Whatever is asked for is brought
- * into view, even from a collapsed inspector or a phone showing the chat.
+ * into view, even from a collapsed inspector or a phone showing the chat. The surface shown is kept for the workspace
+ * with its layout (`keepInspectorSurface`), so a reload or a return opens on the tab left open, where nothing asks for
+ * another.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
@@ -11,6 +13,8 @@ import {
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import type { WorkbenchHandle } from "@/components/WorkbenchPanels";
 import type { ChatImageSource } from "@/components/ChatImages";
+import { keepInspectorSurface, readInspectorSurface } from "@kinu.run/core/web/inspector-layout";
+import { useInspectorAccount } from "@/hooks/use-inspector-layout";
 
 /** A chat's file links: the prefixes it links, and what opens one. */
 interface FileLinks {
@@ -78,7 +82,26 @@ export function useWorkbenchSurfaces({ workspace, executors, slates, search, ins
   // The jump to a fork's slate waits until the listing names the slate.
   const [landingSlate, setLandingSlate] = useState<string | null>(() => new URLSearchParams(search).get("slate"));
   const [forkLanding, setForkLanding] = useState(() => forkLandingOf(new URLSearchParams(search)));
-  const [surface, setSurface] = useState<SurfaceKind>("Work");
+  const account = useInspectorAccount(true);
+  const [surface, setSurface] = useState<SurfaceKind>(() => readInspectorSurface(account, workspace) ?? "Work");
+  // Whether `surface` is this account's yet: an account resolved only after the first paint reads its kept tab then,
+  // unless something already asked for another; until then nothing is kept over it.
+  const read = useRef(account?.kind === "known");
+
+  useEffect(() => {
+    if (account?.kind !== "known") return;
+
+    if (read.current) {
+      keepInspectorSurface(account, workspace, surface);
+
+      return;
+    }
+
+    read.current = true;
+    const kept = readInspectorSurface(account, workspace);
+
+    if (kept !== null && surface === "Work") setSurface(kept);
+  }, [account, workspace, surface]);
   // `?environment=desktop` opens Environment, once the inspector's layout is decided (a reveal before it is undone), and
   // Environment shows the chosen machine's desktop; each lets go once it has. Followed, not read once: the desktop's old
   // address redirects here within the same page, which stays mounted across the workspace's own routes.

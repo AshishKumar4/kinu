@@ -12,6 +12,23 @@ export const ACTIVITY_SURFACE = "Activity";
 
 export type SlateSurfaceKind = `${typeof SLATE_PREFIX}${string}`;
 
+/** `said` as a surface's name, as this browser's storage keeps it; null for anything else. */
+export function surfaceKindOf(said: string): SurfaceKind | null {
+	const named = SURFACES.find((surface) => surface === said) ?? (said === ACTIVITY_SURFACE ? ACTIVITY_SURFACE : null);
+
+	if (named !== null) return named;
+	const cut = said.indexOf(":") + 1;
+	const rest = said.slice(cut);
+
+	if (cut === 0 || rest === "") return null;
+
+	if (said.startsWith(SLATE_PREFIX)) return `${SLATE_PREFIX}${rest}`;
+
+	if (said.startsWith("plan:")) return `plan:${rest}`;
+
+	return said.startsWith("preview:") ? `preview:${rest}` : null;
+}
+
 /** A plan revision's own page: its owner's conversation, the plan's id and the revision. */
 export type PlanSurfaceKind = `plan:${string}`;
 

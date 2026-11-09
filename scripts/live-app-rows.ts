@@ -631,6 +631,14 @@ const RECORD_MARKS = `(() => {
   });
 })()`;
 
+/** The inspector's marked tab, once the page has painted what it read. */
+async function markedTab(page: Page): Promise<string | null> {
+  await until(page, 'a marked tab in the inspector strip', `${MARKED_TAB} !== null`);
+  await painted(page);
+
+  return v.parse(v.nullable(v.string()), await page.evaluate(MARKED_TAB));
+}
+
 const RpcAskSchema = v.looseObject({ id: v.string(), method: v.string() });
 
 const RpcAnswerSchema = v.looseObject({ id: v.string(), result: v.optional(v.unknown()) });
@@ -2019,6 +2027,9 @@ export interface PageDataVerdict {
   /** After a reload: the page drawn again in its answer, and what its card says it was kept as. */
   readonly reloaded: PageDataReading;
   readonly stillSaved: string | null;
+  /** The inspector's marked tab once the saved slate was opened in it, after a reload, and after leaving the workspace
+   *  for Workspaces and coming back: the owner's 2026-11-09 report was a reload that opened on Work again. */
+  readonly tab: { readonly opened: string | null; readonly reloaded: string | null; readonly returned: string | null };
 }
 
 const PAGE_DATA_CARD = `[data-slate-ui="${PAGE_DATA.name}"]`;
@@ -2066,6 +2077,7 @@ async function measurePageData(newPage: LiveApp['newPage'], origin: string): Pro
     await saved?.evaluate((button) => { if (button instanceof HTMLElement) button.click(); });
     const pane = await frameAt(page, '#inspector iframe.p-slate-frame', 'the saved slate in the work surface');
     const kept = await pageDataReading(pane, 'opened', 'the saved slate');
+    const openedTab = await markedTab(page);
 
     await pane.click('#add');
     const keptAdded = await pageDataReading(pane, 'added', 'the saved slate');
@@ -2076,8 +2088,16 @@ async function measurePageData(newPage: LiveApp['newPage'], origin: string): Pro
     // The card learns it was saved from the workspace's slate list, which the page opens beside the transcript.
     const again = await named('the reloaded card, saved', () => page.waitForSelector(`${PAGE_DATA_CARD} button[data-slate-saved]`));
     const stillSaved = await again?.evaluate((button) => button.getAttribute('data-slate-saved')) ?? null;
+    const reloadedTab = await markedTab(page);
 
-    return { opened, added, saved: savedAs, kept, keptAdded, reloaded, stillSaved };
+    // Away to Workspaces in the app and back, as the sidebar and the browser's back take the reader.
+    await page.click(`a[href="${APP_ROUTES.workspaces}"]`);
+    await until(page, 'the address to move to Workspaces', `location.pathname === ${JSON.stringify(APP_ROUTES.workspaces)}`);
+    await page.goBack();
+    await until(page, 'the workspace again', `location.pathname.startsWith('/workspace/')`);
+    await named('the card again, saved', () => page.waitForSelector(`${PAGE_DATA_CARD} button[data-slate-saved]`));
+
+    return { opened, added, saved: savedAs, kept, keptAdded, reloaded, stillSaved, tab: { opened: openedTab, reloaded: reloadedTab, returned: await markedTab(page) } };
   } finally {
     await shoot(page, 'page-data-settled');
     await page.close();

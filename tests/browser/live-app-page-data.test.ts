@@ -29,3 +29,13 @@ test('saved, it is a slate with its server and its data, and a reload still know
   expect(reloaded).toEqual({ typed: '4', sql: '[{"n":4}]', served: 'HELLO', pinged: '', pushed: '' });
   expect(stillSaved).toBe(saved);
 });
+
+// The owner, 2026-11-09: a reload, or leaving the workspace and coming back, opened the inspector on Work again, and the
+// slate he had been reading took another click. The inspector opens on the tab it was left on.
+test('the inspector opens again on the slate it was showing, after a reload and after a return', () => {
+  const { tab } = verdictOf(observed.pageData, 'page-data');
+
+  expect(tab.opened).not.toBeNull();
+  expect(tab.opened).not.toBe('Work');
+  expect(tab).toEqual({ opened: tab.opened, reloaded: tab.opened, returned: tab.opened });
+});

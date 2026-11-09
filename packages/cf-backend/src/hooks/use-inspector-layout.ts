@@ -66,6 +66,48 @@ function committedWidthPx(
   return Math.round((share / total) * Math.max(0, group.clientWidth - separators));
 }
 
+/**
+ * The account a workbench's layout and tab are kept under: this browser's last-known email at first paint, then the
+ * shell's one profile read. `null` means only "not resolved yet"; a session resolved to no account is still decided.
+ * A nameless workbench (`keyed` false, a sample frame) reads none.
+ */
+export function useInspectorAccount(keyed: boolean): InspectorAccount | null {
+  // The cached email lets first paint use this person's layout before the profile read returns.
+  const [account, setAccount] = useState<InspectorAccount | null>(() => {
+    const cached = keyed ? readStored("kinu.inspector.account") : null;
+
+    return cached === null ? null : { kind: "known", email: cached };
+  });
+
+  // The account is the shell's one profile read: a sign-in or a name saved there is this layout's account too.
+  // Each of its three answers is a resolution; only loading means "unknown".
+  const { profile } = useAccount();
+  let profileAccount: InspectorAccount | null = null;
+
+  if (profile.status === "ready") profileAccount = profile.value?.email ? { kind: "known", email: profile.value.email } : { kind: "none" };
+  else if (profile.status === "error") profileAccount = { kind: "unreadable" };
+
+  const resolvedEmail = profileAccount?.kind === "known" ? profileAccount.email : null;
+  const resolvedKind = profileAccount?.kind ?? null;
+
+  useEffect(() => {
+    if (!keyed || resolvedKind === null) return;
+
+    const resolved: InspectorAccount = resolvedEmail === null
+      ? { kind: resolvedKind === "unreadable" ? "unreadable" : "none" }
+      : { kind: "known", email: resolvedEmail };
+
+    if (resolved.kind === "known") writeStored("kinu.inspector.account", resolved.email);
+
+    // Keep the cached object when unchanged so the decision effect does not re-run.
+    setAccount((prev) => (
+      prev?.kind === "known" && resolved.kind === "known" && prev.email === resolved.email ? prev : resolved
+    ));
+  }, [keyed, resolvedKind, resolvedEmail]);
+
+  return account;
+}
+
 interface InspectorInput { readonly kind: "pointer" | "key" }
 
 interface InspectorLayout {
@@ -99,39 +141,7 @@ export function useInspectorLayout(input: {
   // A nameless workbench (sample frame) neither reads nor writes the account shelf.
   const keyed = workspace !== undefined;
 
-  // `null` means only "not resolved yet"; a session resolved to no account is still decided.
-  // The cached email lets first paint use this person's width before the profile read returns.
-  const [account, setAccount] = useState<InspectorAccount | null>(() => {
-    const cached = keyed ? readStored("kinu.inspector.account") : null;
-
-    return cached === null ? null : { kind: "known", email: cached };
-  });
-
-  // The account is the shell's one profile read: a sign-in or a name saved there is this layout's account too.
-  // Each of its three answers is a resolution; only loading means "unknown".
-  const { profile } = useAccount();
-  let profileAccount: InspectorAccount | null = null;
-
-  if (profile.status === "ready") profileAccount = profile.value?.email ? { kind: "known", email: profile.value.email } : { kind: "none" };
-  else if (profile.status === "error") profileAccount = { kind: "unreadable" };
-
-  const resolvedEmail = profileAccount?.kind === "known" ? profileAccount.email : null;
-  const resolvedKind = profileAccount?.kind ?? null;
-
-  useEffect(() => {
-    if (!keyed || resolvedKind === null) return;
-
-    const resolved: InspectorAccount = resolvedEmail === null
-      ? { kind: resolvedKind === "unreadable" ? "unreadable" : "none" }
-      : { kind: "known", email: resolvedEmail };
-
-    if (resolved.kind === "known") writeStored("kinu.inspector.account", resolved.email);
-
-    // Keep the cached object when unchanged so the decision effect does not re-run.
-    setAccount((prev) => (
-      prev?.kind === "known" && resolved.kind === "known" && prev.email === resolved.email ? prev : resolved
-    ));
-  }, [keyed, resolvedKind, resolvedEmail]);
+  const account = useInspectorAccount(keyed);
 
   // An unkeyed layout stores nothing yet is still decided; `null` would mean no policy at all.
   const readLayout = useCallback(
