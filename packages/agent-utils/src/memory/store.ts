@@ -188,6 +188,11 @@ export class MemoryStore {
 		return this.sql<{ id: string }>`SELECT id FROM memory_note_chunks UNION SELECT id FROM memory_projection_updates`.map((row) => row.id);
 	}
 
+	/** Whether any chunk is indexed: without one, the vector index holds nothing of this store. */
+	holdsChunks(): boolean {
+		return this.sql<{ held: number }>`SELECT EXISTS(SELECT 1 FROM memory_note_chunks) AS held`[0]?.held === 1;
+	}
+
 	ackProjection(updates: readonly { id: string; revision: number }[]): void {
 		for (const update of updates) void this.sql`DELETE FROM memory_projection_updates WHERE id = ${update.id} AND revision = ${update.revision}`;
 	}

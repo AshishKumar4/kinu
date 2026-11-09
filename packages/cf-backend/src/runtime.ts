@@ -292,7 +292,7 @@ export function createCFRuntime(
   memoryStore.ensureSchema();
 
   // Built before the memory adapter so writes embed.
-  const vectorStore = buildVectorStore(env, actor, hooks.reportModelCall);
+  const vectorStore = buildVectorStore(env, actor, hooks.reportModelCall, () => memoryStore.holdsChunks());
 
   const craftStore = new AgentUtilsCraftStore(sql);
   craftStore.ensureSchema();
@@ -608,6 +608,7 @@ function buildVectorStore(
   env: Env,
   actor: ActorRuntimeIdentity,
   reportModelCall: ModelCallSink,
+  holds: () => boolean,
 ): VectorStore {
   const embedder = createWorkersAIEmbedder({ env, model: EMBEDDING_MODEL, dimensions: 384, report: reportModelCall });
   const vectorizeBinding = env.MEMORY_VECTORS;
@@ -618,7 +619,7 @@ function buildVectorStore(
 
   const built = Result.try({
     // Shared index across workspaces: scope every write and query to this one.
-    try: () => createCloudflareVectorStore({ index: vectorizeBinding, embedder, namespace: actor.workspaceName }),
+    try: () => createCloudflareVectorStore({ index: vectorizeBinding, embedder, namespace: actor.workspaceName, holds }),
     catch: (cause) => toKinuError({ doing: 'constructing the Vectorize memory store', cause, otherwise: 'unavailable' }),
   });
 

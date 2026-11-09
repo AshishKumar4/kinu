@@ -9,7 +9,7 @@ import {
   createCloudflareVectorStore, VECTOR_BACKEND_COOLDOWN_MS,
   type Embedder, type VectorizeIndex, type VectorStore, type IndexedChunk,
 } from '@kinu.run/core';
-import { adaptMemory, backfillMemoryVectors } from '@kinu.run/core';
+import { adaptMemory, backfillMemoryVectors, searchMemoryHits } from '@kinu.run/core';
 
 function createStore() {
   const database = new Database(':memory:');
@@ -40,6 +40,45 @@ const PATH = 'memory/MEMORY.md';
 
 const doc = (count: number, fill = 'x') =>
   Array.from({ length: count }, (_, i) => `note line ${i + 1} ${fill.repeat(40)}`).join('\n');
+
+// #103: a warm turn in a workspace with no memory spent about 180 ms embedding and querying an index that held nothing
+// of it (staging, 2026-11-09: 33 of 33 searches, zero matches).
+test('a memory search embeds and queries the index only once the workspace holds a chunk', async () => {
+  const { store, files } = createStore();
+  const asked: string[] = [];
+
+  const index: VectorizeIndex = {
+    upsert: async () => ({ ids: [] }),
+    deleteByIds: async () => ({ ids: [] }),
+    query: async () => {
+      asked.push('query');
+
+      return { matches: [] };
+    },
+  };
+
+  const embedder: Embedder = {
+    dimensions: 3,
+    embed: async () => {
+      asked.push('embed');
+
+      return [0, 0, 1];
+    },
+  };
+
+  const vectors = createCloudflareVectorStore({ index, embedder, namespace: 'ws', holds: () => store.holdsChunks() });
+  const memory = adaptMemory(store, files, { store: vectors });
+
+  await searchMemoryHits(memory, vectors, 'dinner plans', { limit: 5 });
+  const empty = asked.splice(0);
+
+  await memory.write(PATH, doc(3));
+  await memory.index(PATH);
+  asked.splice(0);
+  await searchMemoryHits(memory, vectors, 'dinner plans', { limit: 5 });
+
+  expect({ empty, held: asked }).toEqual({ empty: [], held: ['embed', 'query'] });
+});
 
 describe('adaptMemory — semantic index sync on write', () => {
   test('indexing embeds every chunk with its verbatim text', async () => {

@@ -108,8 +108,12 @@ export function createCloudflareVectorStore(opts: {
   embedder: Embedder;
   /** Omit only for an unshared index. */
   namespace?: string;
+  /** Whether the index may hold anything of this namespace. The memory store's chunks are its only source, and a hit for
+   *  a chunk the store no longer holds is dropped anyway, so without one a search finds nothing: it answers so without
+   *  embedding or querying (#103: about 180 ms of every warm turn in a workspace with no memory). */
+  holds?: () => boolean;
 }): VectorStore {
-  const { index, embedder, namespace } = opts;
+  const { index, embedder, namespace, holds } = opts;
 
   // Failures always throw; `available` only lets the search arm skip during the cooldown.
   let unavailableUntil = 0;
@@ -163,6 +167,8 @@ export function createCloudflareVectorStore(opts: {
     },
 
     search(text: string, topK = 10) {
+      if (holds?.() === false) return Promise.resolve([]);
+
       return settle(tripping('query', async () => {
         const began = performance.now();
         const vector = await embedder.embed(text);
