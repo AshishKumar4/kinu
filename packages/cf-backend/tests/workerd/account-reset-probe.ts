@@ -45,7 +45,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
   }
 }
 
-const PROBE_METHODS = ['seed', 'counts', 'hashes', 'reset', 'freshProfile', 'refuseTeardownOf', 'pendingDeletes', 'receivedFrom', 'ownerDeleted', 'lap', 'held', 'storeKey'];
+const PROBE_METHODS = ['seed', 'counts', 'hashes', 'reset', 'requested', 'freshProfile', 'refuseTeardownOf', 'pendingDeletes', 'receivedFrom', 'ownerDeleted', 'lap', 'held', 'storeKey'];
 
 const ACCOUNT_TABLE_PREFIXES = ['user_', 'device_', 'cli_', 'codex_'];
 
@@ -154,10 +154,18 @@ export class AccountResetProbeDO extends UserDO {
     return this.deleteAccount(await ownerCaller(this.env), RESET_OWNER_ID);
   }
 
-  /** The next sign-in's first request; on a reset account it inserts and the stamp is null. */
+  /** A request's read of the account, as every signed-in route makes one: its email, or why it was refused. */
+  async requested(): Promise<string> {
+    const owner = await ownerCaller(this.env);
+    const read = await settle(Effect.result(attempt({ doing: 'reading the account as a request', otherwise: 'io' }, async () => this.ensureProfile(owner, 'owner@probe.local'))));
+
+    return Result.isSuccess(read) ? read.success.email : renderThrownChain({ cause: read.failure });
+  }
+
+  /** The next sign-in; on a reset account it inserts and the stamp is null. */
   async freshProfile(): Promise<UserProfile | null> {
     const owner = await ownerCaller(this.env);
-    await this.ensureProfile(owner, 'owner@probe.local');
+    await this.signIn(owner, 'owner@probe.local');
 
     return this.getProfile(owner);
   }

@@ -27,7 +27,7 @@ function setupEnv() {
   const rows = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
 
   const userDO: SessionAuthority = {
-    async ensureProfile(_caller: UserCaller, email: string, displayName?: string) {
+    async signIn(_caller: UserCaller, email: string, displayName?: string) {
       ensuredProfiles.push(`${email}:${displayName ?? ''}`);
 
       return bootstrappedProfile(email, displayName ?? null);

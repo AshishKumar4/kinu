@@ -33,7 +33,7 @@ function twoLocations() {
   const objects = cliAuthObjects();
 
   const account = cliAccount({
-    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+    async signIn(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async mintCliToken(_caller: UserCaller, userId: string) {
       return { token: `ptc_${userId}_terminal`, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
     },
@@ -79,7 +79,7 @@ function spent(kv: KvStore, kind: string): KvStore {
 
 /** One account's sign-ins from one terminal, at `kv` and `account`: the same rate counts each time. */
 function oneTerminal(kv: KvStore, account: CliRoutesAuthority = cliAccount({
-  async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+  async signIn(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
   async mintCliToken(_caller: UserCaller, userId: string) {
     return { token: `ptc_${userId}_terminal`, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
   },
@@ -173,7 +173,7 @@ describe('a sign-in its counts or its account refuse mid-way', () => {
 
   test("an approval its account cannot take is answered as the service's failure, never as the person's 400", async () => {
     const env = oneTerminal(makeKv(), cliAccount({
-      async ensureProfile() { throw new Error('the account store is gone'); },
+      async signIn() { throw new Error('the account store is gone'); },
     }));
 
     const started = v.parse(StartedSchema, await present(await api(postJson('/api/cli/auth/start', JSON.stringify({ deviceName: 'pc' })), env), 'the start').json());

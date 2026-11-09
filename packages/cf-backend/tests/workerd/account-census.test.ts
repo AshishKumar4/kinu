@@ -150,6 +150,12 @@ describe("deleting an account on real workerd, every store's census", () => {
       danaAccount: { cards: 0, overviews: 0 },
     });
 
+    // The owner, 2026-11-09: deleted accounts came back to the operator's Accounts list, each read after its delete making
+    // it again. A request reading her now is told she was deleted, and the control plane still lists no one of hers.
+    expect(await account(dana).readAsRequest(priya)).toContain('This account was deleted');
+    expect((await control().controlCensus(priya)).cp_users).toBe(0);
+    expect(await account(priya.userId).deletedAt()).toEqual(expect.any(Number));
+
     // The same person signs in again, as the same account (her email's), and takes her address back (owner, 2026-11-08).
     const [again = ''] = await account('census-ids').accountsOf([EMAIL]);
 

@@ -178,13 +178,43 @@ const DELETE_CALL_MS = 30_000;
 const HeldKeysSchema = v.array(v.looseObject({ key: v.string() }));
 
 /**
- * Deletes `target`'s account through the product's own account delete, its profile's email confirming it. A finding, or
- * null. Its credentials go first, each disconnected without revoking: an account's delete revokes what it holds at the
- * provider, and a trial account holds logins it does not own (a plan's, OMP's; the deployment's gateway token). Nothing
- * reads the account after: every request records the account it names again (the control plane's `observeUser`).
+ * Signs `target`'s account in, as the dev identity's sign-in does (`POST /api/auth/dev-session`): the one way an account
+ * deleted before is made again, which a read never does. A finding, or null.
  */
-export async function deleteTrialAccount(target: EvalTarget): Promise<string | null> {
+export async function signInTrialAccount(target: EvalTarget): Promise<string | null> {
+  const answer = await fetch(`${target.origin}/api/auth/dev-session`, { method: 'POST', headers: webHeaders(target.identity), signal: AbortSignal.timeout(DELETE_CALL_MS) });
+
+  return answer.ok ? null : `signing ${accountOf(target)} in at ${target.origin} answered ${String(answer.status)}`;
+}
+
+/** How long an account's deletion may take to finish once asked, its workspaces torn down and its storage destroyed. */
+const DELETION_FINISH_MS = 10 * 60_000;
+
+/** How often a deletion under way is read again. */
+const DELETION_POLL_MS = 2_000;
+
+/** What reading an account answers about its deletion: still the account, being deleted, or deleted. */
+function standingOf(status: number): 'live' | 'deleting' | 'deleted' | null {
+  if (status === 404) return 'deleted';
+
+  if (status === 503) return 'deleting';
+
+  return status >= 200 && status < 300 ? 'live' : null;
+}
+
+/** How a teardown waits between reads of a deletion under way; a test hands its own. */
+export type Pause = (ms: number) => Promise<void>;
+
+/**
+ * Deletes `target`'s account through the product's own account delete, its profile's email confirming it, and answers
+ * once the deletion has finished: a finding, or null. Its credentials go first, each disconnected without revoking: an
+ * account's delete revokes what it holds at the provider, and a trial account holds logins it does not own (a plan's,
+ * OMP's; the deployment's gateway token). Reading it after is safe: a deleted account, or one being deleted, answers so
+ * (`UserDO.ensureProfile`), and is neither made again nor noted in the control plane by a read (`UserDO.observed`).
+ */
+export async function deleteTrialAccount(target: EvalTarget, pause: Pause = async (ms) => Bun.sleep(ms)): Promise<string | null> {
   const headers = webHeaders(target.identity);
+  const account = accountOf(target);
 
   const call = async (path: string, init: { readonly method?: string; readonly json?: unknown } = {}) => fetch(`${target.origin}${path}`, {
     method: init.method ?? 'GET', signal: AbortSignal.timeout(DELETE_CALL_MS),
@@ -192,22 +222,39 @@ export async function deleteTrialAccount(target: EvalTarget): Promise<string | n
     ...init.json !== undefined && { body: JSON.stringify(init.json) },
   });
 
-  const [held, profile] = await Promise.all([call('/api/user/credentials'), call('/api/user/profile')]);
+  const profile = await call('/api/user/profile');
+  const standing = standingOf(profile.status);
 
-  if (!held.ok) return `listing ${accountOf(target)}'s credentials at ${target.origin} answered ${String(held.status)}`;
+  if (standing === null) return `reading ${account}'s profile at ${target.origin} answered ${String(profile.status)}`;
 
-  if (!profile.ok) return `reading ${accountOf(target)}'s profile at ${target.origin} answered ${String(profile.status)}`;
+  if (standing === 'live') {
+    const held = await call('/api/user/credentials');
 
-  for (const { key } of v.parse(HeldKeysSchema, await held.json())) {
-    const dropped = await call(`/api/user/credentials/${encodeURIComponent(key)}?revoke=0`, { method: 'DELETE' });
+    if (!held.ok) return `listing ${account}'s credentials at ${target.origin} answered ${String(held.status)}`;
 
-    if (!dropped.ok) return `disconnecting ${accountOf(target)}'s ${key} at ${target.origin} answered ${String(dropped.status)}`;
+    for (const { key } of v.parse(HeldKeysSchema, await held.json())) {
+      const dropped = await call(`/api/user/credentials/${encodeURIComponent(key)}?revoke=0`, { method: 'DELETE' });
+
+      if (!dropped.ok) return `disconnecting ${account}'s ${key} at ${target.origin} answered ${String(dropped.status)}`;
+    }
+
+    const { email } = v.parse(ProfileEmailSchema, await profile.json());
+    const deleted = await call('/api/user/account', { method: 'DELETE', json: { confirm: email } });
+
+    if (!deleted.ok) return `deleting ${account} at ${target.origin} answered ${String(deleted.status)}`;
   }
 
-  const { email } = v.parse(ProfileEmailSchema, await profile.json());
-  const deleted = await call('/api/user/account', { method: 'DELETE', json: { confirm: email } });
+  // Its workspaces are torn down and its storage destroyed by jobs of its own: the account is free once they have run.
+  for (let waited = 0; waited <= DELETION_FINISH_MS; waited += DELETION_POLL_MS) {
+    const now = standingOf((await call('/api/user/profile')).status);
 
-  return deleted.ok ? null : `deleting ${accountOf(target)} at ${target.origin} answered ${String(deleted.status)}`;
+    if (now === 'deleted') return null;
+
+    if (now !== 'deleting') return `${account} at ${target.origin} read as ${now ?? 'an error'} while its deletion was finishing`;
+    await pause(DELETION_POLL_MS);
+  }
+
+  return `${account}'s deletion at ${target.origin} had not finished after ${String(DELETION_FINISH_MS / 60_000)} minutes`;
 }
 
 /** A run's leased block as it acts as it: each origin's account of the block. */
@@ -226,12 +273,12 @@ export const TEARDOWN_MARK = 'tearing-down';
 export const RENEWING_MARK = 'renewing';
 
 /** Each account of `block` deleted, eight at a time, each answering before the next eight: what that came to, in words. */
-async function deleteBlock(block: TrialBlock): Promise<string> {
+async function deleteBlock(block: TrialBlock, pause?: Pause): Promise<string> {
   const refused: string[] = [];
   let deleted = 0;
 
   for (let at = 0; at < block.targets.length; at += 8) {
-    const answers = await Promise.allSettled(block.targets.slice(at, at + 8).map(async (target) => deleteTrialAccount(target)));
+    const answers = await Promise.allSettled(block.targets.slice(at, at + 8).map(async (target) => deleteTrialAccount(target, pause)));
 
     deleted += answers.filter((answer) => answer.status === 'fulfilled' && answer.value === null).length;
     refused.push(...answers.flatMap((answer) => (answer.status === 'rejected' ? [String(answer.reason)] : answer.value ?? [])));
@@ -241,8 +288,8 @@ async function deleteBlock(block: TrialBlock): Promise<string> {
 }
 
 /**
- * `run` on its leased block (evals/src/lease.ts), whose accounts are deleted when it ends, however it ends, and only then
- * is the lease let go: trial accounts pile up otherwise (the owner, 2026-11-09: 64 left on production, 256 on staging).
+ * `run` on its leased block (evals/src/lease.ts), whose accounts are deleted when it ends, however it ends, and only once
+ * each deletion has finished is the lease let go: trial accounts pile up otherwise (the owner, 2026-11-09: 64 left on production, 256 on staging).
  * The lease is held from before anything touches the block, so its teardown deletes nothing another run holds. The next
  * run's provisioning makes each account again before any trial opens on it (scripts/eval-provider-keys.ts). `before`
  * runs first: it waits for the run's remote trials to have ended, and for anything writing to the block to stop; where
@@ -251,14 +298,14 @@ async function deleteBlock(block: TrialBlock): Promise<string> {
  */
 export async function onTrialBlock<T>(
   lease: TrialLease, block: TrialBlock, run: () => Promise<T>,
-  options: { readonly say?: (line: string) => void; readonly before?: () => Promise<void> } = {},
+  options: { readonly say?: (line: string) => void; readonly before?: () => Promise<void>; readonly pause?: Pause } = {},
 ): Promise<T> {
   try {
     return await run();
   } finally {
     try {
       await options.before?.();
-      (options.say ?? console.log)(await deleteBlock(block));
+      (options.say ?? console.log)(await deleteBlock(block, options.pause));
     } finally {
       await lease.release();
     }

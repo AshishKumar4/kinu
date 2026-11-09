@@ -63,6 +63,8 @@ function harness(email: string, owned: readonly string[]) {
     get: () => ({
       async workspaceAdmission(_caller: UserCaller, name: string) { return owned.includes(name) ? { capabilityHash: null } : null; },
       async ensureWorkspaceCapability() { /* the two sides already agree */ },
+      // A live account notes itself in the control plane's index, as `UserDO.observed` does.
+      async observed(_caller: UserCaller, observation: { userId: string }) { index.users.push(observation.userId); },
     }),
   };
 

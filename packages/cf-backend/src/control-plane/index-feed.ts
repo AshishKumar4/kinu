@@ -10,6 +10,9 @@ import type { AuthIdentity } from '../auth/session';
 import { internalCaller } from './admin-caller';
 import { controlPlaneStub, hasControlPlane, type ControlPlaneEnv } from './stub';
 import type { ControlPlaneDO } from './control-plane-do';
+import { ownerCaller, type ObjectNamespace, type OwnerCapabilityEnv } from '@kinu.run/core';
+import type { UserDO } from '../user/user-do';
+import { UNPLACED } from '../user/workspace-placement';
 
 export type IndexFeedSink = Pick<
   ControlPlaneDO, 'observeUser' | 'observeWorkspace' | 'touchWorkspace' | 'forgetWorkspace'
@@ -17,6 +20,11 @@ export type IndexFeedSink = Pick<
 
 /** Destination optional: "no control plane" is a first-class state; see `hasControlPlane`. */
 export type IndexFeedEnv<Id> = Partial<ControlPlaneEnv<Id, IndexFeedSink>>;
+
+/** A user is noted through their account's object, which alone knows whether it is still an account (`UserDO.observed`). */
+export type ObserveIdentityEnv<Id> = IndexFeedEnv<Id> & OwnerCapabilityEnv & {
+  readonly UserDO?: ObjectNamespace<Id, Pick<UserDO, 'observed'>>;
+};
 
 /** Not forever: `last_seen_at` orders the users list; matches the monitoring cron period. */
 const OBSERVE_TTL_MS = 15 * 60 * 1000;
@@ -42,19 +50,24 @@ export interface RetainWork {
   waitUntil: (promise: Promise<unknown>) => void;
 }
 
-/** Retained with `waitUntil`; failure is reported as diagnostics and never affects the request. */
+/**
+ * Retained with `waitUntil`, off the request's path; failure is reported as diagnostics and never affects the request.
+ * Noted by the account's own object, which notes an account being deleted, or deleted, nowhere: a read after an
+ * account's delete never brings it back to the operator's list.
+ */
 export function observeIdentity<Id>(
-  env: IndexFeedEnv<Id>,
+  env: ObserveIdentityEnv<Id>,
   identity: AuthIdentity,
   options: { retain: RetainWork; now?: number },
 ): void {
   const now = options.now ?? Date.now();
+  const { UserDO } = env;
 
-  if (!hasControlPlane(env)) return;
+  if (!hasControlPlane(env) || UserDO === undefined) return;
 
   if (!shouldWrite(identity.userId, now)) return;
   options.retain.waitUntil(settle(retained(identity.userId, false, async () => {
-    await controlPlaneStub(env).observeUser(await internalCaller(env), {
+    await UserDO.get(UserDO.idFromName(identity.userId), { locationHint: UNPLACED }).observed(await ownerCaller(env), {
       userId: identity.userId,
       email: identity.email,
       displayName: identity.displayName ?? null,

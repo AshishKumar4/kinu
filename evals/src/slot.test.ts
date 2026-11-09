@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { BUILTIN_PROFILE_CATALOG, DEV_IDENTITY_ACCOUNT_HEADER, EVAL_WORKSPACE_LEASE_MS, inheritedRows, parseEvalAccount, profileCatalogDigest } from '@kinu.run/core';
-import { evalWorkspaceName } from '@kinu.run/test-utils';
+import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
 import { evalMatrix } from './config';
-import { onTrialBlock, prepareTrialAccount, trialAccounts, trialSlot } from './slot';
+import { onTrialBlock, prepareTrialAccount, trialAccounts, trialSlot, type SlotClaim } from './slot';
+import { leaseBlock } from './lease';
 import type { EvalTarget } from './workspace-roster';
 
 const TASK_FILES = ['budget-board.eval.ts', 'chess.eval.ts', 'launch-prep.eval.ts', 'order-book.eval.ts'];
@@ -193,12 +194,13 @@ describe('opening on a trial account', () => {
 
 /**
  * A deployment's account routes, as a run's teardown meets them: each request names its account in the dev identity
- * header, and is recorded against it in order, so a read after an account's delete shows (any request records its
- * account as one of the deployment's again). A credential's revoking is recorded too.
+ * header, and is recorded against it in order. An account's delete is finished by its own jobs `lands` reads later,
+ * answering 503 until then and 404 after, as the account object does (`UserDO.ensureProfile`).
  */
-function accountsDeployment(holding: Readonly<Record<string, readonly string[]>>) {
+function accountsDeployment(holding: Readonly<Record<string, readonly string[]>>, lands = 0) {
   const calls: { account: string; call: string }[] = [];
   const deleted = new Set<string>();
+  const deleting = new Map<string, number>();
 
   const server = Bun.serve({
     port: 0,
@@ -208,20 +210,34 @@ function accountsDeployment(holding: Readonly<Record<string, readonly string[]>>
       const url = new URL(request.url);
       const call = `${request.method} ${url.pathname}${url.search}`;
 
-      calls.push({ account, call: deleted.has(account) ? `${call} AFTER DELETE` : call });
+      calls.push({ account, call: deleted.has(account) || deleting.has(account) ? `${call} AFTER DELETE` : call });
+      const reads = deleting.get(account);
+
+      if (reads !== undefined) {
+        if (reads <= 0) {
+          deleting.delete(account);
+          deleted.add(account);
+        } else deleting.set(account, reads - 1);
+      }
+
+      if (deleted.has(account)) return Response.json({ error: 'This account was deleted.', code: 'missing' }, { status: 404 });
+
+      if (deleting.has(account)) return Response.json({ error: 'This account is being deleted.', code: 'unavailable' }, { status: 503 });
 
       if (url.pathname === '/api/user/profile') return Response.json({ email: `eval-service+${account}@kinu.run` });
 
       if (url.pathname === '/api/user/credentials') return Response.json((holding[account] ?? []).map((key) => ({ key })));
 
-      if (request.method === 'DELETE' && url.pathname === '/api/user/account') deleted.add(account);
+      if (request.method === 'DELETE' && url.pathname === '/api/user/account') deleting.set(account, lands);
 
       return Response.json({ ok: true });
     },
   });
 
-  return { server, calls, deleted };
+  return { server, calls, deleted, deleting };
 }
+
+const STAGING = 'staging.kinu.run';
 
 describe("a run's trial accounts", () => {
   const block = (origin: string, first: number, last: number) => ({
@@ -239,7 +255,7 @@ describe("a run's trial accounts", () => {
   };
 
   // The owner, 2026-11-09: 64 trial accounts left on production, 256 on staging.
-  test('a run that ends, fails or is stopped leaves no account of its block, reads none after deleting it, then lets its lease go', async () => {
+  test('a run that ends, fails or is stopped leaves no account of its block, only reads its deletion after, then lets its lease go', async () => {
     const accounts = accountsDeployment({});
     const origin = accounts.server.url.origin;
     const said: string[] = [];
@@ -253,7 +269,8 @@ describe("a run's trial accounts", () => {
       await expect(onTrialBlock(broke.lease, block(origin, 6, 7), async () => { throw new Error('stopped by SIGTERM'); }, { say })).rejects.toThrow('stopped by SIGTERM');
 
       expect([...accounts.deleted].sort()).toEqual(['trial-3', 'trial-4', 'trial-5', 'trial-6', 'trial-7']);
-      expect(accounts.calls.filter(({ call }) => call.endsWith('AFTER DELETE'))).toEqual([]);
+      // After its delete, an account is only read for how its deletion stands, which neither makes it again nor notes it.
+      expect(accounts.calls.filter(({ call }) => call.endsWith('AFTER DELETE') && call !== 'GET /api/user/profile AFTER DELETE')).toEqual([]);
       expect(said).toEqual(['evals: deleted 3 of the run\'s 3 trial accounts', 'evals: deleted 2 of the run\'s 2 trial accounts']);
       expect([ended.events, broke.events]).toEqual([['released'], ['released']]);
     } finally {
@@ -287,6 +304,45 @@ describe("a run's trial accounts", () => {
       const writes = accounts.calls.filter(({ call }) => call.startsWith('DELETE')).map(({ call }) => call);
 
       expect(writes).toEqual(['DELETE /api/user/credentials/codex.oauth?revoke=0', 'DELETE /api/user/credentials/cloudflare.oauth?revoke=0', 'DELETE /api/user/account']);
+    } finally {
+      await accounts.server.stop(true);
+    }
+  });
+
+  // Main, 2026-11-09: the account's delete answers once it is marked, and its jobs finish it later; a run that leased
+  // the block meanwhile would be refused at its provisioning ("This account is being deleted").
+  test("the block is not free again until every account's deletion has finished", async () => {
+    const accounts = accountsDeployment({}, 3);
+    const dir = scratchDir('trial-leases');
+    const none = async (): Promise<SlotClaim[]> => [];
+    const reads: (() => void)[] = [];
+    const pause = async () => new Promise<void>((read) => { reads.push(read); });
+    // The event loop's next turn: the teardown's reads, over a real socket, are answered on a later one.
+    const turn = async () => new Promise<void>((next) => { setImmediate(next); });
+    const lease = await leaseBlock({ size: 2, pass: false, hosts: [STAGING], liveClaims: none, dir });
+    const targets = block(accounts.server.url.origin, 1, 2).targets;
+
+    try {
+      const tearing = onTrialBlock(lease, { targets }, async () => {}, { say: () => {}, pause });
+
+      // Each account was deleted, and reads as being deleted: its block is still the run's.
+      while (reads.length < 2) await turn();
+      const meanwhile = await leaseBlock({ size: 2, pass: false, hosts: [STAGING], liveClaims: none, dir });
+
+      expect({ first: meanwhile.first, deleting: [...accounts.deleting.keys()].sort() }).toEqual({ first: 3, deleting: ['trial-1', 'trial-2'] });
+      await meanwhile.release();
+
+      // Its jobs land; the run's teardown reads them deleted and lets the block go.
+      while (accounts.deleting.size > 0 || reads.length > 0) {
+        for (const read of reads.splice(0)) read();
+        await turn();
+      }
+
+      await tearing;
+      const after = await leaseBlock({ size: 2, pass: false, hosts: [STAGING], liveClaims: none, dir });
+
+      expect({ first: after.first, deleted: [...accounts.deleted].sort() }).toEqual({ first: 1, deleted: ['trial-1', 'trial-2'] });
+      await after.release();
     } finally {
       await accounts.server.stop(true);
     }

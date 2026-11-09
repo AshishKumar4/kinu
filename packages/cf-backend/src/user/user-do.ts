@@ -25,7 +25,7 @@ import { rawPath, rethrow, type FamilyEnv } from '../api/context';
 import { accountPages, type AccountPagesEnv } from './account-pages';
 import { destroyDriveTenant, driveStoredBytes, tenantDrive } from '../drive/tenant';
 import { forgetSharesGiven, forgetSharesReceived } from './shares-given';
-import { internalCaller } from '@kinu.run/core/control-plane';
+import { internalCaller, type UserObservation } from '@kinu.run/core/control-plane';
 import { BUILTIN_ACCOUNTS_OBJECT, builtinSignInOn } from '@kinu.run/core/identity';
 import { controlPlaneStub, hasControlPlane } from '../control-plane/stub';
 
@@ -299,13 +299,57 @@ export class UserDO extends Agent<Env> {
     },
   });
 
-  /** A sign-in: an account deleted before is a new one now, and keeps cards again. */
+  /** Where the account stands: in use, being deleted (`deleteAccount` marked it), or deleted (its storage destroyed). */
+  private standing(): 'live' | 'deleting' | 'deleted' {
+    if (this.ctx.storage.kv.get(ACCOUNT_DELETING_KEY) !== undefined) return 'deleting';
+
+    return this.ctx.storage.kv.get(ACCOUNT_DELETED_KEY) === undefined ? 'live' : 'deleted';
+  }
+
+  /** Why a request may not reach the account as it stands, or null: one being deleted, or deleted, is no one's yet. */
+  private standingRefusal(): KinuError | null {
+    switch (this.standing()) {
+      case 'live': return null;
+      case 'deleting': return new KinuError('unavailable', 'This account is being deleted.');
+      case 'deleted': return new KinuError('missing', 'This account was deleted. Sign in to make a new one.');
+    }
+  }
+
+  /**
+   * A request's account (every signed-in route reaches it so): made where none was, its last visit noted. A deleted
+   * account, or one being deleted, is refused: only a sign-in makes it again (`signIn`), so no read brings it back.
+   */
   async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
+    const refused = this.standingRefusal();
+
+    if (refused !== null) return settle(Effect.fail(refused));
+
+    return await this.profile.ensureProfile(caller, email, displayName);
+  }
+
+  /**
+   * A sign-in, by any provider, the dev identity's exchange or a CLI login's approval: the one way a deleted account is
+   * a new one, which keeps cards again. One still being deleted is refused until its deletion has finished.
+   */
+  async signIn(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
+    if (this.standing() === 'deleting') return settle(Effect.fail(new KinuError('unavailable', 'This account is being deleted. Sign in again in a moment.')));
     const profile = await this.profile.ensureProfile(caller, email, displayName);
 
     this.ctx.storage.kv.delete(ACCOUNT_DELETED_KEY);
 
     return profile;
+  }
+
+  /**
+   * A signed-in request seen by the session gate (control-plane/index-feed.ts `observeIdentity`): noted in the control
+   * plane's accounts while the account is in use, never once it is being deleted or deleted, whoever reads it after.
+   */
+  async observed(caller: UserCaller, observation: UserObservation): Promise<void> {
+    await this.requireTier(caller, 'profile');
+    const { ControlPlaneDO } = this.env;
+
+    if (this.standing() !== 'live' || ControlPlaneDO === undefined || !hasControlPlane({ ControlPlaneDO })) return;
+    await controlPlaneStub({ ControlPlaneDO }).observeUser(await internalCaller(this.env), observation);
   }
 
   getProfile(caller: UserCaller): Promise<UserProfile | null> {

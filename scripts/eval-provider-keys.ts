@@ -27,7 +27,7 @@ import {
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
 import { evalMatrix } from '../evals/src/config';
 import { listWorkspaces, settleCatalog, webHeaders, type CatalogNeed, type PublicWebIdentity } from '../evals/src/workspace-roster';
-import { deleteTrialAccount, deletionsLanded, trialInheritedRows } from '../evals/src/slot';
+import { deleteTrialAccount, signInTrialAccount, trialInheritedRows } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
 import { recordStep } from './deploy-report';
 import { deployedConfig, deploymentAt } from './infra-manifest';
@@ -193,6 +193,10 @@ type TrialOutcome = { readonly given: boolean; readonly reset: boolean; readonly
 async function readyTrialAccount(input: Provisioning & { identity: string }, account: EvalAccount, keys: Readonly<Record<string, string>>): Promise<TrialOutcome> {
   const identity: PublicWebIdentity = { kind: 'secret', secret: input.identity, account };
   const headers = webHeaders(identity);
+  // Signed in first: an account a run before this one deleted is made again only so, never by a read.
+  const unsigned = await signInTrialAccount({ origin: input.origin, identity });
+
+  if (unsigned !== null) return { given: false, reset: false, finding: unsigned };
   const held = await trialInheritedRows({ origin: input.origin, identity });
 
   if ('why' in held) return { given: false, reset: false, finding: `${account}: ${held.why}` };
@@ -212,11 +216,10 @@ async function readyTrialAccount(input: Provisioning & { identity: string }, acc
 
     if (refused !== null) return { given: false, reset: false, finding: `resetting ${account}, which holds ${rows}: ${refused}` };
     reset = true;
-    // The reset clears the account's keys in its own job: a key stored before it lands would go with them.
-    const landed = await deletionsLanded({ origin: input.origin, identity }, true);
-    const left = 'why' in landed ? landed.why : Object.keys(landed.inherited).join(', ');
+    // Deleted whole, its jobs landed (`deleteTrialAccount` answers once they have): made again by a sign-in.
+    const again = await signInTrialAccount({ origin: input.origin, identity });
 
-    if (left !== '') return { given: false, reset, finding: `resetting ${account} had not landed: ${left}` };
+    if (again !== null) return { given: false, reset, finding: again };
   }
 
   const holds = await heldKeys(input, headers, account);

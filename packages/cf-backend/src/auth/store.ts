@@ -77,7 +77,7 @@ export interface BrowserSession {
 
 /** A projection of the class, so a stand-in keeps the object's real contract. */
 export type SessionAuthority = Pick<
-  UserDO, 'ensureProfile' | 'registerBrowserSession' | 'verifyBrowserSession' | 'revokeBrowserSession'
+  UserDO, 'signIn' | 'registerBrowserSession' | 'verifyBrowserSession' | 'revokeBrowserSession'
 >;
 
 export interface AuthStoreEnv<Id = DurableObjectId> extends OwnerCapabilityEnv, SignInDeclarationEnv {
@@ -299,7 +299,7 @@ function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: 
 
     // The account's first reach, which makes its object where every provider answers.
     const stored = yield* Effect.promise(async () => accountNamed(env.UserDO, userId, placement)
-      .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined));
+      .signIn(await ownerCaller(env), email, profile.displayName ?? undefined));
 
     return {
       userId,

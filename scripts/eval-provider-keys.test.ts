@@ -167,6 +167,8 @@ function accountsDeployment() {
   const accounts = new Map<string, Account>();
   const resets: string[] = [];
   const disconnected: string[] = [];
+  const deleted = new Set<string>();
+  const signedIn: string[] = [];
 
   const of = (request: Request): Account => {
     const name = request.headers.get('x-kinu-dev-identity-account') ?? 'eval-service';
@@ -229,8 +231,19 @@ function accountsDeployment() {
       '/api/user/profile': (request) => {
         const account = request.headers.get('x-kinu-dev-identity-account');
 
+        // A deleted account reads as deleted until a sign-in makes it again (`UserDO.ensureProfile`).
+        if (deleted.has(account ?? 'eval-service')) return Response.json({ error: 'This account was deleted.', code: 'missing' }, { status: 404 });
+
         return Response.json({ email: `eval-service${account === null ? '' : `+${account}`}@kinu.run` });
       },
+      '/api/auth/dev-session': { POST: (request) => {
+        const account = request.headers.get('x-kinu-dev-identity-account') ?? 'eval-service';
+
+        signedIn.push(account);
+        deleted.delete(account);
+
+        return Response.json({ user: { email: `eval-service+${account}@kinu.run` } });
+      } },
       '/api/user/account': { DELETE: async (request) => {
         const account = request.headers.get('x-kinu-dev-identity-account') ?? 'eval-service';
         const { confirm } = v.parse(v.object({ confirm: v.string() }), await request.json());
@@ -238,13 +251,14 @@ function accountsDeployment() {
         if (confirm !== `eval-service+${account}@kinu.run`) return Response.json({ error: 'Type the account email to confirm.' }, { status: 400 });
         resets.push(account);
         accounts.delete(account);
+        deleted.add(account);
 
         return Response.json({ deleted: true });
       } },
     },
   });
 
-  return { server, accounts, resets, disconnected, at: `http://127.0.0.1:${String(server.port)}` };
+  return { server, accounts, resets, disconnected, signedIn, at: `http://127.0.0.1:${String(server.port)}` };
 }
 
 describe('every trial account a run acts as', () => {
@@ -419,7 +433,7 @@ describe('every trial account a run acts as', () => {
   });
 
   test('a trial account holding a row a trial would inherit is reset and given its keys again, unless a run is on it', async () => {
-    const { server, accounts, resets, disconnected, at } = accountsDeployment();
+    const { server, accounts, resets, disconnected, signedIn, at } = accountsDeployment();
 
     try {
       const input = {
@@ -441,6 +455,9 @@ describe('every trial account a run acts as', () => {
       expect(resets).toEqual(['trial-1']);
       // Its key went unrevoked before the account: the account's own delete revokes what it still holds.
       expect(disconnected).toEqual(['trial-1 opencode-go.bearer revoke=0']);
+      // Deleted, it is made again only by its sign-in, before its keys are given: each account signs in as each
+      // provisioning begins, and the reset one once more after its delete.
+      expect(signedIn.filter((account) => account === 'trial-1')).toEqual(['trial-1', 'trial-1', 'trial-1']);
       expect(provisioned.trials).toEqual({ given: 1, reset: ['trial-1'] });
       expect(provisioned.findings).toEqual([]);
 

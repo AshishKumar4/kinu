@@ -122,7 +122,7 @@ function fleet(): Fleet {
         builtinHasOwner: (): never => { throw new Error('builtinHasOwner: not reachable in this test'); },
         builtinInvitedEmail: (): never => { throw new Error('builtinInvitedEmail: not reachable in this test'); },
         builtinResetAccount: (): never => { throw new Error('builtinResetAccount: not reachable in this test'); },
-        ensureProfile: (...args: Parameters<UserDO['ensureProfile']>) => real.ensureProfile(...args),
+        signIn: (...args: Parameters<UserDO['signIn']>) => real.signIn(...args),
         registerBrowserSession: (...args: Parameters<UserDO['registerBrowserSession']>) =>
           refuse('registerBrowserSession') ?? real.registerBrowserSession(...args),
         verifyBrowserSession: (...args: Parameters<UserDO['verifyBrowserSession']>) =>

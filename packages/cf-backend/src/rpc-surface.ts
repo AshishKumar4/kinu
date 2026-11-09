@@ -106,6 +106,8 @@ const USER_DO_METHODS = [
   'disconnectCodex',
   'raiseCredentialFloor',
   'ensureProfile',
+  'signIn',
+  'observed',
   'ensureWorkspaceCapability',
   'finishChatGptPasteSignIn',
   'finishClaudeSignIn',

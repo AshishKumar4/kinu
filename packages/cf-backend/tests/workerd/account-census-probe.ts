@@ -25,6 +25,9 @@ import { handleInboundMail } from '../../src/mail/handler';
 import { UserDO } from '../../src/user/user-do';
 import { shareViewerKey } from '../../src/viewer-pass';
 import { accountIdFor } from '../../src/auth/store';
+import { observeIdentity } from '../../src/control-plane/index-feed';
+import { renderThrownChain } from '@kinu.run/core/obs';
+import { accountObject } from '../../src/user/roster-socket';
 import { runControlAction, type ActionOutcome, type ControlAction } from '../../src/control-plane/actions';
 
 export * from '../../src/server';
@@ -70,7 +73,7 @@ function workspaceNamed(env: ProbeEnv, name: string): Promise<DurableObjectStub<
   return getAgentByName<ProbeEnv, ProductionOrchestrator>(env.OrchestratorAgent, name);
 }
 
-const ACCOUNT_METHODS = ['seedProfile', 'accountsOf', 'runDueWork', 'pushStale', 'deletedAt', 'mailTo', 'driveNames', 'previewKeys', 'signInRows', 'seedPriya', 'seedDana', 'seedSignIn', 'accountCensus', 'sentTo', 'deleteThis', 'signInCensus'];
+const ACCOUNT_METHODS = ['seedProfile', 'accountsOf', 'runDueWork', 'pushStale', 'deletedAt', 'mailTo', 'driveNames', 'previewKeys', 'signInRows', 'seedPriya', 'seedDana', 'seedSignIn', 'accountCensus', 'sentTo', 'deleteThis', 'signInCensus', 'readAsRequest'];
 
 /** The tables an account holds, by the prefixes `account-reset-probe.ts` counts, and its sent cards. */
 const ACCOUNT_TABLE_PREFIXES = ['user_', 'device_', 'cli_', 'codex_', 'share_cards_'];
@@ -169,6 +172,25 @@ export class CensusAccountDO extends UserDO {
       cards: sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM share_cards_sent WHERE recipient_user_id = ?', person.userId).one().n,
       overviews: sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM workspace_overviews WHERE instr(lower(overview), ?) > 0', person.email).one().n,
     };
+  }
+
+  /**
+   * `person` read as every signed-in request reads them: the session gate notes them in the control plane's index
+   * (`observeIdentity`, its work awaited here as the platform keeps it), and the route reaches their account
+   * (`accountObject`). What the account answered: its profile's email, or the refusal's code.
+   */
+  async readAsRequest(person: Person): Promise<string> {
+    const retained: Promise<unknown>[] = [];
+    const identity = { userId: person.userId, email: person.email, sub: 'dev', provider: 'dev' as const, displayName: null, authTime: Date.now() };
+
+    observeIdentity(this.env, identity, { retain: { waitUntil: (work) => { retained.push(work); } } });
+    await Promise.all(retained);
+
+    try {
+      return (await accountObject(this.env.UserDO, identity, await ownerCaller(this.env)).then(async (stub) => stub.getProfile(await ownerCaller(this.env))))?.email ?? 'none';
+    } catch (cause) {
+      return renderThrownChain({ cause });
+    }
   }
 
   /** The person's delete, then the account's alarms until its jobs have landed it, as the platform runs them. */

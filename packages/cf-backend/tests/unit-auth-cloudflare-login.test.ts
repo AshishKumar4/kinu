@@ -32,7 +32,7 @@ function setupEnv() {
     async builtinHasOwner() { return true; },
     async builtinInvitedEmail() { return null; },
     async builtinResetAccount() { return null; },
-    async ensureProfile(_caller: UserCaller, email: string) {
+    async signIn(_caller: UserCaller, email: string) {
       accounts.profiled.push(email);
 
       return bootstrappedProfile(email);

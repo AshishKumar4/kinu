@@ -13,7 +13,7 @@ import { SCRIPTED_MODEL_KEY_ENV, SCRIPTED_MODEL_ORIGIN, SCRIPTED_MODEL_SPEC } fr
 import { registerScriptedModel } from '../../scripts/scripted-model';
 import { MINECRAFT_CONTROL } from '../../scripts/minecraft-control-script';
 import { runTurn } from '../src/harness';
-import { onTrialBlock, prepareTrialAccount } from '../src/slot';
+import { onTrialBlock, prepareTrialAccount, signInTrialAccount } from '../src/slot';
 import { leaseBlock } from '../src/lease';
 import { kinuArmada, liveClaims } from '../../scripts/evals-lease';
 import { openWorkspace, resolveEvalTarget } from '../src/target';
@@ -41,6 +41,10 @@ const target = { ...base, identity: { ...base.identity, account } };
 const say = (line: string): void => { process.stdout.write(`[minecraft-control] ${line}\n`); };
 
 await onTrialBlock(lease, { targets: [target] }, async () => {
+  // Signed in first: an account a run before this one deleted is made again only so, never by a read.
+  const unsigned = await signInTrialAccount(target);
+
+  if (unsigned !== null) throw new Error(unsigned);
   await prepareTrialAccount(target, Date.now());
 
   await registerScriptedModel(target.origin, SCRIPTED_MODEL_ORIGIN, webHeaders(target.identity), key);

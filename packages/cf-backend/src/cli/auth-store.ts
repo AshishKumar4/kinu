@@ -94,7 +94,7 @@ export type CliAuthRecord = v.InferOutput<typeof CliAuthRecordSchema>;
 const RateBucketSchema = v.object({ count: v.number(), resetAt: v.number() });
 
 export type CliAuthAuthority = Pick<
-  UserDO, 'ensureProfile' | 'mintCliToken' | 'verifyCliToken' | 'verifyAccessToken'
+  UserDO, 'signIn' | 'mintCliToken' | 'verifyCliToken' | 'verifyAccessToken'
 >;
 
 export type CliAuthObject = Pick<CliAuthDO, 'claimCode' | 'deviceOf' | 'open' | 'read' | 'approve' | 'collect'>;
@@ -349,8 +349,8 @@ export function approveCliAuth<Id>(
 
     if (replayed !== null) return replayed;
     const owner = yield* Effect.promise(async () => ownerCaller(env));
-    yield* Effect.promise(() => idempotent('UserDO.ensureProfile', () => accountNamed(env.UserDO, identity.userId),
-      (user) => user.ensureProfile(owner, identity.email), { onRetry: logDoCallRetry }));
+    yield* Effect.promise(() => idempotent('UserDO.signIn', () => accountNamed(env.UserDO, identity.userId),
+      (user) => user.signIn(owner, identity.email), { onRetry: logDoCallRetry }));
 
     // The object approves only a pending request, so one approved or expired since the read is answered as it stands.
     const approved = yield* approvalOf(yield* Effect.promise(() => device.approve(identity.userId, identity.email, now)), identity, now);

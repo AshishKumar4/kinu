@@ -75,6 +75,9 @@ describe('deleting an account on real workerd', () => {
 
     expect(await probe().hashes()).toEqual({ 'ws-alpha': null, 'ws-beta': null });
 
+    // A request is no sign-in: it reads the account as deleted, and makes nothing again (owner, 2026-11-09).
+    expect(await probe().requested()).toContain('This account was deleted');
+
     const profile = await probe().freshProfile();
     expect(profile?.onboardedAt).toBeNull();
     expect(profile?.displayName).toBeNull();

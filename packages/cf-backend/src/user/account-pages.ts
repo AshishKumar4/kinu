@@ -22,7 +22,7 @@ import { landingRoutes, type LandingEnv } from '../landing-route';
 import { appShell, type AgentSocketAdmission } from '../front-routes';
 import { familyMount, ownerGate, rawPath, routeError, type FamilyEnv } from '../api/context';
 import type { AuthEnv, AuthIdentity } from '../auth/session';
-import type { IndexFeedEnv } from '../control-plane/index-feed';
+import type { ObserveIdentityEnv } from '../control-plane/index-feed';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
 import { accountNamed } from './workspace-placement';
@@ -49,7 +49,7 @@ export const accountShell = async <Id, E extends FamilyEnv<AccountShellEnv<Id>, 
   },
 });
 
-export type AccountPagesEnv = AuthEnv<DurableObjectId> & IndexFeedEnv<DurableObjectId> & AccountShellEnv<DurableObjectId>
+export type AccountPagesEnv = AuthEnv<DurableObjectId> & ObserveIdentityEnv<DurableObjectId> & AccountShellEnv<DurableObjectId>
   & RosterSocketEnv<DurableObjectId> & CliAgentTicketEnv<DurableObjectId>
   & WorkspaceOwnershipEnv<DurableObjectId, Pick<OrchestratorAgent, 'claimOwner' | 'resolveHostedActorRoute' | 'openMainIsolate'>>;
 

@@ -290,6 +290,7 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   counts(): Promise<Record<string, number>>;
   hashes(): Promise<Record<'ws-alpha' | 'ws-beta', string | null>>;
   reset(): Promise<{ ok: true; workspaces: number }>;
+  requested(): Promise<string>;
   freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null; workspaceCount: number } | null>;
   refuseTeardownOf(workspace: string, refuse: boolean): Promise<void>;
   pendingDeletes(): Promise<string[]>;
@@ -318,6 +319,7 @@ interface CensusAccountRpc extends Rpc.DurableObjectBranded {
   accountCensus(): Promise<Record<string, number>>;
   sentTo(person: CensusPerson): Promise<{ readonly cards: number; readonly overviews: number }>;
   deleteThis(): Promise<{ ok: true; workspaces: number }>;
+  readAsRequest(person: CensusPerson): Promise<string>;
   signInCensus(person: CensusPerson): Promise<number>;
   driveNames(tenant: string): Promise<{ readonly user: string; readonly shards: readonly string[] }>;
   previewKeys(workspace: string): Promise<number>;

@@ -93,7 +93,7 @@ function served(url: string, headers: Record<string, string> = {}, deployment: P
 /** Device-code sign-in on this machine: the dev identity stands for the signed-in browser. */
 function terminalSignIn() {
   const userDO = cliAccount({
-    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+    async signIn(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async mintCliToken(_caller: UserCaller, userId: string) {
       return { token: `ptc_${userId}_terminal`, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
     },
@@ -490,7 +490,7 @@ function cloudflareCallbackEnv() {
     async builtinHasOwner() { return true; },
     async builtinInvitedEmail() { return null; },
     async builtinResetAccount() { return null; },
-    async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
+    async signIn(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async registerBrowserSession(
       _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,
     ) { sessions.set(tokenHash, { expiresAt, identity }); },

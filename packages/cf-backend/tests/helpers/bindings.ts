@@ -219,7 +219,7 @@ export function cliAccount<Built extends Partial<CliRoutesAuthority>>(built: Bui
   const refuse = (member: string) => unreached('UserDO', member);
 
   return {
-    ensureProfile: refuse('ensureProfile'),
+    signIn: refuse('signIn'),
     getProfile: refuse('getProfile'),
     getConfig: refuse('getConfig'),
     setConfig: refuse('setConfig'),
@@ -282,7 +282,7 @@ export function mcpAccount<Built extends Partial<McpAuthority>>(built: Built): M
   const refuse = (member: string) => unreached('UserDO', member);
 
   return {
-    ensureProfile: refuse('ensureProfile'),
+    signIn: refuse('signIn'),
     mintCliToken: refuse('mintCliToken'),
     verifyCliToken: refuse('verifyCliToken'),
     verifyAccessToken: refuse('verifyAccessToken'),

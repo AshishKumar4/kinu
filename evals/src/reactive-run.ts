@@ -5,7 +5,7 @@ import { runTurn } from './harness';
 import { armEvolution, LAST_SEGMENTS, REACTIVE_ARMS, reactiveReply, THUMB_RATE, type ArmRun, type ReactiveArm, type SegmentResult } from './reactive';
 import type { KinuPublicSession } from './session';
 import { ARMS, openWorkspace } from './target';
-import { prepareTrialAccount } from './slot';
+import { prepareTrialAccount, signInTrialAccount } from './slot';
 import { type EvalTarget } from './workspace-roster';
 import { graded, taskTurns, type EvalTask, type EvalTurn } from './task';
 import { TrialTimeline } from './timeline';
@@ -87,6 +87,10 @@ export async function runArm(input: {
 }): Promise<ArmRun> {
   const say = (line: string) => process.stdout.write(`[reactive] ${input.arm} seed ${String(input.seed)}: ${line}\n`);
   const target = { ...input.target, identity: { ...input.target.identity, account: input.account } };
+  // Signed in first: an account a run before this one deleted is made again only so, never by a read.
+  const unsigned = await signInTrialAccount(target);
+
+  if (unsigned !== null) throw new Error(unsigned);
   await prepareTrialAccount(target, Date.now());
   const session = await openWorkspace(target, { subject: `reactive-${input.arm}-${String(input.seed)}`, mission: 'Help with each task as it comes.', model: input.model });
   const rng = new Seeded(input.seed * 7919 + REACTIVE_ARMS.indexOf(input.arm) + 1);
