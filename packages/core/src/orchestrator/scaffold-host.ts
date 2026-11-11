@@ -34,7 +34,7 @@ export interface ScaffoldBridgeOpts extends ScaffoldRunControl {
   modelContext?: ChatOptions['modelContext'];
   /** Resolved per call so mid-turn rebuilds land. */
   tools: () => ToolSet;
-  streamOptions?: Pick<ChatOptions, 'providerOptions' | 'onStep' | 'stopWhen' | 'budget'> & Pick<KinuExtension, 'prepareStep'>;
+  streamOptions?: Pick<ChatOptions, 'providerOptions' | 'reasoning' | 'onStep' | 'stopWhen' | 'budget'> & Pick<KinuExtension, 'prepareStep'>;
   /** Absent means the scaffold's spend is attributed to nothing. */
   spend?: ModelCallSpend;
 }
@@ -88,6 +88,7 @@ async function* streamScaffoldChat(
       ...frame, model: opts.model, modelSpec: opts.spec, modelContext: opts.modelContext ?? frame.modelContext,
       signal: opts.signal, extensions,
       providerOptions: opts.streamOptions?.providerOptions,
+      reasoning: opts.streamOptions?.reasoning,
       stopWhen: opts.streamOptions?.stopWhen,
       // Charged here: the turn records a program's boundary only.
       ...(opts.streamOptions?.budget !== undefined && { budget: opts.streamOptions.budget }),

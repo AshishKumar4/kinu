@@ -521,21 +521,16 @@ describe('turn-pipeline correctness wiring', () => {
     expect(said.at(-2)?.text).toContain('### slates (explicit /slates)');
   });
 
-  test("the turn request carries the tier's reasoning effort as its provider's option", async () => {
+  test("the turn request carries the tier's reasoning effort", async () => {
     // Two tiers that differ only in effort, so a constant or a chat-model default fails one of them.
-    const efforts: Array<ReasoningEffort | undefined> = [];
+    const efforts: Array<string | undefined> = [];
 
     for (const effort of ['low', 'high'] as const) {
       const { agent } = orchestratorHarness();
       agent.harnessInstallCatalog({ tiers: { default: { model: DEFAULT_WORKERS_AI_MODEL_SPEC, reasoningEffort: effort } } });
       const turn = await chatSessionTurns(agent).prepare({ messages: [{ role: 'user', content: effort }] });
 
-      const options = v.parse(
-        v.object({ workersAi: v.object({ reasoningEffort: v.picklist(['low', 'medium', 'high']) }) }),
-        turn?.providerOptions,
-      );
-
-      efforts.push(options.workersAi.reasoningEffort);
+      efforts.push(turn?.reasoning);
     }
 
     expect(efforts).toEqual(['low', 'high']);
@@ -555,7 +550,7 @@ describe('turn-pipeline correctness wiring', () => {
         resolveModelWithEffort: (spec, effort) => {
           asked.push({ spec, effort });
 
-          return { model: MERGE_ANSWER_MODEL, provider: 'mock', providerOptions: undefined };
+          return { model: MERGE_ANSWER_MODEL, provider: 'mock' };
         },
       },
       profile: async () => profile,

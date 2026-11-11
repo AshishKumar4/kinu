@@ -6,7 +6,6 @@ import type { ModelCallSpend } from '../events/model-call';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile } from '../profiles/resolve';
 import { resolveModelRoute } from '../profiles/model-route';
-import { reasoningEffortOptions } from '../providers/effort';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import type { ComposedRequest } from '../orchestrator/chat-session';
 import { createScaffoldCallTool, createScaffoldDefaultInference, createScaffoldLLMStream } from '../orchestrator/scaffold-host';
@@ -70,7 +69,7 @@ export function createScaffoldCandidateSurface(
         model: binding.bindModel(route.model), spec: route.model, modelContext,
         tools: () => tools, spend: binding.spend,
         signal: binding.signal, assertActive: binding.assertActive,
-        streamOptions: { providerOptions: reasoningEffortOptions(route.reasoningEffort, route.model) },
+        streamOptions: { reasoning: route.reasoningEffort ?? undefined },
       },
     };
   };

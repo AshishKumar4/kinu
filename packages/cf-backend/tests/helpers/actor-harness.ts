@@ -1197,6 +1197,7 @@ function requestView({ request, model, identity, tools, history }: RecordedCall)
     tools,
     activeTools: request.tools?.map((tool) => tool.name),
     providerOptions: request.providerOptions,
+    reasoning: request.reasoning,
   };
 }
 
@@ -1425,7 +1426,7 @@ export function chatSessionTurns(agent: HarnessOrchestratorAgent): TurnHarness {
 
     const parked = {
       request: request === null
-        ? { identity, messages: [], prompt: [], system: undefined, model, tools: {}, activeTools: undefined, providerOptions: undefined }
+        ? { identity, messages: [], prompt: [], system: undefined, model, tools: {}, activeTools: undefined, providerOptions: undefined, reasoning: undefined }
         : requestView({ request, model, identity, tools: agent.harnessPreparedTools(identity.turnId), history: await agent.harnessAdmittedHistory() }),
       answer, landed, identity,
     };

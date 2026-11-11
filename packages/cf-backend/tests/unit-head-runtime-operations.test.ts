@@ -105,7 +105,7 @@ function runtimeWith(text: string) {
       resolveModelWithEffort: (spec, effort) => {
         resolved.push({ spec, effort });
 
-        return { model: mergeModel(text, calls), provider: 'mock', providerOptions: undefined };
+        return { model: mergeModel(text, calls), provider: 'mock' };
       },
     },
     profile: async () => mergePolicyProfile(),

@@ -22,7 +22,6 @@ import { effectiveRoleCatalog } from '../profiles/catalog';
 import { ownProfileChoices, resolveTurnProfile, type PinnedProfile, type ProfileAuthorityInputs, type ResolvedTurnProfile } from '../profiles/resolve';
 import type { FrozenAuthority } from './turn-facts';
 import type { TierId } from '../types/profile';
-import { reasoningEffortOptions } from '../providers/effort';
 import { diagnostics, KinuError, settleSync } from '../obs/index';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
 import { parseModelSpec, type CacheRetention } from '../providers/types';
@@ -380,7 +379,6 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
   };
 
   const { provider, modelId } = parseModelSpec(spec);
-  const providerOptions = reasoningEffortOptions(profile.tier.reasoningEffort, spec);
 
   const system = buildSystemPromptParts(sources.rt, prompt);
   const { routed } = models;
@@ -401,7 +399,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     ...(sources.operations !== undefined && { operations: sources.operations }),
     ...(sources.observeStream !== undefined && { observeStream: sources.observeStream }),
     ...(sources.paceStep !== undefined && { paceStep: sources.paceStep }),
-    ...(providerOptions !== undefined && { providerOptions }),
+    reasoning: profile.tier.reasoningEffort ?? undefined,
     ...routedChat(models, spec, profile),
   };
 
@@ -446,7 +444,7 @@ function routedChat(models: TurnModelSources, spec: string, profile: ResolvedTur
         spec: fallback,
         accepts: models.catalog.acceptedMedia(model),
         window: models.catalog.window(model),
-        bind: () => ({ model: models.resolve(fallback), provider: fallbackProvider, providerOptions: reasoningEffortOptions(reasoningEffort, fallback) }),
+        bind: () => ({ model: models.resolve(fallback), provider: fallbackProvider, reasoning: reasoningEffort ?? undefined }),
       };
     }),
   };

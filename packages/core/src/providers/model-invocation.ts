@@ -26,7 +26,7 @@ export type GenerateResult = Awaited<ReturnType<typeof generateText>>;
 export type StreamRequest = Parameters<typeof streamText>[0];
 
 /** A structured call's request: one prompt, and only the options it sends on. */
-export type ObjectRequest = Pick<StreamRequest, 'model' | 'system' | 'maxRetries' | 'abortSignal' | 'providerOptions'> & { readonly prompt: string };
+export type ObjectRequest = Pick<StreamRequest, 'model' | 'system' | 'maxRetries' | 'abortSignal' | 'providerOptions' | 'reasoning'> & { readonly prompt: string };
 
 export interface ReportedCall {
   readonly spend: ModelCallSpend;

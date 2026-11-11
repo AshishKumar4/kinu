@@ -10,7 +10,7 @@ import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture, MergeOutputSchema,
-  MissionGovernor, reasoningEffortOptions, explorationActorKey, defaultLoopOrigin,
+  MissionGovernor, explorationActorKey, defaultLoopOrigin,
   initWorkspaceSchema, RunEventRecorder, startBranchHead, workspaceSpend, createAgentStores, BackgroundJobRunner,
   CONFINED_BACKGROUNDABLE_TOOLS,
   type ReasoningEffort,
@@ -115,10 +115,7 @@ function headDeps(
     bindMergeModel: (route) => {
       probe?.asked.push({ spec: route.model, effort: route.reasoningEffort });
 
-      return {
-        model,
-        providerOptions: reasoningEffortOptions(route.reasoningEffort, 'openai/gpt-6.1') ?? {},
-      };
+      return { model, reasoning: route.reasoningEffort ?? undefined };
     },
     reportModelCall: () => {},
     webSearch: stubWeb,
@@ -178,6 +175,7 @@ const aHeadInput = (over?: Partial<HeadInput>): HeadInput => ({
 
 function fakeHeadsModel(capture?: (options: {
   maxOutputTokens?: number;
+  reasoning?: string;
   providerOptions?: LanguageModelV2CallOptions['providerOptions'];
 }, isMerge: boolean) => void): LanguageModel {
   const usage = { inputTokens: 8, outputTokens: 12, totalTokens: 20 };
@@ -372,6 +370,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   test('the routed effort reaches the provider, and no output cap does', async () => {
     let mergeOptions: {
       maxOutputTokens?: number;
+      reasoning?: string;
       providerOptions?: LanguageModelV2CallOptions['providerOptions'];
     } | undefined;
 
@@ -391,11 +390,9 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     });
 
     expect(mergeOptions?.maxOutputTokens).toBeUndefined();
-    // The call's retries ride beside the effort for the model stack, which this bare test model is not inside.
-    expect(mergeOptions?.providerOptions).toEqual({
-      openai: { reasoningEffort: MERGE_POLICY_BINDING.effort },
-      kinu: { retries: expect.any(Number) },
-    });
+    expect(mergeOptions?.reasoning).toBe(MERGE_POLICY_BINDING.effort);
+    // The call's retries ride in its provider options for the model stack, which this bare test model is not inside.
+    expect(mergeOptions?.providerOptions).toEqual({ kinu: { retries: expect.any(Number) } });
   });
 
   test('a head advertises and invokes the workspace\'s crafted tools, as every actor does', async () => {

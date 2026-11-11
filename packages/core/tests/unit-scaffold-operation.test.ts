@@ -164,10 +164,7 @@ for (const provider of ['openai', 'anthropic']) {
     expect(resolutions).toBe(1);
     expect(bound).toEqual([spec]);
     expect(model.doStreamCalls).toHaveLength(1);
-    expect(model.doStreamCalls[0]?.providerOptions?.[provider]).toMatchObject(
-      provider === 'openai' ? { reasoningEffort: 'high' } : { effort: 'high' },
-    );
-    expect(model.doStreamCalls[0]?.providerOptions?.workersAi).toBeUndefined();
+    expect(model.doStreamCalls[0]).toMatchObject({ reasoning: 'high' });
     // The live turn's frame: its system prompt, then its dynamic block (backend, model, date) before the task.
     const sent = model.doStreamCalls[0]?.prompt ?? [];
     expect(sent[0]).toEqual({ role: 'system', content: 'the turn system prompt' });
