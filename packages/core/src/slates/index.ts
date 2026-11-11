@@ -33,12 +33,10 @@ export type { DurableAppIdentity, DurableApps } from './durable-app';
 
 export { SIGNED_OUT_VIEWER, SlateLiveShareStore, initSlateLiveShareTables } from './live-shares';
 
-export { declareShareSpend } from './share-viewers';
-
 export {
   ANONYMOUS_SUBJECT_PREFIX, SlateShareChats, appAgentAsk, asksAppAgent, appAgentConsented, appAgentKey, appAgentMessage,
-  appAgentSystem, appAgentTranscript, appAgentTurn, appAgentVisitorPayer, fittedHistory, identifiedOnlyBySource, visitorLabel,
-  type AppAgentAbout, type AppAgentConversation, type AppAgentEntry, type AppAgentGrant, type AppAgentNeeds, type AppAgentPayer, type AppAgentSession, type ShareChat,
+  appAgentSystem, appAgentTool, appAgentTranscript, appAgentVisitorPayer, visitorLabel, APP_AGENT_TOOL,
+  type AppAgentAbout, type AppAgentConversation, type AppAgentEntry, type AppAgentGrant, type AppAgentModel, type AppAgentNeeds, type AppAgentPayer, type AppAgentSession, type ShareChat,
 } from './app-agent';
 
 export { confinedTo } from './scoped-reader';

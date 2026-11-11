@@ -72,6 +72,7 @@ export function workerEnv(reached: Partial<Env> = {}): Env {
     },
     OrchestratorAgent: unreachableObjects('OrchestratorAgent'),
     UserDO: unreachableObjects('UserDO'),
+    APP_AGENT: unreachableObjects('APP_AGENT'),
     MonitorDO: unreachableObjects('MonitorDO'),
     ControlPlaneDO: unreachableObjects('ControlPlaneDO'),
     KinuDevbox: unreachableObjects('KinuDevbox'),

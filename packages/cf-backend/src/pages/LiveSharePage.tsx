@@ -150,6 +150,7 @@ export default function LiveSharePage() {
       <header className="flex h-11 shrink-0 items-center gap-3 border-b p-border px-4">
         <a href="/" aria-label="Kinu home" className="flex shrink-0 items-center"><KinuLogo /></a>
         <span className="t-item min-w-0 flex-1 truncate" data-shared-title>{opened?.title ?? "Shared slate"}</span>
+        {opened?.mode === "owner" && <span className="t-meta min-w-0 truncate p-text-3" data-shared-lent>Its assistant runs on its owner&apos;s model, and they can read your chat with it.</span>}
       </header>
       {opened !== null && <SharedSlate workspace={workspace} share={share} opened={opened} />}
       {signedOut && <SignInToOpen />}

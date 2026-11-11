@@ -64,7 +64,7 @@ import {
   APP_AGENT_CONSENT, appAgentConsented, EffectApprovals, SlateConsentSchema, SlateConsentStore, partAiCall, partCallVerdict, resolvePartCall,
   type AppAgentGrant, type PartAiAnswer, type PartConnectionAnswer, type SlateAiRoute, type SlateConsent,
 } from '@kinu.run/core/slates';
-import { appAgentObject } from '../app-agent-do';
+import { appAgentObject } from '../app-agent-object';
 import { McpToolSurfaceSchema } from '@kinu.run/core';
 import { parseJsonValue } from '../../../core/src/utils/json';
 import { Effect } from 'effect';

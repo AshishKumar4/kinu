@@ -2829,5 +2829,7 @@ export type {
 
 export { refusedRun, writesSnapshotRows } from './subagents/agent-isolate';
 
+export { runAppAgentTurn, type AppAgentChat, type AppAgentTurn } from './orchestrator/app-agent-turn';
+
 export { describeAgentTools } from './subagents/tool-descriptors';
 

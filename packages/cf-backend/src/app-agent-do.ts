@@ -9,18 +9,22 @@
  * a provider its machine carries (Codex), whose every request crosses its device socket as it does everywhere.
  */
 import { DurableObject } from 'cloudflare:workers';
-import type { ModelMessage } from 'ai';
+import type { LanguageModel, ModelMessage } from 'ai';
 import {
-  actorAffinity, ModelCatalogSession, objectNamed, ownerCaller, specModelInfo,
+  actorAffinity, DynamicContextLedger, ExtensionHost, ModelCatalogSession, ownerCaller, parseModelSpec, runAppAgentTurn, specModelInfo,
   type AccountSpend, type AuthResolution, type CredentialSummary, type JsonValue, type ModelCallReport, type UserCaller,
 } from '@kinu.run/core';
 import {
-  appAgentKey, appAgentMessage, appAgentSystem, appAgentTranscript, appAgentTurn, fittedHistory,
-  type AppAgentConversation, type AppAgentEntry, type AppAgentSession,
+  appAgentKey, appAgentMessage, appAgentSystem, appAgentTranscript,
+  type AppAgentConversation, type AppAgentEntry, type AppAgentModel, type AppAgentSession,
 } from '@kinu.run/core/slates';
 import { KinuError, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
-import { createAgentProviderRegistry, userCredentials, type UserCredentialSource } from './providers/agent-registry';
+import {
+  compactionDiagnostics, compactionTranscriptPath, createCompactionExtension, createModelSummarizer,
+  type ArchiveIndexStore, type ArchiveRange, type CompactionExtensionDeps,
+} from '@kinu.run/compaction';
+import { createAgentProviderRegistry, routedModelReads, userCredentials, type UserCredentialSource } from './providers/agent-registry';
 import { accountNamed } from './user/workspace-placement';
 import { recordSlateAi } from './user/slate-ai-account';
 
@@ -53,22 +57,23 @@ function messageKey(at: number): string {
  * provider refused one is asked again, and replaces it.
  */
 function askCredentials(source: UserCredentialSource): UserCredentialSource {
-  const auths = new Map<string, Promise<AuthResolution | null>>();
-  let listed: Promise<CredentialSummary[]> | undefined;
-
-  const asked = (key: string, held: Promise<AuthResolution | null>) => {
-    auths.set(key, held);
-    // A failed read is no credential: the next request asks again.
-    held.catch(() => { if (auths.get(key) === held) auths.delete(key); });
-
-    return held;
-  };
+  const auths = new Map<string, AuthResolution | null>();
+  let listed: CredentialSummary[] | undefined;
 
   return {
     ...source,
-    getAuth: async (key, opts) => (opts === undefined ? auths.get(key) ?? asked(key, source.getAuth(key)) : asked(key, source.getAuth(key, opts))),
+    getAuth: async (key, opts) => {
+      const held = opts === undefined ? auths.get(key) : undefined;
+
+      if (held !== undefined) return held;
+      const auth = await source.getAuth(key, opts);
+
+      auths.set(key, auth);
+
+      return auth;
+    },
     listCredentials: async () => {
-      listed ??= source.listCredentials();
+      listed ??= await source.listCredentials();
 
       return listed;
     },
@@ -116,66 +121,113 @@ function keep(storage: DurableObjectStorage, messages: readonly ModelMessage[]):
   });
 }
 
+/** Where compaction keeps a conversation's plan, archive index and folded transcripts: the conversation's own object. */
+const PLAN_PREFIX = 'c:plan:';
+
+const ARCHIVE_PREFIX = 'c:archive:';
+
+const TRANSCRIPT_PREFIX = 'c:transcript:';
+
 /**
- * One turn of the conversation `storage` keeps, on the model its payer's account named for it: the person's message,
- * each step admitted by the session first, its spend told to the share it was lent on and kept in the payer's account.
+ * The compaction every agent's turn runs (`@kinu.run/compaction`), its stores this conversation's own: an app agent has
+ * no files of its own, and its chat carries none to move, since the app answers it JSON alone.
+ */
+function conversationCompaction(storage: DurableObjectStorage, summarizer: { readonly model: () => LanguageModel; readonly spec: string; readonly report: (report: ModelCallReport) => void }): ExtensionHost {
+  const archive: ArchiveIndexStore = {
+    list: (sessionKey) => storage.kv.get<ArchiveRange[]>(`${ARCHIVE_PREFIX}${sessionKey}`) ?? [],
+    append: (sessionKey, range) => {
+      const held = storage.kv.get<ArchiveRange[]>(`${ARCHIVE_PREFIX}${sessionKey}`) ?? [];
+
+      if (!held.some((each) => each.rangeHash === range.rangeHash)) storage.kv.put(`${ARCHIVE_PREFIX}${sessionKey}`, [...held, range]);
+    },
+    clear: (sessionKey) => { storage.kv.delete(`${ARCHIVE_PREFIX}${sessionKey}`); },
+  };
+
+  const plans: CompactionExtensionDeps['ports']['plans'] = {
+    load: (sessionKey) => storage.kv.get(`${PLAN_PREFIX}${sessionKey}`) ?? null,
+    save: (sessionKey, snapshot) => {
+      if (snapshot === null) storage.kv.delete(`${PLAN_PREFIX}${sessionKey}`);
+      else storage.kv.put(`${PLAN_PREFIX}${sessionKey}`, snapshot);
+    },
+  };
+
+  const transcripts: CompactionExtensionDeps['ports']['transcripts'] = {
+    citablePath: compactionTranscriptPath,
+    write: async (relativePath, content) => {
+      storage.kv.put(`${TRANSCRIPT_PREFIX}${relativePath}`, content);
+
+      return { absolutePath: relativePath };
+    },
+  };
+
+  return new ExtensionHost().register(createCompactionExtension({
+    ports: { transcripts, plans, logger: compactionDiagnostics },
+    archive,
+    summarize: createModelSummarizer(summarizer.model, { source: 'compaction', report: summarizer.report }, () => summarizer.spec),
+    ephemeral: new DynamicContextLedger(),
+    attachments: { files: () => settleSync(Effect.fail(new KinuError('unsupported', "An app agent's chat carries no files to move"))) },
+  }));
+}
+
+/**
+ * One turn of the conversation `storage` keeps, on the model its payer's account named for it, through the chat loop
+ * every agent's turn runs (core orchestrator/app-agent-turn.ts); its spend kept in the payer's account once it ends.
  */
 async function turnOf(env: Env, storage: DurableObjectStorage, input: {
   readonly conversation: AppAgentConversation;
   readonly caller: UserCaller;
-  readonly grant: { readonly spec: string; readonly tier: string };
+  readonly grant: AppAgentModel;
   readonly request: AppAgentAskRequest;
   readonly session: AppAgentSession;
   readonly signal: AbortSignal;
   readonly write: (text: string) => void;
 }): Promise<void> {
-  const { conversation, caller, session } = input;
+  const { conversation, caller, grant, session } = input;
   const { payer, workspace } = conversation;
   const account = accountNamed(env.UserDO, payer.userId);
   const registry = createAgentProviderRegistry({ env, userDO: askCredentials(userCredentials(() => account, caller)), appTitle: 'Kinu' });
-  const spec = registry.normalizeSpecSync(input.grant.spec);
+  const key = appAgentKey(conversation);
+  const affinity = actorAffinity({ name: `app-agent:${key}`, workspaceId: workspace });
+  const spec = registry.normalizeSpecSync(grant.spec);
+  const fallbacks = grant.fallbacks.map((fallback) => ({ ...fallback, spec: registry.normalizeSpecSync(fallback.model) }));
   const pricing = new ModelCatalogSession({ effectiveSpec: () => spec, lookup: async (named) => specModelInfo(registry.registry, registry.deps, named), measured: () => null });
   const spends: AccountSpend[] = [];
-  const reports: ModelCallReport[] = [];
 
-  const record = (report: ModelCallReport): void => {
-    recordSlateAi({ env, spent: (spend) => { spends.push(spend); } }, workspace, report, pricing);
-    reports.push(report);
+  const report = (call: ModelCallReport): void => {
+    recordSlateAi({ env, spent: (spend) => { spends.push(spend); } }, workspace, call, pricing);
   };
 
-  // A step's spend is told to the share it was lent on before the next step is admitted, so the share's day bounds it.
-  const told = async (): Promise<void> => {
-    for (const report of reports.splice(0)) await session.spent(report.usage);
-  };
-
-  const [about] = await Promise.all([session.about(), pricing.warm([spec])]);
-  const system = appAgentSystem(about);
+  const [about] = await Promise.all([session.about(), pricing.warm([spec, ...fallbacks.map((fallback) => fallback.spec)])]);
+  const model = registry.resolveModel(spec, affinity);
+  const routed = routedModelReads(registry);
 
   try {
-    await appAgentTurn({
-      model: registry.resolveModel(spec, actorAffinity({ name: `app-agent:${appAgentKey(conversation)}`, workspaceId: workspace })), spec, system,
-      history: fittedHistory(messagesOf(storage), pricing.window(spec).contextWindow, system),
-      asked: appAgentMessage(input.request.text, input.request.data),
-      session: {
-        about: async () => about,
-        call: async (method, args) => session.call(method, args),
-        spent: async (usage) => session.spent(usage),
-        admit: async () => { await told(); await session.admit(); },
+    await runAppAgentTurn({
+      chat: {
+        model, modelSpec: spec, modelContext: { ...await pricing.contextFor(spec), provider: parseModelSpec(spec).provider },
+        retries: grant.retries,
+        ...(grant.reasoning !== null && { reasoning: grant.reasoning }),
+        fallbacks: fallbacks.map((fallback) => ({
+          spec: fallback.spec, accepts: pricing.acceptedMedia(fallback.spec), window: pricing.window(fallback.spec),
+          bind: () => ({ model: registry.resolveModel(fallback.spec, affinity), provider: parseModelSpec(fallback.spec).provider, ...(fallback.reasoning !== null && { reasoning: fallback.reasoning }) }),
+        })),
+        attemptOf: async (served) => routed.attemptFor(served),
+        countInputTokens: async (counted) => routed.countInputTokens(spec, counted),
+        extensions: conversationCompaction(storage, { model: () => model, spec, report }),
+        conversationKey: key,
+        signal: input.signal,
       },
-      signal: input.signal,
-      spend: { source: 'slate', report: record, operations: () => {} },
-      write: input.write,
+      system: appAgentSystem(about),
+      history: messagesOf(storage),
+      asked: appAgentMessage(input.request.text, input.request.data),
+      session,
       keep: (messages) => { keep(storage, messages); },
+      write: input.write,
+      report,
     });
-    await told();
   } finally {
     if (spends.length > 0) await account.appAgentSpent(caller, spends);
   }
-}
-
-/** The object `conversation` is kept in. */
-export function appAgentObject(env: Pick<Env, 'APP_AGENT'>, conversation: AppAgentConversation): DurableObjectStub<AppAgentDO> {
-  return objectNamed(env.APP_AGENT, appAgentKey(conversation));
 }
 
 export class AppAgentDO extends DurableObject<Env> {

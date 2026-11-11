@@ -78,19 +78,14 @@ const DRIVER = [
   '}',
 ].join('\n');
 
-/**
- * A class that reads `ai.stream`'s text, or the reply `agent.ask` answers as UTF-8 bytes, as its page would, a piece at a
- * time, and answers what it read and in how many pieces; or, `ask-whole`, reads the reply as the slates skill writes it.
- */
+/** A class that reads `ai.stream`'s text as its page would, a piece at a time, and answers what it read and in how many pieces. */
 const TYPIST = [
   'import { SlateObject } from "kinu:slate";',
   'export class Slate extends SlateObject {',
   '  async fetch(request) {',
   '    const url = new URL(request.url);',
   '    const say = url.searchParams.get("say");',
-  '    const via = url.searchParams.get("via");',
-  '    if (via === "ask-whole") return Response.json([await new Response((await this.env.workspace.agent.ask({ text: say })).reply).text()]);',
-  '    const stream = via === "ask" ? (await this.env.workspace.agent.ask({ text: say })).reply.pipeThrough(new TextDecoderStream()) : await this.env.workspace.ai.stream({ prompt: say });',
+  '    const stream = await this.env.workspace.ai.stream({ prompt: say });',
   '    const pieces = [];',
   '    for await (const piece of stream) {',
   '      pieces.push(piece);',
@@ -257,9 +252,6 @@ export class SlateShareProbeDO extends DurableObject<SlateHostDeps['env']> {
       dispatch: async (_caller, route, context) => {
         // The actor's half of `ai.stream`: the model's text, a piece at a time, as the actor hands it over.
         if (route.kind === 'ai' && route.stream === true) return typedPieces(['Typ', 'ing ', route.prompt], this.#typing.promise);
-
-        // And of `agent.ask`: the reply of the turn the message lands in, as the actor answers it at once.
-        if (route.kind === 'agent' && route.ask === true) return { reply: typedPieces(['The ', 'agent ', 'says ', route.text], this.#typing.promise) };
 
         // The typist's word that it has text already: the model's last piece waits on it.
         if (route.kind === 'namespace' && route.member === 'fs.write' && route.args[0] === '/typed') {
@@ -440,19 +432,16 @@ export class SlateShareProbeDO extends DurableObject<SlateHostDeps['env']> {
   /** Settled once the typist has written down text it read: its stream's last piece waits on it. */
   #typing = Promise.withResolvers<void>();
 
-  /** What the typist slate's class read from `ai.stream`, or `agent.ask`'s reply, through the runner and the binding. */
-  async typed(say: string, via: 'stream' | 'ask' | 'ask-whole' = 'stream'): Promise<string> {
+  /** What the typist slate's class read from `ai.stream`, through the runner and the binding. */
+  async typed(say: string): Promise<string> {
     this.#typing = Promise.withResolvers<void>();
-
-    // Read whole, the reply's last piece cannot wait on the reader having text already.
-    if (via === 'ask-whole') this.#typing.resolve();
     const files = this.vfs.as(CRED_KERNEL);
     files.mkdir('/slates/typist', { recursive: true });
     files.writeFile('/slates/typist/package.json', JSON.stringify({ main: 'server.js' }));
     files.writeFile('/slates/typist/server.js', TYPIST);
     const process = await this.host.ensure(ROOT_SLATE_CALLER, 'typist');
 
-    return await (await process.request(new Request(`https://slate.invalid/?say=${encodeURIComponent(say)}&via=${via}`))).text();
+    return await (await process.request(new Request(`https://slate.invalid/?say=${encodeURIComponent(say)}`))).text();
   }
 
   /** What the owner's driver slate answers when its class connects `session`. */

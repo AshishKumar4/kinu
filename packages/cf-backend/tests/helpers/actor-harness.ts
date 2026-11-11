@@ -8,6 +8,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { Database } from 'bun:sqlite';
 import { setSystemTime } from 'bun:test';
 import type { AgentContext, Connection, WSMessage } from 'agents';
+import { MessageType } from 'agents/chat';
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
@@ -465,22 +466,25 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       this._deliveryWatchers.add(watcher);
     });
   }
+  /** Main's words as the room sends its clients each streamed chunk (chat-transport's relay): what a client has seen. */
+  override broadcast(message: string | ArrayBuffer | ArrayBufferView, without?: string[]): void {
+    const frame = typeof message === 'string' ? v.safeParse(v.pipe(v.string(), v.parseJson(), v.object({ type: v.literal(MessageType.CF_AGENT_USE_CHAT_RESPONSE), body: v.string() })), message) : null;
+    const chunk = frame?.success === true ? v.safeParse(v.pipe(v.string(), v.parseJson(), v.object({ type: v.literal('text-delta'), delta: v.string() })), frame.output.body) : null;
+
+    if (chunk?.success === true) {
+      this._deliveredText.push(chunk.output.delta);
+
+      for (const watcher of this._deliveryWatchers) watcher();
+    }
+
+    super.broadcast(message, without);
+  }
   protected override get chatTransport(): ChatWireTransport {
     const transport = super.chatTransport;
 
     if (!this._observedTransport) {
       this._observedTransport = true;
       const deliver = transport.deliver.bind(transport);
-      const feed = this.replies.feed.bind(this.replies);
-
-      // Main's words reach this room as its isolate streams them, each fed to the replies it answers.
-      this.replies.feed = (turnId, delta) => {
-        this._deliveredText.push(delta);
-
-        for (const watcher of this._deliveryWatchers) watcher();
-
-        feed(turnId, delta);
-      };
 
       transport.deliver = (event) => {
         if (event.type === 'turn-start') this._lastTurnStart = { turnId: event.turnId, messageId: event.messageId };

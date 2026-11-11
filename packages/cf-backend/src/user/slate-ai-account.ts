@@ -6,11 +6,11 @@
 import * as v from 'valibot';
 import {
   accountSpendOfCall, DEFAULT_ROLE_ID, webSearchChainOf, pricedModelCallEvent, loadProfileAuthorityInputs, ModelCatalogSession, resolveTurnProfile, specModelInfo,
-  type AccountSpend, type ModelCallReport, type ProfileCatalogEnvelope, type SlateSurfaceValue, type Usage, type UserCaller,
+  type AccountSpend, type ModelCallReport, type ProfileCatalogEnvelope, type ResolvedTurnProfile, type SlateSurfaceValue, type Usage, type UserCaller,
 } from '@kinu.run/core';
 import { recordModelRow } from '@kinu.run/core/analytics';
 import { OwnedModelServices, type OwnedModelEnv } from '../owned-model-services';
-import { slateAiAnswer, type SlateAiRoute } from '@kinu.run/core/slates';
+import { slateAiAnswer, type AppAgentModel, type SlateAiRoute } from '@kinu.run/core/slates';
 
 /** What of the account the call reads and writes: its name, catalog and credentials' revision, and its own spend. */
 export interface AccountSlateAiHost<Id> {
@@ -60,7 +60,7 @@ export function recordSlateAi<Id>(host: Pick<AccountSlateAiHost<Id>, 'env' | 'sp
  * resolves it, its services and its own priced catalog with it.
  */
 async function accountModel<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, workspace: string, tier: string | undefined)
-  : Promise<{ readonly services: OwnedModelServices<Id>; readonly pricing: ModelCatalogSession; readonly spec: string; readonly tier: string }> {
+  : Promise<{ readonly services: OwnedModelServices<Id>; readonly pricing: ModelCatalogSession; readonly profile: ResolvedTurnProfile }> {
   // The rate is the account's own provider catalog's, read as a workspace reads its model's (`OrchestratorAgent.catalogEntry`).
   const pricing = new ModelCatalogSession({
     effectiveSpec: () => '', lookup: async (spec) => specModelInfo(services.providerRegistry().registry, services.providerRegistry().deps, spec), measured: () => null,
@@ -73,26 +73,31 @@ async function accountModel<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller
     ...inputs, roleId: DEFAULT_ROLE_ID, explicitTier: tier, workMode: 'build', availableTools: [], activeSkills: [],
   });
 
-  return { services, pricing, spec: profile.tier.model, tier: profile.tier.id };
+  return { services, pricing, profile };
 }
 
 /** One `ai.run` or `ai.stream`, resolved and run as this account's own: no tier, model or key of the slate owner's. */
 export async function accountSlateAi<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
   const { workspace } = request;
-  const { services, pricing, spec, tier } = await accountModel(host, caller, workspace, request.route.tier);
+  const { services, pricing, profile } = await accountModel(host, caller, workspace, request.route.tier);
+  const spec = profile.tier.model;
 
   await pricing.warm([spec]);
 
-  return slateAiAnswer(request.route, { spec, tier }, {
+  return slateAiAnswer(request.route, { spec, tier: profile.tier.id }, {
     resolveModel: (named) => services.resolveModel(named), report: (report) => { recordSlateAi(host, workspace, report, pricing); }, operations: () => {},
   });
 }
 
-/** An app agent's model on this account (core slates/app-agent.ts): its default tier, and its credentials' revision. */
-export async function accountAppAgentModel<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, workspace: string): Promise<{ readonly spec: string; readonly tier: string; readonly credentialsRevision: number }> {
-  const { spec, tier } = await accountModel(host, caller, workspace, undefined);
+/** An app agent's model on this account (core slates/app-agent.ts): its default tier as its own turns run it. */
+export async function accountAppAgentModel<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, workspace: string): Promise<AppAgentModel> {
+  const { tier, retries } = (await accountModel(host, caller, workspace, undefined)).profile;
 
-  return { spec, tier, credentialsRevision: await host.credentialsRevision(caller) };
+  return {
+    spec: tier.model, tier: tier.id, reasoning: tier.reasoningEffort, retries,
+    fallbacks: tier.fallbacks.map(({ model, reasoningEffort }) => ({ model, reasoning: reasoningEffort })),
+    credentialsRevision: await host.credentialsRevision(caller),
+  };
 }
 
 /** The tally's usage columns, each with the `Usage` field it sums. */

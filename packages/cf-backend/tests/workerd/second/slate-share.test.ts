@@ -100,7 +100,10 @@ it('a share is granted what its graph observes, across the app hop and its cycle
     'issues:mcp.github.issue_read', 'issues:memory.recall', 'issues:slates.triage-digest.summary', 'issues:workspace.fs.text',
     'triage-digest:slates.issues.refresh', 'triage-digest:workspace.fs.text',
   ]);
-  expect(await granted('users', [{ slate: 'issues', namespace: 'agent', member: 'send' }])).toContain('issues:agent.send');
+  // No share reaches its owner's agent: a visitor talks to the app agent, which no grant names.
+  expect(await probe.operationAs('root', {
+    op: 'share', id: 'issues', visibility: 'users', approved: [{ slate: 'issues', namespace: 'agent', member: 'send' }],
+  })).toMatchObject({ ok: false, reason: 'bad_input' });
 
   // What only the agent does is refused where the host routes it, so it never enters a graph or a grant. Subagents the
   // owner's own slate hired are in its graph, as delegating, and no share carries them or may be approved them.
@@ -408,20 +411,3 @@ it('a slate\'s class reads ai.stream a piece at a time, as the model writes it, 
   expect(v.parse(v.array(v.string()), pieces).length).toBeGreaterThan(1);
 });
 
-// The slates skill (core skills/builtins.ts) writes `new Response((await workspace.agent.ask({ text })).reply).text()`:
-// a reply decoded to text in the slate failed it with "This ReadableStream did not return bytes" (rc22 chat-app evals).
-it('a slate\'s class reads agent.ask\'s reply as the slates skill writes it, its UTF-8 bytes read as text', async () => {
-  const probe = env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName('asker-whole'));
-
-  const answered = await probe.typed('hello', 'ask-whole');
-
-  expect(JSON.parse(answered), answered).toEqual(['The agent says hello']);
-});
-
-it('a slate\'s class reads agent.ask\'s reply a piece at a time, the answer\'s stream carried across the binding', async () => {
-  const probe = env.SLATE_SHARE_PROBE.get(env.SLATE_SHARE_PROBE.idFromName('asker'));
-  const pieces = v.parse(v.array(v.string()), JSON.parse(await probe.typed('hello', 'ask')));
-
-  expect(pieces.join('')).toBe('The agent says hello');
-  expect(pieces.length).toBeGreaterThan(1);
-});

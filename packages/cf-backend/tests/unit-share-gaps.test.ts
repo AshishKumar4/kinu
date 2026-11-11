@@ -1049,7 +1049,7 @@ test("a share's one link is the app's page for it: a public share opens there si
   const open = async (share: string) => present(await openShare(world, { workspace: 'issues-owner', share }), 'the open answer');
 
   expect(await jsonBody(await open(made.share.id), LiveShareOpenSchema))
-    .toEqual({ url: present(await world.owner.agent.liveShareUrl(made.share.handle), 'the share host'), slate: 'issues', title: 'Issue triage' });
+    .toMatchObject({ url: present(await world.owner.agent.liveShareUrl(made.share.handle), 'the share host'), slate: 'issues', title: 'Issue triage', mode: 'own', signedIn: false });
 
   const named = await sharePublic(world, 'users');
 

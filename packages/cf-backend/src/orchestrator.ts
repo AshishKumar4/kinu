@@ -234,6 +234,7 @@ import { Hono } from 'hono';
 import { beneath, rawPath, rethrow } from './api/context';
 import { ownedByAnotherAccount } from './user/workspace-ownership';
 import { workspaceOwner, type LiveShareReading, type SlateEditor, type WorkspaceOwnerRpc } from './workspace-owner-rpc';
+import { appAgentObject } from './app-agent-object';
 
 import {
   recordJobSettled, recordSandboxRecovery,
@@ -9409,6 +9410,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
           async () => { await Promise.all(shares.map(async (share) => this.syncListing(share))); }, { workspace: this.name }));
       },
       shared: (operation) => this.editShared(operation),
+      appAgentObject: (conversation) => appAgentObject(this.env, conversation),
       // Each viewer's own account answers their parts' calls, with their consents and connections: never this workspace.
       partConnections: {
         // Prepared first, then the run's word read again with nothing awaited before the viewer's account is called.

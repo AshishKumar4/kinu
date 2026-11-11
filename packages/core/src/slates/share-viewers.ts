@@ -316,7 +316,7 @@ export class SlateShareViewers {
  * `share`'s spend label for today, declared on `governor` at the share's daily cap: what its viewers' calls and their
  * app agents' model calls on My access spend, one label on the workspace's one governor. Unparented, so no turn owns it.
  */
-export function declareShareSpend(governor: MissionGovernor, share: string): string {
+function declareShareSpend(governor: MissionGovernor, share: string): string {
   const label = shareSpendLabel(share);
 
   governor.declare(label, { usd: SHARE_SPEND_CAP_USD_PER_DAY }, { parent: '' });

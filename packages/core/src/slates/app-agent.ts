@@ -8,15 +8,13 @@
  * link, where the owner can read it; the visitor's own on a default link, where no one else can.
  */
 import * as v from 'valibot';
-import { jsonSchema, tool, type LanguageModel, type ModelMessage, type Tool, type UIMessage } from 'ai';
+import { jsonSchema, tool, type ModelMessage, type Tool, type UIMessage } from 'ai';
 import { Effect } from 'effect';
 import { KinuError } from '../obs/error';
 import { settleSync } from '../obs/effect';
-import type { ModelCallSpend } from '../events/model-call';
-import { streamTextReported } from '../providers/model-invocation';
-import { estimateTokens } from '../token-estimate';
 import type { SqlExec } from '../types/primitives';
 import type { Usage } from '../usage';
+import type { ReasoningEffort } from '../providers/reasoning-effort';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { APP_AGENT_CONSENT, type ShareMode, type SlateConsent } from './share-modes';
 import type { SlateCallResult } from './rpc';
@@ -27,7 +25,7 @@ import { slateCallAddress } from './surface';
 export const ANONYMOUS_SUBJECT_PREFIX = 'anon:';
 
 /** Whether a share's visitor is known only by where they came from: no account and no anonymous id. */
-export function identifiedOnlyBySource(subject: string): boolean {
+function identifiedOnlyBySource(subject: string): boolean {
   return subject.startsWith('source:');
 }
 
@@ -98,10 +96,18 @@ export function appAgentConsented(consent: SlateConsent | null, revision: string
   return consent !== null && consent.server === APP_AGENT_CONSENT && consent.revision === revision;
 }
 
+/** The model a payer's default tier names, as their own turns run it: its effort, then its fallbacks in order. */
+export interface AppAgentModel {
+  readonly spec: string;
+  readonly tier: string;
+  readonly reasoning: ReasoningEffort | null;
+  readonly fallbacks: readonly { readonly model: string; readonly reasoning: ReasoningEffort | null }[];
+  readonly retries: number;
+  readonly credentialsRevision: number;
+}
+
 /** The payer's account's word on one ask: their default model, or that it waits for their consent. */
-export type AppAgentGrant =
-  | { readonly kind: 'granted'; readonly spec: string; readonly tier: string; readonly credentialsRevision: number }
-  | { readonly kind: 'needs-consent' };
+export type AppAgentGrant = ({ readonly kind: 'granted' } & AppAgentModel) | { readonly kind: 'needs-consent' };
 
 /** The app, as its agent is told it. `asker` is whom it talks with. */
 export interface AppAgentAbout {
@@ -161,77 +167,6 @@ export function appAgentTool(session: Pick<AppAgentSession, 'call'>): Tool {
 /** The person's message, with what the app sent beside it. */
 export function appAgentMessage(text: string, data: JsonValue | undefined): ModelMessage {
   return { role: 'user', content: data === undefined ? text : `${text}\n\nWhat the app sent with it: ${JSON.stringify(data)}` };
-}
-
-/**
- * The newest whole turns of `history` (each from a person's message) that fit `window`, the model's context in tokens,
- * beside `prompt`; all of it where the model states no window.
- */
-export function fittedHistory(history: readonly ModelMessage[], window: number | null, prompt: string): ModelMessage[] {
-  if (window === null) return [...history];
-  let room = window - estimateTokens(prompt.length);
-  let start = history.length;
-
-  for (let at = history.length - 1; at >= 0; at -= 1) {
-    if (history[at]?.role !== 'user') continue;
-    const cost = estimateTokens(JSON.stringify(history.slice(at, start)).length);
-
-    if (cost > room) break;
-    room -= cost;
-    start = at;
-  }
-
-  return history.slice(start);
-}
-
-export interface AppAgentTurn {
-  readonly model: LanguageModel;
-  readonly spec: string;
-  readonly system: string;
-  readonly history: readonly ModelMessage[];
-  readonly asked: ModelMessage;
-  readonly session: AppAgentSession;
-  readonly signal: AbortSignal;
-  readonly spend: ModelCallSpend;
-  /** The reply's text, as the model writes it. */
-  readonly write: (text: string) => void;
-  /** Messages the turn adds to the conversation: the person's, then each step's whole, its calls with their results. */
-  readonly keep: (messages: readonly ModelMessage[]) => void;
-}
-
-/** One turn: a step at a time, each admitted first, until a step calls nothing. */
-export async function appAgentTurn(turn: AppAgentTurn): Promise<void> {
-  const tools = { [APP_AGENT_TOOL]: appAgentTool(turn.session) };
-  const messages = [...turn.history, turn.asked];
-  let wrote = false;
-
-  turn.keep([turn.asked]);
-
-  for (;;) {
-    await turn.session.admit();
-    const chunks = streamTextReported({ model: turn.model, system: turn.system, messages, tools, abortSignal: turn.signal }, { spend: turn.spend, spec: turn.spec });
-    let opened = false;
-    let next = await chunks.next();
-
-    while (next.done !== true) {
-      // A step that writes after an earlier one's words starts a paragraph of its own.
-      if (!opened && wrote) turn.write('\n\n');
-      opened = true;
-      turn.write(next.value);
-      next = await chunks.next();
-    }
-
-    wrote ||= opened;
-    const result = next.value;
-
-    if (result === undefined) return;
-    const step = (await result.response).messages;
-
-    turn.keep(step);
-    messages.push(...step);
-
-    if (await result.finishReason !== 'tool-calls') return;
-  }
 }
 
 type Part = UIMessage['parts'][number];

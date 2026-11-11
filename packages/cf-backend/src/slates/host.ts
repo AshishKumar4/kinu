@@ -27,7 +27,7 @@ import { codemodeEgress } from '../codemode-egress-mint';
 import { SlateSources, type MessageBlock, type SlateSource } from './sources';
 import { PersonalParts, type PartConnections } from './part-runs';
 import { RpcTarget } from 'cloudflare:workers';
-import { appAgentObject } from '../app-agent-do';
+import type { AppAgentDO } from '../app-agent-do';
 
 type SlateCapabilityRoute = Exclude<SlateRoute, { kind: 'app' }>;
 
@@ -57,7 +57,7 @@ export interface SlateDispatchContext {
 
 export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained' | 'bundler'> {
   readonly ctx: DurableObjectState;
-  readonly env: Pick<Env, 'LOADER' | 'ASSETS' | 'APP_AGENT'>;
+  readonly env: Pick<Env, 'LOADER' | 'ASSETS'>;
   readonly workspace: string;
   /** The object's slate build records, which its owner reads and moves on a file change before any host is loaded. */
   readonly builds: SlateBuilds;
@@ -88,6 +88,8 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained' | 'bun
   readonly ownerEffects?: NonNullable<SlateControllerPorts<SlateSource, ResidentSlateProcess>['ownerEffects']>;
   /** What the owner's MCP catalog knows of a connection's tool (share-policy.ts `ToolContract`). */
   toolContract?(namespace: string, member: string): Promise<ToolContract | null>;
+  /** The object an app agent's conversation is kept in (app-agent-do.ts); absent, no slate has an app agent here. */
+  appAgentObject?(conversation: AppAgentConversation): DurableObjectStub<AppAgentDO>;
   /** A live share's Gallery listing changed where its owner waits: the Gallery is told now, a failure logged. */
   listingChanged?(share: LiveShareRecord): Promise<void>;
   /** The Gallery told again of these listed shares, in the background. */
@@ -469,7 +471,10 @@ export class SlateHost {
   private async appAgentReply(conversation: AppAgentConversation, args: readonly JsonValue[], session: AppAgentSessionTarget): Promise<SlateSurfaceResult> {
     const asked = appAgentAsk(args);
     const revision = slateRevision(this.controller.builds, conversation.slate) ?? '';
-    const answer = await appAgentObject(this.deps.env, conversation).ask({ conversation, revision, ...asked }, session);
+    const object = this.deps.appAgentObject?.(conversation);
+
+    if (object === undefined) return { ok: false, ...refusalOf(new KinuError('unsupported', 'This deployment keeps no app agent conversations')) };
+    const answer = await object.ask({ conversation, revision, ...asked }, session);
 
     // Answered as a value: the share's page reads `needs`, and asks Kinu what its visitor must do.
     if (answer.kind === 'needs-consent') {
@@ -545,14 +550,14 @@ export class SlateHost {
     const owner = this.deps.ownerUserId?.() ?? null;
     const record = this.controller.live.get(share);
 
-    for (const conversation of this.openAsks.get(share)?.values() ?? []) await appAgentObject(this.deps.env, conversation).stop();
+    for (const conversation of this.openAsks.get(share)?.values() ?? []) await this.deps.appAgentObject?.(conversation).stop();
     this.openAsks.delete(share);
     const subjects = this.guests.forget(share);
 
     if (owner === null || record === undefined) return;
 
     for (const subject of subjects) {
-      await appAgentObject(this.deps.env, { payer: { kind: 'lent', userId: owner }, workspace: this.deps.workspace, slate: record.slate, share, subject }).end();
+      await this.deps.appAgentObject?.({ payer: { kind: 'lent', userId: owner }, workspace: this.deps.workspace, slate: record.slate, share, subject }).end();
     }
   }
 
@@ -560,7 +565,7 @@ export class SlateHost {
   private async forgetAppAgent(slate: string): Promise<void> {
     const owner = this.deps.ownerUserId?.() ?? null;
 
-    if (owner !== null) await appAgentObject(this.deps.env, { payer: { kind: 'lent', userId: owner }, workspace: this.deps.workspace, slate, share: '', subject: '' }).end();
+    if (owner !== null) await this.deps.appAgentObject?.({ payer: { kind: 'lent', userId: owner }, workspace: this.deps.workspace, slate, share: '', subject: '' }).end();
   }
 
   /** Every conversation this workspace lent its owner's model to ends, as the workspace does. */
@@ -582,7 +587,7 @@ export class SlateHost {
 
     if (owner === null || record === undefined || !this.guests.has(share, subject)) return [];
 
-    return appAgentObject(this.deps.env, { payer: { kind: 'lent', userId: owner }, workspace: this.deps.workspace, slate: record.slate, share, subject }).transcript();
+    return await this.deps.appAgentObject?.({ payer: { kind: 'lent', userId: owner }, workspace: this.deps.workspace, slate: record.slate, share, subject }).transcript() ?? [];
   }
 
   /** A slate's call on the surface; whatever refuses or fails it is answered as a refusal, never thrown. */
@@ -631,20 +636,9 @@ export class SlateHost {
       // A viewer's request is held to its own share as it stands now, and the server's word on it with it. A refusal
       // decided on the way is the visitor's to read as written; only a failure keeps where it happened.
       if (viewer !== undefined) {
-        const viewers = this.controller.viewers;
-
         const asking = asksAgent
-          ? () => viewers.ask({ id, viewer, run: async (payer, share) => this.visitorAsk(payer, share, viewer.subject, parsed.output.args) })
-          : () => viewers.call({
-            share: viewer.share, id, request: parsed.output, chain, issued, gate: (call) => gate(call, viewer.subject),
-            bound: (address) => servers.bounded({ slate: id, chain, address }),
-            run: (route, nested, admit) => this.run(shareCaller(viewer.share), route, {
-              nested: (namespace, member) => { within(namespace, member); nested(namespace, member); },
-              admit,
-              viewer: true,
-              ...(parsed.output.authorize && { authorizeOnly: true }),
-            }, viewer),
-          });
+          ? () => this.controller.viewers.ask({ id, viewer, run: async (payer, share) => this.visitorAsk(payer, share, viewer.subject, parsed.output.args) })
+          : () => this.viewerCall({ id, viewer, request: parsed.output, chain, issued, gate: (call) => gate(call, viewer.subject), within });
 
         return await settle(Effect.catch(attemptInItsWords('io', asking),
           (failure) => Effect.succeed(CODE_IS_REFUSAL[failure.code] ? { ok: false as const, ...refusalOf(failure) } : refused({ cause: failure }))));
@@ -695,6 +689,30 @@ export class SlateHost {
     });
 
     return settle(Effect.catchCause(answering, (failed) => Effect.succeed(refused({ cause: Cause.squash(failed) }))));
+  }
+
+  /** A share's viewer's call, the grant and the shared servers on its way weighing it, run as the share's. */
+  private viewerCall(input: {
+    readonly id: string;
+    readonly viewer: SlateViewer;
+    readonly request: SlateCallRequest;
+    readonly chain: readonly string[];
+    readonly issued: SlateInvocation | null;
+    readonly gate: (call: { readonly address: { readonly namespace: string; readonly member: string }; readonly effect: boolean }) => Effect.Effect<ServerSend, KinuError>;
+    readonly within: (namespace: string, member: string) => void;
+  }): Promise<SlateCallResult> {
+    const { id, viewer, request, chain, within } = input;
+
+    return this.controller.viewers.call({
+      share: viewer.share, id, request, chain, issued: input.issued, gate: input.gate,
+      bound: (address) => this.controller.servers.bounded({ slate: id, chain, address }),
+      run: (route, nested, admit) => this.run(shareCaller(viewer.share), route, {
+        nested: (namespace, member) => { within(namespace, member); nested(namespace, member); },
+        admit,
+        viewer: true,
+        ...(request.authorize && { authorizeOnly: true }),
+      }, viewer),
+    });
   }
 
   /**
