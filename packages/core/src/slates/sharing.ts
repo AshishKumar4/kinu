@@ -193,6 +193,11 @@ export const LiveShareListingBodySchema = v.variant('listed', [
 
 export type LiveShareListingBody = v.InferOutput<typeof LiveShareListingBodySchema>;
 
+/** What a share lends of its owner's in one namespace, as its visitor is shown it: whether anything there acts. */
+export const ShareReachSchema = v.object({ namespace: v.string(), acts: v.boolean() });
+
+export type ShareReach = v.InferOutput<typeof ShareReachSchema>;
+
 /** `POST`, signed in or not: where a live share opens for this person (their signed entry when signed in, else the
  *  share's address), with the slate it serves and its title, which the page that frames it names it by, and how it lends
  *  at which revision of its code, which its page asks its visitor about before the app agent answers them. */
@@ -315,11 +320,6 @@ export const ShareViewerClaimSchema = v.object({
   source: v.string(),
   consented: v.nullable(v.string()),
 });
-
-/** What a share lends of its owner's in one namespace, as its visitor is shown it: whether anything there acts. */
-export const ShareReachSchema = v.object({ namespace: v.string(), acts: v.boolean() });
-
-export type ShareReach = v.InferOutput<typeof ShareReachSchema>;
 
 /**
  * What a share lends its visitors of its owner's now, by namespace: nothing on their own access, whose server lends
