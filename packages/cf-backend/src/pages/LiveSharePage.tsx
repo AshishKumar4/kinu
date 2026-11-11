@@ -8,8 +8,7 @@
  */
 import { Button } from "@/components/ui/Button";
 import { APP_AGENT_CONSENT, appAgentConsent, readSlateIdentityAsk, slateFrameSrc, VIEWER_EXCHANGE_PATH, type LiveShareOpen } from "@kinu.run/core";
-import { detach } from "@kinu.run/core/obs";
-import { Effect } from "effect";
+import { detachPromise } from "@kinu.run/core/obs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { useParams } from "react-router-dom";
@@ -65,7 +64,7 @@ function SharedSlate({ workspace, share, opened }: { workspace: string; share: s
     const origin = new URL(opened.url).origin;
 
     const heard = (event: MessageEvent) => {
-      if (readSlateIdentityAsk(event, frame.current?.contentWindow, origin)) detach(Effect.map(Effect.promise(async () => assistantAsk(workspace, share)), setAsking));
+      if (readSlateIdentityAsk(event, frame.current?.contentWindow, origin)) detachPromise(async () => { setAsking(await assistantAsk(workspace, share)); });
     };
 
     window.addEventListener("message", heard);
@@ -89,7 +88,10 @@ function SharedSlate({ workspace, share, opened }: { workspace: string; share: s
       {asking?.kind === "sign-in" && <SignInSheet onClose={() => setAsking(null)} />}
       {asking?.kind === "consent" && (
         <AssistantConsentDecision slate={opened.title} changed={asking.changed} onClose={() => setAsking(null)}
-          onAllow={() => detach(Effect.map(Effect.promise(async () => giveConsent(appAgentConsent(workspace, asking.slate, asking.revision))), () => setAsking(null)))} />
+          onAllow={() => detachPromise(async () => {
+            await giveConsent(appAgentConsent(workspace, asking.slate, asking.revision));
+            setAsking(null);
+          })} />
       )}
     </>
   );

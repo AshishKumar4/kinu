@@ -17,7 +17,7 @@ import {
   type SlateFileChange, type SlateOperation, type EgressPrincipal, type Usage,
 } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import { attempt, attemptInItsWords, CODE_IS_REFUSAL, ERROR_CODES, KinuError, refusalOf, settle, settleLogged, settleSync, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { attempt, attemptInItsWords, CODE_IS_REFUSAL, ERROR_CODES, KinuError, refusalOf, settle, settleLogged, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import type { ApprovalSpend } from '@kinu.run/core';
 import { Cause, Effect } from 'effect';
 import { ONLY_A_PAGE_PUSHES, PAGE_KEEPS_NO_DATA, ResidentSlateProcesses, type ResidentSlateDeps, type ResidentSlateProcess } from './resident';
@@ -146,9 +146,9 @@ const OWN_SERVER = '$server';
 const ENDS_AT_ONCE = 8;
 
 /** A viewer's answer: a refusal decided on the way is the visitor's to read as written; only a failure keeps where it happened. */
-async function viewerWords(asking: () => Promise<SlateCallResult>, refused: (failure: { readonly cause: unknown }) => SlateSurfaceResult): Promise<SlateSurfaceResult> {
-  return settle(Effect.catch(attemptInItsWords('io', asking),
-    (failure) => Effect.succeed(CODE_IS_REFUSAL[failure.code] ? { ok: false as const, ...refusalOf(failure) } : refused({ cause: failure }))));
+function viewerWords(asking: () => Promise<SlateCallResult>, refused: (failure: { readonly cause: unknown }) => SlateSurfaceResult): Effect.Effect<SlateSurfaceResult> {
+  return Effect.catch(attemptInItsWords('io', asking),
+    (failure) => Effect.succeed(CODE_IS_REFUSAL[failure.code] ? { ok: false as const, ...refusalOf(failure) } : refused({ cause: failure })));
 }
 
 /** What one ask lends its app agent (core slates/app-agent.ts `AppAgentSession`), handed to its conversation's object. */
@@ -523,25 +523,12 @@ export class SlateHost {
     // A visitor's consent names this revision of the app: a change of its code ends what that consent let run.
     const revision = this.revisionOf(share.slate);
 
-    // And what the owner lends on My access, the revision they approved it at: an editor's change since lends nothing.
-    const sameCode = (): void => {
-      if (!lent && this.revisionOf(share.slate) !== revision) {
-        settleSync(Effect.fail(new KinuError('denied', "This app's code changed since you let its assistant use your models: ask again to allow it")));
-      }
-
-      if (lent && live.get(share.id)?.grantRevision !== this.revisionOf(share.slate)) {
-        settleSync(Effect.fail(new KinuError('denied', "This app changed since its owner approved what My access lends: its assistant waits for them")));
-      }
-    };
-
     open.set(key, conversation);
     this.openAsks.set(share.id, open);
 
     // The share's word, and the code's: read before each step, and again where each call is sent, past its build.
     const admitted = (): void => {
-      if (lent) viewers.admitLent(share);
-      else viewers.stillLends(share);
-      sameCode();
+      viewers.admitAgentStep(share, { lent, revision: this.revisionOf(share.slate), consented: revision });
 
       // Listed for the owner once the share first admits it: a refused ask leaves no chat.
       if (lent) this.chats.record({ slate: share.slate, share: share.id, subject });
@@ -679,7 +666,7 @@ export class SlateHost {
       if (shared && issued === null) return { ok: false, ...refusalOf(new KinuError('denied', `Slate ${id} is shared, and called out under no request of this host's`)) };
 
       // The app agent's: the host answers it, and only what the agent then calls is routed and gated.
-      if (asksAppAgent(parsed.output.path)) return await this.appAgentAsked({ caller, id, args: parsed.output.args, issued, refused });
+      if (asksAppAgent(parsed.output.path)) return await settle(this.appAgentAsked({ caller, id, args: parsed.output.args, issued, refused }));
       const viewer = issued?.viewer;
       const reportOnly = parsed.output.authorize !== true;
 
@@ -694,7 +681,7 @@ export class SlateHost {
       // A viewer's request is held to its own share as it stands now, and the server's word on it with it. A refusal
       // decided on the way is the visitor's to read as written; only a failure keeps where it happened.
       if (viewer !== undefined) {
-        return await viewerWords(async () => this.viewerCall({ id, viewer, request: parsed.output, chain, issued, gate: (call) => gate(call, viewer.subject), within }), refused);
+        return await settle(viewerWords(async () => this.viewerCall({ id, viewer, request: parsed.output, chain, issued, gate: (call) => gate(call, viewer.subject), within }), refused));
       }
 
       if (caller.share !== undefined) return { ok: false, ...refusalOf(new KinuError('denied', `Slate ${id} runs for a share, and called out under no viewer's request`)) };
@@ -749,27 +736,26 @@ export class SlateHost {
    * A slate's `agent.ask`, answered by its app agent for whoever the call is: a share's visitor under their request, the
    * owner otherwise. A call the agent made itself cannot ask it again, and an answer's page has none.
    */
-  private async appAgentAsked(input: {
+  private appAgentAsked(input: {
     readonly caller: SlateCaller;
     readonly id: string;
     readonly args: readonly JsonValue[];
     readonly issued: SlateInvocation | null;
     readonly refused: (failure: { readonly cause: unknown }) => SlateSurfaceResult;
-  }): Promise<SlateSurfaceResult> {
+  }): Effect.Effect<SlateSurfaceResult> {
     const { caller, id, args, issued, refused } = input;
     const viewer = issued?.viewer;
 
     // The app agent's own call asking it again would queue behind the very turn that waits on it.
-    if (issued?.agent === id) return refused({ cause: new KinuError('denied', "agent.ask came from a call the app's assistant made, which waits on its answer: the assistant cannot ask itself") });
+    if (issued?.agent === id) return Effect.succeed(refused({ cause: new KinuError('denied', "agent.ask came from a call the app's assistant made, which waits on its answer: the assistant cannot ask itself") }));
 
     if (viewer !== undefined) return viewerWords(async () => this.controller.viewers.ask({ id, viewer, run: async (payer, share) => this.visitorAsk(payer, share, viewer.subject, args) }), refused);
 
-    if (caller.share !== undefined) return refused({ cause: new KinuError('denied', `Slate ${id} runs for a share, and called out under no viewer's request`) });
-    const source = await this.slateSources.resolve(caller.cred, id);
+    if (caller.share !== undefined) return Effect.succeed(refused({ cause: new KinuError('denied', `Slate ${id} runs for a share, and called out under no viewer's request`) }));
 
-    if (source.kind === 'message') return refused({ cause: new KinuError('denied', "An answer's page has no app agent: it reaches the agent that wrote it with agent.send") });
-
-    return this.ownerAsk(caller, id, args);
+    return Effect.flatMap(Effect.promise(async () => this.slateSources.resolve(caller.cred, id)), (source) => (source.kind === 'message'
+      ? Effect.succeed(refused({ cause: new KinuError('denied', "An answer's page has no app agent: it reaches the agent that wrote it with agent.send") }))
+      : Effect.promise(async () => this.ownerAsk(caller, id, args))));
   }
 
   /** A share's viewer's call, the grant and the shared servers on its way weighing it, run as the share's. */

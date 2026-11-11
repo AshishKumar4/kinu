@@ -168,7 +168,7 @@ function conversationCompaction(storage: DurableObjectStorage, summarizer: { rea
     archive,
     summarize: createModelSummarizer(summarizer.model, { source: 'compaction', report: summarizer.report }, () => summarizer.spec),
     ephemeral: new DynamicContextLedger(),
-    attachments: { files: () => settleSync(Effect.fail(new KinuError('unsupported', "An app agent's chat carries no files to move"))) },
+    attachments: { files: () => null },
   }));
 }
 
@@ -282,7 +282,7 @@ export class AppAgentDO extends DurableObject<Env> {
       start: (stream) => {
         // Never fails: a turn's failure errors its reply (a no-op once its reader let it go, where closing would throw),
         // and the next ask's turn starts after it all the same.
-        const turn = async (): Promise<void> => settle(Effect.ensuring(
+        this.turns = this.turns.then(async () => settle(Effect.ensuring(
           Effect.match(attemptInItsWords('io', async () => {
             stop.signal.throwIfAborted();
             await turnOf(this.env, this.ctx.storage, { conversation, caller, grant, request, session: held.session, signal: stop.signal, write: (text) => { stream.enqueue(encoder.encode(text)); } });
@@ -292,9 +292,7 @@ export class AppAgentDO extends DurableObject<Env> {
             this.running.delete(stop);
             held.release();
           }),
-        ));
-
-        this.turns = this.turns.then(turn);
+        )));
       },
       // The asker went away (a page closed, a share ended): the model call stops where it is.
       cancel: () => { stop.abort(new KinuError('denied', 'The ask was let go')); },

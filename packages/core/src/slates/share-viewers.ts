@@ -280,13 +280,26 @@ export class SlateShareViewers {
   }
 
   /**
-   * A step of an app agent the owner lends on `lent`: refused once the share ended, changed how it lends, or is paused
-   * for the day. Throws to refuse.
+   * A step of a share's app agent, and each call it sends: refused once the share ended or changed how it lends, and
+   * where the owner lends their model, once it is paused for the day or its code moved past the revision they approved;
+   * where the visitor pays, once its code moved past the one they consented to. Throws to refuse.
    */
-  admitLent(lent: LiveShareRecord): void {
-    this.stillLends(lent);
+  admitAgentStep(share: LiveShareRecord, step: { readonly lent: boolean; readonly revision: string; readonly consented: string }): void {
+    this.stillLends(share);
 
-    return settleSync(this.notPaused(this.deps.live.live(lent.id)));
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const now = this.deps.live.live(share.id);
+
+      if (!step.lent) {
+        if (step.revision !== step.consented) return yield* new KinuError('denied', "This app's code changed since you let its assistant use your models: ask again to allow it");
+
+        return;
+      }
+
+      yield* this.notPaused(now);
+
+      if (now.grantRevision !== step.revision) return yield* new KinuError('denied', 'This app changed since its owner approved what My access lends: its assistant waits for them');
+    }));
   }
 
   /** What a step of an app agent the owner lends on `share` spent of their model, counted against the share's day. */

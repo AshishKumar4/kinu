@@ -6,7 +6,8 @@ import {
 import { carriedMedia, withoutMedia, type CarriedMedia } from './codec';
 
 export interface AttachmentDeps {
-  readonly files: () => { readonly storage: Pick<Storage, 'vfs' | 'home'>; readonly planes: PathPlanes };
+  /** Where an attachment moves to; null where the conversation keeps no files, and its attachments stay where they are. */
+  readonly files: () => { readonly storage: Pick<Storage, 'vfs' | 'home'>; readonly planes: PathPlanes } | null;
 }
 
 export const KEEP_RECENT_IMAGES = 3;
@@ -42,9 +43,10 @@ export function attachmentStore(deps: AttachmentDeps): AttachmentStore {
     store: async (attachment, item) => {
       const media = carriedMedia(item).find((carried) => carried.id === attachment.id);
       const bytes = media === undefined ? null : attachmentBytes(media.data);
+      const files = deps.files();
 
-      if (bytes === null) return null;
-      const { storage, planes } = deps.files();
+      if (bytes === null || files === null) return null;
+      const { storage, planes } = files;
       const path = await storeAttachment(storage.vfs, `${storage.home}/${SPILL_DIRS.offloaded}`, bytes, attachment.mimeType);
 
       return formatPath(path, planes);
