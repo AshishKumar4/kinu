@@ -169,6 +169,10 @@ explain or invent; ignore greetings, acknowledgements and one-off plans. When
 a value is corrected, keep only the latest. Preserve names, numbers, paths,
 versions, dates and the original language exactly.
 
+One fact is one subject: a plain dotted key and the few words that state it
+("home.city": "Porto"; "reply.language": "English"). A passage that
+states several things is several facts, never one summary of it.
+
 A defect the owner reports, a feature they ask for, its acceptance criteria and
 a one-off correction are this workspace's work, never a standing preference of
 the owner's, unless the owner says it holds across all their work. Quoting
