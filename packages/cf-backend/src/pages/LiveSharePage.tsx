@@ -114,8 +114,9 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
   useEffect(() => {
     postIntoFrame(exchange, SHARED_FRAME, said);
 
-    // Restored from the back-forward cache, the frame keeps whatever it held: said again.
-    const restored = (event: PageTransitionEvent): void => { if (event.persisted) postIntoFrame(exchange, SHARED_FRAME, said); };
+    // Restored from the back-forward cache, the frame keeps whatever it held, and who is signed in may have changed: the
+    // page loads again, to say who the visitor is now.
+    const restored = (event: PageTransitionEvent): void => { if (event.persisted) window.location.reload(); };
 
     window.addEventListener("pageshow", restored);
 

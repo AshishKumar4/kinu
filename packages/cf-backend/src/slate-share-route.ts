@@ -92,6 +92,8 @@ interface Exchanged {
   readonly consent: boolean;
   /** Whom its exchanges are counted against, where not the subject: where a new anonymous visitor comes from. */
   readonly admitAs?: string;
+  /** A signed-out page saying so, at every load: no one new is named, so it spends no count. */
+  readonly uncounted?: true;
 }
 
 /** The identity cookie for `exchanged`, the visitor sent on to the slate's page as it was framed. */
@@ -100,7 +102,9 @@ async function exchangedTo(c: { readonly env: VerifiedShare }, request: Request,
 
   if (exchanged === null) return new Response('Not found', NOT_FOUND);
 
-  if (env.AUTH_KV !== undefined
+  // A signed-out load says no account at every load, and KV takes one write a second per key, so a reload counted there
+  // would fail (staging fc3f743f5, 2026-11-11): only that one goes uncounted, being no one new.
+  if (env.AUTH_KV !== undefined && exchanged.uncounted !== true
     && !await ingressAdmitted(env.AUTH_KV, 'slate-share', `${handle}:${exchanged.admitAs ?? exchanged.subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) {
     return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
   }
@@ -152,9 +156,9 @@ shareHostRoutes.post(VIEWER_EXCHANGE_PATH, async (c) => {
   const source = await viewerSource(viewerSecret, request);
   const consent = held?.consented === true && held.userId === null;
 
-  if (held?.anonymous !== null && held?.anonymous !== undefined) return await exchangedTo(c, request, { subject: held.subject, consent });
+  if (held?.anonymous !== null && held?.anonymous !== undefined) return await exchangedTo(c, request, { subject: held.subject, consent, ...(!anonymous && { uncounted: true }) });
 
-  return await exchangedTo(c, request, anonymous ? { subject: mintAnonymousSubject(), consent, admitAs: source } : { subject: source, consent });
+  return await exchangedTo(c, request, anonymous ? { subject: mintAnonymousSubject(), consent, admitAs: source } : { subject: source, consent, uncounted: true });
 });
 
 /**

@@ -263,8 +263,11 @@ test('a share host takes who its visitor is from Kinu\'s own page alone: never a
     method: 'POST', body: new URLSearchParams({ anonymous: '1' }), headers: { origin: APP_ORIGIN, cookie: signedIn, 'cf-connecting-ip': '203.0.113.21', 'content-type': 'application/x-www-form-urlencoded' },
   }), world.env);
 
-  expect([out?.status, out?.headers.get('set-cookie') === null, out?.headers.get('set-cookie')?.split(';')[0] === signedIn]).toEqual([303, false, false]);
-  expect([anonymousOver?.status, anonymousOver?.headers.get('set-cookie')?.split(';')[0] === signedIn]).toEqual([303, false]);
+  // The cookie's subject, its value's first part: who the host now takes the browser to be.
+  const subjectOf = (answer: Response | null) => answer?.headers.get('set-cookie')?.split(';')[0]?.split('=')[1]?.split('.')[0] ?? '';
+
+  expect([out?.status, subjectOf(out) === VIEWER_ID, subjectOf(out).startsWith('anon:')]).toEqual([303, false, false]);
+  expect([anonymousOver?.status, subjectOf(anonymousOver) === VIEWER_ID, subjectOf(anonymousOver).startsWith('anon:')]).toEqual([303, false, true]);
 });
 
 test('S2: the per-viewer request bound refuses past its limit, per viewer and on the exchange', async () => {
