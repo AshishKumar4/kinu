@@ -3286,11 +3286,13 @@ export async function appAgentTicketsStayTheirs(target: FlowTarget): Promise<App
     // Its first answer: the exchange's own, a redirect where it named the browser, or the refusal where it did not.
     const byLink = landed?.request().redirectChain()[0]?.response()?.status() ?? landed?.status() ?? 0;
 
-    await victim.goto(`${host}/`, { waitUntil: 'load' });
-    const fromTheApp = v.parse(v.number(), await victim.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ ticket: ${JSON.stringify(ticket ?? '')} }) }).then((answer) => answer.status)`));
+    // Then the share as anyone opens it, on Kinu's page, signed out: its app's page presents the ticket too.
+    const app = await appOnItsLink(victim, made.link);
 
-    await victim.goto(`${host}/`, { waitUntil: 'load' });
-    const asked = await askTheApp(victim, victim.mainFrame());
+    await waitOn(victim, 'the app\'s page to draw', app.waitForFunction('document.querySelector("[data-ask]") !== null', { polling: 100 }));
+    const fromTheApp = v.parse(v.number(), await app.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ ticket: ${JSON.stringify(ticket ?? '')} }) }).then((answer) => answer.status)`));
+    const again = await appOnItsLink(victim, made.link);
+    const asked = await askTheApp(victim, again);
 
     await context.close();
 
