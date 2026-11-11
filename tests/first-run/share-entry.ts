@@ -29,9 +29,18 @@ export interface SharedEntry {
 }
 
 export async function shareEntry(origin: string, workspace: string, share: string | undefined): Promise<SharedEntry> {
-  const opened = share === undefined ? null : await openShare({ origin, workspace, share });
+  const none: SharedEntry = { url: null, enter: async () => Promise.reject(new Error('no share to enter')) };
 
-  if (opened === null) return { url: null, enter: async () => Promise.reject(new Error('no share to enter')) };
+  if (share === undefined) return none;
+  const id = share;
+  const opened = await openShare({ origin, workspace, share: id });
 
-  return { url: opened.url, enter: async () => consentToShare({ url: opened.url, origin, binding: opened.consent?.binding ?? null }) };
+  if (opened === null) return none;
+
+  // What it reaches is read as the visitor enters, as Kinu's page reads it when they accept: a share lent since it was
+  // first opened asks for that.
+  return {
+    url: opened.url,
+    enter: async () => consentToShare({ url: opened.url, origin, binding: (await openShare({ origin, workspace, share: id }))?.consent?.binding ?? null }),
+  };
 }
