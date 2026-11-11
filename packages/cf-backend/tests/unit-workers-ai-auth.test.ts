@@ -5,7 +5,7 @@ import { userCredentialSource } from './helpers/user-credentials';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { OAuthTokenError, refreshCloudflareCredential } from '@kinu.run/core';
-import { asFetchFunction, reasoningEffortOptions, type AuthRequest } from '@kinu.run/core';
+import { asFetchFunction, type AuthRequest } from '@kinu.run/core';
 import * as v from 'valibot';
 import { bindingModel } from './helpers/workers-ai-model';
 import { requestUrl } from '@kinu.run/core';
@@ -19,7 +19,7 @@ const OK_ANSWER = { ...OK_CHAT_ANSWER, id: 'chatcmpl-1', model: '@cf/moonshotai/
 test('configured effort reaches the native Workers AI binding through its SDK transport', async () => {
   const { model, runs } = bindingModel((run) => chatResponse(OK_ANSWER, run.inputs.stream === true));
 
-  await generateText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('high', 'workers-ai/@cf/zai-org/glm-5.3') });
+  await generateText({ model, prompt: 'probe', maxRetries: 0, reasoning: 'high' });
   expect(runs[0]?.inputs.reasoning_effort).toBe('high');
   expect(runs[0]?.inputs.reasoningEffort).toBeUndefined();
   expect(runs[0]?.inputs.providerOptions).toBeUndefined();

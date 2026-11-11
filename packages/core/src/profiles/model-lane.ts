@@ -6,7 +6,7 @@ import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, toKinuError } from '../obs/index';
 import { accountOf, MAIN_ACCOUNT } from '../credentials/accounts';
 import { attemptOrUnknown, FallbackRoute, type CallFailure } from '../providers/fallback-route';
-import { reasoningEffortOptions, type ProviderOptions, type ReasoningEffort } from '../providers/effort';
+import type { ReasoningEffort } from '../providers/effort';
 import { generateObjectReported, generateReported, type ObjectRequest } from '../providers/model-invocation';
 import type { ModelCallSpend } from '../events/model-call';
 import { callRetries } from '../providers/middleware/retry';
@@ -28,24 +28,20 @@ export interface RouteCallComponents extends RouteWalk {
   llm(resolution: ModelRouteResolution): RoutedLLM;
 }
 
-/** A backend's whole say in a routed call: the client and effort options for one (spec, effort), the spec normalised against its registry. */
+/** A backend's whole say in a routed call: the client and its effort for one (spec, effort), the spec normalised against its registry. */
 export interface RouteModelBinding {
   readonly model: LanguageModel;
-  readonly providerOptions?: ProviderOptions;
+  readonly reasoning?: ReasoningEffort;
 }
 
 export type RouteModelBinder = (route: ModelRouteResolution) => RouteModelBinding;
 
-/** A registry's binding: the effort options are those of the API serving the spec once normalised. */
+/** A registry's binding of a route, its spec normalised. */
 export function bindRoute(
   registry: { normalize(spec: string): string; resolve(spec: string): LanguageModel },
   route: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>,
 ): RouteModelBinding {
-  const spec = registry.normalize(route.model);
-  const model = registry.resolve(spec);
-  const providerOptions = reasoningEffortOptions(route.reasoningEffort, spec);
-
-  return providerOptions === undefined ? { model } : { model, providerOptions };
+  return { model: registry.resolve(registry.normalize(route.model)), reasoning: route.reasoningEffort ?? undefined };
 }
 
 export interface ModelLaneComponents extends RouteCallComponents {
@@ -77,10 +73,8 @@ export function routeRetryOptions(call: Pick<ModelRouteResolution, 'retries'>) {
 /** One routed call as an {@link RoutedLLM}, billed under the route's source once it completes. */
 export function routedLlm(bind: RouteModelBinder, route: ModelRouteResolution, spend: Omit<ModelCallSpend, 'source'>, system?: string): RoutedLLM {
   const sent = (prompt: string) => {
-    const { model, providerOptions } = bind(route);
-    const request: ObjectRequest = { model, prompt, ...routeRetryOptions(route) };
-
-    if (providerOptions !== undefined) request.providerOptions = { ...request.providerOptions, ...providerOptions };
+    const { model, reasoning } = bind(route);
+    const request: ObjectRequest = { model, reasoning, prompt, ...routeRetryOptions(route) };
 
     if (system !== undefined) request.system = system;
 

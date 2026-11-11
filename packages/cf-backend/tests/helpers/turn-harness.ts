@@ -4,6 +4,7 @@
  */
 import type { LanguageModel, ModelMessage, ToolSet, UIMessage } from 'ai';
 import type { ChatOptions, JsonObject, JsonValue } from '@kinu.run/core';
+import type { ScriptedTurnOptions } from '@kinu.run/test-utils/turn-model';
 
 export interface PreparedRequest {
   readonly identity: SettledTurn;
@@ -15,6 +16,7 @@ export interface PreparedRequest {
   readonly tools: ToolSet;
   readonly activeTools: readonly string[] | undefined;
   readonly providerOptions: ChatOptions['providerOptions'];
+  readonly reasoning: ScriptedTurnOptions['reasoning'];
 }
 
 /** A tool call the answer's first step makes, as a model makes it: the agent's own loop runs it. */

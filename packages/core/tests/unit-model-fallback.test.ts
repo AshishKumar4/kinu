@@ -120,14 +120,14 @@ async function turn(
     }),
   };
 
-  // Each model carries its own reasoning options: the turn's are 'low', a fallback's 'high'.
+  // Each model reasons at its own effort: the turn's is 'low', a fallback's 'high'.
   const acceptsOf = (modelId: string): ReadonlySet<MediaModality> => opts.accepts?.[modelId] ?? new Set(['image']);
 
   const chain: ChatFallback[] = fallbacks.map((modelId) => ({
     spec: `openrouter/${modelId}`,
     accepts: acceptsOf(modelId),
     window: { contextWindow: null, modelOutputLimit: null },
-    bind: () => ({ model: modelFor(modelId), provider: 'openrouter', providerOptions: { openrouter: { reasoningEffort: 'high' } } }),
+    bind: () => ({ model: modelFor(modelId), provider: 'openrouter', reasoning: 'high' }),
   }));
 
   const events: ChatEvent[] = [];
@@ -137,7 +137,7 @@ async function turn(
     for await (const event of runChat({
       model: modelFor('primary'), modelContext: { id: 'openrouter/primary' }, modelSpec: 'openrouter/primary', fallbacks: chain,
       pacer: opts.pacer ?? new ProviderPacer(), ...(opts.retries !== undefined && { retries: opts.retries }),
-      providerOptions: { openrouter: { reasoningEffort: 'low' } },
+      reasoning: 'low',
       attachments: { accepts: acceptsOf('primary'), vfs: createMemoryVfs().vfs },
       system: 'sys', history: opts.history ?? [{ role: 'user', content: 'go' }], tools,
     })) events.push(event);
@@ -255,7 +255,7 @@ describe('a failed call hands the turn down its fallback chain', () => {
       .toEqual(['openrouter/primary>openrouter/backup', 'openrouter/backup>openrouter/last']);
   });
 
-  test('each call carries its own model\u2019s reasoning options, never the failed model\u2019s', async () => {
+  test('each call carries its own model\u2019s effort, never the failed model\u2019s', async () => {
     const { served } = await turn((model) => (model === 'primary' ? refused(402) : answer('from backup')), ['backup']);
 
     expect(served.map((entry) => {

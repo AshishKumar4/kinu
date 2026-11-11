@@ -2,9 +2,9 @@ import type { ModelAttemptIdentity } from '@kinu.run/core';
 import { Effect } from 'effect';
 import type { LanguageModel } from 'ai';
 import {
-  actorAffinity, parseModelSpec, reasoningEffortOptions,
+  actorAffinity, parseModelSpec,
   providerSnapshotOf, providerListingKey, providerListingOf, ProviderListingCache,
-  type ModelAffinity, type ProviderListing, type StoredProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
+  type ModelAffinity, type RouteModelBinding, type ProviderListing, type StoredProviderListing, type ProviderSnapshotRead, type ReasoningEffort,
   type ModelAttemptInfo, type ProviderWaitInfo, type ProviderAccounts,
   type WebSearchProvider, type WebSearchChain,
   type ProviderEnv, type WorkersAIBinding,
@@ -186,16 +186,12 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return agent.registry.attemptFor(agent.normalizeSpecSync(spec), agent.deps);
   }
 
-  resolveModelWithEffort(spec: string, effort: ReasoningEffort | null) {
+  resolveModelWithEffort(spec: string, effort: ReasoningEffort | null): RouteModelBinding & { readonly provider: string } {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);
     const { provider } = parseModelSpec(normalized);
 
-    return {
-      model: this.resolveModel(normalized),
-      provider,
-      providerOptions: reasoningEffortOptions(effort, normalized),
-    };
+    return { model: this.resolveModel(normalized), provider, reasoning: effort ?? undefined };
   }
 
   profileProviderSnapshot(): Promise<ProviderSnapshotRead> {

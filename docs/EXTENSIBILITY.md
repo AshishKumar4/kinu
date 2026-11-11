@@ -169,25 +169,18 @@ that one workspace's `agent_config.reasoning_effort`, on either backend. A
 workspace without its own setting runs `tiers.default.reasoningEffort` from the
 active profile (the account catalog when signed in, the local profile
 otherwise), which the TUI home screen's Defaults and the web's Model tiers card change.
-`reasoningEffortOptions(effort, providerFamily)` in
-`packages/core/src/providers/effort.ts` translates the level to each provider's
-native option.
-
-| Family | Emitted `providerOptions` |
-|---|---|
-| `workers-ai` | `{ 'workers-ai': { reasoningEffort } }` (the SDK sends `reasoning_effort` on the wire) |
-| `openai`, `opencode`, `codex`, `openai-compat` | `{ openai: { reasoningEffort } }` |
-| `openrouter` | `{ openrouter: { reasoningEffort } }` |
-| `anthropic`, `claude` | `{ anthropic: { effort } }` for `low`, `medium`, `high`, `xhigh`, `max`; otherwise `undefined` |
-| anything else | `undefined` |
+A call sends the level as the AI SDK's own `reasoning` call option, which each
+provider's adapter sends as its API takes it, per model: Claude's adaptive
+thinking with its text shown, OpenAI's effort with its reasoning summary,
+Workers AI's `reasoning_effort`.
 
 An internal producer takes the effort of the tier its `MODEL_ROUTE_POLICY` row
-names, through the same function:
+names, the same way:
 
 ```ts
-import { generateReported, reasoningEffortOptions } from '@kinu.run/core';
+import { generateReported } from '@kinu.run/core';
 
-generateReported({ model, prompt, providerOptions: reasoningEffortOptions(route.reasoningEffort, provider) }, { spend });
+generateReported({ model, prompt, reasoning: route.reasoningEffort ?? undefined }, { spend });
 ```
 Effort is the cheapness lever on most paths, not an output-token cap.
 

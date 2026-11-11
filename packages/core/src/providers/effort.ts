@@ -1,11 +1,8 @@
-// A reasoning effort as each provider family's native option.
-//
-// Chat Completions SDKs read `reasoningEffort` under their provider's name in camelCase (workersAi, opencodeGo)
-// and serialize reasoning_effort, overwriting a wire-spelled option.
+// Reasoning-effort levels, and provider options merged per namespace. A call sends its effort as the AI SDK's own
+// `reasoning`, which each provider's adapter sends as its API takes it, per model (Claude's adaptive thinking with its
+// text shown, OpenAI's effort with its reasoning summary, Workers AI's reasoning_effort).
 
 import type { streamText } from 'ai';
-import type { ReasoningEffort } from './reasoning-effort';
-import { servingRoute } from './serving-route';
 
 export {
   REASONING_EFFORTS, isReasoningEffort, knownReasoningEfforts,
@@ -14,54 +11,7 @@ export {
 
 export type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
 
-/** The key an OpenAI-compatible adapter reads a provider's options under: its name in camelCase. ai 7 reads the kebab
- *  spelling too, but warns on every request. */
-function compatOptionsKey(name: string): string {
-  return name.replace(/[_-]([a-z])/gu, (_match, letter: string) => letter.toUpperCase());
-}
-
-export function workersAIEffortOption(
-  effort?: ReasoningEffort,
-) {
-  if (!effort) return {};
-
-  return { providerOptions: { [compatOptionsKey('workers-ai')]: { reasoningEffort: effort } } };
-}
-
-/** Levels Anthropic's `effort` accepts; others leave the model on its default rather than being refused. */
-const ANTHROPIC_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-
-/** `effort` as the API serving `spec` takes it (`servingRoute`): a gateway's Claude route is Anthropic's. */
-export function reasoningEffortOptions(
-  effort: ReasoningEffort | null | undefined,
-  spec: string,
-): ProviderOptions | undefined {
-  const family = servingRoute(spec)?.provider.split(':', 1)[0];
-
-  if (!effort || family === undefined) return undefined;
-
-  switch (family) {
-    case 'workers-ai':
-      return workersAIEffortOption(effort).providerOptions;
-    case 'openai':
-    case 'codex':
-    case 'chatgpt':
-    case 'openai-compat':
-      return { openai: { reasoningEffort: effort } };
-    case 'opencode':
-    case 'opencode-go':
-      return { openai: { reasoningEffort: effort }, [compatOptionsKey(family)]: { reasoningEffort: effort } };
-    case 'openrouter':
-      return { openrouter: { reasoningEffort: effort } };
-    case 'anthropic':
-    case 'claude':
-      return ANTHROPIC_EFFORTS.includes(effort) ? { anthropic: { effort } } : undefined;
-    default:
-      return undefined;
-  }
-}
-
-/** Merges per provider namespace so cache and reasoning settings coexist. */
+/** Merges per provider namespace, the request's options over the plan's. */
 export function mergeProviderOptions(
   base: ProviderOptions | undefined,
   override: ProviderOptions | undefined,

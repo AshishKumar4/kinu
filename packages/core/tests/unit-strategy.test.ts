@@ -2,16 +2,33 @@ import { describe, test, expect } from 'bun:test';
 import { streamText } from 'ai';
 import * as v from 'valibot';
 import {
-  workersAIEffortOption, reasoningEffortOptions,
-  mergeProviderOptions, createChatModel, JsonObjectSchema, asFetchFunction, type JsonObject,
+  mergeProviderOptions, createChatModel, runChat, JsonObjectSchema, asFetchFunction, type ChatEvent, type JsonObject,
 } from '../src/index';
 
-describe('reasoning_effort plumbing', () => {
-  test('workersAIEffortOption returns empty when no effort', () => {
-    expect(workersAIEffortOption()).toEqual({});
-    expect(workersAIEffortOption(undefined)).toEqual({});
-  });
+/** Anthropic's Messages stream of one thinking block and one answer: a Claude 5 model always thinks, and its thinking text
+ *  is omitted unless the request asks `display: "summarized"` (platform.claude.com, "thinking" and its supported-models
+ *  table, read 2026-11-10). */
+function claudeThinkingAnswer(body: JsonObject, thought: string): Response {
+  const thinking = v.safeParse(v.looseObject({ display: v.string() }), body.thinking);
+  const shown = thinking.success && thinking.output.display === 'summarized' ? thought : '';
 
+  const events = [
+    { type: 'message_start', message: { id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '', signature: '' } },
+    ...(shown === '' ? [] : [{ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: shown } }]),
+    { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig-1' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Both files agree.' } },
+    { type: 'content_block_stop', index: 1 },
+    { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 1 } },
+    { type: 'message_stop' },
+  ];
+
+  return new Response(events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+}
+
+describe('a call at a reasoning effort', () => {
   test('configured Workers AI effort reaches the streaming HTTP request without an output cap', async () => {
     const requests: JsonObject[] = [];
 
@@ -28,7 +45,7 @@ describe('reasoning_effort plumbing', () => {
       }),
     });
 
-    const result = streamText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('medium', 'workers-ai/@cf/zai-org/glm-5.3') });
+    const result = streamText({ model, prompt: 'probe', maxRetries: 0, reasoning: 'medium' });
     await result.text;
     expect(requests[0]?.reasoning_effort).toBe('medium');
     expect(requests[0]?.reasoningEffort).toBeUndefined();
@@ -36,47 +53,24 @@ describe('reasoning_effort plumbing', () => {
     expect(requests[0]?.max_completion_tokens).toBeUndefined();
   });
 
-  test('maps user effort to each provider family exactly', () => {
-    for (const spec of ['openai/gpt-6.1', 'codex/gpt-6.1', 'openai-compat/local-model', 'openai-compat:groq/llama'] as const) {
-      expect(reasoningEffortOptions('medium', spec)).toEqual({
-        openai: { reasoningEffort: 'medium' },
-      });
-    }
+  // Owner report 2026-11-10: no thinking streamed for Opus. From 2026-09-10 a Claude call sent only `effort`, and a
+  // Claude 5 model, which always thinks, returned its thinking blocks with the text omitted.
+  test("a turn at an effort streams a Claude model's thinking as text", async () => {
+    const thought = 'The second file restates the first.';
 
-    expect(reasoningEffortOptions('low', 'openrouter/openai/gpt-6.1')).toEqual({
-      openrouter: { reasoningEffort: 'low' },
+    const model = createChatModel({
+      kind: 'anthropic', modelId: 'claude-opus-5-5', baseURL: 'https://fixture.invalid/v1', headers: { 'x-api-key': 'test' },
+      fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => claudeThinkingAnswer(v.parse(JsonObjectSchema, await new Request(input, init).json()), thought)),
     });
-    expect(reasoningEffortOptions('high', 'anthropic/claude-opus-4-7')).toEqual({
-      anthropic: { effort: 'high' },
-    });
-  });
 
-  // The SufficientKoala audit: a gateway route sent no effort though its serving adapter is the author's own.
-  test("a gateway's Claude or GPT route sends effort as the author's own API takes it; its chat route sends none", () => {
-    expect(['my-gateway/anthropic/claude-opus-4.7', 'my-gateway/openai/gpt-6.1', 'my-gateway/workers-ai/@cf/zai-org/glm-5.3']
-      .map((spec) => reasoningEffortOptions('high', spec) ?? null))
-      .toEqual([{ anthropic: { effort: 'high' } }, { openai: { reasoningEffort: 'high' } }, null]);
-  });
+    const events: ChatEvent[] = [];
 
-  test('Anthropic takes its documented effort levels and nothing outside them', () => {
-    // `max` and `xhigh` exist only as the effort parameter; `none` is not an Anthropic level and sends nothing.
-    expect(reasoningEffortOptions('max', 'anthropic/claude-opus-4-7')).toEqual({ anthropic: { effort: 'max' } });
-    expect(reasoningEffortOptions('low', 'anthropic/claude-opus-4-7')).toEqual({ anthropic: { effort: 'low' } });
-    expect(reasoningEffortOptions('none', 'anthropic/claude-opus-4-7')).toBeUndefined();
-  });
+    for await (const event of runChat({
+      modelSpec: 'anthropic/claude-opus-5-5', model, system: 'You compare files.', history: [{ role: 'user', content: 'Do the two files agree?' }],
+      tools: {}, cache: { providerId: 'anthropic', modelId: 'claude-opus-5-5' }, reasoning: 'medium',
+    })) events.push(event);
 
-  test('returns no options for an unsupported provider or missing effort', () => {
-    expect(reasoningEffortOptions(undefined, 'openai/gpt-6.1')).toBeUndefined();
-    expect(reasoningEffortOptions('high', 'unknown/model')).toBeUndefined();
-  });
-
-  test('merges effort into an existing provider namespace without clobbering it', () => {
-    expect(mergeProviderOptions(
-      { openai: { promptCacheKey: 'session-1' } },
-      reasoningEffortOptions('high', 'openai/gpt-6.1'),
-    )).toEqual({
-      openai: { promptCacheKey: 'session-1', reasoningEffort: 'high' },
-    });
+    expect(events.flatMap((event) => (event.type === 'reasoning-delta' ? [event.delta] : [])).join('')).toBe(thought);
   });
 });
 
@@ -86,7 +80,7 @@ describe('provider options layer per namespace', () => {
     // A shared and a unique key together: a wholesale override would lose the cache key.
     expect(mergeProviderOptions(
       { openai: { promptCacheKey: 'session-1', reasoningEffort: 'low' } },
-      reasoningEffortOptions('high', 'openai/gpt-6.1'),
+      { openai: { reasoningEffort: 'high' } },
     )).toEqual({
       openai: { promptCacheKey: 'session-1', reasoningEffort: 'high' },
     });
@@ -94,7 +88,7 @@ describe('provider options layer per namespace', () => {
     // The merge is per-namespace, not whole-object.
     expect(mergeProviderOptions(
       { anthropic: { cacheControl: { type: 'ephemeral' } }, openai: { reasoningEffort: 'low' } },
-      reasoningEffortOptions('high', 'openai/gpt-6.1'),
+      { openai: { reasoningEffort: 'high' } },
     )).toEqual({
       anthropic: { cacheControl: { type: 'ephemeral' } },
       openai: { reasoningEffort: 'high' },

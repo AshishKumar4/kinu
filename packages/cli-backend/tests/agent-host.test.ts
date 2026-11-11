@@ -64,6 +64,9 @@ import { ANSWERING_HIRE_ANSWER, answeringHireModel, hireDeathModel } from './hir
 import { swarmsOn, toolCallStream, toolSequenceModel } from './helpers/local-session';
 import { staticModelPlane } from '../src/profile-authority';
 
+/** The effort a model call was sent, as the SDK's own `reasoning` (a v2 test model's options type does not name it). */
+const CalledEffortSchema = v.looseObject({ reasoning: v.optional(v.string()) });
+
 /** A roster row's lifetime is its actor's. */
 const ROSTER_LIFETIME = "(SELECT lifetime FROM workspace_actors WHERE actor_id = json_extract(actor_subagents.actor_reference, '$.actorId')) AS lifetime";
 
@@ -1628,7 +1631,7 @@ describe('LocalAgentHost', () => {
       provider: 'fake',
       modelId: 'fake-model',
       doStream: async (options) => {
-        efforts.push(options.providerOptions?.['openai']?.['reasoningEffort']);
+        efforts.push(v.parse(CalledEffortSchema, options).reasoning);
 
         return { stream: textStream('done', { inputTokens: 1, outputTokens: 1, totalTokens: 2 }), response: { headers: {} } };
       },

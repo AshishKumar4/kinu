@@ -1366,7 +1366,7 @@ export {
 } from './subagents/ingress';
 
 // Swarm
-export { mergeProviderOptions, reasoningEffortOptions, workersAIEffortOption } from './providers/effort';
+export { mergeProviderOptions } from './providers/effort';
 
 export { type RatioProblem } from './strategy/exec-ratio';
 

@@ -48,7 +48,7 @@ import type { CountableRequest, InputTokenCount } from './providers/input-tokens
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost, MessageSwap } from './extension';
 import { ImageCarrierSchema, releaseCarriedImages } from './types/tool-images';
-import { mergeProviderOptions } from './providers/effort';
+import { mergeProviderOptions, type ReasoningEffort } from './providers/effort';
 import { compactionTriggerOptions, isServerCompaction, serverCompactionOptions, serverCompactor, sinceLatestCompaction } from './providers/server-compaction';
 import { describeProviderError, toProviderError } from './providers/util';
 import { ChatRelay } from './chat-relay';
@@ -131,7 +131,7 @@ export interface ChatFallback {
   readonly bind: () => {
     readonly model: LanguageModel;
     readonly provider: string;
-    readonly providerOptions?: ChatOptions['providerOptions'];
+    readonly reasoning?: ReasoningEffort;
   };
 }
 
@@ -222,6 +222,8 @@ export interface ChatOptions {
   /** Each tool call as it starts executing and as it ends: what a step is running while its model waits. */
   toolExecuting?: (toolCallId: string, executing: boolean) => void;
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
+  /** How hard the model reasons: the AI SDK's own level, which each provider's adapter sends as its API takes it. */
+  reasoning?: ReasoningEffort;
   /** The subset of `tools` the model may call; the rest stay wired for execution. Absent, all are offered. */
   activeTools?: readonly string[];
   /** A label whose cumulative cap is spent declines the next request. */
@@ -901,7 +903,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   /** One attempt's provider options: its cache's, the serving model's server compaction, then its own. OpenAI's is
    *  asked per step, from what the step replays. */
-  const optionsFor = (spec: string | undefined, served: number | null | undefined, own: ChatOptions['providerOptions']) => mergeProviderOptions(
+  const optionsFor = (spec: string | undefined, served: number | null | undefined, own?: ChatOptions['providerOptions']) => mergeProviderOptions(
     mergeProviderOptions(cache.providerOptions, serverCompactor(spec) === 'openai' ? undefined : serverCompactionOptions(spec, served, forcedInput)), own);
 
   /** The model each attempt calls, with the media it takes: the turn's for the primary, its own for a fallback. */
@@ -909,6 +911,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     ...primary,
     model: opts.model,
     accepts: opts.attachments?.accepts,
+    reasoning: opts.reasoning,
     providerOptions: optionsFor(assembly.model, opts.modelContext?.contextWindow, opts.providerOptions),
   };
 
@@ -1096,6 +1099,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // The only terminal handover: an aborted run never settles `result.steps`.
       onAbort: ({ steps }) => { call.aborted(steps); },
       onEnd: ({ steps, totalUsage, response }) => { call.ended({ steps, usage: totalUsage, modelId: response.modelId }); },
+      reasoning: current.reasoning,
       providerOptions: { ...current.providerOptions, ...callRetries(route.callRetries) },
       prepareStep: pacedPrepareStep(opts.paceStep, signal, prepareStep, (ended) => { stepEnded = ended; }),
       experimental_transform: () => new TransformStream<TextStreamPart<ToolSet>, TextStreamPart<ToolSet>>({
@@ -1230,7 +1234,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     servingRoute = { providerId: bound.provider, modelId: parseModelSpec(next.spec).modelId, retention: turnRoute.retention };
     cache = attemptCachePlan(opts, servingRoute, messages, tools);
     base = cache.messages;
-    current = { ...bound, spec: next.spec, accepts: next.accepts, providerOptions: optionsFor(next.spec, served, bound.providerOptions) };
+    current = { ...bound, spec: next.spec, accepts: next.accepts, reasoning: bound.reasoning, providerOptions: optionsFor(next.spec, served) };
     servingFallback = next.spec;
     route.tried.push(next.spec);
   };
