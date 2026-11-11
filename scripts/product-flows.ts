@@ -2745,7 +2745,9 @@ async function shoot(page: Page, name: string): Promise<void> {
     await page.setViewport({ width, height });
 
     for (const mode of ['light', 'dark'] as const) {
-      await page.evaluate(`document.documentElement.dataset.mode = ${JSON.stringify(mode)}`);
+      // As the app's theme store applies a mode (use-theme.ts `apply`): its attribute and the colour scheme together,
+      // which tokens resolved by `light-dark()` follow; the attribute alone draws a mix of both modes.
+      await page.evaluate(`document.documentElement.dataset.mode = ${JSON.stringify(mode)}; document.documentElement.style.colorScheme = ${JSON.stringify(mode)}`);
       await page.screenshot({ path: `${directory}/${name}-${size}-${mode}.png` });
     }
   }
