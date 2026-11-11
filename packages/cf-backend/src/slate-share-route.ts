@@ -16,7 +16,7 @@ import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { rawPath, routeError, type FamilyEnv } from './api/context';
-import { mintAnonymousSubject, mintViewerTicket, ticketUser, viewerCookie, viewerCookieResponse, viewerSigner } from './viewer-pass';
+import { anonymousTicketValid, mintAnonymousSubject, mintAnonymousTicket, mintViewerTicket, ticketUser, viewerCookie, viewerCookieResponse, viewerSigner } from './viewer-pass';
 
 const shareSigner = labelSigner('kinu.slate-share.salt', 'kinu.slate-share.v1');
 
@@ -48,6 +48,14 @@ export async function slateShareUrl(env: Env, workspace: string, handle: string)
   return host === null ? null : `https://${host}${previewPortSuffix(env)}/`;
 }
 
+
+/** Where Kinu's share page sends its frame once its visitor continues anonymously: the exchange, with its ticket. */
+export async function anonymousEntryUrl(env: Env, workspace: string, handle: string): Promise<string | null> {
+  const base = await slateShareUrl(env, workspace, handle);
+  const ticket = await mintAnonymousTicket(env, workspace, handle);
+
+  return base === null || ticket === null ? null : `${base}${VIEWER_EXCHANGE_PATH.slice(1)}?anonymous=${encodeURIComponent(ticket)}`;
+}
 
 export async function viewerEntryUrl(env: Env, workspace: string, handle: string, userId: string): Promise<string | null> {
   const base = await slateShareUrl(env, workspace, handle);
@@ -88,7 +96,11 @@ shareHostRoutes.all(VIEWER_EXCHANGE_PATH, async (c) => {
   const url = new URL(request.url);
   const source = await viewerSource(viewerSecret, request);
   const consent = url.searchParams.has('consent');
-  const anonymous = url.searchParams.has('anonymous');
+  // Continuing anonymously needs Kinu's own page's ticket (`mintAnonymousTicket`): the app's frame, on this very origin,
+  // must never name its visitor anonymous, which is to accept the owner's reading of their chat.
+  const anonymous = url.searchParams.has('anonymous') && await anonymousTicketValid(env, workspace, handle, url.searchParams.get('anonymous') ?? '');
+
+  if (url.searchParams.has('anonymous') && !anonymous) return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
   const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
   const ticket = consent || anonymous ? null : await ticketUser(env, workspace, handle, url.searchParams.get('ticket') ?? '');
   // Continuing anonymously keeps who the visitor already is, signed in or anonymous, and their consent; only a visitor

@@ -11,10 +11,10 @@ import {
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
   LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, type LiveShareBody,
-  LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema, LIVE_SHARE_ACKNOWLEDGE_PATH, LiveShareAcknowledgeSchema,
+  LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema, LIVE_SHARE_ACKNOWLEDGE_PATH, LiveShareAcknowledgeSchema, LIVE_SHARE_ANONYMOUS_PATH, type LiveShareAnonymous,
   type OwnedLiveShare, type SlateAnswer,
 } from '@kinu.run/core';
-import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
+import { anonymousEntryUrl, slateShareUrl, viewerEntryUrl } from '../slate-share-route';
 import { shareViewerKey } from '../viewer-pass';
 import { crossSiteRejection, requestIdentity, type AuthIdentity } from '../auth/session';
 import { accountIdFor } from '../auth/store';
@@ -301,6 +301,23 @@ async function blueprintBundle(env: Env, id: string) {
 }
 
 const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
+
+// Continuing anonymously on a My-access share: Kinu's own page alone asks, by its Origin whether or not a session rides
+// it, since every share host is same-site and an app's frame must never mint its visitor's acceptance.
+sharedPublicRoutes.post(LIVE_SHARE_ANONYMOUS_PATH, async (c) => {
+  const request = c.req.raw;
+
+  if (request.headers.get('origin') !== new URL(request.url).origin) return err(403, 'Only Kinu\'s own share page continues anonymously');
+  const body = await safeJson(request, LiveIdBody);
+
+  if (!body) return err(400, 'Body must be { workspace, share }');
+  const reading = await workspaceOwner(c.env, body.workspace).openLiveShare(body.share, null, SIGNED_OUT_VIEWER);
+
+  if (!reading.ok || !reading.value.admits || reading.value.record.mode !== 'owner') return err(404, 'No such share');
+  const url = await anonymousEntryUrl(c.env, body.workspace, reading.value.record.handle);
+
+  return url === null ? err(503, 'This deployment cannot sign live-share links') : json({ body: { url } satisfies LiveShareAnonymous });
+});
 
 /** `emails` names users on a `users` share; `approved` is the mutating grant the dialog checked. */
 async function shareLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {

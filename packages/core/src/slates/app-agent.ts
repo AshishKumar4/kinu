@@ -77,8 +77,8 @@ export function appAgentKey(conversation: AppAgentConversation): string {
 
 /**
  * How a share lends that its visitor was told and accepted, as their asks are held to it: an anonymous visitor accepted
- * the owner's model when they continued anonymously, the one way to become one; a signed-in one by what they
- * acknowledged last (`ShareDisclosures`). Null for none.
+ * the owner's model when they continued anonymously, the one way to become one (the share host's exchange takes only
+ * Kinu's own page's ticket for it); a signed-in one by what they acknowledged last (`ShareDisclosures`). Null for none.
  */
 export function acknowledgedMode(subject: string, recorded: ShareMode | null): ShareMode | null {
   return subject.startsWith(ANONYMOUS_SUBJECT_PREFIX) ? 'owner' : recorded;
@@ -311,11 +311,11 @@ const DisclosureRow = v.object({ mode: ShareModeSchema });
  * accepts it; read at each ask, which runs only under the mode the share has now. Forgotten with the share or the person.
  */
 export class ShareDisclosures {
-  constructor(private readonly db: SqlExec, private readonly now: () => number = () => Date.now()) {}
+  constructor(private readonly db: SqlExec) {}
 
   acknowledge(share: string, subject: string, mode: ShareMode): void {
-    this.db.exec('INSERT INTO slate_share_disclosures (share_id, viewer_subject, mode, acknowledged_at) VALUES (?, ?, ?, ?) '
-      + 'ON CONFLICT (share_id, viewer_subject) DO UPDATE SET mode = excluded.mode, acknowledged_at = excluded.acknowledged_at', share, subject, mode, this.now());
+    this.db.exec('INSERT INTO slate_share_disclosures (share_id, viewer_subject, mode) VALUES (?, ?, ?) '
+      + 'ON CONFLICT (share_id, viewer_subject) DO UPDATE SET mode = excluded.mode', share, subject, mode);
   }
 
   of(share: string, subject: string): ShareMode | null {

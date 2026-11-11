@@ -214,6 +214,16 @@ export const LIVE_SHARE_ACKNOWLEDGE_PATH = '/api/shared/live/acknowledge';
 
 export const LiveShareAcknowledgeSchema = v.object({ workspace: v.string(), share: v.string(), mode: ShareModeSchema });
 
+/**
+ * `POST`, from Kinu's own share page alone (its Origin), signed in or not: where its frame goes once its visitor
+ * continues anonymously on a My-access share, the exchange with a ticket only this answer carries.
+ */
+export const LIVE_SHARE_ANONYMOUS_PATH = '/api/shared/live/anonymous';
+
+export const LiveShareAnonymousSchema = v.object({ url: v.string() });
+
+export type LiveShareAnonymous = v.InferOutput<typeof LiveShareAnonymousSchema>;
+
 /** `POST`, its owner's: the My-access conversations of one share (app-agent.ts), newest first. */
 export const LIVE_SHARE_CHATS_PATH = '/api/shared/live/chats';
 

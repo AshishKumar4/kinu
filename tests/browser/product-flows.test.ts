@@ -781,6 +781,7 @@ describe(productFlowTestName('app-agent-lent', 'an anonymous visitor on a My-acc
   test('a visitor known by nothing yet is asked who they are, and may go on anonymously', () => {
     const lent = verdictOf(observed, 'app-agent-lent');
 
+    expect(lent.forged).toBe(404);
     expect(lent.first.reply).toBe('');
     expect(lent.sheet?.anonymous).toBe(true);
   });

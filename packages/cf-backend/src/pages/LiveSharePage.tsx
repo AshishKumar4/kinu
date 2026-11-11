@@ -7,7 +7,7 @@
  * site, so the ticket's cookie reaches it inside the frame.
  */
 import { Button } from "@/components/ui/Button";
-import { APP_AGENT_CONSENT, appAgentConsent, readSlateIdentityAsk, slateFrameSrc, VIEWER_EXCHANGE_PATH, type LiveShareOpen, type ShareMode } from "@kinu.run/core";
+import { APP_AGENT_CONSENT, appAgentConsent, readSlateIdentityAsk, slateFrameSrc, type LiveShareOpen, type ShareMode } from "@kinu.run/core";
 import { detachPromise } from "@kinu.run/core/obs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
@@ -16,7 +16,8 @@ import { Loader } from "@/components/ui/Loader";
 import { useSlateHostContext } from "@/components/slates/InlineSlate";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { usePartHost } from "@/hooks/use-part-host";
-import { acknowledgeShare, openLiveShare } from "@/lib/shared-api";
+import { useArmed } from "@/hooks/use-armed";
+import { acknowledgeShare, anonymousEntry, openLiveShare } from "@/lib/shared-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { signInAndReturn } from "@/lib/sign-in";
 import { Notice } from "@/components/ui/Notice";
@@ -110,13 +111,11 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
     else await reread();
   });
 
-  const continueAnonymously = (): void => {
-    const exchange = new URL(VIEWER_EXCHANGE_PATH, opened.url);
-
-    exchange.searchParams.set("anonymous", "1");
-    setAnonymous(slateFrameSrc(exchange.toString(), contextRef.current));
+  // Kinu's ticket for it, asked here: the app's frame cannot name its visitor anonymous itself.
+  const continueAnonymously = (): void => detachPromise(async () => {
+    setAnonymous(slateFrameSrc(await anonymousEntry({ workspace, share }), contextRef.current));
     setAsking(null);
-  };
+  });
 
   return (
     <>
@@ -138,12 +137,14 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
 
 /** The app's assistant on its owner's model needs to know who asks: they sign in, or go on as this browser, anonymously. */
 function IdentitySheet({ onClose, onAnonymous }: { onClose: () => void; onAnonymous: () => void }) {
+  const armed = useArmed();
+
   return (
     <Modal title="Say who's asking" width="md" onClose={onClose}
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>Not now</Button>
-          <Button variant="secondary" size="sm" data-assistant-anonymous onClick={onAnonymous}>Continue anonymously</Button>
+          <Button variant="secondary" size="sm" data-assistant-anonymous disabled={!armed} onClick={onAnonymous}>Continue anonymously</Button>
           <Button variant="primary" size="sm" data-assistant-sign-in onClick={() => signInAndReturn()}>Sign in</Button>
         </>
       )}>
@@ -154,12 +155,14 @@ function IdentitySheet({ onClose, onAnonymous }: { onClose: () => void; onAnonym
 
 /** Signed in on My access: the visitor accepts that the assistant runs on the owner's model, who reads the chat. */
 function LentSheet({ onClose, onContinue }: { onClose: () => void; onContinue: () => void }) {
+  const armed = useArmed();
+
   return (
     <Modal title="Its owner can read this chat" width="md" onClose={onClose}
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>Not now</Button>
-          <Button variant="primary" size="sm" data-assistant-continue onClick={onContinue}>Continue</Button>
+          <Button variant="primary" size="sm" data-assistant-continue disabled={!armed} onClick={onContinue}>Continue</Button>
         </>
       )}>
       <p className="t-body p-text-2">This app&apos;s assistant runs on its owner&apos;s model, and its owner can read your conversation with it. Nothing you asked was sent yet.</p>

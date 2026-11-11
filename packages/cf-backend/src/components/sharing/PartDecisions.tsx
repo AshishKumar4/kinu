@@ -11,6 +11,7 @@ import { type ConsentAsk, type EffectAsk, type JsonValue } from "@kinu.run/core"
 import { Modal } from "@/components/ui/Modal";
 import { rootWords, serverWords } from "./words";
 import { Surface } from "@/components/ui/Surface";
+import { useArmed } from "@/hooks/use-armed";
 
 /** What leaves, as it will leave: the payload's own JSON, never a summary of it. */
 function Payload({ value, ...data }: { value: JsonValue; [attribute: `data-${string}`]: string | boolean | undefined }) {
@@ -79,9 +80,11 @@ export function AssistantConsentDecision({ slate, reason, onAllow, onClose }: {
   onAllow: () => void;
   onClose: () => void;
 }) {
+  const armed = useArmed();
+
   return (
     <Modal title={ASSISTANT_CONSENT_TITLES[reason](slate)} icon={<PlugIcon size={18} className="p-accent-fg" />} onClose={onClose}
-      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose} data-consent-dismiss>Not now</Button><Button variant="primary" size="sm" data-consent-allow onClick={onAllow}>{reason === "new" ? "Allow" : "Allow again"}</Button></div>}>
+      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose} data-consent-dismiss>Not now</Button><Button variant="primary" size="sm" data-consent-allow disabled={!armed} onClick={onAllow}>{reason === "new" ? "Allow" : "Allow again"}</Button></div>}>
       <Lets
         yes={[
           <span key="model">Answer you on your own default model</span>,

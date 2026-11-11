@@ -340,7 +340,7 @@ export {
   type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
   type LiveShareRecord, type OwnedLiveShare, type LiveShareCreated, type ShareViewerClaim,
   LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen,
-  LIVE_SHARE_ACKNOWLEDGE_PATH, LiveShareAcknowledgeSchema, LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, ShareChatsSchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema, ShareChatTranscriptSchema,
+  LIVE_SHARE_ACKNOWLEDGE_PATH, LiveShareAcknowledgeSchema, LIVE_SHARE_ANONYMOUS_PATH, LiveShareAnonymousSchema, type LiveShareAnonymous, LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, ShareChatsSchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema, ShareChatTranscriptSchema,
   type ShareChats, type ShareChatTranscript,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, SlatePreapprovalsSchema,
   type SharePreapproval, type SlatePreapprovals, type SlatePreapprovalWithdraw,

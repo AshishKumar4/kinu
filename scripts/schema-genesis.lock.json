@@ -1406,7 +1406,6 @@
     "share_id TEXT NOT NULL",
     "viewer_subject TEXT NOT NULL",
     "mode TEXT NOT NULL",
-    "acknowledged_at INTEGER NOT NULL",
     "PRIMARY KEY (share_id, viewer_subject)"
   ],
   "slate_share_guests@packages/core/src/slates/live-shares.ts": [

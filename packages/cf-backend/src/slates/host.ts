@@ -578,7 +578,9 @@ export class SlateHost {
       async () => { await this.deps.appAgentObject?.(conversation).stop(); }, { share })));
     const slate = this.controller.live.get(share)?.slate;
 
-    // What each visitor acknowledged was of how it lent then: a share lending otherwise now asks them again.
+    // What each visitor acknowledged was of how it lent then. The ask's own check (`acknowledged !== share.mode`) is what
+    // keeps a visitor from running under a mode they never accepted; forgetting here is what asks them again after a
+    // flip there and back, and is skipped only where the share's restart threw first.
     this.disclosures.forget(share);
 
     if (slate !== undefined) await this.endChats(this.chats.of(share).map(({ subject }) => ({ slate, share, subject })));

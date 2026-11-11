@@ -39,17 +39,16 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
     opens INTEGER NOT NULL,
     PRIMARY KEY (share, viewer)
   )`);
-  // Each conversation an app's agent had on its owner's model (app-agent.ts): the owner's own (share ''), and each
-  // My-access visitor's, which the owner may read. Written at its first admitted ask, forgotten once its object ended,
-  // and what finds that object then. A conversation on a visitor's own models is never listed here.
   // What each signed-in visitor of a share last acknowledged of how it lends (app-agent.ts `ShareDisclosures`).
   execRaw(`CREATE TABLE IF NOT EXISTS slate_share_disclosures (
     share_id TEXT NOT NULL,
     viewer_subject TEXT NOT NULL,
     mode TEXT NOT NULL,
-    acknowledged_at INTEGER NOT NULL,
     PRIMARY KEY (share_id, viewer_subject)
   )`);
+  // Each conversation an app's agent had on its owner's model (app-agent.ts): the owner's own (share ''), and each
+  // My-access visitor's, which the owner may read. Written at its first admitted ask, forgotten once its object ended,
+  // and what finds that object then. A conversation on a visitor's own models is never listed here.
   execRaw(`CREATE TABLE IF NOT EXISTS slate_agent_chats (
     slate TEXT NOT NULL,
     share_id TEXT NOT NULL,
