@@ -12,7 +12,7 @@ import { SharedServers, type SharedServerDeps } from '../src/slates/shared-serve
 import { approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable } from '../src/index';
 import { preapproveSlateEffect } from '../src/slates/live-sharing';
 import { settle } from '../src/obs/effect';
-import type { ShareGrant } from '../src/slates/sharing';
+import { shareGrantKey, type ShareGrant } from '../src/slates/sharing';
 import type { JsonValue } from '../src/utils/json';
 import { slateCallAddress } from '../src/slates/surface';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
@@ -69,10 +69,11 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
     const chain = options.chain ?? [];
     const args = options.args ?? [{ path: 'notes.md', text: 'hello' }];
 
-    return viewers.call({
+    // A visitor who accepted the grant as it stands when they call: what the grant reaches is not this file's question.
+    return shareGrantKey(live.live('s1').grant).then(async (consented) => viewers.call({
       share: 's1', id: slate, chain,
       request: { path: member.split('.'), args, invocation: null, ...(options.authorize && { authorize: options.authorize }) },
-      issued: { id: slate, chain, incarnation: 'p1', generations: {}, viewer: { share: 's1', subject, consented: '', request: live.openRequest({ share: 's1', viewer: subject, path: '/' }) } },
+      issued: { id: slate, chain, incarnation: 'p1', generations: {}, viewer: { share: 's1', subject, consented, request: live.openRequest({ share: 's1', viewer: subject, path: '/' }) } },
       gate: (routed) => servers.gate({ slate, chain, address: routed.address, effect: routed.effect, args, on: subject }),
       bound: (address) => servers.bounded({ slate, chain, address }),
       run: async (_route, _nested, admit) => {
@@ -84,7 +85,7 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
 
         return { ok: true, value: { done: true } };
       },
-    });
+    }));
   };
 
   /** The owner's own request to their shared slate: the server's like any other. */

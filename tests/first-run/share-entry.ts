@@ -4,6 +4,7 @@
  * public share, or as a named person for their signed entry.
  */
 import * as v from 'valibot';
+import { consentToShare } from '@kinu.run/test-utils';
 import { LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen } from '@kinu.run/core';
 
 export async function openShare(input: {
@@ -20,12 +21,17 @@ export async function openShare(input: {
   return opened.ok ? v.parse(LiveShareOpenSchema, await opened.json()) : null;
 }
 
-/**
- * A public share's bare host, as its page is told it signed out, and what Kinu's page would post into it to enter as a
- * visitor with no account (`consentToShare`); null for no share, or one that would not open.
- */
-export async function shareEntry(origin: string, workspace: string, share: string | undefined): Promise<{ readonly url: string; readonly origin: string; readonly binding: string | null } | null> {
+/** A public share's bare host as its page is told it signed out (null for no share, or one that would not open), and
+ *  entering it as Kinu's page enters it for a visitor with no account (`consentToShare`): their viewer cookie. */
+export interface SharedEntry {
+  readonly url: string | null;
+  enter(): Promise<string>;
+}
+
+export async function shareEntry(origin: string, workspace: string, share: string | undefined): Promise<SharedEntry> {
   const opened = share === undefined ? null : await openShare({ origin, workspace, share });
 
-  return opened === null ? null : { url: opened.url, origin, binding: opened.consent?.binding ?? null };
+  if (opened === null) return { url: null, enter: async () => Promise.reject(new Error('no share to enter')) };
+
+  return { url: opened.url, enter: async () => consentToShare({ url: opened.url, origin, binding: opened.consent?.binding ?? null }) };
 }

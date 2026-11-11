@@ -7,7 +7,7 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
-import { callSharedSlate, consentToShare, type EvalObservation, type SlateViewerAnswer } from '@kinu.run/test-utils';
+import { callSharedSlate, type EvalObservation, type SlateViewerAnswer } from '@kinu.run/test-utils';
 import { JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
 import { firstRunCaseId, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { operatorFirstRunPlan } from './operator-session';
@@ -76,7 +76,7 @@ END`]));
         const created = answered.success ? v.safeParse(LiveShareCreatedSchema, answered.output.value) : null;
         // Its link is the app's page for it; the visitor here drives the host that page frames.
         const entry = await shareEntry(session.origin, session.workspace, created?.success === true ? created.output.share.id : undefined);
-        const url = entry?.url ?? null;
+        const { url } = entry;
         const refusal = v.safeParse(Refused, shared);
         let served: { status: number; body: string } | null = null;
         let probe: SlateViewerAnswer<JsonValue> | null = null;
@@ -86,7 +86,7 @@ END`]));
         if (url !== null) {
           // Signed out: no identity, no bearer — only the consent the share
           // asks every viewer for.
-          const cookie = await consentToShare({ url, origin: entry?.origin ?? '', binding: entry?.binding ?? null });
+          const cookie = await entry.enter();
           const response = await fetch(url, { headers: { cookie } });
           served = { status: response.status, body: (await response.text()).slice(0, 200) };
           probe = await viewerCall(url, 'probe', cookie);

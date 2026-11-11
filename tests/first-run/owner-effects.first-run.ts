@@ -5,7 +5,7 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
-import { callSharedSlate, consentToShare, type EvalObservation, type EvalSubgoal, type SlateViewerAnswer } from '@kinu.run/test-utils';
+import { callSharedSlate, type EvalObservation, type EvalSubgoal, type SlateViewerAnswer } from '@kinu.run/test-utils';
 import { approvalKindOf, JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { turnOnMyAccess } from './my-access';
@@ -78,14 +78,14 @@ END`));
         const created = shared.success ? v.safeParse(LiveShareCreatedSchema, shared.output.value) : null;
         const share = created?.success === true ? created.output.share.id : null;
         const entry = await shareEntry(plan.origin, session.workspace, share ?? undefined);
-        const url = entry?.url ?? null;
+        const { url } = entry;
 
         const lent = share === null ? null : await turnOnMyAccess({
           origin: plan.origin, headers: webHeaders(plan.identity), workspace: session.workspace, share,
           graph: await session.slateOp({ op: 'graph', id: SLATE }), approved: [WRITE],
         });
 
-        const cookie = url === null ? null : await consentToShare({ url, origin: entry?.origin ?? '', binding: entry?.binding ?? null });
+        const cookie = url === null ? null : await entry.enter();
         const write = async () => (url === null || cookie === null ? null : callSharedSlate(url, 'mark', JsonValueSchema, cookie));
         const marked = async () => v.parse(Exec, await session.execute('workspace', `cat ${MARK} 2>&1 || echo EFFECTS-NO-MARK`)).stdout ?? '';
         const asked = await write();
