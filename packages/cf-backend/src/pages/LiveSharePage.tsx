@@ -88,8 +88,8 @@ function postIntoFrame(action: string, frame: string, field: { readonly name: st
   input.type = "hidden";
   input.name = field.name;
   input.value = field.value;
-  form.append(input);
-  document.body.append(form);
+  form.appendChild(input);
+  document.body.appendChild(form);
   form.submit();
   form.remove();
 }
