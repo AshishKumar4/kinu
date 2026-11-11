@@ -31,7 +31,11 @@ export async function shareViewerKey(env: LabelSignerEnv, share: string, userId:
 }
 
 /** A guest host's visitor identity, set by its ticket exchange and scoped to that host: a live share's viewer, a preview's owner. */
-export const VIEWER_COOKIE_NAME = '__Host-kinu_viewer';
+/**
+ * `__Host-Http-`: a cookie no script may set (Chrome 140+, Firefox), so an app's page on its own share host cannot plant
+ * one, by overflowing the jar or otherwise, to stand its visitor under an identity or an acceptance they never gave.
+ */
+export const VIEWER_COOKIE_NAME = '__Host-Http-kinu_viewer';
 
 const USER_ID_RE = /^[a-f0-9]{32}$/;
 

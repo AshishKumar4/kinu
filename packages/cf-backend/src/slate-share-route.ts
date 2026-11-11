@@ -138,20 +138,21 @@ shareHostRoutes.post(VIEWER_EXCHANGE_PATH, async (c) => {
   const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
   const source = await viewerSource(viewerSecret, request);
 
+  const bound = form.get('consent');
+  // Its binding names the reach it was shown, which admission compares again; a binding that does not verify is no one's.
+  const grant = bound === null ? null : await consentBindingGrant(env, workspace, handle, bound);
+
+  if (bound !== null && grant === null) return new Response('Not found', NOT_FOUND);
+
+  // Signed in, who they are; posted with an acceptance, theirs too, so it never lands on whoever the cookie named last.
   if (ticketed !== null) {
     const ticket = await ticketUser(env, workspace, handle, ticketed);
 
-    return await exchangedTo(c, request, ticket === null ? null : { subject: ticket.userId, consented: keptConsent(held, ticket.userId) });
+    return await exchangedTo(c, request, ticket === null ? null : { subject: ticket.userId, consented: grant ?? keptConsent(held, ticket.userId) });
   }
 
-  const bound = form.get('consent');
-
-  // Accepted over whoever the visitor is now; its binding names the grant it was shown, which admission compares again.
-  if (bound !== null) {
-    const grant = await consentBindingGrant(env, workspace, handle, bound);
-
-    return await exchangedTo(c, request, grant === null ? null : { subject: held?.subject ?? source, consented: grant });
-  }
+  // Accepted over whoever the visitor is now.
+  if (grant !== null) return await exchangedTo(c, request, { subject: held?.subject ?? source, consented: grant });
 
   // No account now: an account this browser held before (a sign-out, a shared machine) is no one's to keep. An anonymous
   // id it held stays, and continuing anonymously makes one where it has none; anything else is who it comes from.
@@ -161,8 +162,9 @@ shareHostRoutes.post(VIEWER_EXCHANGE_PATH, async (c) => {
 
   if (held?.anonymous !== null && held?.anonymous !== undefined) return await exchangedTo(c, request, { subject: held.subject, consented: held.consented, ...(!anonymous && { uncounted: true }) });
 
+  // A visitor going on anonymously from a browser that named no account keeps what that browser accepted.
   return anonymous
-    ? await exchangedTo(c, request, { subject: mintAnonymousSubject(), consented: null, admitAs: source })
+    ? await exchangedTo(c, request, { subject: mintAnonymousSubject(), consented: held?.userId === null ? held.consented : null, admitAs: source })
     : await exchangedTo(c, request, { subject: source, consented: keptConsent(held, source), uncounted: true });
 });
 

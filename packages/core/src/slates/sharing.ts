@@ -198,6 +198,9 @@ export type LiveShareListingBody = v.InferOutput<typeof LiveShareListingBodySche
  *  at which revision of its code, which its page asks its visitor about before the app agent answers them. */
 export const LIVE_SHARE_OPEN_PATH = '/api/shared/live/open';
 
+/** `again`: its page reading it once more, for a sheet it asks; counted as no new open. */
+export const LiveShareOpenBodySchema = v.object({ workspace: v.string(), share: v.string(), again: v.optional(v.literal(true)) });
+
 export const LiveShareOpenSchema = v.object({
   url: v.string(), slate: v.string(), title: v.string(), mode: ShareModeSchema, revision: v.string(), signedIn: v.boolean(),
   /** Signed in, who they are to the share's host: what Kinu's page posts into its frame (`VIEWER_EXCHANGE_PATH`). */
@@ -209,7 +212,7 @@ export const LiveShareOpenSchema = v.object({
    * binding it posts into the frame once they accept (the share host takes consent from Kinu's own page alone); null
    * for a grant reaching nothing of the owner's.
    */
-  consent: v.nullable(v.object({ namespaces: v.array(v.string()), binding: v.string() })),
+  consent: v.nullable(v.object({ reach: v.array(ShareReachSchema), binding: v.string() })),
 });
 
 export type LiveShareOpen = v.InferOutput<typeof LiveShareOpenSchema>;
@@ -313,31 +316,63 @@ export const ShareViewerClaimSchema = v.object({
   consented: v.nullable(v.string()),
 });
 
-/**
- * What of its owner's a share's grant reaches, as its visitors accept it: the namespaces it names, written out (base64url,
- * so a cookie carries it whole), so a grant that reaches more is another key; '' for one reaching nothing of theirs,
- * which no one is asked about. Read synchronously, where a call is sent.
- */
-export function shareGrantKey(grant: { readonly members: readonly { readonly namespace: string }[] }): string {
-  const namespaces = shareGrantNamespaces(grant);
+/** What a share lends of its owner's in one namespace, as its visitor is shown it: whether anything there acts. */
+export const ShareReachSchema = v.object({ namespace: v.string(), acts: v.boolean() });
 
-  if (namespaces.length === 0) return '';
-  const bytes = new TextEncoder().encode(namespaces.join('\n'));
+export type ShareReach = v.InferOutput<typeof ShareReachSchema>;
+
+/**
+ * What a share lends its visitors of its owner's now, by namespace: nothing on their own access, whose server lends
+ * nothing; on My access, each namespace its grant names, and whether any member there acts.
+ */
+export function shareReach(share: { readonly mode: string; readonly grant: { readonly members: readonly { readonly namespace: string; readonly impact: string }[] } }): ShareReach[] {
+  if (share.mode !== 'owner') return [];
+  const acts = new Map<string, boolean>();
+
+  for (const member of share.grant.members) acts.set(member.namespace, (acts.get(member.namespace) ?? false) || member.impact !== 'observe');
+
+  return [...acts].sort(([a], [b]) => a.localeCompare(b)).map(([namespace, acting]) => ({ namespace, acts: acting }));
+}
+
+/**
+ * That reach as a key its visitor's acceptance is kept by (base64url, so a cookie carries it whole; read synchronously,
+ * where a call is sent); '' for a share lending nothing, which no one is asked about.
+ */
+export function shareGrantKey(share: Parameters<typeof shareReach>[0]): string {
+  const reach = shareReach(share);
+
+  if (reach.length === 0) return '';
+  const bytes = new TextEncoder().encode(reach.map((entry) => `${entry.namespace}:${entry.acts ? 'acts' : 'reads'}`).join('\n'));
 
   return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
 }
 
-/** The namespaces a share's grant reaches, as its visitors are shown them before they accept it. */
-export function shareGrantNamespaces(grant: { readonly members: readonly { readonly namespace: string }[] }): string[] {
-  return [...new Set(grant.members.map((member) => member.namespace))].sort();
+/**
+ * Whether `consented`, a key the visitor accepted, covers the share's reach now (`grant`): every namespace it names, and
+ * where it acts there, an acceptance of acting. A narrower reach is covered; a wider one asks again.
+ */
+export function grantAccepted(grant: string, consented: string): boolean {
+  if (grant === '' || grant === consented) return true;
+
+  const accepted = keyEntries(consented);
+
+  return [...keyEntries(grant)].every(([namespace, acts]) => accepted.has(namespace) && (!acts || accepted.get(namespace) === true));
+}
+
+/** A key's namespaces, each with whether it acts there. */
+function keyEntries(key: string): Map<string, boolean> {
+  if (key === '') return new Map();
+
+  return new Map(atob(key.replaceAll('-', '+').replaceAll('_', '/')).split('\n').map((entry) => {
+    const at = entry.lastIndexOf(':');
+
+    return [entry.slice(0, at), entry.slice(at + 1) === 'acts'] as const;
+  }));
 }
 
 export type ShareViewerClaim = v.InferOutput<typeof ShareViewerClaimSchema>;
 
 export const VIEWER_EXCHANGE_PATH = '/__kinu/viewer';
-
-/** Where a slate's page opens its session to its process (runtime-modules.ts). */
-export const SLATE_RPC_PATH = '/__rpc';
 
 /**
  * The app's entry to a workspace preview, `?to=<the preview's URL>`: it knows its visitor, and sends the workspace's

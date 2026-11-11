@@ -324,7 +324,7 @@ describe("a removed slate's pictures", () => {
 describe("a listed share's view", () => {
   const HOST = 'https://s1handle-token-ledger.preview.test/';
   /** The workspace's own capture pass, as `shareCapturePass` mints it: set on the browser, never in the address. */
-  const CAPTURE_COOKIE = { name: '__Host-kinu_viewer', value: 'capture.1.grant.sig' };
+  const CAPTURE_COOKIE = { name: '__Host-Http-kinu_viewer', value: 'capture.1.grant.sig' };
 
   /** Share s1 listed, serving `publication` now; listed no more once `listed` says so; its authority holding while `held`. */
   const s1 = (publication: () => string, listed: () => boolean = () => true, held: () => boolean = () => true): PictureCapture['share'] => async (share) =>
@@ -410,7 +410,7 @@ describe("a listed share's view", () => {
 describe("a share view's shot", () => {
   const HOST = 'https://s1handle-token-ledger.preview.test/';
   /** The workspace's own capture pass, as `shareCapturePass` mints it: set on the browser, never in the address. */
-  const CAPTURE_COOKIE = { name: '__Host-kinu_viewer', value: 'capture.1.grant.sig' };
+  const CAPTURE_COOKIE = { name: '__Host-Http-kinu_viewer', value: 'capture.1.grant.sig' };
 
   /** A camera that, as it takes its one shot, runs `meanwhile` (what the owner does while the page loads). */
   function during(meanwhile: () => Promise<void>, frame: Uint8Array): Camera {

@@ -7,7 +7,7 @@
 import type { ReactNode } from "react";
 import { CheckIcon, EyeIcon, PlugIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/Button";
-import { type ConsentAsk, type EffectAsk, type JsonValue } from "@kinu.run/core";
+import { type ConsentAsk, type EffectAsk, type JsonValue, type ShareReach } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { rootWords, serverWords } from "./words";
 import { Surface } from "@/components/ui/Surface";
@@ -74,9 +74,9 @@ const ASSISTANT_CONSENT_TITLES = {
  * What a share's grant reaches of its owner's, accepted on Kinu's own page before any of it runs for this visitor, and
  * again once it reaches more (the share's host takes this acceptance from Kinu's origin alone, never the app's).
  */
-export function ReachDecision({ slate, namespaces, onContinue, onClose }: {
+export function ReachDecision({ slate, reach, onContinue, onClose }: {
   slate: string;
-  namespaces: readonly string[];
+  reach: readonly ShareReach[];
   onContinue: () => void;
   onClose: () => void;
 }) {
@@ -85,11 +85,18 @@ export function ReachDecision({ slate, namespaces, onContinue, onClose }: {
   return (
     <Modal title={`${slate} uses its owner's connections`} icon={<PlugIcon size={18} className="p-accent-fg" />} onClose={onClose}
       footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose}>Not now</Button><Button variant="primary" size="sm" data-reach-continue disabled={!armed} onClick={onContinue}>Continue</Button></div>}>
-      <p className="t-body p-text-2">It runs in its owner&apos;s workspace and calls these with their credentials:</p>
-      <Lets yes={namespaces.map((namespace) => <span key={namespace}>{serverWords({ server: namespace })}</span>)} no={[]} />
+      <p className="t-body p-text-2">It runs in its owner&apos;s workspace, and here it uses these with their credentials:</p>
+      <Lets yes={reach.map((entry) => <span key={entry.namespace}>{reachWords(entry)}</span>)} no={[]} />
       <p className="t-meta p-text-3">What you do here runs as its owner and is logged for them.</p>
     </Modal>
   );
+}
+
+/** One namespace a share lends, as its visitor reads it: what it is, and whether the app only reads there or acts. */
+function reachWords(entry: ShareReach): string {
+  const named = entry.namespace === "workspace" ? "its owner's files and tools" : serverWords({ server: entry.namespace });
+
+  return `${named}: ${entry.acts ? "reads and changes" : "reads"}`;
 }
 
 /**

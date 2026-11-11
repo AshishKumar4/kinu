@@ -746,7 +746,7 @@ describe("signing a preview's owner in on its own host", () => {
 
     expect(exchange.status).toBe(303);
     expect(next.toString()).toBe(`${NIMBUS_URL}board?tab=2`);
-    expect(cookie).toMatch(/^__Host-kinu_viewer=[^;]+; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/);
+    expect(cookie).toMatch(/^__Host-Http-kinu_viewer=[^;]+; Path=\/; Secure; HttpOnly; SameSite=Lax; Max-Age=\d+$/);
     expect(page?.status).toBe(200);
     expect(visits).toEqual([OWNER_ID]);
   });
@@ -853,7 +853,7 @@ describe("signing a preview's owner in on its own host", () => {
     const issued = await viewerCookieResponse(ENV, { workspace: 'hello', handle: NIMBUS_CAPABILITY.slice(0, 10), subject: OWNER_ID }, '/');
     const shared = present(issued.headers.get('set-cookie')?.split(';')[0], 'a share cookie');
 
-    for (const cookie of [`__Host-kinu_viewer=forged.${String(Date.now() + 60_000)}.sig`, shared]) {
+    for (const cookie of [`__Host-Http-kinu_viewer=forged.${String(Date.now() + 60_000)}.sig`, shared]) {
       await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL, { headers: { cookie } }), env);
     }
 

@@ -50,7 +50,7 @@ async function acceptedClaim(owned: ReturnType<typeof workspaceOwner>, share: st
   const read = await owned.openLiveShare(share, null, SIGNED_OUT_VIEWER);
 
   if (!read.ok) throw new Error(`reading the share refused: ${read.reason}: ${read.error}`);
-  const grant = shareGrantKey(read.value.record.grant);
+  const grant = shareGrantKey(read.value.record);
 
   return { userId: null, source: 'probe-viewer', consented: grant === '' ? null : grant };
 }

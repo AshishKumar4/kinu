@@ -149,10 +149,10 @@ describe('a share this deployment minted', () => {
     const viewerSigner = labelSigner('kinu.slate-viewer.salt', 'kinu.slate-viewer.v1');
     const userId = 'a'.repeat(32);
     const expiresAt = Date.now() + 12 * 60 * 60 * 1000;
-    const sig = await viewerSigner.token(TEST_CREDENTIAL_ENCRYPTION_KEY, `kinu:viewer-cookie:v1:${WORKSPACE}:abcdef0123:${userId}:${expiresAt}`);
+    const sig = await viewerSigner.token(TEST_CREDENTIAL_ENCRYPTION_KEY, `kinu:viewer-cookie:v2:${WORKSPACE}:abcdef0123:${userId}:${expiresAt}:`);
 
     const res = await worker.fetch(new Request(shareUrl(await mintedLabel()), {
-      headers: { cookie: `__Host-kinu_viewer=${userId}.${expiresAt}.${sig}` },
+      headers: { cookie: `__Host-Http-kinu_viewer=${userId}.${expiresAt}..${sig}` },
     }), p.env, p.ctx);
 
     expect(res.status).toBe(200);
@@ -164,7 +164,7 @@ describe('a share this deployment minted', () => {
 
     const res = await worker.fetch(new Request(shareUrl(await mintedLabel()), {
       headers: {
-        cookie: '__Host-kinu_viewer=forged',
+        cookie: '__Host-Http-kinu_viewer=forged',
         'x-kinu-anything': 'forged',
         'x-nimbus-base': 'forged',
         'x-forwarded-for': '1.2.3.4',

@@ -77,6 +77,12 @@ export const SLATE_NEEDS_IDENTITY_MESSAGE = 'needs-identity';
 /** A shared app's frame tells its host that its grant reaches what its visitor has not accepted on Kinu's page. */
 export const SLATE_NEEDS_CONSENT_MESSAGE = 'needs-consent';
 
+/**
+ * The header a share's host answers that same word with, on whatever it refuses for it: what an open page whose session
+ * broke reads (its socket's refusal says nothing a page can read) to tell its host to ask.
+ */
+export const SLATE_NEEDS_HEADER = 'x-kinu-needs';
+
 /** Why a page's session to its app closed as the app's process ended: what its runtime makes a cut call again on. */
 export const SLATE_RESTARTED_REASON = 'The app restarted';
 

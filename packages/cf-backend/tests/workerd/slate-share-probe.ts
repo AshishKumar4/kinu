@@ -915,7 +915,7 @@ export class SlateShareProbeDO extends DurableObject<SlateHostDeps['env']> {
 
   accepted(handle: string): ShareViewerClaim {
     const share = this.host.controller.live.byHandle(handle);
-    const grant = share === undefined ? '' : shareGrantKey(share.grant);
+    const grant = share === undefined ? '' : shareGrantKey(share);
 
     return { userId: null, source: 'vitest', consented: grant === '' ? null : grant };
   }

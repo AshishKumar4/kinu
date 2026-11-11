@@ -91,7 +91,8 @@ export async function revokeShare(input: { workspace: string; share: string }): 
  * Share origin for a public share; a ticket-bearing entry for one that names people; with the slate and its title. Null
  * when a share that names people is entered signed out.
  */
-export function openLiveShare(input: { workspace: string; share: string }): Promise<LiveShareOpen | null> {
+/** `again`: the page reading it once more for a sheet it asks, counted as no new open. */
+export function openLiveShare(input: { workspace: string; share: string; again?: true }): Promise<LiveShareOpen | null> {
   return settle(Effect.gen(function* () {
     const res = yield* respond(LIVE_SHARE_OPEN_PATH, { method: 'POST', json: input });
 

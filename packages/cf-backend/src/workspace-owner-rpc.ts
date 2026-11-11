@@ -54,7 +54,7 @@ export interface WorkspaceOwnerRpc {
   admitBlueprint(bundle: BlueprintBundle): Promise<SlateAnswer<BlueprintFork>>;
   // The claim is built at the edge, never trusted.
   routeSlateShare(handle: string, claim: ShareViewerClaim, request: Request, pathname: string): Promise<Response>;
-  openLiveShare(share: string, reader: string | null, viewer: string): Promise<SlateAnswer<LiveShareReading>>;
+  openLiveShare(share: string, reader: string | null, viewer: string, again?: boolean): Promise<SlateAnswer<LiveShareReading>>;
   acknowledgeShareMode(share: string, viewer: string, mode: ShareMode): Promise<boolean>;
   galleryNeeds(share: string): Promise<SlateAnswer<RoomService[]>>;
   shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<OwnedLiveShare>>;

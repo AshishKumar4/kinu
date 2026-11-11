@@ -2808,8 +2808,8 @@ async function askTheApp(page: Page, frame: Frame): Promise<AppAsked> {
  * Presses one of the app's plain-call buttons (`data-call`, `data-count`) and reads its output (`data-called`,
  * `data-counted`) once it settles: what its server's method answered, or why it was refused.
  */
-async function callTheApp(page: Page, frame: Frame, which: 'call' | 'count' = 'call'): Promise<string> {
-  const output = which === 'call' ? '[data-called]' : '[data-counted]';
+async function callTheApp(page: Page, frame: Frame, which: 'call' | 'count' | 'note' = 'call'): Promise<string> {
+  const output = `[data-${{ call: 'called', count: 'counted', note: 'noted' }[which]}]`;
   const giveUpAt = v.parse(v.number(), await frame.evaluate('performance.now()')) + ASK_SETTLES_MS;
 
   await frame.click(`[data-${which}]`);
@@ -3183,13 +3183,17 @@ export interface AppAgentFlipVerdict {
 
 /** What widening a share's grant with its page open came to: before the visitor accepted, the app's try, and after. */
 export interface WidenedVerdict {
-  /** A plain call from the open page right after: refused, and Kinu's page asks them to accept what the grant reaches. */
-  readonly calledBefore: string;
+  /** The app's write from the open page right after: refused, and Kinu's page asks them to accept what it now reaches. */
+  readonly notedBefore: string;
   readonly reachSheet: boolean;
-  readonly namespaces: readonly string[];
-  /** The app's own script posting the acceptance, with a genuine binding: what the share's host answered. */
+  /** What the sheet says the app now reaches. */
+  readonly reachShown: string;
+  /** The app's own script posting the acceptance, with a genuine binding: what the share's host answered; and its
+   *  write after that, still refused. */
   readonly appPosted: number;
-  /** After Kinu's sheet's Continue: the same call. */
+  readonly notedAfterAppPosted: string;
+  /** After Kinu's sheet's Continue: the write waits on its owner, as every effect on My access does; its own method answers. */
+  readonly notedAfter: string;
   readonly calledAfter: string;
 }
 
@@ -3199,22 +3203,24 @@ export interface WidenedVerdict {
  */
 async function widenWithThePageOpen(target: FlowTarget, page: Page, at: { readonly workspace: string; readonly share: string; readonly visitor: Pick<FlowTarget, 'origin' | 'identity'> }): Promise<WidenedVerdict> {
   await setFlowShareMode(target, { workspace: at.workspace, share: at.share }, 'owner', LENT_WRITE);
-  const calledBefore = await callTheApp(page, await appFrameNow(page));
+  const notedBefore = await callTheApp(page, await appFrameNow(page), 'note');
   const reachBy = v.parse(v.number(), await page.evaluate('performance.now()')) + SHEET_OPENS_MS;
 
   await until(page, 'the reach sheet, or a while', `document.querySelector("[data-reach-continue]") !== null || performance.now() > ${String(reachBy)}`);
   const reachSheet = v.parse(v.boolean(), await page.evaluate('document.querySelector("[data-reach-continue]") !== null'));
+  const reachShown = v.parse(v.string(), await page.evaluate('document.querySelector(\'[role="dialog"]\')?.textContent ?? ""'));
 
   // A genuine binding, as Kinu's page holds it: what keeps the app from using one is where its post comes from.
   const opened = await fetch(`${at.visitor.origin}${LIVE_SHARE_OPEN_PATH}`, {
-    method: 'POST', headers: { ...webHeaders(at.visitor.identity), 'content-type': 'application/json' }, body: JSON.stringify({ workspace: at.workspace, share: at.share }),
+    method: 'POST', headers: { ...webHeaders(at.visitor.identity), 'content-type': 'application/json' }, body: JSON.stringify({ workspace: at.workspace, share: at.share, again: true }),
   });
 
-  const consent = v.parse(v.object({ consent: v.optional(v.nullable(v.object({ namespaces: v.array(v.string()), binding: v.string() }))) }), await opened.json()).consent ?? null;
+  const binding = v.parse(v.object({ consent: v.optional(v.nullable(v.object({ binding: v.string() }))) }), await opened.json()).consent?.binding ?? null;
   const app = await appFrameNow(page);
-  const appPosted = consent === null ? 0 : v.parse(v.number(), await app.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ consent: ${JSON.stringify(consent.binding)} }) }).then((answer) => answer.status)`));
+  const appPosted = binding === null ? 0 : v.parse(v.number(), await app.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ consent: ${JSON.stringify(binding)} }) }).then((answer) => answer.status)`));
+  const notedAfterAppPosted = await callTheApp(page, app, 'note');
 
-  if (!reachSheet) return { calledBefore, reachSheet, namespaces: consent?.namespaces ?? [], appPosted, calledAfter: '' };
+  if (!reachSheet) return { notedBefore, reachSheet, reachShown, appPosted, notedAfterAppPosted, notedAfter: '', calledAfter: '' };
   await shoot(page, 'reach-sheet');
   await until(page, 'the reach sheet to take a press', 'document.querySelector("[data-reach-continue]:not([disabled])") !== null');
   await page.click('[data-reach-continue]');
@@ -3223,7 +3229,7 @@ async function widenWithThePageOpen(target: FlowTarget, page: Page, at: { readon
 
   await waitOn(page, 'the app back after its acceptance', after.waitForFunction('document.querySelector("[data-call]") !== null', { polling: 100 }));
 
-  return { calledBefore, reachSheet, namespaces: consent?.namespaces ?? [], appPosted, calledAfter: await callTheApp(page, after) };
+  return { notedBefore, reachSheet, reachShown, appPosted, notedAfterAppPosted, notedAfter: await callTheApp(page, after, 'note'), calledAfter: await callTheApp(page, after) };
 }
 
 /** One ask on the open page, and what it shows once its sheet, if any, is up. */
@@ -3259,6 +3265,8 @@ export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<A
     const opened = await appInKinu(target, workspace);
 
     await waitOn(opened.page, 'the app\'s page to draw', opened.frame.waitForFunction('document.querySelector("[data-ask]") !== null', { polling: 100 }));
+    // The owner writes with it once, unshared, so its reach names the write the owner may lend later.
+    await callTheApp(opened.page, opened.frame, 'note');
     await opened.page.close();
     const made = await shareTheApp(target, workspace, 'own');
 

@@ -12,7 +12,7 @@ import { SharedServers, type SharedServerDeps } from '../src/slates/shared-serve
 import { approvalKindOf, DeferredApprovalQueue, DeferredApprovalStore, initOwnerRequestsTable } from '../src/index';
 import { preapproveSlateEffect } from '../src/slates/live-sharing';
 import { settle } from '../src/obs/effect';
-import { shareGrantKey, type ShareGrant } from '../src/slates/sharing';
+import { grantAccepted, shareGrantKey, type ShareGrant } from '../src/slates/sharing';
 import type { JsonValue } from '../src/utils/json';
 import { slateCallAddress } from '../src/slates/surface';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
@@ -63,14 +63,14 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
   const ran: string[] = [];
 
   /** `meanwhile`: what changes while the dispatch prepares, before it sends; the dispatch admits the call just before it acts. */
-  const call = (member: string, options: { subject?: string; authorize?: true; slate?: string; chain?: string[]; args?: JsonValue[]; fails?: true; meanwhile?: () => void } = {}) => {
+  const call = (member: string, options: { subject?: string; authorize?: true; slate?: string; chain?: string[]; args?: JsonValue[]; fails?: true; meanwhile?: () => void; consented?: string } = {}) => {
     const subject = options.subject ?? 'user:ana';
     const slate = options.slate ?? 'board';
     const chain = options.chain ?? [];
     const args = options.args ?? [{ path: 'notes.md', text: 'hello' }];
 
     // A visitor who accepted the grant as it stands when they call: what the grant reaches is not this file's question.
-    const consented = shareGrantKey(live.get('s1')?.grant ?? { members: [] });
+    const consented = options.consented ?? shareGrantKey(live.get('s1') ?? { mode: 'own', grant: { members: [] } });
 
     return viewers.call({
       share: 's1', id: slate, chain,
@@ -107,7 +107,7 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
   const asked = () => queue.list().map((row) => approvalKindOf(row));
   const approveAll = async (answer: 'approved' | 'always' = 'approved') => queue.decide(queue.list().map((row) => row.id), answer);
 
-  return { call, ownersCall, ran, asked, approveAll, live, queue, servers, remembered };
+  return { call, ownersCall, ran, asked, approveAll, live, queue, servers, remembered, viewers };
 }
 
 test('an owner share\'s acting call waits for the owner, then runs once on their approval', async () => {
@@ -376,4 +376,34 @@ test("R3-P1 pending edit. while an editor's change awaits review, the owner shar
   expect(live.authoritiesOf('board')).toMatchObject([{ mode: 'owner', grantRevision: null, editedBy: 'pat@example.test' }]);
   expect(servers.authorityOf('board')).toEqual({ kind: 'none' });
   await expect(call('fs.text')).rejects.toMatchObject({ code: 'denied' });
+});
+
+// The grant a visitor accepted on Kinu's page is the one their calls run under: a wider one asks them first.
+test('a viewer whose acceptance does not cover the grant is told what to accept, and nothing of the owner\'s runs', async () => {
+  const { call, ran, asked } = world('owner');
+  const readsOnly = shareGrantKey({ mode: 'owner', grant: { slates: ['board'], members: [{ slate: 'board', namespace: 'workspace', member: 'fs.text', impact: 'observe' }] } });
+
+  await expect(call('fs.text', { consented: readsOnly })).resolves.toMatchObject({ ok: false, needs: 'consent' });
+  await expect(call('fs.write', { consented: '' })).resolves.toMatchObject({ ok: false, needs: 'consent' });
+  expect({ ran, asked: asked() }).toEqual({ ran: [], asked: [] });
+});
+
+test('a grant that widens while a call prepares is not sent on the acceptance the call was admitted under', async () => {
+  const { call, ran, live } = world('owner');
+  const wider: ShareGrant = { ...grant, members: [...grant.members, { slate: 'board', namespace: 'mcp.github', member: 'list_issues', impact: 'observe' }] };
+
+  await expect(call('fs.text', { meanwhile: () => { live.setAuthority('s1', { mode: 'owner', grantRevision: 'rev-1' }, wider); } })).rejects.toThrow('reaches more of its owner');
+  expect(ran).toEqual([]);
+});
+
+test('a narrower grant needs nothing more accepted; an app agent\'s step on a wider one than accepted is refused', () => {
+  const { viewers, live } = world('owner');
+  const share = live.live('s1');
+  const accepted = shareGrantKey(share);
+  const narrower: ShareGrant = { ...grant, members: grant.members.filter((member) => member.namespace === 'workspace') };
+
+  expect(grantAccepted(shareGrantKey({ mode: 'owner', grant: narrower }), accepted)).toBe(true);
+  expect(grantAccepted(accepted, shareGrantKey({ mode: 'owner', grant: narrower }))).toBe(false);
+  expect(() => viewers.admitAgentStep(share, { lent: true, revision: 'rev-1', consented: 'rev-1', accepted: '' })).toThrow('reaches more of its owner');
+  expect(() => viewers.admitAgentStep(share, { lent: true, revision: 'rev-1', consented: 'rev-1', accepted })).not.toThrow();
 });

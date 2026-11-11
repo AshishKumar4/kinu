@@ -3968,7 +3968,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         const publication = builtRevision(controller.builds, entry.slate) ?? '';
         const host = await slateShareUrl(this.env, this.name, entry.handle);
         const share = controller.live.get(id);
-        const cookie = share === undefined ? null : await shareCapturePass(this.env, this.name, entry.handle, shareGrantKey(share.grant));
+        const cookie = share === undefined ? null : await shareCapturePass(this.env, this.name, entry.handle, shareGrantKey(share));
 
         return host === null || cookie === null ? null : { url: host, cookie, publication, held: entry.held };
       },
@@ -9584,7 +9584,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    * own opens are not counted. A listed share's Gallery card is told its viewers by its next listing sync, made from
    * here at most once an hour, so the Gallery is never written per open.
    */
-  async openLiveShare(share: string, reader: string | null, viewer: string): Promise<SlateAnswer<LiveShareReading>> {
+  /** `again`: the page that opened it reading it once more (a sheet it asks), which no one's count of opens takes. */
+  async openLiveShare(share: string, reader: string | null, viewer: string, again = false): Promise<SlateAnswer<LiveShareReading>> {
     const slates = await this.slates();
     const { controller } = slates;
     const read = await controller.readLiveShareRecord(share);
@@ -9594,7 +9595,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     const owner = reader !== null && reader === this.getOwnerUserId();
     const admits = record.visibility === 'public' || owner || (reader !== null && controller.live.hasUser(share, reader));
 
-    if (admits && !owner) {
+    if (admits && !owner && !again) {
       controller.live.opened(share, viewer);
 
       if (record.gallery !== null && Date.now() - (this.viewsSynced.get(share) ?? 0) >= VIEWS_SYNC_MS) {

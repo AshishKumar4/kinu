@@ -54,7 +54,7 @@ function consentReason(current: boolean, earlier: boolean): ConsentReason {
  * their models at this revision of its code. Each, for how the share lends now: a share that changed asks again.
  */
 async function assistantState(workspace: string, share: string): Promise<AssistantState> {
-  const now = await openLiveShare({ workspace, share });
+  const now = await openLiveShare({ workspace, share, again: true });
 
   if (now === null) return { mode: null, ask: { kind: "sign-in" } };
 
@@ -69,36 +69,41 @@ async function assistantState(workspace: string, share: string): Promise<Assista
   return { mode: now.mode, ask: { kind: "consent", slate: now.slate, revision: now.revision, reason: consentReason(current, given.length > 0) } };
 }
 
-/** One post into the share's frame: its field, and the fresh name of the frame made for it. */
+/** One post into the share's frame: its fields, and the fresh name of the frame made for it. */
 interface FramePost {
   readonly frame: string;
-  readonly field: { readonly name: "ticket" | "anonymous" | "out" | "consent"; readonly value: string };
+  readonly fields: Readonly<Partial<Record<"ticket" | "anonymous" | "out" | "consent", string>>>;
 }
 
-/** `field`, for a frame named afresh (`getRandomValues`: `randomUUID` wants a secure context, which a test host is not). */
-function framePost(field: FramePost["field"]): FramePost {
+/** `fields`, for a frame named afresh (`getRandomValues`: `randomUUID` wants a secure context, which a test host is not). */
+function framePost(fields: FramePost["fields"]): FramePost {
   const name = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-  return { frame: `kinu-share-${name}`, field };
+  return { frame: `kinu-share-${name}`, fields };
 }
 
 /**
- * One field posted into the frame named `frame`, as a form of this page submits it: a navigation whose Origin is this
+ * Fields posted into the frame named `frame`, as a form of this page submits it: a navigation whose Origin is this
  * page's, the one the share's host takes who its visitor is from (slate-share-route.ts). Built and gone at once, it is
  * no element of the page's own.
  */
-function postIntoFrame(action: string, frame: string, field: { readonly name: string; readonly value: string }): void {
+function postIntoFrame(action: string, frame: string, fields: FramePost["fields"]): void {
   const form = document.createElement("form");
-  const input = document.createElement("input");
 
   form.method = "post";
   form.action = action;
   form.target = frame;
   form.hidden = true;
-  input.type = "hidden";
-  input.name = field.name;
-  input.value = field.value;
-  form.appendChild(input);
+
+  for (const [name, value] of Object.entries(fields)) {
+    const input = document.createElement("input");
+
+    input.type = "hidden";
+    input.name = name;
+    input.value = value;
+    form.appendChild(input);
+  }
+
   document.body.appendChild(form);
   form.submit();
   form.remove();
@@ -121,10 +126,10 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
   // anonymous visitor its sheet's button made, or the grant its reach sheet's visitor accepted. Each post goes into a
   // frame made for it under a name no one else knows: an app can rename its window, or open one under an old name, to
   // take a post meant for its frame (measured, Chrome 157, 2026-11-11), but not one made after it.
-  const [said, setSaid] = useState<FramePost>(() => framePost(opened.ticket === null ? { name: "out", value: "1" } : { name: "ticket", value: opened.ticket }));
+  const [said, setSaid] = useState<FramePost>(() => framePost(opened.ticket === null ? { out: "1" } : { ticket: opened.ticket }));
 
   useEffect(() => {
-    postIntoFrame(exchange, said.frame, said.field);
+    postIntoFrame(exchange, said.frame, said.fields);
 
     // Restored from the back-forward cache, the frame keeps whatever it held, and who is signed in may have changed: the
     // page loads again, to say who the visitor is now.
@@ -155,7 +160,7 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
       if (need === "identity") detachPromise(async () => { await reread(); });
 
       // What the grant reaches, read from Kinu: the frame's word only prompts the read.
-      if (need === "consent") detachPromise(async () => { setReach((await openLiveShare({ workspace, share }))?.consent ?? null); });
+      if (need === "consent") detachPromise(async () => { setReach((await openLiveShare({ workspace, share, again: true }))?.consent ?? null); });
     };
 
     window.addEventListener("message", heard);
@@ -171,29 +176,31 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
 
   // Said by this page's own post: the app's frame cannot name its visitor anonymous itself.
   const continueAnonymously = (): void => {
-    setSaid(framePost({ name: "anonymous", value: "1" }));
+    setSaid(framePost({ anonymous: "1" }));
     setAsking(null);
   };
 
   // Accepted on this page: a binding read afresh (one shown long ago has lapsed), posted into a new frame, which loads
   // the app; a grant that changed meanwhile is shown again instead.
   const acceptReach = (shown: NonNullable<LiveShareOpen["consent"]>): void => detachPromise(async () => {
-    const now = (await openLiveShare({ workspace, share }))?.consent ?? null;
+    const read = await openLiveShare({ workspace, share, again: true });
+    const now = read?.consent ?? null;
 
-    if (now !== null && now.namespaces.join("\n") !== shown.namespaces.join("\n")) {
+    if (now !== null && JSON.stringify(now.reach) !== JSON.stringify(shown.reach)) {
       setReach(now);
 
       return;
     }
 
-    if (now !== null) setSaid(framePost({ name: "consent", value: now.binding }));
+    // Signed in, posted with who they are, so the acceptance lands on them whatever the frame's cookie named last.
+    if (now !== null) setSaid(framePost({ consent: now.binding, ...(read?.ticket !== null && read?.ticket !== undefined && { ticket: read.ticket }) }));
     setReach(null);
   });
 
   return (
     <>
       <iframe key={said.frame} ref={frame} name={said.frame} src="about:blank" title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
-      {reach !== null && <ReachDecision slate={opened.title} namespaces={reach.namespaces} onClose={() => setReach(null)} onContinue={() => acceptReach(reach)} />}
+      {reach !== null && <ReachDecision slate={opened.title} reach={reach.reach} onClose={() => setReach(null)} onContinue={() => acceptReach(reach)} />}
       {decision}
       {asking?.kind === "identity" && <IdentitySheet onClose={() => setAsking(null)} onAnonymous={continueAnonymously} />}
       {asking?.kind === "lent" && <LentSheet onClose={() => setAsking(null)} onContinue={() => accept("owner")} />}

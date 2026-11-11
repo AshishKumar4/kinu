@@ -878,14 +878,18 @@ describe(productFlowTestName('app-agent-flip', 'a share that changes how it lend
     expect(flip.chatsAfterAccepting).toBe(1);
   });
 
-  test('widened with the page open, nothing runs until they accept it on Kinu\'s page, which the app\'s own script cannot do', () => {
+  test('widened with the page open, the owner\'s reach waits for them to accept it on Kinu\'s page, which the app\'s own script cannot do', () => {
     const { widened } = verdictOf(observed, 'app-agent-flip');
+    const shown = JSON.stringify(widened);
 
-    expect(widened.calledBefore, JSON.stringify(widened)).toStartWith('refused:');
-    expect(widened.reachSheet, JSON.stringify(widened)).toBe(true);
-    expect(widened.namespaces).toContain('workspace');
-    expect(widened.appPosted, JSON.stringify(widened)).toBe(404);
-    expect(widened.calledAfter, JSON.stringify(widened)).toBe(APP_AGENT_SLATE.stop);
+    expect(widened.notedBefore, shown).toStartWith('refused:');
+    expect(widened.reachSheet, shown).toBe(true);
+    expect(widened.reachShown, shown).toContain('reads and changes');
+    expect(widened.appPosted, shown).toBe(404);
+    expect(widened.notedAfterAppPosted, shown).toStartWith('refused:');
+    // Accepted: the write is the owner's to approve, as every effect on My access is; the app's own method answers.
+    expect(widened.notedAfter, shown).toContain('waits for');
+    expect(widened.calledAfter, shown).toBe(APP_AGENT_SLATE.stop);
   });
 
   test('switched back to their own access, the next ask asks for their consent again', () => {

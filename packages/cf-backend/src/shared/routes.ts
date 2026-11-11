@@ -9,7 +9,7 @@ import {
   err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
-  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, shareGrantKey, shareGrantNamespaces, type LiveShareOpen,
+  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, LiveShareOpenBodySchema, shareGrantKey, shareReach, type LiveShareOpen,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, type LiveShareBody,
   LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema, LIVE_SHARE_ACKNOWLEDGE_PATH, LiveShareAcknowledgeSchema,
   type OwnedLiveShare, type SlateAnswer,
@@ -402,13 +402,13 @@ async function revoke(request: Request, env: Env, identity: AuthIdentity): Promi
  * one signed out for more than to sign in, and says nothing of itself to anyone else.
  */
 async function openLive(request: Request, env: Env, identity: AuthIdentity | null): Promise<Response> {
-  const body = await safeJson(request, LiveIdBody);
+  const body = await safeJson(request, LiveShareOpenBodySchema);
 
   if (!body) return err(400, 'Body must be { workspace, share }');
   const viewer = identity === null ? SIGNED_OUT_VIEWER : await shareViewerKey(env, body.share, identity.userId);
 
   if (viewer === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
-  const reading = await workspaceOwner(env, body.workspace).openLiveShare(body.share, identity?.userId ?? null, viewer);
+  const reading = await workspaceOwner(env, body.workspace).openLiveShare(body.share, identity?.userId ?? null, viewer, body.again === true);
 
   if (reading.ok && !reading.value.admits && identity === null) return err(401, 'Sign in to open this share');
 
@@ -421,9 +421,9 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity | nul
   const url = await slateShareUrl(env, body.workspace, handle);
   const ticket = identity === null ? null : await mintViewerTicket(env, body.workspace, handle, identity.userId);
   // What its grant reaches of the owner's, which the page shows before its visitor accepts it, and what it posts then.
-  const grant = shareGrantKey(reading.value.record.grant);
+  const grant = shareGrantKey(reading.value.record);
   const binding = grant === '' ? null : await mintConsentBinding(env, body.workspace, handle, grant);
-  const consent = binding === null ? null : { namespaces: shareGrantNamespaces(reading.value.record.grant), binding };
+  const consent = binding === null ? null : { reach: shareReach(reading.value.record), binding };
 
   if (url === null || (identity !== null && ticket === null)) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
 

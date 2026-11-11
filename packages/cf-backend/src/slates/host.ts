@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateController, type SlateControllerPorts, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateStorageCall,
-  ROOT_SLATE_CALLER, SLATE_NEEDS_CONSENT_MESSAGE, shareCaller, slateAnswer, AppAgentChats, ShareDisclosures, acknowledgedMode, appAgentAsk, asksAppAgent, lentConversation, ownConversation, ownerConversation, slateRevision, visitorLabel,
+  ROOT_SLATE_CALLER, SLATE_NEEDS_CONSENT_MESSAGE, SLATE_NEEDS_HEADER, shareCaller, slateAnswer, AppAgentChats, ShareDisclosures, acknowledgedMode, appAgentAsk, asksAppAgent, lentConversation, ownConversation, ownerConversation, slateRevision, visitorLabel,
   type AppAgentAbout, type AppAgentConversation, type LentChat, type ShareMode, type AppAgentPayer, type AppAgentSession, type ShareChat, type AppAgentEntry, type ServerSend, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateCallFrom, type SlateLaunch, type SlateLineage, type ToolContract,
 } from '@kinu.run/core/slates';
 import {
@@ -288,7 +288,9 @@ export class SlateHost {
       case 'missing': return new Response('Not found', { status: 404, headers });
       case 'sign-in': return new Response(null, { status: 303, headers: { location: admission.entry, ...headers } });
       case 'too-many': return new Response('Too many requests', { status: 429, headers });
-      case 'consent': return await this.needsConsentPage(admission.share);
+      case 'consent': return input.pathname === '/__rpc'
+        ? new Response('Accept what this app reaches on its Kinu page first', { status: 403, headers: { ...headers, [SLATE_NEEDS_HEADER]: 'consent' } })
+        : await this.needsConsentPage(admission.share);
       case 'admitted': {
         const { caller, share, viewer } = admission;
         const invocation = crypto.randomUUID();
@@ -314,11 +316,13 @@ export class SlateHost {
     const html = publicPage({
       title,
       body: `<main><section class="section"><h1>${escapeHtml(title)}</h1>
-<p class="dim">This app uses its owner's connections. Open it from its Kinu page to see what it reaches, and continue there.</p></section></main>`,
-      script: `if (window.parent !== window) window.parent.postMessage({ kinu: ${JSON.stringify(SLATE_NEEDS_CONSENT_MESSAGE)} }, "*");`,
+<p class="dim">This app uses its owner's connections. See what it reaches on the page around it, and continue there.</p>
+<button class="btn solid" type="button" id="ask">See what it reaches</button></section></main>`,
+      script: `const ask = () => { if (window.parent !== window) window.parent.postMessage({ kinu: ${JSON.stringify(SLATE_NEEDS_CONSENT_MESSAGE)} }, "*"); };
+ask(); document.getElementById("ask").addEventListener("click", ask);`,
     });
 
-    return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
+    return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', [SLATE_NEEDS_HEADER]: 'consent' } });
   }
 
   async routeShare(

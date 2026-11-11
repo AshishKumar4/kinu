@@ -16,7 +16,7 @@ import type { OwnerEffects, ServerSend } from './shared-server';
 import { AGENT_ASK_MEMBER, slateAddressImpact } from './members';
 import { isJsonAnswer, type SlateCallResult, type SlateSurfaceResult } from './rpc';
 import {
-  SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, SLATE_RPC_PATH, shareGrantKey, shareSpendLabel,
+  SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, grantAccepted, shareGrantKey, shareSpendLabel,
   type LiveShareRecord, type ShareViewerClaim, type ViewerCall,
 } from './sharing';
 import { admitNestedViewerCall, routeViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, type SlateCall, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
@@ -84,11 +84,6 @@ function usageOf(value: JsonValue): Usage | undefined {
   return parsed.success ? parsed.output.usage : undefined;
 }
 
-/** Whether a grant, by its key, is one its viewer accepted: theirs exactly, or one reaching nothing of the owner's. */
-function grantAccepted(grant: string, consented: string): boolean {
-  return grant === '' || grant === consented;
-}
-
 /** Why a viewer's call waits: the share's grant reaches more of its owner's than they accepted on Kinu's page. */
 const UNACCEPTED = 'This app reaches more of its owner\'s than you accepted: see what first';
 
@@ -127,14 +122,13 @@ export class SlateShareViewers {
 
     // S2: a viewer past the bound is refused; the share is never paused.
     if (this.deps.admitted !== undefined && !await this.deps.admitted(`${share.id}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) return { kind: 'too-many' };
-    const grant = shareGrantKey(share.grant);
+    const grant = shareGrantKey(share);
     const consented = input.claim.consented ?? '';
 
     // D3: what the grant reaches of the owner's is accepted on Kinu's page before anything of theirs runs, for named
-    // viewers too, and again once it reaches more; a grant reaching nothing of the owner's has nothing to accept. The
-    // app's page's session is let in regardless, its every call refused until then (`unaccepted`): that refusal is how a
-    // page already open, its socket reopened as the grant widened, tells Kinu's page to ask.
-    if (!grantAccepted(grant, consented) && input.pathname !== SLATE_RPC_PATH) return { kind: 'consent', share };
+    // viewers too, and again once it reaches more; a grant reaching nothing of the owner's has nothing to accept. Every
+    // request is refused until then, the app's page's session among them: its page reads why after its session breaks.
+    if (!grantAccepted(grant, consented)) return { kind: 'consent', share };
     const request = this.deps.live.openRequest({ share: share.id, viewer: subject, path: input.pathname });
 
     const viewer: SlateViewer = { share: share.id, subject, request, consented, ...(input.claim.userId !== null && { userId: input.claim.userId }) };
@@ -345,7 +339,7 @@ export class SlateShareViewers {
    * page open since: Kinu's page shows them what, and runs nothing until they accept it; null where it does not.
    */
   private unaccepted(share: LiveShareRecord, viewer: SlateViewer): Effect.Effect<SlateCallResult | null> {
-    return Effect.sync(() => (grantAccepted(shareGrantKey(share.grant), viewer.consented)
+    return Effect.sync(() => (grantAccepted(shareGrantKey(share), viewer.consented)
       ? null
       : { ok: false as const, ...refusalOf(new KinuError('denied', UNACCEPTED)), needs: 'consent' as const }));
   }
@@ -355,7 +349,7 @@ export class SlateShareViewers {
    * grant as it stands then is the one they accepted. Throws to refuse.
    */
   stillAccepted(share: string, viewer: Pick<SlateViewer, 'consented'>): void {
-    return settleSync(grantAccepted(shareGrantKey(this.deps.live.live(share).grant), viewer.consented) ? Effect.void : Effect.fail(new KinuError('denied', UNACCEPTED)));
+    return settleSync(grantAccepted(shareGrantKey(this.deps.live.live(share)), viewer.consented) ? Effect.void : Effect.fail(new KinuError('denied', UNACCEPTED)));
   }
 
   /** S2: the per-day spend bound refuses as 'budget'. */

@@ -8,7 +8,7 @@ import { afterEach, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { matchPath } from 'react-router-dom';
 import {
-  APP_ROUTES, GallerySlateSchema, SLATE_NEEDS_CONSENT_MESSAGE, SLATE_QUERY_PARAM, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, OwnedLiveShareSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
+  APP_ROUTES, GallerySlateSchema, SLATE_NEEDS_CONSENT_MESSAGE, SLATE_NEEDS_HEADER, SLATE_QUERY_PARAM, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, OwnedLiveShareSchema, SlateReachSchema, LiveShareCreatedSchema, BlueprintForkSchema, SHARE_VIEWER_REQUESTS_PER_MINUTE, SharedLibrarySchema,
   type AgentRuntime, type GalleryCategory, type GallerySlate, type JsonValue, type SlateAnswer,
 } from '@kinu.run/core';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
@@ -226,8 +226,20 @@ function visit(world: World, url: string, ip: string, init?: { path?: string; co
 /** The share host's exchange, which takes only Kinu's share page's posts into its frame. */
 const EXCHANGE_PATH = '__kinu/viewer';
 
+/**
+ * A share made on its owner's access as it was cut: no slate process runs here, so it has no revision the route would
+ * approve, and it is set in the store as the route sets it.
+ */
+async function sharedOnMyAccess(world: World): Promise<Awaited<ReturnType<typeof sharePublic>>> {
+  const made = await sharePublic(world, 'public');
+
+  world.owner.db.run("UPDATE slate_shares SET mode = 'owner', grant_revision = 'rev-1' WHERE id = ?", [made.share.id]);
+
+  return made;
+}
+
 /** What a share's grant reaches, as Kinu's page shows it, and the binding it posts once its visitor accepts. */
-async function consentOf(world: World, share: string): Promise<{ namespaces: string[]; binding: string }> {
+async function consentOf(world: World, share: string): Promise<{ reach: { namespace: string; acts: boolean }[]; binding: string }> {
   const opened = await jsonBody(present(await openShare(world, { workspace: 'issues-owner', share }), 'the open answer'), LiveShareOpenSchema);
 
   return present(opened.consent, 'what the grant reaches');
@@ -290,7 +302,7 @@ test('S2: the per-viewer request bound refuses past its limit, per viewer and on
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
-  const created = await sharePublic(world, 'public');
+  const created = await sharedOnMyAccess(world);
   const url = await hostOf(world, created.share.handle);
 
   // The ingress count resets on the wall-clock minute; this burst belongs to one window.
@@ -312,7 +324,7 @@ test('S2: the per-viewer request bound refuses past its limit, per viewer and on
   const minted = await accept();
 
   expect(minted?.status).toBe(303);
-  expect(minted?.headers.get('set-cookie')).toContain('__Host-kinu_viewer');
+  expect(minted?.headers.get('set-cookie')).toContain('__Host-Http-kinu_viewer');
 
   for (let n = 0; n < SHARE_VIEWER_REQUESTS_PER_MINUTE; n += 1) await accept();
   expect((await accept())?.status).toBe(429);
@@ -322,7 +334,14 @@ test('D3: a share whose grant reaches its owner\'s is accepted on Kinu\'s page a
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
-  const created = await sharePublic(world, 'public');
+  // On its visitors' own access a share lends nothing of its owner's: no one is asked.
+  const onTheirOwn = await sharePublic(world, 'public');
+  const ownHost = await hostOf(world, onTheirOwn.share.handle);
+
+  expect(await (await visit(world, ownHost, '203.0.113.6'))?.text()).not.toContain(SLATE_NEEDS_CONSENT_MESSAGE);
+  expect(await jsonBody(present(await openShare(world, { workspace: 'issues-owner', share: onTheirOwn.share.id }), 'the open answer'), LiveShareOpenSchema)).toMatchObject({ consent: null });
+
+  const created = await sharedOnMyAccess(world);
   const url = await hostOf(world, created.share.handle);
   const before = await visit(world, url, '203.0.113.4');
   const html = await before?.text() ?? '';
@@ -331,13 +350,15 @@ test('D3: a share whose grant reaches its owner\'s is accepted on Kinu\'s page a
   expect(before?.status).toBe(200);
   expect(html).toContain(SLATE_NEEDS_CONSENT_MESSAGE);
   expect(html).not.toContain('mcp.github');
-  const { namespaces, binding } = await consentOf(world, created.share.id);
+  const { reach, binding } = await consentOf(world, created.share.id);
 
-  expect(namespaces).toEqual(['mcp.github', 'workspace']);
+  // What it lends, and that it only reads there.
+  expect(reach).toEqual([{ namespace: 'mcp.github', acts: false }, { namespace: 'workspace', acts: false }]);
+  expect(before?.headers.get(SLATE_NEEDS_HEADER)).toBe('consent');
   const exchange = `${url}${EXCHANGE_PATH}`;
   const own = new URL(url).origin;
   const statusOf = async (request: Request) => (await handleSlateShareHostRequest(request, world.env))?.status;
-  const otherShare = await sharePublic(world, 'public');
+  const otherShare = await sharedOnMyAccess(world);
 
   expect({
     get: await statusOf(new Request(`${exchange}?consent=1`, { headers: { 'cf-connecting-ip': '203.0.113.4' } })),
@@ -354,15 +375,19 @@ test('D3: a share whose grant reaches its owner\'s is accepted on Kinu\'s page a
   const requests = answered(await world.owner.agent.slate({ op: 'viewerRequests', share: created.share.id }), v.array(v.looseObject({ viewer: v.string() })));
   expect(requests).toHaveLength(1);
 
-  // A cookie that accepted another grant, as a wider one is to the grant it accepted, asks again; so does one of the
-  // cookie's earlier shape, which names no grant.
-  const other = present(await mintConsentBinding(world.env, 'issues-owner', created.share.handle, 'another-grant'), 'a binding');
+  // A cookie that accepted less than the grant reaches now, as an older acceptance is once it widens, asks again; so
+  // does one of the cookie's earlier shape, which names no grant. The app's page's session is refused alike, saying why.
+  const narrower = btoa('mcp.github:reads').replaceAll('=', '');
+  const other = present(await mintConsentBinding(world.env, 'issues-owner', created.share.handle, narrower), 'a binding');
   const accepted = await handleSlateShareHostRequest(exchangePost(exchange, { consent: other }, '203.0.113.5'), world.env);
   const otherCookie = present(accepted?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
   const earlier = cookie.replace(/\.[^.]*\.([^.]+)$/u, '.$1');
 
   expect(await (await visit(world, url, '203.0.113.5', { cookie: otherCookie }))?.text()).toContain(SLATE_NEEDS_CONSENT_MESSAGE);
   expect(await (await visit(world, url, '203.0.113.4', { cookie: earlier }))?.text()).toContain(SLATE_NEEDS_CONSENT_MESSAGE);
+  const socket = await visit(world, url, '203.0.113.5', { cookie: otherCookie, path: '__rpc' });
+
+  expect([socket?.status, socket?.headers.get(SLATE_NEEDS_HEADER)]).toEqual([403, 'consent']);
 });
 
 test("share views. who opens a share through its link is counted in its owner's workspace, by a key no one can trace", async () => {
@@ -468,7 +493,7 @@ test("live host context. a share's host keeps the context its slate's page was f
   expect(ticket?.headers.get('location')).toBe(`/?${kept}`);
 
   // A share whose grant asks its visitor's acceptance first: Kinu's page posts it to the exchange framed the same way.
-  const open = await sharePublic(world, 'public');
+  const open = await sharedOnMyAccess(world);
   const url = await hostOf(world, open.share.handle);
   const accepted = await handleSlateShareHostRequest(exchangePost(`${url}${EXCHANGE_PATH}?${kept}`, { consent: (await consentOf(world, open.share.id)).binding }, '203.0.113.9'), world.env);
 
@@ -1091,7 +1116,7 @@ test("a viewer's cookie acts on its share only from the share's own origin: a si
   const world = await twoUserWorld();
   cleanups.push(world.close);
 
-  const created = await sharePublic(world, 'public');
+  const created = await sharedOnMyAccess(world);
   const url = await hostOf(world, created.share.handle);
   const cookie = await acceptedCookie(world, url, created.share.id, '203.0.113.4');
   const own = new URL(url).origin;
