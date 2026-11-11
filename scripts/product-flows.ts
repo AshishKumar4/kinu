@@ -3288,8 +3288,12 @@ export async function appAgentTicketsStayTheirs(target: FlowTarget): Promise<App
 
     // Then the share as anyone opens it, on Kinu's page, signed out: its app's page presents the ticket too.
     const app = await appOnItsLink(victim, made.link);
+    const drawBy = v.parse(v.number(), await victim.evaluate('performance.now()')) + 20_000;
 
-    await waitOn(victim, 'the app\'s page to draw', app.waitForFunction('document.querySelector("[data-ask]") !== null', { polling: 100 }));
+    await until(victim, 'the app\'s page, or a while', `(document.querySelector('[data-shared-slate]')?.contentDocument === null) || performance.now() > ${String(drawBy)}`);
+    const shown = v.parse(v.string(), await app.evaluate('`${location.pathname} ${document.body?.innerText ?? ""}`.slice(0, 400)'));
+
+    if (!shown.includes('Ask')) throw new Error(`the app's page never drew for the other browser: ${shown}`);
     const fromTheApp = v.parse(v.number(), await app.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ ticket: ${JSON.stringify(ticket ?? '')} }) }).then((answer) => answer.status)`));
     const again = await appOnItsLink(victim, made.link);
     const asked = await askTheApp(victim, again);
