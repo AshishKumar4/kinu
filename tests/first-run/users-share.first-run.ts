@@ -6,7 +6,7 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import { LiveShareCreatedSchema, liveSharePagePath, VIEWER_EXCHANGE_PATH } from '@kinu.run/core';
+import { LiveShareCreatedSchema, liveSharePagePath, VIEWER_EXCHANGE_PATH, type LiveShareOpen } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
 import { openShare } from './share-entry';
@@ -42,11 +42,11 @@ const SLATE = 'usershare';
 const BODY = 'users-share-probe-ok';
 
 /** The share's ticket, posted as Kinu's share page posts it into the share's frame: the one way its host takes who the visitor is. */
-async function postedTicket(origin: string, host: string | null, ticket: string | null): Promise<Response | null> {
-  if (host === null || ticket === null) return null;
+async function postedTicket(origin: string, opened: LiveShareOpen | null): Promise<Response | null> {
+  if (opened?.ticket === null || opened?.ticket === undefined) return null;
 
-  return fetch(`${host}${VIEWER_EXCHANGE_PATH.slice(1)}`, {
-    method: 'POST', redirect: 'manual', body: new URLSearchParams({ ticket }),
+  return fetch(new URL(VIEWER_EXCHANGE_PATH, opened.url), {
+    method: 'POST', redirect: 'manual', body: new URLSearchParams({ ticket: opened.ticket }),
     headers: { origin: new URL(origin).origin, 'content-type': 'application/x-www-form-urlencoded' },
   });
 }
@@ -61,7 +61,7 @@ async function enteredAsNamed(input: { origin: string; workspace: string; share:
   const host = ticket === null ? null : `${new URL(ticket.url).origin}/`;
   const first = host === null ? null : await fetch(host, { redirect: 'manual' });
 
-  const exchanged = await postedTicket(input.origin, host, ticket?.ticket ?? null);
+  const exchanged = await postedTicket(input.origin, ticket);
 
   const cookie = exchanged?.headers.get('set-cookie')?.split(';')[0] ?? null;
   const served = cookie === null || host === null ? null : await fetch(host, { headers: { cookie }, redirect: 'manual' });
