@@ -80,7 +80,11 @@ export async function extractImportPiece(
   known: readonly ImportedFact[],
 ): Promise<ImportedFact[]> {
   const update = await runSleepTimeCompute(judge, {
-    turns: [{ task: `The owner imported a document into their account memory: part ${String(piece.index + 1)} of ${String(piece.total)}.`, output: '', ownerWords: piece.text }],
+    turns: [{
+      task: `The owner imported what they wrote into their account memory: part ${String(piece.index + 1)} of ${String(piece.total)}, `
+        + 'read oldest first. A line that begins with a date says when they said it.',
+      output: '', ownerWords: piece.text,
+    }],
     currentFacts: [],
     accountFacts: known.map(({ key, value }) => ({ key, value })),
   });

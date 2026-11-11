@@ -5,10 +5,13 @@
  * facts, which the owner keeps in one act, in place of the facts it was read from.
  */
 import { expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { catalogTurn, GATEWAY_CATALOG, gatewayWorkspace } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do';
+import { kvOf } from './helpers/platform-context';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun, type StubbedAiBinding } from './helpers/platform-gateway';
+import { readExport } from '@kinu.run/core';
 
 const OWNER = 'abcdef0123456789abcdef0123456789';
 
@@ -207,4 +210,144 @@ test('facts the owner imports again are replaced by the batch in the act that ke
   expect(kept.notes.some((note) => note.content.includes('partner is Priya'))).toBe(true);
   await user.joinFibers();
   user.close();
+});
+
+/** The rest of a long conversation, so each of the two sits in a piece of its own. */
+const CHORES = ' And a long list of other weekend errands, groceries and chores to sort out.'.repeat(30);
+
+/** A ChatGPT export's conversations, newest first as an export may list them: the person lived in Raleigh in one, and
+ *  moved to Austin in a later one. */
+const CHATGPT_EXPORT = JSON.stringify([
+  ['Moving checklist', '2025-05-02T10:00:00Z', `I moved to Austin last week, so update everything to Austin, Texas.${CHORES}`],
+  ['Weekend plans', '2023-08-12T09:00:00Z', `I live in Raleigh, North Carolina. What can I do this weekend?${CHORES}`],
+].map(([title, at, said]) => ({
+  title, create_time: Date.parse(at ?? '') / 1000, current_node: 'answer',
+  mapping: {
+    ask: { parent: null, message: { author: { role: 'user' }, create_time: Date.parse(at ?? '') / 1000, content: { parts: [said] } } },
+    answer: { parent: 'ask', message: { author: { role: 'assistant' }, create_time: Date.parse(at ?? '') / 1000 + 5, content: { parts: ['Noted.'] } } },
+  },
+})));
+
+/** The extractor on one piece: what that piece's own words state, as a careful model would read them, never a fact
+ *  from another piece. Which of two statements wins is the import's order alone. */
+function extractedPerPiece(run: RecordedGatewayRun): string {
+  const prompt = JSON.stringify(v.parse(ExtractorPromptSchema, run.query).messages);
+
+  const said = (key: string, value: string, importance: number) => ({ key, value, importance, rationale: 'stated' });
+
+  const owners = [
+    ...(prompt.includes('moved to Austin') ? [said('home.city', 'Austin, Texas', 0.9), said('home.previous_city', 'Raleigh', 0.5)] : []),
+    ...(prompt.includes('I live in Raleigh') ? [said('home.city', 'Raleigh, North Carolina', 0.9)] : []),
+  ];
+
+  return JSON.stringify({ upserts: [], decay: [], account: owners });
+}
+
+test("an AI export is read oldest first, so its newest statement is the home a first chat knows, with no memory call", async () => {
+  const gateway = stubAiBinding((run) => chatCompletion(run, requestOf(run).tools.length === 0 && carried(run).includes('persistent state') ? extractedPerPiece(run) : homeFrom(run)));
+  const { user, owner } = await account(gateway);
+  const bytes = new TextEncoder().encode(CHATGPT_EXPORT);
+  const read = await readExport({ size: bytes.length, read: async (offset, length) => bytes.subarray(offset, offset + length) }, false);
+
+  // Raleigh and Austin in pieces of their own, the oldest first.
+  expect({ conversations: read.conversations, read: read.read, said: read.pieces.map((piece) => ['Raleigh', 'Austin'].filter((city) => piece.includes(city))) })
+    .toEqual({ conversations: 2, read: 2, said: [['Raleigh'], ['Austin']] });
+  const id = await user.userDO.accountMemory_import(owner, { conversations: [...read.pieces] });
+
+  await readImports(user);
+  const batch = (await user.userDO.accountMemory_view(owner)).pending.find((each) => each.id === id)?.proposal;
+
+  expect(batch).toMatchObject({ kind: 'import', keepNotes: false });
+  expect(batch?.kind === 'import' ? Object.fromEntries(batch.facts.map((fact) => [fact.key, fact.value])) : null)
+    .toEqual({ 'home.city': 'Austin, Texas', 'home.previous_city': 'Raleigh' });
+  expect(await user.userDO.accountMemory_decide(owner, id, 'accept')).toBe(true);
+  // An export's conversations are never kept: only what was read from them.
+  expect((await user.userDO.accountMemory_view(owner)).notes).toEqual([]);
+
+  await askIn(user, gateway, 'first-chat');
+  const asked = answering(gateway);
+
+  expect(asked.map(homeFrom)).toEqual(asked.map(() => 'Austin, Texas'));
+  expect(asked.flatMap((run) => requestOf(run).messages.filter((message) => message.role === 'tool'))).toEqual([]);
+  await user.joinFibers();
+  user.close();
+});
+
+/** An import row as builds e68901c09 to ab0fff2ca wrote it: its pieces inside the row. */
+function legacyImport(status: 'pending' | 'importing' | 'failed' | 'declined', notes: readonly string[], read: number, failure?: string) {
+  return {
+    status,
+    json: JSON.stringify({
+      kind: 'import', notes, read, facts: read === 0 ? [] : [{ key: 'home.city', value: 'Austin, Texas' }], replaces: [],
+      ...(failure !== undefined && { failure }),
+    }),
+  };
+}
+
+test('import rows an earlier build wrote are kept as this one reads them, once, when the account starts', async () => {
+  const storage = new Database(':memory:');
+  const made = createTestUserDO({ storage, durableObjectId: OWNER });
+  const owner = await testOwner();
+
+  await made.userDO.accountMemory_view(owner);
+  made.close();
+
+  const rows = {
+    amp_pending: legacyImport('pending', ['I live in Austin, Texas.', 'My partner is Meera.'], 2),
+    amp_reading: legacyImport('importing', ['I fly out of AUS.', 'I keep a window seat.'], 1),
+    amp_stopped: legacyImport('failed', ['I work on Kinu.'], 0, 'workers-ai: daily allocation used (4006)'),
+    amp_declined: legacyImport('declined', ['A document the owner declined.'], 1),
+  };
+
+  for (const [id, row] of Object.entries(rows)) {
+    storage.run('INSERT INTO account_memory_proposals (id, proposal_json, origin_json, delivery, status, created_at) VALUES (?, ?, ?, NULL, ?, ?)',
+      [id, row.json, JSON.stringify({ by: 'import' }), row.status, 1]);
+  }
+
+  const started = createTestUserDO({ storage, durableObjectId: OWNER });
+  const view = await started.userDO.accountMemory_view(owner);
+
+  // What a decided import held is not kept apart: nothing would ever read or drop it.
+  expect([...kvOf(storage).keys()].filter((key) => key.startsWith('memory-import:amp_declined:'))).toEqual([]);
+  expect([...kvOf(storage).keys()].filter((key) => key.startsWith('memory-import:amp_reading:'))).toHaveLength(2);
+
+  expect(view.pending.map((each) => [each.id, each.proposal])).toEqual([
+    ['amp_pending', { kind: 'import', pieces: 2, keepNotes: true, read: 2, facts: [{ key: 'home.city', value: 'Austin, Texas' }], replaces: [] }],
+  ]);
+  expect(view.imports.map(({ id, pieces, read, parked, failure }) => ({ id, pieces, read, parked, failure }))).toEqual([
+    { id: 'amp_reading', pieces: 2, read: 1, parked: false, failure: null },
+    { id: 'amp_stopped', pieces: 1, read: 0, parked: true, failure: 'workers-ai: daily allocation used (4006)' },
+  ]);
+  // Kept as it was: accepting writes the pieces the row held as notes.
+  expect(await started.userDO.accountMemory_decide(owner, 'amp_pending', 'accept')).toBe(true);
+  expect((await started.userDO.accountMemory_view(owner)).notes.map((note) => note.content).sort()).toEqual(['I live in Austin, Texas.', 'My partner is Meera.']);
+  started.close();
+
+  // A second start finds nothing left to convert, and changes nothing.
+  const again = createTestUserDO({ storage, durableObjectId: OWNER });
+
+  expect((await again.userDO.accountMemory_view(owner)).imports.map((each) => each.id)).toEqual(['amp_reading', 'amp_stopped']);
+  again.close();
+});
+
+test('an export cut short, or holding anything but conversations, is refused before anything is offered to import', async () => {
+  const conversation = JSON.stringify(JSON.parse(CHATGPT_EXPORT)[0]);
+
+  const refusedFor = async (text: string) => {
+    const bytes = new TextEncoder().encode(text);
+
+    try {
+      await readExport({ size: bytes.length, read: async (offset, length) => bytes.subarray(offset, offset + length) }, false);
+
+      return null;
+    } catch (failure) {
+      return failure;
+    }
+  };
+
+  for (const text of [`[${conversation}, ${conversation.slice(0, 200)}`, `[null, ${conversation}]`, `{"conversations": [${conversation}]}`, `[${conversation}`]) {
+    expect(await refusedFor(text)).toMatchObject({ code: 'bad_input' });
+  }
+
+  expect(await refusedFor(`[${conversation}, ${conversation}]`)).toBeNull();
 });

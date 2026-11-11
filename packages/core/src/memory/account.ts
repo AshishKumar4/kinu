@@ -9,7 +9,7 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import { JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
-import { KinuError, settleSync } from '../obs/index';
+import { KinuError, settleSync, tolerate } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { scrubSecrets } from '../safety/secret-patterns';
 import { scrubMemoryValue } from './scrub';
@@ -46,10 +46,26 @@ export type AccountProposal = v.InferInput<typeof AccountProposalSchema>;
 
 
 /**
- * A document the owner imported (`account-import.ts`): its notes, the facts read from them so far (`read` of the notes),
- * and the facts it replaces once accepted. `failure` is the last read's failure, in its provider's words.
+ * What the owner imported (`account-import.ts`): how many pieces it holds (kept apart, {@link ImportPieces}), the facts
+ * read from them so far (`read` of the pieces), the facts it replaces once accepted, and whether its pieces are kept as
+ * notes then: a document's are, an export's conversations never. `failure` is the last read's, in its provider's words.
  */
 const AccountImportSchema = v.strictObject({
+  kind: v.literal('import'),
+  pieces: v.pipe(v.number(), v.integer(), v.minValue(1)),
+  keepNotes: v.boolean(),
+  read: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  facts: v.array(ImportedFactSchema),
+  replaces: v.array(FactKeySchema),
+  failure: v.optional(v.string()),
+});
+
+/**
+ * An import row as builds e68901c09 to ab0fff2ca wrote it, its pieces in the row as `notes`. One-time conversion
+ * (`convertLegacyImports`); remove it, and this, once production has started every account on a build that has it
+ * (ARCHITECTURE-DECISIONS: a change that must keep rows writes its own one-time migration).
+ */
+const LegacyImportSchema = v.strictObject({
   kind: v.literal('import'),
   notes: v.pipe(v.array(v.string()), v.minLength(1)),
   read: v.pipe(v.number(), v.integer(), v.minValue(0)),
@@ -258,11 +274,22 @@ function readProposal(row: ProposalRow): Effect.Effect<AccountMemoryProposal, Ki
   });
 }
 
+/**
+ * An import's pieces, kept apart from its row so the row stays small whatever was imported and the owner's open pages
+ * hear a count, never the text. Written in the same commit as the row (the user object's key-value storage shares its
+ * SQLite transaction).
+ */
+export interface ImportPieces {
+  put(id: string, at: number, text: string): void;
+  get(id: string, at: number): string | undefined;
+  drop(id: string, count: number): void;
+}
+
 /** The account's memory over the user object's SQL. `transaction` runs its body as one commit. */
 export class AccountMemoryStore {
   private readonly factsStore: FactsStore;
 
-  constructor(private readonly sql: SqlExecutor, private readonly transaction: (body: () => void) => void) {
+  constructor(private readonly sql: SqlExecutor, private readonly transaction: (body: () => void) => void, private readonly pieces: ImportPieces) {
     // The user object is this store's only writer, and never retires it.
     this.factsStore = createFactsStore(sql, { actorId: ACCOUNT_FACTS_ACTOR, assertCurrent: () => {} });
   }
@@ -312,7 +339,7 @@ export class AccountMemoryStore {
 
       const imports = yield* Effect.forEach(this.sql<ImportRow>`SELECT id, proposal_json, status, created_at FROM account_memory_proposals
         WHERE status IN ('importing', 'failed') ORDER BY created_at, id`, (row) => Effect.map(readImport(row), (record): AccountImportStatus => ({
-        id: row.id, pieces: record.notes.length, read: record.read, facts: record.facts.length, replaces: record.replaces.length,
+        id: row.id, pieces: record.pieces, read: record.read, facts: record.facts.length, replaces: record.replaces.length,
         failure: record.failure ?? null, parked: row.status === 'failed', createdAt: row.created_at,
       })));
 
@@ -338,7 +365,9 @@ export class AccountMemoryStore {
       const kept = proposal.kind === 'import' && edited !== undefined ? { ...proposal, facts: v.parse(ImportedFactsSchema, edited) } : proposal;
 
       this.transaction(() => {
-        if (decision === 'accept') this.write(kept, origin);
+        if (decision === 'accept') this.write(kept, origin, id);
+
+        if (kept.kind === 'import') this.pieces.drop(id, kept.pieces);
         void this.sql`UPDATE account_memory_proposals SET status = ${decision === 'accept' ? 'accepted' : 'declined'} WHERE id = ${id}`;
       });
       markStoreChanged(this.sql);
@@ -347,23 +376,55 @@ export class AccountMemoryStore {
     }));
   }
 
-  /** Files the owner's import of `notes`, reading none of it yet; `replaces` are the facts it takes the place of once
-   *  accepted. Its id. */
-  startImport(notes: readonly string[], replaces: readonly string[]): string {
+  /** Files the owner's import of `pieces`, in the order they are read, reading none of it yet. `replaces` are the facts it
+   *  takes the place of once accepted; `keepNotes`, whether its pieces are kept as notes then. Its id. */
+  startImport(pieces: readonly string[], replaces: readonly string[], keepNotes: boolean): string {
     return settleSync(Effect.gen({ self: this }, function* () {
-      // Kept scrubbed (`memory/scrub.ts`), as every note is.
-      const record: AccountImport = { kind: 'import', notes: notes.map((note) => scrubSecrets(note)), read: 0, facts: [], replaces: replaces.map((key) => v.parse(FactKeySchema, key)) };
-
-      if (record.notes.length === 0) return yield* new KinuError('bad_input', 'The document holds no words to import.');
+      if (pieces.length === 0) return yield* new KinuError('bad_input', 'There are no words to import.');
+      const record: AccountImport = { kind: 'import', pieces: pieces.length, keepNotes, read: 0, facts: [], replaces: replaces.map((key) => v.parse(FactKeySchema, key)) };
       const json = yield* importRow(record);
       const id = `amp_${nanoid(12)}`;
 
-      void this.sql`INSERT INTO account_memory_proposals (id, proposal_json, origin_json, delivery, status, created_at)
-        VALUES (${id}, ${json}, ${JSON.stringify({ by: 'import' })}, ${null}, 'importing', ${Date.now()})`;
+      this.transaction(() => {
+        // Kept scrubbed (`memory/scrub.ts`), as every note is, and so read.
+        for (const [at, piece] of pieces.entries()) this.pieces.put(id, at, scrubSecrets(piece));
+        void this.sql`INSERT INTO account_memory_proposals (id, proposal_json, origin_json, delivery, status, created_at)
+          VALUES (${id}, ${json}, ${JSON.stringify({ by: 'import' })}, ${null}, 'importing', ${Date.now()})`;
+      });
       markStoreChanged(this.sql);
 
       return id;
     }));
+  }
+
+  /**
+   * Each import row an earlier build wrote with its pieces inside, as this build keeps it: the pieces apart, the row their
+   * count. One transaction; a row already converted is no longer legacy, so a second start changes nothing. Answers how
+   * many it converted. One-time: see {@link LegacyImportSchema}.
+   */
+  convertLegacyImports(): number {
+    const rows = this.sql<ImportRow>`SELECT id, proposal_json, status, created_at FROM account_memory_proposals
+      WHERE proposal_json LIKE '%"kind":"import"%' AND proposal_json LIKE '%"notes":[%'`;
+
+    const legacy = rows.flatMap((row) => {
+      const parsed = v.safeParse(LegacyImportSchema, tolerate(() => parseJsonValue(row.proposal_json), 'malformed-input'));
+
+      return parsed.success ? [{ id: row.id, record: parsed.output, open: row.status === 'pending' || row.status === 'importing' || row.status === 'failed' }] : [];
+    });
+
+    if (legacy.length === 0) return 0;
+    this.transaction(() => {
+      for (const { id, record, open } of legacy) {
+        const { notes, ...rest } = record;
+
+        // A decided import's pieces are read no more: only an open one keeps them, as `decide` drops them.
+        for (const [at, piece] of open ? notes.entries() : []) this.pieces.put(id, at, piece);
+        void this.sql`UPDATE account_memory_proposals SET proposal_json = ${JSON.stringify({ ...rest, pieces: notes.length, keepNotes: true })} WHERE id = ${id}`;
+      }
+    });
+    markStoreChanged(this.sql);
+
+    return legacy.length;
   }
 
   /** The imports still reading their document: each its next piece, and what the account will hold beside it. */
@@ -376,7 +437,7 @@ export class AccountMemoryStore {
 
       return {
         id: row.id,
-        piece: { text: record.notes[record.read] ?? '', index: record.read, total: record.notes.length },
+        piece: { text: this.pieces.get(row.id, record.read) ?? '', index: record.read, total: record.pieces },
         known: mergeImported(held, record.facts),
       };
     })));
@@ -391,9 +452,9 @@ export class AccountMemoryStore {
       if (row === undefined) return false;
       const record = yield* readImport(row);
 
-      if (record.read !== index) return record.read < record.notes.length;
-      const next: AccountImport = { kind: 'import', notes: record.notes, read: index + 1, facts: mergeImported(record.facts, facts), replaces: record.replaces };
-      const done = next.read >= next.notes.length;
+      if (record.read !== index) return record.read < record.pieces;
+      const next: AccountImport = { kind: 'import', pieces: record.pieces, keepNotes: record.keepNotes, read: index + 1, facts: mergeImported(record.facts, facts), replaces: record.replaces };
+      const done = next.read >= next.pieces;
       const json = yield* importRow(next);
 
       void this.sql`UPDATE account_memory_proposals SET proposal_json = ${json}, status = ${done ? 'pending' : 'importing'} WHERE id = ${id}`;
@@ -455,11 +516,16 @@ export class AccountMemoryStore {
     return existed;
   }
 
-  private write(proposal: StoredProposal, origin: FactOrigin): void {
+  /** Writes what the proposal asks; an import as `id`'s, whose pieces it reads. */
+  private write(proposal: StoredProposal, origin: FactOrigin, id: string): void {
     if (proposal.kind === 'import') {
       const kept = new Set(proposal.facts.map((fact) => fact.key));
 
-      for (const content of proposal.notes) this.insertNote(content, origin);
+      for (let at = 0; proposal.keepNotes && at < proposal.pieces; at += 1) {
+        const content = this.pieces.get(id, at);
+
+        if (content !== undefined) this.insertNote(content, origin);
+      }
 
       for (const key of proposal.replaces) if (!kept.has(key)) this.factsStore.forget(key, origin);
 

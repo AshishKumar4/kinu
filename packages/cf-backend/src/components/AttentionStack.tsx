@@ -61,7 +61,7 @@ function kindOf(ask: OwnerAsk): AskKind {
 function remembered(memory: AccountMemoryProposal): string {
   const { proposal } = memory;
 
-  if (proposal.kind === "import") return `${String(proposal.facts.length)} facts from a document you imported`;
+  if (proposal.kind === "import") return `${String(proposal.facts.length)} facts from what you imported`;
 
   return proposal.kind === "fact" ? memoryLabel(proposal.key) : proposal.content;
 }
@@ -177,7 +177,7 @@ function MemoryBody({ memory }: { memory: AccountMemoryProposal }) {
           {proposal.facts.map((fact) => <MemoryFact key={fact.key} factKey={fact.key} value={fact.value} />)}
         </Surface>
         <div className="t-meta mt-1 p-text-3">
-          Read from a document you imported{proposal.replaces.length > 0 ? `, in place of ${String(proposal.replaces.length)} facts` : ''}. Edit them first under Settings → Memory.
+          Read from what you imported{proposal.replaces.length > 0 ? `, in place of ${String(proposal.replaces.length)} facts` : ''}. Edit them first under Settings → Memory.
         </div>
       </>
     );

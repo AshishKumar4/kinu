@@ -18,6 +18,8 @@ export const ONBOARDING_STEPS = [
   { id: 'mail', title: 'Your email address' },
   { id: 'providers', title: 'Connect a provider' },
   { id: 'model', title: 'Your default model' },
+  // Right after the model, so the account's fast model reads an import while the person goes on.
+  { id: 'memory', title: 'Wanna dump everything about yourself?' },
   { id: 'search', title: 'Web search' },
   { id: 'tools', title: 'Connect your tools' },
   { id: 'assistant', title: 'A personal assistant' },

@@ -7,9 +7,9 @@ import { pictureKey, PictureAddressSchema, readPictureInMode, type PictureBucket
 import { connectedPath, GOOGLE_OAUTH_CRED_KEY, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
-import { DEVICE_TIERS, ImportedFactsSchema, JsonValueSchema, MCP_OAUTH_CALLBACK_PATH } from '@kinu.run/core';
+import { DEVICE_TIERS, ImportedFactsSchema, JsonValueSchema, MCP_OAUTH_CALLBACK_PATH, PLATFORM_LIMITS, readBounded } from '@kinu.run/core';
 import { AccountImportSourceSchema } from './account-memory';
-import { diagnostics, authoredRefusal, renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
+import { diagnostics, authoredRefusal, renderThrownChain, settle, KinuError } from '@kinu.run/core/obs';
 import { isEvalServiceIdentity } from '../eval/abort-route';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
 import { listProviderCatalog } from './available-models';
@@ -50,7 +50,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'userMcp_handleOAuthCallback'
   | 'userMcp_beginConnect' | 'userMcp_reconnect' | 'evalAbortActivation'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
-  | 'accountMemory_import' | 'accountMemory_retryImport'
+  | 'accountMemory_import' | 'accountMemory_retryImport' | 'accountMemory_documentText'
   | 'slateAiSpend'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
 >;
@@ -644,6 +644,33 @@ userRoutes.post('/api/user/memory/import', (c) => settle(Effect.gen(function* ()
   return yield* Effect.tryPromise({
     try: async () => json({ body: { id: await c.get('stub').accountMemory_import(c.get('owner'), body) } }),
     catch: (cause) => authoredRefusal({ doing: 'importing into your account memory', cause }),
+  });
+})));
+
+/** A file the account reads to text: one call's argument (`rpc.arg_bytes`), less a mebibyte for its name, type and caller. */
+const DOCUMENT_TEXT_BYTES = PLATFORM_LIMITS['rpc.arg_bytes'].value - 1024 * 1024;
+
+// A file to import that the browser cannot read (a PDF): its text, for the owner to see and import as a document.
+userRoutes.post('/api/user/memory/import/text', (c) => settle(Effect.gen(function* () {
+  const name = c.req.query('name') ?? 'document';
+  const type = c.req.header('content-type') ?? 'application/octet-stream';
+  const bytes = yield* Effect.promise(() => readBounded(c.req.raw, DOCUMENT_TEXT_BYTES));
+
+  if (bytes === 'too_large') return err(413, `This file is over ${String(DOCUMENT_TEXT_BYTES / 1024 / 1024)} MiB, the most one call to the account carries (rpc.arg_bytes). Copy its text and paste it instead.`);
+
+  if (bytes instanceof KinuError) return yield* bytes;
+
+  if (bytes.byteLength === 0) return err(400, 'The file is empty.');
+
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const text = await c.get('stub').accountMemory_documentText(c.get('owner'), { name, type, bytes });
+
+      return text === null || text.trim() === ''
+        ? err(422, 'Kinu could not read text from this file. Copy its text and paste it instead.')
+        : json({ body: { text } });
+    },
+    catch: (cause) => authoredRefusal({ doing: 'reading this file', cause }),
   });
 })));
 

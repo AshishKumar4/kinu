@@ -57,7 +57,7 @@ import { UserSecrets } from './secrets';
 import { GitHubHooks, type GitHubHookAsk } from './github-hooks';
 import { UserWorkspaces, type WorkspaceAdmission, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
-import { accountAppAgentModel, accountFastJudge, accountSlateAi, addSlateAiSpend, slateAiSpendOf, type AccountSlateAiHost } from './slate-ai-account';
+import { accountAppAgentModel, accountDocumentText, accountFastJudge, accountSlateAi, addSlateAiSpend, slateAiSpendOf, type AccountSlateAiHost } from './slate-ai-account';
 import { AccountImportJobs } from './account-imports';
 import { testAvailableModel } from './available-models';
 import type { ModelTestResult } from '@kinu.run/core';
@@ -180,6 +180,7 @@ export class UserDO extends Agent<Env> {
     if (this.storageRefusal !== undefined) return;
     this.workspaceDeletions.adoptMarked();
     this.accountDeletion.adopt();
+    this.accountMemory.convertLegacyImports();
     this.accountImports.adopt();
   }
 
@@ -1118,6 +1119,14 @@ export class UserDO extends Agent<Env> {
 
   accountMemory_retryImport(caller: UserCaller, id: string): Promise<boolean> {
     return this.accountMemory.accountMemory_retryImport(caller, id);
+  }
+
+  /** A file the owner is about to import (a PDF, say), as text for them to see before they import it; nothing is kept.
+   *  Null where the platform could not read it. */
+  async accountMemory_documentText(caller: UserCaller, file: { name: string; type: string; bytes: Uint8Array }): Promise<string | null> {
+    await this.host.requireTier(caller, 'memory.account.manage');
+
+    return await accountDocumentText(this.slateAiHost(), file);
   }
 
   accountMemory_view(caller: UserCaller): Promise<AccountMemoryView> {

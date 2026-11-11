@@ -934,8 +934,7 @@ const MEMORY_PROPOSALS = new Map<string, JsonValue>([
   ["import", {
     id: "amp_import",
     proposal: {
-      kind: "import", read: 3, replaces: ["profile.section-01", "profile.section-02", "profile.section-03"],
-      notes: ["Home and travel …", "Work …", "Preferences …"],
+      kind: "import", pieces: 3, keepNotes: true, read: 3, replaces: ["profile.section-01", "profile.section-02", "profile.section-03"],
       facts: [
         { key: "home.city", value: "Austin, Texas", importance: 0.9 },
         { key: "home.previous_city", value: "Raleigh (moved 2024)", importance: 0.4 },
@@ -977,6 +976,21 @@ function keptFacts(proposal: JsonValue): JsonValue[] {
     key: fact.key, value: fact.value, importance: 0.5, veracity: "stated", lastObservedAt: NOW, origin,
     history: [{ forgotten: false, value: fact.value, origin, at: NOW }],
   }));
+}
+
+/** What the person imported, recorded as sent (`data-gallery-memory-imports`, one JSON body a line); a file the
+ *  platform reads to text answers as a PDF of the person's notes would. */
+function galleryMemoryImport(path: string, method: string, body: BodyInit | null | undefined): Response | null {
+  if (method !== "POST") return null;
+
+  if (path.startsWith("/api/user/memory/import/text")) return Response.json({ text: "Notes from my PDF\n\nI live in Austin, Texas. I moved there from Raleigh in May 2025." });
+
+  if (path !== "/api/user/memory/import") return null;
+  const root = document.documentElement.dataset;
+
+  root.galleryMemoryImports = `${root.galleryMemoryImports ?? ""}${typeof body === "string" ? body : ""}\n`;
+
+  return Response.json({ id: "amp_gallery_import" });
 }
 
 /** The owner's decision on a proposal, recorded (`data-gallery-memory-decisions`), then what is left sent to every page. */
@@ -1162,7 +1176,7 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
   const upload = galleryUploadFixture(path, method);
 
   if (upload !== null) return Promise.resolve(upload);
-  const decided = galleryMemoryDecision(path, method, body);
+  const decided = galleryMemoryDecision(path, method, body) ?? galleryMemoryImport(path, method, body);
 
   if (decided !== null) return Promise.resolve(decided);
 

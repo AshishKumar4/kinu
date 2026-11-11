@@ -387,8 +387,14 @@ export const decideAccountMemory = (id: string, decision: 'accept' | 'decline', 
   settle(api(OkSchema, 'POST', `${MEMORY_PATH}/proposals/${encodeURIComponent(id)}`, { decision, ...(facts !== undefined && { facts }) }));
 
 /** A document to read into short facts, or facts the account holds, which the batch replaces once accepted. */
-export const importAccountMemory = (source: { document: string } | { facts: string[] }) =>
+/** A document to read into short facts and keep as notes; facts the account holds, which the batch replaces once
+ *  accepted; or the person's own words of an export's conversations (`readExport`), of which only facts are kept. */
+export const importAccountMemory = (source: { document: string } | { facts: string[] } | { conversations: string[] }) =>
   settle(api(v.object({ id: v.string() }), 'POST', `${MEMORY_PATH}/import`, source));
+
+/** A file the browser cannot read (a PDF), as text by the platform's conversion; nothing is kept. */
+export const accountDocumentText = (file: File) =>
+  settle(request(v.object({ text: v.string() }), `/api/user${MEMORY_PATH}/import/text?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file }));
 
 export const retryAccountImport = (id: string) =>
   settle(api(v.object({ retried: v.boolean() }), 'POST', `${MEMORY_PATH}/imports/${encodeURIComponent(id)}/retry`, {}));

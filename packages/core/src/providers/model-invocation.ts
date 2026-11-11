@@ -257,22 +257,33 @@ export function workersAiWebSearch(env: { readonly AI?: Partial<WorkersAiWebSear
   return ai?.websearch?.bind(ai);
 }
 
+/** A file as text by the platform's conversion (`env.AI.toMarkdown`, which reads PDF, office documents, HTML and
+ *  more); null where it could not. Each conversion files one unmeasured `platform` row. */
+export function workersAiToMarkdown(
+  env: { readonly AI?: WorkersAiMarkdown },
+  report: ModelCallSink,
+): ((file: { readonly name: string; readonly blob: Blob }) => Promise<string | null>) | undefined {
+  const ai = env.AI;
+
+  if (!converts(ai)) return undefined;
+
+  return async (file) => {
+    const out = await ai.toMarkdown([{ name: file.name, blob: file.blob }]);
+    report({ source: 'platform', usage: {}, modelId: 'toMarkdown' });
+    const converted = out[0];
+
+    return converted !== undefined && converted.format !== 'error' ? converted.data : null;
+  };
+}
+
 /** Each conversion files one unmeasured `platform` row. */
 export function workersAiHtmlToMarkdown(
   env: { readonly AI?: WorkersAiMarkdown },
   report: ModelCallSink,
 ): ((html: string, opts?: { url?: string }) => Promise<string>) | undefined {
-  const ai = env.AI;
+  const convert = workersAiToMarkdown(env, report);
 
-  if (!converts(ai)) return undefined;
+  if (convert === undefined) return undefined;
 
-  return async (html, opts) => {
-    const name = `${opts?.url ?? 'page'}.html`;
-    const blob = new Blob([html], { type: 'text/html' });
-    const out = await ai.toMarkdown([{ name, blob }]);
-    report({ source: 'platform', usage: {}, modelId: 'toMarkdown' });
-    const converted = out[0];
-
-    return converted?.format === 'markdown' ? converted.data : '';
-  };
+  return async (html, opts) => await convert({ name: `${opts?.url ?? 'page'}.html`, blob: new Blob([html], { type: 'text/html' }) }) ?? '';
 }

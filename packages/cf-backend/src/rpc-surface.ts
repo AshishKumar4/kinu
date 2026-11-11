@@ -69,6 +69,7 @@ const USER_DO_METHODS = [
   'appAgentSpent',
   'decideSlateEffect',
   'accountMemory_decide',
+  'accountMemory_documentText',
   'accountMemory_facts',
   'accountMemory_turnFacts',
   'accountMemory_forget',

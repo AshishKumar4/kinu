@@ -342,6 +342,7 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     putProfileCatalog: refuse('putProfileCatalog'),
     accountMemory_view: refuse('accountMemory_view'),
     accountMemory_decide: refuse('accountMemory_decide'),
+    accountMemory_documentText: refuse('accountMemory_documentText'),
     accountMemory_put: refuse('accountMemory_put'),
     accountMemory_forget: refuse('accountMemory_forget'),
     accountMemory_forgetNote: refuse('accountMemory_forgetNote'),

@@ -484,7 +484,7 @@ export { CHARS_PER_TOKEN } from './token-estimate';
 export type { LLMProviderConfig } from './llm';
 
 export {
-  createWorkersAIEmbedder, type WorkersAiWebSearch, generateReported,
+  createWorkersAIEmbedder, type WorkersAiWebSearch, generateReported, workersAiToMarkdown,
 } from './providers/model-invocation';
 
 // Every surface that counts tokens speaks this usage report.
@@ -1166,7 +1166,7 @@ export {
   SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND,
 } from './vfs/shared-drive';
 
-export { packZip, unpackZip, type ZipEntry } from './utils/zip';
+export { packZip, unpackZip, zipEntryStream, type RangedSource, type ZipEntry } from './utils/zip';
 
 export {
   normalizeDrivePath, listDrive, makeDriveFolder, renameDriveEntry,
@@ -1243,7 +1243,7 @@ export {
 } from './memory/facts';
 
 export {
-  AccountImportStatusSchema, AccountMemoryStore, AccountMemoryProposalSchema, AccountNoteSchema, AccountProfileUseSchema,
+  AccountImportStatusSchema, AccountMemoryStore, AccountMemoryProposalSchema, AccountNoteSchema, AccountProfileUseSchema, type ImportPieces,
   type AccountImportStatus, type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNoteHit, type AccountProposal,
   type AccountProposalFiled, type AccountProposer,
 } from './memory/account';
@@ -1254,6 +1254,10 @@ export {
 } from './memory/account-profile';
 
 export { extractImportPiece, factsAsDocument, ImportedFactsSchema, importPieces, type ImportedFact, type ImportJudge } from './memory/account-import';
+
+export {
+  ANOTHER_AI_PROMPT, IMPORT_CARRIED_CHARS, readExport, type ExportPieces,
+} from './memory/import-sources';
 
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema, renderIssuesUnquoted,

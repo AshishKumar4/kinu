@@ -3,7 +3,7 @@ import { ClockCounterClockwiseIcon, SealCheckIcon } from "@phosphor-icons/react"
 import { Effect } from "effect";
 import * as v from "valibot";
 import { JsonValueSchema, type AccountMemoryProposal, type JsonValue } from "@kinu.run/core";
-import { attempt, detach, renderThrownChain, tolerate } from "@kinu.run/core/obs";
+import { detach, tolerate } from "@kinu.run/core/obs";
 import { Card } from "@/components/ui/Card";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
@@ -14,12 +14,12 @@ import {
 } from "../../lib/user-api";
 import { Button } from "@/components/ui/Button";
 import { Checkbox } from "@/components/ui/Check";
-import { FilePicker } from "@/components/ui/FilePicker";
 import { Group } from "@/components/ui/Group";
 import { Meter, ProgressBar } from "@/components/ui/Meter";
 import { Notice } from "@/components/ui/Notice";
-import { TextArea, TextInput } from "@/components/ui/Field";
+import { TextInput } from "@/components/ui/Field";
 import { MemoryFact, MemoryProvenance, MemoryValue } from "@/components/MemoryFact";
+import { MemoryImport, useActing } from "./MemoryImport";
 
 /** Editing keeps JSON values structured and strings literal. */
 function editableValueText(value: JsonValue): string {
@@ -56,22 +56,11 @@ export function AccountMemoryCard() {
     framed.current = accountProposals;
     reload();
   }, [accountProposals, reload]);
-  const [busy, setBusy] = useState<Busy>(null);
-  const [failure, setFailure] = useState<string | null>(null);
+  // One change to the account's memory at a time, as an effect each control detaches on its press; then a fresh read.
+  const { busy, failure, act } = useActing(reload);
   // The facts chosen to import as one document; null when none are being chosen.
   const [selected, setSelected] = useState<ReadonlySet<string> | null>(null);
   const [composing, setComposing] = useState(false);
-
-  /** One change to the account's memory, as an effect each control detaches on its press. */
-  const act = (what: string, run: () => Promise<void>) => Effect.sync(() => {
-    setBusy({ what });
-    setFailure(null);
-  }).pipe(
-    Effect.andThen(attempt({ doing: what, otherwise: "io" }, run)),
-    Effect.tap(() => Effect.sync(reload)),
-    Effect.catch((failed) => Effect.sync(() => { setFailure(renderThrownChain({ cause: failed })); })),
-    Effect.ensuring(Effect.sync(() => { setBusy(null); })),
-  );
 
   return (
     <Card title="Account memory">
@@ -82,7 +71,12 @@ export function AccountMemoryCard() {
             <Profile state={state} onImportUnshown={() => setSelected(new Set(state.profile.unshown.map((fact) => fact.key)))} />
             <Imports state={state} busy={busy} act={act} decide={decideAccountProposal} />
             <Pending pending={accountProposals ?? state.pending} busy={busy} act={act} decide={decideAccountProposal} />
-            {composing && <ImportDocument busy={busy} act={act} onDone={() => setComposing(false)} />}
+            {composing && (
+              <section className="space-y-2" data-account-memory-import-document>
+                <div className="t-label">Import</div>
+                <MemoryImport onImported={() => { setComposing(false); reload(); }} onCancel={() => setComposing(false)} />
+              </section>
+            )}
             <Facts state={state} busy={busy} act={act} selected={selected} select={setSelected} compose={composing ? null : () => setComposing(true)} />
             <Notes state={state} busy={busy} act={act} />
           </div>
@@ -147,38 +141,8 @@ function Imports({ state, busy, act, decide }: SectionProps & { readonly decide:
   );
 }
 
-/** A document pasted or chosen, to import. */
-function ImportDocument({ busy, act, onDone }: Omit<SectionProps, "state"> & { readonly onDone: () => void }) {
-  const [text, setText] = useState("");
-  const picker = useRef<HTMLInputElement>(null);
-
-  return (
-    <section className="space-y-2" data-account-memory-import-document>
-      <div className="t-label">Import a document</div>
-      <div className="t-meta p-text-3">
-        What every agent of yours should know about you. Its text is kept as notes your agents can search, and read into short facts you review before they are kept.
-      </div>
-      <TextArea rows={8} aria-label="Document to import" value={text} onChange={(event) => setText(event.target.value)} />
-      <FilePicker ref={picker} accept=".md,.txt,.json,text/plain,text/markdown,application/json" onChange={(event) => detach(act("reading this file", async () => {
-        const file = event.target.files?.[0];
-
-        if (file !== undefined) setText(await file.text());
-      }))} />
-      <div className="flex flex-wrap gap-2">
-        <Button variant="primary" size="sm" disabled={busy !== null || text.trim() === ""}
-          onClick={() => detach(act("importing this document", async () => {
-            await importAccountMemory({ document: text });
-            onDone();
-          }))}>Import</Button>
-        <Button size="sm" disabled={busy !== null} onClick={() => picker.current?.click()}>Choose a file</Button>
-        <Button variant="ghost" size="sm" onClick={onDone}>Cancel</Button>
-      </div>
-    </section>
-  );
-}
-
 /** An import's facts as the owner keeps them: each value editable, each removable, all kept in one act. */
-function ImportBatch({ item, busy, act, decide }: Omit<SectionProps, "state"> & {
+export function ImportBatch({ item, busy, act, decide }: Omit<SectionProps, "state"> & {
   readonly item: AccountMemoryProposal & { readonly proposal: { readonly kind: "import" } };
   readonly decide: Decide;
 }) {
@@ -199,7 +163,7 @@ function ImportBatch({ item, busy, act, decide }: Omit<SectionProps, "state"> & 
   return (
     <div className="px-3 py-2 space-y-2" data-account-memory-proposal={item.id}>
       <div className="t-body p-text">
-        {count(rows.length)} facts read from a document you imported
+        {count(rows.length)} facts read from what you imported
         {proposal.replaces.length > 0 && `, in place of ${count(proposal.replaces.length)} facts`}
       </div>
       <div className="space-y-1" data-account-memory-batch>
@@ -275,7 +239,7 @@ function Facts({ state, busy, act, selected, select, compose }: SectionProps & {
         <div className="t-label">Facts</div>
         {selected === null && (
           <div className="ml-auto flex gap-1">
-            {compose !== null && <Button variant="ghost" size="sm" onClick={compose}>Import a document</Button>}
+            {compose !== null && <Button variant="ghost" size="sm" onClick={compose}>Import</Button>}
             {state.facts.length > 0 && <Button variant="ghost" size="sm" onClick={() => select(new Set())}>Choose facts to import</Button>}
           </div>
         )}

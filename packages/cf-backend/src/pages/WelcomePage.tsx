@@ -18,6 +18,8 @@ import { DefaultModelField } from "@/components/account/DefaultModelField";
 import { WebSearchSettings } from "@/components/account/WebSearchSettings";
 import { AssistantStep, DEFAULT_ASSISTANT, type AssistantChoice } from "@/components/assistant/AssistantStep";
 import { McpServersSection } from "@/components/account/McpServersPanel";
+import { MemoryImport } from "@/components/account/MemoryImport";
+import { ImportReview } from "@/components/account/ImportReview";
 import { setDisplayName } from "@/lib/user-api";
 import { finishSetup } from "@/lib/setup-finish";
 import { useAccount } from "@/hooks/use-account";
@@ -238,6 +240,16 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                 {/* Mounted only while open, so a revisit reads the providers connected meanwhile. */}
                 {s.id === 'model' && i === step && <DefaultModelField />}
 
+                {s.id === 'memory' && (
+                  <div className="space-y-3">
+                    <p className="t-body p-text-3">
+                      Everything your agents should know about you, from another AI, a file, or your ChatGPT or Claude export. Your model reads it into short
+                      facts while you go on, and you keep them in one go. From an export only the facts are kept, never your conversations.
+                    </p>
+                    <MemoryImport onImported={() => goTo(Math.min(step + 1, LAST_STEP))} />
+                  </div>
+                )}
+
                 {/* Likewise: the model step writes the same catalog, so this one reads it when it opens. */}
                 {s.id === 'search' && i === step && <WebSearchSettings place="setup" />}
 
@@ -248,6 +260,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   </div>
                 )}
 
+                {s.id === 'assistant' && i === step && <ImportReview />}
                 {s.id === 'assistant' && <AssistantStep choice={assistant} onChange={setAssistant} person={personName(profile === null ? null : { displayName, email: profile.email })} />}
 
                 {s.id === 'showcase' && <ShowcaseStep revealed={revealed} />}

@@ -5,7 +5,7 @@
  */
 import * as v from 'valibot';
 import {
-  accountSpendOfCall, DEFAULT_ROLE_ID, objectOnRoute, resolveModelRoute, routedLlm, webSearchChainOf, pricedModelCallEvent, loadProfileAuthorityInputs, ModelCatalogSession, resolveTurnProfile, specModelInfo,
+  accountSpendOfCall, DEFAULT_ROLE_ID, objectOnRoute, workersAiToMarkdown, resolveModelRoute, routedLlm, webSearchChainOf, pricedModelCallEvent, loadProfileAuthorityInputs, ModelCatalogSession, resolveTurnProfile, specModelInfo,
   type AccountSpend, type ImportJudge, type ModelCallReport, type ProfileCatalogEnvelope, type ResolvedTurnProfile, type SlateSurfaceValue, type Usage, type UserCaller,
 } from '@kinu.run/core';
 import { recordModelRow } from '@kinu.run/core/analytics';
@@ -116,6 +116,20 @@ export async function accountFastJudge<Id>(host: AccountSlateAiHost<Id>, caller:
   };
 
   return { object: async (prompt, schema) => objectOnRoute(route, lane, prompt, schema) };
+}
+
+/** A document the owner imports, as text by the platform's conversion; its unmeasured row is the account's. Null where
+ *  the platform could not read it, or this deployment has no conversion. */
+export async function accountDocumentText<Id>(host: AccountSlateAiHost<Id>, file: { readonly name: string; readonly type: string; readonly bytes: Uint8Array }): Promise<string | null> {
+  const convert = workersAiToMarkdown(host.env, (report) => {
+    recordModelRow(host.env, { workspace: ACCOUNT_MEMORY_WORKSPACE, agentKind: '', provider: 'workers-ai', model: report.modelId ?? '', source: report.source, usage: report.usage, usd: 0 });
+  });
+
+  const owned = new Uint8Array(new ArrayBuffer(file.bytes.byteLength));
+
+  owned.set(file.bytes);
+
+  return await convert?.({ name: file.name, blob: new Blob([owned], { type: file.type }) }) ?? null;
 }
 
 /** The tally's usage columns, each with the `Usage` field it sums. */

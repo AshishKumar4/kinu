@@ -23,11 +23,19 @@ export interface AccountMemoryHost extends UserObjectHost {
   readonly importJudge: () => Promise<ImportJudge>;
 }
 
-/** What an owner imports: a document, or facts the account holds, which the batch replaces once accepted. */
+/**
+ * What an owner imports: a document, kept as notes once accepted; facts the account holds, which the batch replaces; or
+ * their own words of an export's conversations, read in their browser (`import-sources.ts`), dated and oldest first, of
+ * which only the facts are kept.
+ */
 export const AccountImportSourceSchema = v.union([
   v.strictObject({ document: v.pipe(v.string(), v.trim(), v.nonEmpty('The document holds no words to import.')) }),
   v.strictObject({ facts: v.pipe(v.array(v.pipe(v.string(), v.nonEmpty())), v.minLength(1, 'Choose the facts to import.')) }),
+  v.strictObject({ conversations: v.pipe(v.array(v.pipe(v.string(), v.trim(), v.nonEmpty())), v.minLength(1, 'The export holds none of your own words.')) }),
 ]);
+
+/** An import's pieces in the user object's key-value storage, one key a piece. */
+const pieceKey = (id: string, at: number): string => `memory-import:${id}:${String(at)}`;
 
 export type AccountImportSource = v.InferInput<typeof AccountImportSourceSchema>;
 
@@ -37,7 +45,13 @@ export class UserAccountMemory {
   private readonly store: AccountMemoryStore;
 
   constructor(private readonly host: AccountMemoryHost) {
-    this.store = new AccountMemoryStore(host.sql, (body) => { host.ctx.storage.transactionSync(body); });
+    const { kv } = host.ctx.storage;
+
+    this.store = new AccountMemoryStore(host.sql, (body) => { host.ctx.storage.transactionSync(body); }, {
+      put: (id, at, text) => { kv.put(pieceKey(id, at), text); },
+      get: (id, at) => kv.get<string>(pieceKey(id, at)),
+      drop: (id, count) => { for (let at = 0; at < count; at += 1) kv.delete(pieceKey(id, at)); },
+    });
   }
 
   async accountMemory_facts(caller: UserCaller): Promise<Fact[]> {
@@ -96,15 +110,10 @@ export class UserAccountMemory {
     const parsed = v.parse(AccountImportSourceSchema, source);
 
     return settle(Effect.gen({ self: this }, function* () {
-      const named = 'document' in parsed ? null : new Set(parsed.facts);
-      const chosen = named === null ? [] : this.store.facts().filter((fact) => named.has(fact.key));
-
-      if (named !== null && chosen.length === 0) return yield* new KinuError('missing', 'None of those facts is in your account memory.');
+      const filed = yield* this.importOf(parsed);
 
       const started = yield* Effect.try({
-        try: () => ('document' in parsed
-          ? this.store.startImport(importPieces(parsed.document), [])
-          : this.store.startImport(importPieces(factsAsDocument(chosen)), chosen.map((fact) => fact.key))),
+        try: () => this.store.startImport(filed.pieces, filed.replaces, filed.keepNotes),
         catch: (cause) => toKinuError({ doing: 'filing this import', cause, otherwise: 'bad_input' }),
       });
 
@@ -113,6 +122,20 @@ export class UserAccountMemory {
 
       return started;
     }));
+  }
+
+  /** What a source files: its pieces in reading order, the facts it replaces, and whether its pieces become notes. */
+  private importOf(source: v.InferOutput<typeof AccountImportSourceSchema>): Effect.Effect<{ pieces: string[]; replaces: string[]; keepNotes: boolean }, KinuError> {
+    if ('document' in source) return Effect.succeed({ pieces: importPieces(source.document), replaces: [], keepNotes: true });
+
+    // Each as the extractor reads it whole, in the order the browser put them: oldest first.
+    if ('conversations' in source) return Effect.succeed({ pieces: source.conversations.flatMap((piece) => importPieces(piece)), replaces: [], keepNotes: false });
+    const named = new Set(source.facts);
+    const chosen = this.store.facts().filter((fact) => named.has(fact.key));
+
+    if (chosen.length === 0) return Effect.fail(new KinuError('missing', 'None of those facts is in your account memory.'));
+
+    return Effect.succeed({ pieces: importPieces(factsAsDocument(chosen)), replaces: chosen.map((fact) => fact.key), keepNotes: true });
   }
 
   /** The owner retries an import stopped on a failure, from the piece it stopped at. */
@@ -126,6 +149,11 @@ export class UserAccountMemory {
     }
 
     return retried;
+  }
+
+  /** At the account's start: import rows an earlier build wrote, kept as this build reads them (one-time). */
+  convertLegacyImports(): void {
+    if (this.store.convertLegacyImports() > 0) this.pendingMoved();
   }
 
   /** Whether an import has a piece left to read. */

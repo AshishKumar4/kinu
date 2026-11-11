@@ -49,6 +49,86 @@ async function inflate(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
+/** A random-access file: a browser File's slices, so an archive of any size is read a range at a time. */
+export interface RangedSource {
+  readonly size: number;
+  read(offset: number, length: number): Promise<Uint8Array>;
+}
+
+/** Reads of a source this size at a time: a slice a browser holds without strain. */
+export const ZIP_SLICE_BYTES = 4 * 1024 * 1024;
+
+/** The end record and its longest comment: where the end-of-central-directory signature can be. */
+const END_SEARCH_BYTES = 22 + 0xffff;
+
+/**
+ * The first entry `wanted` names, as a stream of its bytes, read through `source` a range at a time: an archive is
+ * never held whole. Null when none is named.
+ */
+export function zipEntryStream(source: RangedSource, wanted: (path: string) => boolean): Effect.Effect<ReadableStream<Uint8Array> | null, KinuError> {
+  return Effect.gen(function* () {
+    const tailStart = Math.max(0, source.size - END_SEARCH_BYTES);
+    const tail = yield* Effect.promise(() => source.read(tailStart, source.size - tailStart));
+    const tailView = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
+    const end = yield* endOfCentral(tailView);
+    const count = tailView.getUint16(end + 10, true);
+    const directoryBytes = tailView.getUint32(end + 12, true);
+    const directoryOffset = tailView.getUint32(end + 16, true);
+
+    if (directoryOffset === ZIP64_MARK || count === 0xffff) return yield* new KinuError('unsupported', 'zip64 archives are not supported');
+    const directory = yield* Effect.promise(() => source.read(directoryOffset, directoryBytes));
+    const view = new DataView(directory.buffer, directory.byteOffset, directory.byteLength);
+    const decoder = new TextDecoder();
+    let at = 0;
+
+    for (let index = 0; index < count; index += 1) {
+      if (view.getUint32(at, true) !== CENTRAL_HEADER) return yield* new KinuError('bad_input', 'corrupt zip: central directory entry expected');
+      const method = view.getUint16(at + 10, true);
+      const compressedSize = view.getUint32(at + 20, true);
+      const nameLength = view.getUint16(at + 28, true);
+      const localOffset = view.getUint32(at + 42, true);
+      const name = decoder.decode(directory.subarray(at + 46, at + 46 + nameLength));
+
+      at += 46 + nameLength + view.getUint16(at + 30, true) + view.getUint16(at + 32, true);
+
+      if (!wanted(name)) continue;
+
+      if (compressedSize === ZIP64_MARK || localOffset === ZIP64_MARK) return yield* new KinuError('unsupported', 'zip64 archives are not supported');
+
+      if (method !== STORED && method !== DEFLATED) return yield* new KinuError('unsupported', `zip entry ${JSON.stringify(name)} uses compression method ${String(method)}`);
+      const local = yield* Effect.promise(() => source.read(localOffset, 30));
+      const localView = new DataView(local.buffer, local.byteOffset, local.byteLength);
+
+      if (localView.getUint32(0, true) !== LOCAL_HEADER) return yield* new KinuError('bad_input', 'corrupt zip: local header expected');
+      const start = localOffset + 30 + localView.getUint16(26, true) + localView.getUint16(28, true);
+      let read = 0;
+
+      const raw = new ReadableStream<Uint8Array<ArrayBuffer>>({
+        async pull(controller) {
+          if (read >= compressedSize) {
+            controller.close();
+
+            return;
+          }
+
+          const length = Math.min(ZIP_SLICE_BYTES, compressedSize - read);
+          const bytes = await source.read(start + read, length);
+          // Owned, as the platform's stream types refuse a view over a buffer that may be shared.
+          const owned = new Uint8Array(new ArrayBuffer(bytes.byteLength));
+
+          owned.set(bytes);
+          controller.enqueue(owned);
+          read += length;
+        },
+      });
+
+      return method === STORED ? raw : raw.pipeThrough(new DecompressionStream('deflate-raw'));
+    }
+
+    return null;
+  });
+}
+
 /** End-of-central-directory offset: the last signature, since an archive comment may follow it. */
 function endOfCentral(view: DataView): Effect.Effect<number, KinuError> {
   for (let at = view.byteLength - 22; at >= Math.max(0, view.byteLength - 22 - 0xffff); at -= 1) {
