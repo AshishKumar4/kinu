@@ -7,7 +7,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import { z } from 'zod';
-import { runChat, currentDateForPrompt, DynamicContextLedger, renderDynamicContextBlock, fnv1a64, agentDynamicContext, mailInContext, observeSystemPromptHash, renderActiveSkillsSection, type DynamicContext, type MailThreadSummary, type PromptExecutorInfo, type SecretsInContext } from '../src/index';
+import { accountProfile, effectiveProfileFacts, runChat, currentDateForPrompt, DynamicContextLedger, renderDynamicContextBlock, fnv1a64, agentDynamicContext, mailInContext, observeSystemPromptHash, renderActiveSkillsSection, type DynamicContext, type MailThreadSummary, type PromptExecutorInfo, type SecretsInContext } from '../src/index';
 import { Fnv1a64 } from '../src/utils/fnv1a';
 import { admitActiveSkills } from '../src/skills/loader';
 import { skillViewPath, WORKSPACE_SKILLS_DIR } from '../src/skills/types';
@@ -767,7 +767,7 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     const idOf = (title: string, line: string) => {
       const row = line.replace(/^\s*- /u, '');
 
-      return /^## (Your task list|Background work|Delegates)/u.test(title) ? row.split(' ')[0] : row;
+      return /^## (Your task list|Background work|Delegates|Your owner)/u.test(title) ? row.split(' ')[0] : row;
     };
 
     /** A "(changed rows)" section's lines applied to its section's rows. */
@@ -825,6 +825,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
       readonly recoveries: readonly string[];
       readonly approvals: readonly (readonly string[])[];
       readonly missing: readonly (readonly string[])[];
+      readonly profile: readonly string[];
+      readonly unshown: number;
     }
 
     const expectFoldState = (sections: Record<string, string[]>, context: DynamicContext): void => {
@@ -872,6 +874,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
         recoveries: rowsUnder(sections, '## Proven by execution').map(line => line.slice(2)),
         approvals: rowsUnder(sections, '## Waiting on the user').map(splitRow),
         missing: rowsUnder(sections, '## Configured but not available').map(splitRow),
+        profile: rowsUnder(sections, '## Your owner').filter((line) => !/^- \d+ more /u.test(line)),
+        unshown: Number(/^- (\d+) more /u.exec(rowsUnder(sections, '## Your owner').at(-1) ?? '')?.[1] ?? 0),
       };
 
       expect(actual).toEqual({
@@ -882,6 +886,8 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
         recoveries: context.recoveries ?? [],
         approvals: (context.approvals?.items ?? []).map(row => [row.kind, row.detail]),
         missing: (context.missingCapabilities ?? []).map(row => [row.source, row.reason]),
+        profile: context.accountProfile?.lines ?? [],
+        unshown: context.accountProfile?.unshown.length ?? 0,
       });
     };
 
@@ -946,6 +952,19 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
           jobs: roster([{ id: 'job-1', kind: 'shell', label: 'build and test' }, { id: 'job-2', kind: 'think_heads', label: null }]),
           delegates: roster([{ kind: 'subagent', name: 'ana', phase: 'done', task: 'survey' }]),
         },
+      ]);
+    });
+
+    test("the owner's facts fold by key: a changed value replaces its row, a forgotten one leaves, and the count of the unshown moves", () => {
+      const owner = (facts: Record<string, string>) => ({
+        accountProfile: accountProfile(effectiveProfileFacts(Object.entries(facts).map(([key, value]) => ({ key, value })), [])),
+      });
+
+      const long = 'trip notes '.repeat(800);
+
+      expectFolded([
+        owner({ 'home.city': 'Raleigh', 'reply.language': 'English', 'diet': 'vegetarian', 'notes.a': long }),
+        owner({ 'home.city': 'Austin, Texas', 'reply.language': 'English', 'notes.a': long, 'notes.b': long }),
       ]);
     });
 

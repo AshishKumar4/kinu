@@ -133,6 +133,7 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     // What `codemode.list` answers in this turn's programs: none where the turn cannot run one.
     connections: runnableSandbox(input.tools, profile) === undefined ? [] : connectedServers(input.externalTools ?? {}),
     // A note MEMORY.md's tail shows already is not shown twice, unless a fact has since changed what it says.
+    ...(input.account !== undefined && { accountProfile: input.account.profile }),
     factsBlock: renderMemoryForTurn(reads.facts, input.recalled?.filter((memory) => memory.kind === 'fact' || memory.supersededBy !== null
       || input.memoryTail?.includes(memory.text.trim()) !== true), input.account),
     memoryTail: input.memoryTail,

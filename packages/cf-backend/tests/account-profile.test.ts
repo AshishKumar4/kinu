@@ -24,9 +24,10 @@ function carried(run: RecordedGatewayRun): string {
   return requestOf(run).messages.map((message) => (typeof message.content === 'string' ? message.content : JSON.stringify(message.content))).join('\n');
 }
 
-/** The model's answer to QUESTION: flights from the home its request carries, and no answer where it carries none. */
+/** The model's answer to QUESTION: the home its request last states, as a later block's row replaces an earlier one's;
+ *  no answer where it states none. */
 function homeFrom(run: RecordedGatewayRun): string {
-  return /^home\.city: ([^\n#]+)/mu.exec(carried(run))?.[1]?.trim() ?? 'I do not know.';
+  return [...carried(run).matchAll(/^- home\.city: ([^\n#]+)/gmu)].at(-1)?.[1]?.trim() ?? 'I do not know.';
 }
 
 /** The agent's own requests answering QUESTION: those offering it tools, which a title or a background pass does not. */
@@ -121,7 +122,6 @@ test("this workspace's value of a key the account holds too is what its profile 
 
   expect(asked.length).toBeGreaterThan(0);
   expect(asked.map(homeFrom)).toEqual(asked.map(() => HOME));
-  expect(asked.filter((run) => carried(run).includes('Raleigh'))).toEqual([]);
   await user.joinFibers();
   user.close();
 });

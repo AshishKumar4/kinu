@@ -388,7 +388,6 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     ...(pinned && { activeSkills: pinned }),
     ...(soul !== undefined && { soulOverride: soul }),
     ...(request.pagesInAnswer === true && { pagesInAnswer: true }),
-    account: reads.account,
   };
 
   const { provider, modelId } = parseModelSpec(spec);

@@ -122,7 +122,7 @@ describe('the control trial', () => {
     const calls = Array.from({ length: made }, () => ({ name: 'eval', arguments: '{}', result: '{}' }));
 
     return {
-      userTexts: ['Build a tower.'], ask: 'Build a tower.', delivered: [], unansweredUserTexts: [], assistantTexts: [], system,
+      userTexts: ['Build a tower.'], ask: 'Build a tower.', delivered: [], unansweredUserTexts: [], assistantTexts: [], system, runtime: [],
       called: calls.map((call) => call.name), calls, turn: calls, askTurn: calls, available, streamed: true,
     };
   };

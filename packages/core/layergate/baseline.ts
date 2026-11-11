@@ -82,9 +82,9 @@ export const LOCKED_BASELINE: Baseline = {
   'volatile-context/instructions-go-out-once': '467143beef82e16e',
   'volatile-context/ledger-appends-once-per-change': '1a8be5669810ecb8',
   'volatile-context/ledger-resets-on-history-rewrite': '517967a1c92a2374',
-  'volatile-context/list-changes-by-row': 'dbe8227ea9d9f2af',
-  'volatile-context/live-rosters-are-bounded': '87ce6a005cdc822b',
+  'volatile-context/list-changes-by-row': 'ceff9e8c8407efe2',
+  'volatile-context/live-rosters-are-bounded': '933e3c3468ca0b22',
   'volatile-context/request-ends-the-turn': 'd1b800d2fed6f523',
-  'volatile-context/system-state-block': 'efad65cd5dd3c973',
-  'volatile-context/turn-reasons': '41be1983ee88fa41',
+  'volatile-context/system-state-block': 'a8861d4d4b3c42ca',
+  'volatile-context/turn-reasons': '6a79fd7beed09cad',
 };

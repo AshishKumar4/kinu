@@ -114,6 +114,9 @@ export interface ScriptedRequest {
   readonly assistantTexts: readonly string[];
   /** The system messages' text: where a workspace's mission reaches its model. */
   readonly system: string;
+  /** The runtime state the product sent in the user role (dynamic context, instructions), oldest first: where the
+   *  owner's account facts and the agent's memory reach its model. */
+  readonly runtime: readonly string[];
   /** Tool names already called in this conversation, in order. */
   readonly called: readonly string[];
   /** The same calls, each with its arguments and result, so a script answers from what the product returned. */
@@ -240,6 +243,7 @@ export function readScriptedRequest(body: string): { readonly request: ScriptedR
       unansweredUserTexts: messages.slice(unansweredFrom).flatMap((message) => isAsk(message) ? [message.content ?? ''] : []),
       assistantTexts: messages.flatMap((message) => message.role === 'assistant' && message.content ? [message.content] : []),
       system: messages.flatMap((message) => message.role === 'system' ? [message.content ?? ''] : []).join('\n'),
+      runtime: messages.flatMap((message) => message.role === 'user' && isRuntimeState(message.content ?? '') ? [message.content ?? ''] : []),
       called: calls.map((call) => call.name),
       calls,
       turn: calls.slice(latestSaid),

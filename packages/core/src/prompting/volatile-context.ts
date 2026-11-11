@@ -40,6 +40,7 @@ import type { ConnectedServer } from '../tools/mcp-discovery';
 import { mcpPresetById } from '../mcp/presets';
 import { formatByteCap } from '../utils/format';
 import { estimateTokens } from '../token-estimate';
+import type { AccountProfile } from '../memory/account-profile';
 
 export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
@@ -88,6 +89,8 @@ export interface DynamicContext {
   externalTools?: readonly ExternalToolDeclaration[];
   /** The owner's connected MCP servers this turn's programs reach, which no other line names. */
   connections?: readonly ConnectedServer[];
+  /** The account owner's facts as this agent reads them (`accountProfile`): one row a key. */
+  accountProfile?: AccountProfile;
   factsBlock?: string;
   memoryTail?: string;
   /** Re-read per step; facts and the memory tail freeze at turn assembly. */
@@ -159,6 +162,7 @@ export interface DynamicContextSources {
   readonly craftedTools?: readonly CraftedDeclaration[];
   readonly externalTools?: readonly ExternalToolDeclaration[];
   readonly connections?: readonly ConnectedServer[];
+  readonly accountProfile?: AccountProfile;
   readonly factsBlock: string | undefined;
   /** Read once per turn (the plane's only await); callers close over it. */
   readonly memoryTail: string | undefined;
@@ -192,6 +196,7 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
     runtime: sources.runtime,
     turn: sources.turn,
     mode: sources.mode,
+    accountProfile: sources.accountProfile,
     craftedTools: sources.craftedTools,
     externalTools: sources.externalTools,
     // Re-listed per step: availability flips mid-turn.
@@ -252,7 +257,7 @@ const APPENDED = '(appended)';
 const DYNAMIC_CONTEXT_HEADER =
   'Kinu runtime state, not conversation or user text. A full block replaces prior state; a delta changes only what it names.\n'
   + `A delta section replaces its section. Under "${CHANGED_ROWS}", a row replaces the row with its id or is added at the end,\n`
-  + `and "${REMOVED_ROW} <id>" drops one; a task's, job's or delegate's id is its first word, any other row's its whole text.\n`
+  + `and "${REMOVED_ROW} <id>" drops one; a task's, job's, delegate's or owner fact's id is its first word, any other row's its whole text.\n`
   + `"${APPENDED}" adds lines to its section's end. Execution deltas update named runtimes. Cleared means empty.`;
 
 const DYNAMIC_DELTA_HEADER = 'Kinu runtime state update, not conversation or user text.';
@@ -456,6 +461,15 @@ function rosterSection<T>(
   return { text: [title, ...lines].join('\n'), rows: lines.map((row) => rowOf(row, listing.keyed)) };
 }
 
+/** A row a key, so a changed fact is told as its row; the facts too long to show are counted, never listed. */
+function profileSection(profile: AccountProfile | undefined): RenderedSection | null {
+  if (profile === undefined || profile.lines.length + profile.unshown.length === 0) return null;
+  const left = profile.unshown.length === 0 ? [] : [`- ${String(profile.unshown.length)} more of their facts are too long to show here; memory.search and memory.recall read them`];
+  const lines = [...profile.lines, ...left];
+
+  return { text: [DYNAMIC_SECTION_TITLES.accountProfile, ...lines].join('\n'), rows: lines.map((line) => rowOf(line, true)) };
+}
+
 function textSection(title: string, body: string): RenderedSection {
   return { text: `${title}\n${body}`, rows: body.split('\n').map((line) => rowOf(line, false)) };
 }
@@ -471,6 +485,7 @@ const DYNAMIC_SECTION_TITLES = {
   craftedTools: '## Crafted tools available through eval',
   externalTools: '## MCP and extension tools available through eval (call them there; they are not native tools)',
   connections: '## Connected services (the owner\'s accounts: you act as the owner. In eval, `codemode.search("what to do")` finds a tool and `tools.<name>(input)` calls it)',
+  accountProfile: '## Your owner (the facts they keep for every agent of theirs; where this workspace holds a key too, its value is shown. Use them without searching)',
   factsBlock: '## World model (facts you remembered)',
   memoryTail: '## Memory (newest MEMORY.md lessons and reflections)',
   recoveries: '## Proven by execution (environment evidence: calls that kept failing until a changed call ran clean)',
@@ -587,6 +602,8 @@ function renderDynamicSections(ctx: DynamicContext): Map<keyof DynamicContext, R
   ));
 
   addToolPlanes(ctx, add);
+
+  add('accountProfile', profileSection(ctx.accountProfile));
 
   const facts = ctx.factsBlock?.trim();
 

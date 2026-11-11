@@ -317,7 +317,7 @@ function appAgentAnswer(request: ScriptedRequest): ScriptedAnswer | undefined {
 
   if (called === undefined) return { toolCall: { name: 'app', arguments: { method: 'nextStop' } } };
   // Says the owner's fact where its request carries it: the lent row's visitor must never hear it.
-  const owners = [request.system, ...request.userTexts].some((text) => text.includes(LENT_OWNER_FACT.key)) ? ` (${LENT_OWNER_FACT.value})` : '';
+  const owners = [request.system, ...request.runtime, ...request.userTexts].some((text) => text.includes(LENT_OWNER_FACT.key)) ? ` (${LENT_OWNER_FACT.value})` : '';
 
   return { text: `${APP_AGENT_REPLY}: ${called.result}${owners}` };
 }
@@ -692,8 +692,9 @@ function accountMemoryAnswer(latest: string, request: ScriptedRequest): Scripted
   if (recalling === undefined) return undefined;
   const { key, value } = recalling.fact;
 
-  // The account's facts ride every turn's prompt (core memory/account-profile.ts): answered from it, with no memory call.
-  return { text: `${recalling.reply} ${request.system.includes(`${key}: ${value}`) ? value : 'nowhere I know of'}` };
+  // The account's facts ride every turn's dynamic context (core memory/account-profile.ts): answered from it, with no
+  // memory call.
+  return { text: `${recalling.reply} ${request.runtime.some((block) => block.includes(`- ${key}: ${value}`)) ? value : 'nowhere I know of'}` };
 }
 
 /** The agent-job row (D95): the ask, the job its turn starts on the computer, and the reply once it has. */

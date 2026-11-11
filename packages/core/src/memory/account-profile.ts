@@ -1,7 +1,8 @@
 /**
- * The account owner's profile: their account's facts, which every agent of the account reads in its system prompt on
- * every turn, with no search (owner, 2026-11-11). One budget, `memory.account_profile_chars`; a fact past it is named
- * with its size, never dropped unsaid. Rendered by key from values alone, so its bytes move only when a fact does.
+ * The account owner's profile: their account's facts, which every agent of the account reads on every turn, with no
+ * search (owner, 2026-11-11). One budget, `memory.account_profile_chars`; a fact past it is named with its size, never
+ * dropped unsaid. It rides the dynamic context as a plane of its own, one row a key: a changed fact is a delta at the
+ * tail, never a new prompt prefix (`prompting/volatile-context.ts`).
  */
 import type { JsonValue } from '../utils/json';
 import { PLATFORM_LIMITS } from '../platform-limits';
@@ -48,7 +49,11 @@ const charsOf = (line: string): number => line.length + 1;
 
 /** As many facts as fit, shortest first, shown by key. */
 export function accountProfile(facts: readonly ProfileFact[]): AccountProfile {
-  const sized = facts.map((fact) => ({ key: fact.key, line: `${fact.key}: ${renderFactValue(fact.value)}${fact.scope === 'workspace' ? '  # this workspace\'s' : ''}` }))
+  // One line a fact, whatever its value holds: a row of the plane is a line.
+  const sized = facts.map((fact) => ({
+    key: fact.key,
+    line: `- ${fact.key}: ${renderFactValue(fact.value).replace(/\s+/gu, ' ').trim()}${fact.scope === 'workspace' ? '  # this workspace\'s' : ''}`,
+  }))
     .sort((a, b) => charsOf(a.line) - charsOf(b.line) || a.key.localeCompare(b.key));
 
   const shown: { key: string; line: string }[] = [];
