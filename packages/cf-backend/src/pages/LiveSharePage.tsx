@@ -7,7 +7,7 @@
  * site, so the ticket's cookie reaches it inside the frame.
  */
 import { Button } from "@/components/ui/Button";
-import { APP_AGENT_CONSENT, appAgentConsent, readSlateIdentityAsk, slateFrameSrc, type LiveShareOpen, type ShareMode } from "@kinu.run/core";
+import { APP_AGENT_CONSENT, appAgentConsent, readSlateIdentityAsk, slateFrameSrc, VIEWER_EXCHANGE_PATH, type LiveShareOpen, type ShareMode } from "@kinu.run/core";
 import { detachPromise } from "@kinu.run/core/obs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
@@ -17,7 +17,7 @@ import { useSlateHostContext } from "@/components/slates/InlineSlate";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { usePartHost } from "@/hooks/use-part-host";
 import { useArmed } from "@/hooks/use-armed";
-import { acknowledgeShare, anonymousEntry, openLiveShare } from "@/lib/shared-api";
+import { acknowledgeShare, openLiveShare } from "@/lib/shared-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { signInAndReturn } from "@/lib/sign-in";
 import { Notice } from "@/components/ui/Notice";
@@ -69,6 +69,9 @@ async function assistantState(workspace: string, share: string): Promise<Assista
   return { mode: now.mode, ask: { kind: "consent", slate: now.slate, revision: now.revision, reason: consentReason(current, given.length > 0) } };
 }
 
+/** The share's frame, by the name the page's form posts into. */
+const SHARED_FRAME = "kinu-shared-slate";
+
 /**
  * The share's slate, framed with its host context as the owner's previews frame it, so its page knows the app it answers
  * to and frames its parts from; and the parts it hosts, a decision opening over it.
@@ -78,8 +81,18 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
   const decision = usePartHost({ workspace, slate: opened.slate, title: opened.title, slateFrame: frame });
   const context = useSlateHostContext("pane", "window" in globalThis ? window.innerWidth : 0);
   const contextRef = useRef(context);
-  // A snapshot, as the previews' is: a theme flip after it never reloads the slate.
-  const src = useMemo(() => slateFrameSrc(opened.url, contextRef.current), [opened.url]);
+  // A snapshot, as the previews' is: a theme flip after it never reloads the slate. Signed in, the frame starts blank:
+  // the form below names its visitor to the share's host first, which then sends it on to the slate.
+  const src = useMemo(() => (opened.ticket === null ? slateFrameSrc(opened.url, contextRef.current) : "about:blank"), [opened.url, opened.ticket]);
+  const exchange = useMemo(() => slateFrameSrc(new URL(VIEWER_EXCHANGE_PATH, opened.url).toString(), contextRef.current), [opened.url]);
+  const exchangeForm = useRef<HTMLFormElement | null>(null);
+  // What the form posts into the frame: who the visitor is, said by this page alone (the host takes it from no other
+  // origin, slate-share-route.ts), as a signed-in person's ticket or the anonymous visitor its sheet's button made.
+  const [said, setSaid] = useState<{ readonly name: "ticket" | "anonymous"; readonly value: string } | null>(opened.ticket === null ? null : { name: "ticket", value: opened.ticket });
+
+  useEffect(() => {
+    if (said !== null) exchangeForm.current?.submit();
+  }, [said]);
   const [asking, setAsking] = useState<AssistantAsk | null>(null);
 
   // The share as it stands now: the bar says how it lends, and the sheet asks what is needed for that.
@@ -89,9 +102,6 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
     if (state.mode !== null) onMode(state.mode);
     setAsking(state.ask);
   }, [workspace, share, onMode]);
-
-  // Where the frame goes once its visitor continues anonymously: the share's host gives this browser an id, then the app.
-  const [anonymous, setAnonymous] = useState<string | null>(null);
 
   useEffect(() => {
     const origin = new URL(opened.url).origin;
@@ -111,15 +121,18 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
     else await reread();
   });
 
-  // Kinu's ticket for it, asked here: the app's frame cannot name its visitor anonymous itself.
-  const continueAnonymously = (): void => detachPromise(async () => {
-    setAnonymous(slateFrameSrc(await anonymousEntry({ workspace, share }), contextRef.current));
+  // Said by this page's own post: the app's frame cannot name its visitor anonymous itself.
+  const continueAnonymously = (): void => {
+    setSaid({ name: "anonymous", value: "1" });
     setAsking(null);
-  });
+  };
 
   return (
     <>
-      <iframe ref={frame} src={anonymous ?? src} title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
+      <iframe ref={frame} name={SHARED_FRAME} src={src} title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
+      <form ref={exchangeForm} method="post" action={exchange} target={SHARED_FRAME} hidden data-shared-exchange>
+        {said !== null && <input type="hidden" name={said.name} value={said.value} />}
+      </form>
       {decision}
       {asking?.kind === "identity" && <IdentitySheet onClose={() => setAsking(null)} onAnonymous={continueAnonymously} />}
       {asking?.kind === "lent" && <LentSheet onClose={() => setAsking(null)} onContinue={() => accept("owner")} />}

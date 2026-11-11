@@ -16,7 +16,7 @@ import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { rawPath, routeError, type FamilyEnv } from './api/context';
-import { anonymousTicketValid, mintAnonymousSubject, mintAnonymousTicket, mintViewerTicket, ticketUser, viewerCookie, viewerCookieResponse, viewerSigner } from './viewer-pass';
+import { mintAnonymousSubject, ticketUser, viewerCookie, viewerCookieResponse, viewerSigner } from './viewer-pass';
 
 const shareSigner = labelSigner('kinu.slate-share.salt', 'kinu.slate-share.v1');
 
@@ -49,21 +49,16 @@ export async function slateShareUrl(env: Env, workspace: string, handle: string)
 }
 
 
-/** Where Kinu's share page sends its frame once its visitor continues anonymously: the exchange, with its ticket. */
-export async function anonymousEntryUrl(env: Env, workspace: string, handle: string): Promise<string | null> {
-  const base = await slateShareUrl(env, workspace, handle);
-  const ticket = await mintAnonymousTicket(env, workspace, handle);
+/**
+ * Kinu's own share page's origin, the one origin whose POST into a share's frame may say who its visitor is: an app's
+ * page sends its own share host's, a sibling share host its own, and a page elsewhere its own (Chrome 157, measured
+ * 2026-11-11 under Kinu's `strict-origin-when-cross-origin`: a form Kinu's page targets at the frame carries Kinu's
+ * origin; `no-referrer` and `same-origin` would send `null`). Null where the deployment names no app origin.
+ */
+function kinuOrigin(env: Env): string | null {
+  const origin = env.CLI_PUBLIC_ORIGIN;
 
-  return base === null || ticket === null ? null : `${base}${VIEWER_EXCHANGE_PATH.slice(1)}?anonymous=${encodeURIComponent(ticket)}`;
-}
-
-export async function viewerEntryUrl(env: Env, workspace: string, handle: string, userId: string): Promise<string | null> {
-  const base = await slateShareUrl(env, workspace, handle);
-
-  if (base === null) return null;
-  const ticket = await mintViewerTicket(env, workspace, handle, userId);
-
-  return ticket === null ? null : `${base}${VIEWER_EXCHANGE_PATH.slice(1)}?ticket=${ticket}`;
+  return origin === undefined || !URL.canParse(origin) ? null : new URL(origin).origin;
 }
 
 /** The app's page a `users` share is entered through: it signs its visitor in, then mints their ticket. */
@@ -89,49 +84,72 @@ interface VerifiedShare {
 
 const shareHostRoutes = new Hono<FamilyEnv<VerifiedShare, object>>({ getPath: rawPath });
 
-// A ticket mints the identity cookie; the consent button mints the consent cookie over the already-proven subject.
-shareHostRoutes.all(VIEWER_EXCHANGE_PATH, async (c) => {
-  const { env, handle, workspace, viewerSecret } = c.env;
-  const request = c.req.raw;
-  const url = new URL(request.url);
-  const source = await viewerSource(viewerSecret, request);
-  const consent = url.searchParams.has('consent');
-  // Continuing anonymously needs Kinu's own page's ticket (`mintAnonymousTicket`): the app's frame, on this very origin,
-  // must never name its visitor anonymous, which is to accept the owner's reading of their chat.
-  const anonymous = url.searchParams.has('anonymous') && await anonymousTicketValid(env, workspace, handle, url.searchParams.get('anonymous') ?? '');
+const NOT_FOUND = { status: 404, headers: { 'cache-control': 'no-store' } } as const;
 
-  if (url.searchParams.has('anonymous') && !anonymous) return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
-  const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
-  const ticket = consent || anonymous ? null : await ticketUser(env, workspace, handle, url.searchParams.get('ticket') ?? '');
-  // Continuing anonymously keeps who the visitor already is, signed in or anonymous, and their consent; only a visitor
-  // known by nothing yet is given an id, which is bounded by where they come from, as every exchange of theirs is.
-  const known = held !== null && (held.userId !== null || held.anonymous !== null) ? held.subject : null;
-  const minted = anonymous && known === null;
+/** Who the visitor becomes, and whether they saw the share's disclaimer: an exchange's answer, before its cookie. */
+interface Exchanged {
+  readonly subject: string;
+  readonly consent: boolean;
+  /** Whom its exchanges are counted against, where not the subject: where a new anonymous visitor comes from. */
+  readonly admitAs?: string;
+}
 
-  const subject = (() => {
-    if (consent) return held?.subject ?? source;
+/** The identity cookie for `exchanged`, the visitor sent on to the slate's page as it was framed. */
+async function exchangedTo(c: { readonly env: VerifiedShare }, request: Request, exchanged: Exchanged | null): Promise<Response> {
+  const { env, handle, workspace } = c.env;
 
-    return anonymous ? known ?? source : ticket?.userId;
-  })();
-
-  if (subject === undefined) {
-    return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
-  }
+  if (exchanged === null) return new Response('Not found', NOT_FOUND);
 
   if (env.AUTH_KV !== undefined
-    && !await ingressAdmitted(env.AUTH_KV, 'slate-share', `${handle}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) {
+    && !await ingressAdmitted(env.AUTH_KV, 'slate-share', `${handle}:${exchanged.admitAs ?? exchanged.subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) {
     return new Response('Too many requests', { status: 429, headers: { 'cache-control': 'no-store' } });
   }
 
-  const kept = keptSlateContext(url);
+  const kept = keptSlateContext(new URL(request.url));
 
-  // On to the slate's page, framed as it was asked for.
-  return await viewerCookieResponse(env, {
-    workspace, handle, subject: minted ? mintAnonymousSubject() : subject, consent: consent || (anonymous && held?.consented === true),
-  }, kept === '' ? '/' : `/?${kept}`);
+  return await viewerCookieResponse(env, { workspace, handle, subject: exchanged.subject, consent: exchanged.consent }, kept === '' ? '/' : `/?${kept}`);
+}
+
+// The disclaimer's Continue, a link on this host's own page: consent over the subject the visitor already is, never a
+// new one.
+shareHostRoutes.get(VIEWER_EXCHANGE_PATH, async (c) => {
+  const { env, handle, workspace, viewerSecret } = c.env;
+  const request = c.req.raw;
+
+  if (!new URL(request.url).searchParams.has('consent')) return new Response('Not found', NOT_FOUND);
+  const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
+
+  return await exchangedTo(c, request, { subject: held?.subject ?? await viewerSource(viewerSecret, request), consent: true });
 });
 
+// Who the visitor is changes only here, on a POST Kinu's own share page sends into the frame: a signed-in person's
+// ticket, or the anonymous visitor its sheet's button made. Any other origin, the app's page on this very host among
+// them, changes no one: a ticket a person minted for themself never becomes another browser's identity.
+shareHostRoutes.post(VIEWER_EXCHANGE_PATH, async (c) => {
+  const { env, handle, workspace, viewerSecret } = c.env;
+  const request = c.req.raw;
+  const origin = kinuOrigin(env);
 
+  if (origin === null || request.headers.get('origin') !== origin) return new Response('Not found', NOT_FOUND);
+  const form = await request.formData();
+  const ticketed = form.get('ticket');
+
+  if (typeof ticketed === 'string') {
+    const ticket = await ticketUser(env, workspace, handle, ticketed);
+
+    return await exchangedTo(c, request, ticket === null ? null : { subject: ticket.userId, consent: false });
+  }
+
+  if (form.get('anonymous') === null) return new Response('Not found', NOT_FOUND);
+  // Continuing anonymously keeps who the visitor already is, signed in or anonymous, and their consent; only a visitor
+  // known by nothing yet is given an id, which is bounded by where they come from, as every exchange of theirs is.
+  const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
+  const known = held !== null && (held.userId !== null || held.anonymous !== null) ? held.subject : null;
+
+  return await exchangedTo(c, request, known === null
+    ? { subject: mintAnonymousSubject(), consent: held?.consented === true, admitAs: await viewerSource(viewerSecret, request) }
+    : { subject: known, consent: held?.consented === true });
+});
 
 /**
  * Whether a request acts (any method but GET, HEAD or OPTIONS, or a socket's upgrade) from anywhere but this share's own

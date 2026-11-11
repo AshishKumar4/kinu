@@ -222,6 +222,30 @@ function visit(world: World, url: string, ip: string, init?: { path?: string; co
 
 const CONSENT_PATH = '__kinu/viewer?consent=1';
 
+/** Kinu's share page's post into the share's frame: the one way its host takes who the visitor is. */
+function exchangePost(url: string, fields: Readonly<Record<string, string>>, ip: string, origin = APP_ORIGIN): Request {
+  return new Request(url, { method: 'POST', body: new URLSearchParams(fields), headers: { origin, 'cf-connecting-ip': ip, 'content-type': 'application/x-www-form-urlencoded' } });
+}
+
+test('a share host takes who its visitor is from Kinu\'s own page alone: never a GET, nor a post from its app\'s page', async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+  const named = await sharePublic(world, 'users');
+
+  await world.owner.agent.shareLiveWith(named.share.id, [{ userId: VIEWER_ID, email: 'pat@example.test' }]);
+  const opened = await jsonBody(present(await openShare(world, { workspace: 'issues-owner', share: named.share.id }, 'pat@example.test'), 'the open answer'), LiveShareOpenSchema);
+  const ticket = present(opened.ticket, 'the ticket');
+  const exchange = `${opened.url}${CONSENT_PATH.split('?')[0]}`;
+  const statusOf = async (request: Request) => (await handleSlateShareHostRequest(request, world.env))?.status;
+
+  expect({
+    get: await statusOf(new Request(`${exchange}?ticket=${ticket}`, { headers: { 'cf-connecting-ip': '203.0.113.20' } })),
+    fromTheApp: await statusOf(exchangePost(exchange, { ticket }, '203.0.113.20', new URL(opened.url).origin)),
+    anonymousFromTheApp: await statusOf(exchangePost(exchange, { anonymous: '1' }, '203.0.113.20', new URL(opened.url).origin)),
+    fromKinu: await statusOf(exchangePost(exchange, { ticket }, '203.0.113.20')),
+  }).toEqual({ get: 404, fromTheApp: 404, anonymousFromTheApp: 404, fromKinu: 303 });
+});
+
 test('S2: the per-viewer request bound refuses past its limit, per viewer and on the exchange', async () => {
   const world = await twoUserWorld();
   cleanups.push(world.close);
@@ -377,7 +401,7 @@ test("live host context. a share's host keeps the context its slate's page was f
 
   await world.owner.agent.shareLiveWith(named.share.id, [{ userId: VIEWER_ID, email: 'pat@example.test' }]);
   const opened = await jsonBody(present(await openShare(world, { workspace: 'issues-owner', share: named.share.id }, 'pat@example.test'), 'the open answer'), LiveShareOpenSchema);
-  const ticket = await handleSlateShareHostRequest(new Request(`${opened.url}&${kept}`, { headers: { 'cf-connecting-ip': '203.0.113.8' } }), world.env);
+  const ticket = await handleSlateShareHostRequest(exchangePost(`${opened.url}${CONSENT_PATH.split('?')[0]}?${kept}`, { ticket: present(opened.ticket, 'the ticket') }, '203.0.113.8'), world.env);
 
   expect(ticket?.headers.get('location')).toBe(`/?${kept}`);
 
@@ -413,7 +437,7 @@ test('a users share link sends each visitor to sign in, then lets in its owner a
     const entry = await jsonBody(opened, LiveShareOpenSchema);
 
     expect([entry.slate, entry.title]).toEqual(['issues', 'Issue triage']);
-    const exchanged = await handleSlateShareHostRequest(new Request(entry.url, { headers: { 'cf-connecting-ip': ip } }), world.env);
+    const exchanged = await handleSlateShareHostRequest(exchangePost(`${entry.url}${CONSENT_PATH.split('?')[0]}`, { ticket: present(entry.ticket, 'the ticket') }, ip), world.env);
     const cookie = present(exchanged?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
 
     return [opened.status, (await visit(world, url, ip, { cookie }))?.status];

@@ -56,32 +56,6 @@ function cookieMessage(workspace: string, handle: string, subject: string, expir
   return `kinu:viewer-cookie:v1:${workspace}:${handle}:${subject}:${expiresAt}`;
 }
 
-function anonymousTicketMessage(workspace: string, handle: string, expiresAt: number): string {
-  return `kinu:viewer-anonymous:v1:${workspace}:${handle}:${expiresAt}`;
-}
-
-/**
- * Kinu's own share page's word that its visitor chose to continue anonymously, having been told the owner reads their
- * chat: what the share host's exchange requires before it names a browser anonymous, so an app's frame never can.
- */
-export async function mintAnonymousTicket(env: LabelSignerEnv, workspace: string, handle: string): Promise<string | null> {
-  const secret = viewerSigner.secret(env);
-
-  if (secret === undefined) return null;
-  const expiresAt = Date.now() + 2 * 60 * 1000;
-
-  return `${expiresAt}.${await viewerSigner.token(secret, anonymousTicketMessage(workspace, handle, expiresAt))}`;
-}
-
-export async function anonymousTicketValid(env: LabelSignerEnv, workspace: string, handle: string, ticket: string): Promise<boolean> {
-  const [expiresAtText, sig] = ticket.split('.');
-  const expiresAt = Number(expiresAtText);
-
-  if (sig === undefined || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return false;
-
-  return viewerSigner.verify(env, anonymousTicketMessage(workspace, handle, expiresAt), sig);
-}
-
 /** Diverged from the identity cookie's message so one cookie never verifies as the other. */
 function consentMessage(workspace: string, handle: string, subject: string, expiresAt: number): string {
   return `kinu:viewer-consent:v1:${workspace}:${handle}:${subject}:${expiresAt}`;

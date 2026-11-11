@@ -11,10 +11,11 @@ import {
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
   LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, type LiveShareBody,
-  LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema, LIVE_SHARE_ACKNOWLEDGE_PATH, LiveShareAcknowledgeSchema, LIVE_SHARE_ANONYMOUS_PATH, type LiveShareAnonymous,
+  LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema, LIVE_SHARE_ACKNOWLEDGE_PATH, LiveShareAcknowledgeSchema,
   type OwnedLiveShare, type SlateAnswer,
 } from '@kinu.run/core';
-import { anonymousEntryUrl, slateShareUrl, viewerEntryUrl } from '../slate-share-route';
+import { slateShareUrl } from '../slate-share-route';
+import { mintViewerTicket } from '../viewer-pass';
 import { shareViewerKey } from '../viewer-pass';
 import { crossSiteRejection, requestIdentity, type AuthIdentity } from '../auth/session';
 import { accountIdFor } from '../auth/store';
@@ -302,23 +303,6 @@ async function blueprintBundle(env: Env, id: string) {
 
 const LiveIdBody = v.object({ workspace: v.string(), share: v.string() });
 
-// Continuing anonymously on a My-access share: Kinu's own page alone asks, by its Origin whether or not a session rides
-// it, since every share host is same-site and an app's frame must never mint its visitor's acceptance.
-sharedPublicRoutes.post(LIVE_SHARE_ANONYMOUS_PATH, async (c) => {
-  const request = c.req.raw;
-
-  if (request.headers.get('origin') !== new URL(request.url).origin) return err(403, 'Only Kinu\'s own share page continues anonymously');
-  const body = await safeJson(request, LiveIdBody);
-
-  if (!body) return err(400, 'Body must be { workspace, share }');
-  const reading = await workspaceOwner(c.env, body.workspace).openLiveShare(body.share, null, SIGNED_OUT_VIEWER);
-
-  if (!reading.ok || !reading.value.admits || reading.value.record.mode !== 'owner') return err(404, 'No such share');
-  const url = await anonymousEntryUrl(c.env, body.workspace, reading.value.record.handle);
-
-  return url === null ? err(503, 'This deployment cannot sign live-share links') : json({ body: { url } satisfies LiveShareAnonymous });
-});
-
 /** `emails` names users on a `users` share; `approved` is the mutating grant the dialog checked. */
 async function shareLive(request: Request, env: Env, identity: AuthIdentity): Promise<Response> {
   const body = await safeJson(request, LiveShareBodySchema);
@@ -434,11 +418,11 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity | nul
   const { handle, slate, mode } = reading.value.record;
 
   // Signed in, the share's host is told who they are, public share or not: their app agent may be theirs to pay for.
-  const url = identity === null
-    ? await slateShareUrl(env, body.workspace, handle)
-    : await viewerEntryUrl(env, body.workspace, handle, identity.userId);
+  // The ticket is posted into the frame by Kinu's page alone; the host takes it from no one else (slate-share-route.ts).
+  const url = await slateShareUrl(env, body.workspace, handle);
+  const ticket = identity === null ? null : await mintViewerTicket(env, body.workspace, handle, identity.userId);
 
-  if (url === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
+  if (url === null || (identity !== null && ticket === null)) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
 
-  return json({ body: { url, slate, title: reading.value.title, mode, revision: reading.value.revision, signedIn: identity !== null, acknowledged: reading.value.acknowledged } satisfies LiveShareOpen });
+  return json({ body: { url, slate, title: reading.value.title, mode, revision: reading.value.revision, signedIn: identity !== null, ticket, acknowledged: reading.value.acknowledged } satisfies LiveShareOpen });
 }

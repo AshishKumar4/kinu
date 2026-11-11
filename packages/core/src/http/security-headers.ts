@@ -48,15 +48,24 @@ export function publicHtmlHeaders() {
  */
 const PART_FRAME = /^\/s\/[^/]+\/[^/]+\/parts\/[^/]+$/u;
 
+/** `/shared/live/:workspace/:share` (APP_ROUTES.sharedLive), a live share's page. */
+const SHARED_LIVE_PAGE = /^\/shared\/live\/[^/]+\/[^/]+\/?$/u;
+
 /**
  * `previewOrigin` (`https://*.<PREVIEW_HOST_SUFFIX>`) is the only framable host; null falls back to `'self'`. `framedBy`
  * replaces `frame-ancestors 'none'` for the one page a preview host frames.
  */
 function appDocumentCsp(url: URL, previewOrigin: string | null, framedBy: string | null): string {
   const frameSrc = previewOrigin ? `'self' ${previewOrigin}` : "'self'";
+  // A live share's page says who its visitor is by a form it posts into the share's frame, on a preview host.
+  const formAction = previewOrigin !== null && SHARED_LIVE_PAGE.test(url.pathname) ? `form-action 'self' ${previewOrigin}` : null;
 
   return [
-    ...BASE_CSP.map((directive) => (framedBy !== null && directive === "frame-ancestors 'none'" ? `frame-ancestors ${framedBy}` : directive)),
+    ...BASE_CSP.map((directive) => {
+      if (framedBy !== null && directive === "frame-ancestors 'none'") return `frame-ancestors ${framedBy}`;
+
+      return formAction !== null && directive === "form-action 'self'" ? formAction : directive;
+    }),
     `connect-src 'self' wss://${url.host}`,
     "img-src 'self' data: blob: https:",
     // Fonts are files of this origin: the build inlines none (vite.config.ts `assetsInlineLimit`).

@@ -3021,7 +3021,6 @@ export async function appAgentAnswersALentVisitor(target: FlowTarget): Promise<A
     await page.click('[role="dialog"] [data-assistant-anonymous]');
     await until(page, 'the sheet to close', 'document.querySelector(\'[role="dialog"]\') === null');
     // The frame goes through the share host's exchange, which names this browser, and back to the app.
-    await until(page, 'the app to open anonymously', 'document.querySelector("[data-shared-slate]")?.getAttribute("src")?.includes("anonymous=") === true');
     frame = await appFrameNow(page);
     await waitOn(page, 'the app back after the exchange', frame.waitForFunction('window.__beforeExchange !== true && !location.pathname.startsWith("/__kinu/") && document.querySelector("[data-ask]") !== null', { polling: 100 }));
     const anonymous = await askTheApp(page, frame);
@@ -3229,6 +3228,73 @@ export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<A
     await page.close();
 
     return { workspace, own, calledAfterFlip, toLent, chatsBeforeAccepting, lent, chatsAfterAccepting, backToOwn };
+  } finally {
+    if (share !== null) await revokeFlowShare(target, workspace, share);
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface AppAgentTicketVerdict {
+  readonly workspace: string;
+  /** The other person's own ask, on their own model: their consent stands. */
+  readonly theirs: AppAsked;
+  /** What the share's host answered a signed-out browser presenting that person's ticket: by link, and from the app's page. */
+  readonly byLink: number;
+  readonly fromTheApp: number;
+  /** That browser's ask afterwards, on the app's own page: refused, it is no one's. */
+  readonly victim: AppAsked;
+}
+
+/**
+ * Row: one person's ticket to a share never becomes another browser's identity. A signed-in visitor mints their own
+ * ticket; a signed-out browser presents it by link and from the app's own page, and its ask is then answered by no one's
+ * model. Red before the share's host took who its visitor is from Kinu's own page alone: the link made the browser that
+ * person, and its ask ran on their model, into their conversation, which they read by asking it.
+ */
+export async function appAgentTicketsStayTheirs(target: FlowTarget): Promise<AppAgentTicketVerdict> {
+  const workspace = await appAgentWorkspace(target, 'app-agent-ticket');
+  let share: string | null = null;
+  const visitor = { origin: target.origin, identity: { ...target.identity, account: 'visitor' as const } };
+
+  try {
+    const made = await shareTheApp(target, workspace, 'own');
+
+    share = made.share;
+    const page = await signedInPage(target.browser, visitor);
+    const frame = await appOnItsLink(page, made.link);
+
+    await askTheApp(page, frame);
+    await until(page, 'the consent sheet', 'document.querySelector("[data-consent-allow]") !== null');
+    await until(page, 'the consent sheet to take a press', 'document.querySelector("[data-consent-allow]:not([disabled])") !== null');
+    await page.click('[data-consent-allow]');
+    await until(page, 'the consent to be kept', 'document.querySelector(\'[role="dialog"]\') === null');
+    const theirs = await askTheApp(page, frame);
+
+    await page.close();
+
+    // Their own open answer: the share's host, and their ticket (a builder before this change put it in the address).
+    const opened = await fetch(`${target.origin}${LIVE_SHARE_OPEN_PATH}`, {
+      method: 'POST', headers: { ...webHeaders(visitor.identity), 'content-type': 'application/json' }, body: JSON.stringify({ workspace, share }),
+    });
+
+    const { url, ticket } = v.parse(v.object({ url: v.string(), ticket: v.optional(v.nullable(v.string())) }), await opened.json());
+    const host = new URL(url).origin;
+    const link = ticket === undefined || ticket === null ? url : `${host}${VIEWER_EXCHANGE_PATH}?ticket=${encodeURIComponent(ticket)}`;
+    const context = await target.browser.createBrowserContext();
+    const victim = await context.newPage();
+    const landed = await victim.goto(link, { waitUntil: 'load' });
+    // Its first answer: the exchange's own, a redirect where it named the browser, or the refusal where it did not.
+    const byLink = landed?.request().redirectChain()[0]?.response()?.status() ?? landed?.status() ?? 0;
+
+    await victim.goto(`${host}/`, { waitUntil: 'load' });
+    const fromTheApp = v.parse(v.number(), await victim.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ ticket: ${JSON.stringify(ticket ?? '')} }) }).then((answer) => answer.status)`));
+
+    await victim.goto(`${host}/`, { waitUntil: 'load' });
+    const asked = await askTheApp(victim, victim.mainFrame());
+
+    await context.close();
+
+    return { workspace, theirs, byLink, fromTheApp, victim: asked };
   } finally {
     if (share !== null) await revokeFlowShare(target, workspace, share);
     await removeFlowWorkspace(target, workspace);

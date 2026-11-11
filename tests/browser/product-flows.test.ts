@@ -23,7 +23,7 @@ import {
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
   computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindReturnsTheAsk, activityIsShown, slatePicturesFollowMode, claudeCodePageExchanges, type AgentPlanVerdict, type AgentReturnVerdict,
-  appAgentAnswersItsOwner, appAgentAnswersALentVisitor, appAgentAnswersAVisitorOnTheirOwn, appAgentFollowsTheShareMode, type AppAgentOwnerVerdict, type AppAgentLentVerdict, type AppAgentOwnVerdict, type AppAgentFlipVerdict,
+  appAgentAnswersItsOwner, appAgentAnswersALentVisitor, appAgentAnswersAVisitorOnTheirOwn, appAgentFollowsTheShareMode, appAgentTicketsStayTheirs, type AppAgentOwnerVerdict, type AppAgentTicketVerdict, type AppAgentLentVerdict, type AppAgentOwnVerdict, type AppAgentFlipVerdict,
   type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
   type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
@@ -875,6 +875,25 @@ describe(productFlowTestName('app-agent-flip', 'a share that changes how it lend
     expect(backToOwn.asked.reply, JSON.stringify(backToOwn)).toBe('');
     expect(backToOwn.sheet).toMatchObject({ allow: true });
     expect(backToOwn.lentBar).toBe(false);
+  });
+});
+
+describe(productFlowTestName('app-agent-ticket', 'one person\'s ticket to a share never becomes another browser\'s identity'), () => {
+  let observed: AppAgentTicketVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('app-agent-ticket', appAgentTicketsStayTheirs);
+  });
+
+  test('the ticket\'s owner is answered on their own model', () => {
+    expect(verdictOf(observed, 'app-agent-ticket').theirs.reply).toContain(APP_AGENT_SLATE.stop);
+  });
+
+  test('presented by another browser, by link or from the app\'s page, it names no one, and that browser\'s ask runs on no one\'s model', () => {
+    const ticket = verdictOf(observed, 'app-agent-ticket');
+
+    expect({ byLink: ticket.byLink, fromTheApp: ticket.fromTheApp }, JSON.stringify(ticket)).toEqual({ byLink: 404, fromTheApp: 404 });
+    expect(ticket.victim.reply, JSON.stringify(ticket.victim)).toBe('');
   });
 });
 

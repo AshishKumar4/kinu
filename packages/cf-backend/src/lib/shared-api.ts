@@ -5,7 +5,7 @@ import {
   LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema,
   type SlatePreapprovals, type SlatePreapprovalWithdraw,
   LIVE_SHARE_CHATS_PATH, ShareChatsSchema, LIVE_SHARE_CHAT_PATH, ShareChatTranscriptSchema, type ShareChats, type ShareChatTranscript,
-  LIVE_SHARE_ACKNOWLEDGE_PATH, LIVE_SHARE_ANONYMOUS_PATH, LiveShareAnonymousSchema, type ShareMode,
+  LIVE_SHARE_ACKNOWLEDGE_PATH, type ShareMode,
   type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareBody, type LiveShareListingBody, type LiveShareModeBody, type OwnedLiveShare,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
@@ -106,11 +106,6 @@ export function openLiveShare(input: { workspace: string; share: string }): Prom
 /** The signed-in person acknowledges how a share lends now, as its page told them; false when it lends otherwise by now. */
 export function acknowledgeShare(input: { workspace: string; share: string; mode: ShareMode }): Promise<boolean> {
   return settle(Effect.map(respond(LIVE_SHARE_ACKNOWLEDGE_PATH, { method: 'POST', json: input }), (res) => res.ok));
-}
-
-/** Where the share page's frame goes once its visitor continues anonymously: the exchange, with Kinu's ticket. */
-export function anonymousEntry(input: { workspace: string; share: string }): Promise<string> {
-  return settle(Effect.map(api(LiveShareAnonymousSchema, 'POST', LIVE_SHARE_ANONYMOUS_PATH, input), (answer) => answer.url));
 }
 
 /** A My-access share's conversations with its app agent, newest first. */
