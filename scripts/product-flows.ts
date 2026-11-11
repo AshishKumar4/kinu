@@ -2773,14 +2773,24 @@ export interface AppAsked {
   readonly refused: string;
 }
 
+/** How long one ask of the app's assistant may take on the scripted model: a few model steps and one app call. */
+const ASK_SETTLES_MS = 90_000;
+
 /** Presses the app's Ask in `frame`, the app's page, and reads what it shows once its ask settles. */
 async function askTheApp(page: Page, frame: Frame): Promise<AppAsked> {
   await waitOn(page, 'the app\'s page to draw', frame.waitForFunction('document.querySelector("[data-ask]") !== null', { polling: 100 }));
   await frame.evaluate('document.querySelector("[data-reply]").textContent = ""; document.querySelector("[data-refused]").textContent = ""');
-  await frame.click('[data-ask]');
-  await waitOn(page, 'the app\'s ask to settle', frame.waitForFunction('(document.querySelector("[data-reply]")?.textContent ?? "") !== "" || (document.querySelector("[data-refused]")?.textContent ?? "") !== ""', { polling: 100 }));
+  const giveUpAt = v.parse(v.number(), await frame.evaluate('performance.now()')) + ASK_SETTLES_MS;
 
-  return v.parse(v.object({ reply: v.string(), refused: v.string() }), await frame.evaluate('({ reply: document.querySelector("[data-reply]")?.textContent ?? "", refused: document.querySelector("[data-refused]")?.textContent ?? "" })'));
+  await frame.click('[data-ask]');
+  // An ask that never settles is the app's answer too: the verdict says so, where a wait would end the row unread.
+  await waitOn(page, 'the app\'s ask to settle', frame.waitForFunction(
+    `(document.querySelector("[data-reply]")?.textContent ?? "") !== "" || (document.querySelector("[data-refused]")?.textContent ?? "") !== "" || performance.now() > ${String(giveUpAt)}`,
+    { polling: 100 },
+  ));
+  const shown = v.parse(v.object({ reply: v.string(), refused: v.string() }), await frame.evaluate('({ reply: document.querySelector("[data-reply]")?.textContent ?? "", refused: document.querySelector("[data-refused]")?.textContent ?? "" })'));
+
+  return shown.reply === '' && shown.refused === '' ? { reply: '', refused: `no answer in ${String(ASK_SETTLES_MS / 1000)} s` } : shown;
 }
 
 /** The app's page as the workspace shows it in Kinu, its tab opened from the Drive's tile. */
