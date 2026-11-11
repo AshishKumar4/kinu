@@ -355,7 +355,7 @@ export class SlateShareViewers {
    * grant as it stands then is the one they accepted. Throws to refuse.
    */
   stillAccepted(share: string, viewer: Pick<SlateViewer, 'consented'>): void {
-    if (!grantAccepted(shareGrantKey(this.deps.live.live(share).grant), viewer.consented)) settleSync(Effect.fail(new KinuError('denied', UNACCEPTED)));
+    return settleSync(grantAccepted(shareGrantKey(this.deps.live.live(share).grant), viewer.consented) ? Effect.void : Effect.fail(new KinuError('denied', UNACCEPTED)));
   }
 
   /** S2: the per-day spend bound refuses as 'budget'. */
