@@ -240,6 +240,7 @@ export const APP_AGENT_FILES = {
     '  const [called, setCalled] = useState("");',
     '',
     '  const ask = async () => {',
+    '    setReply("");',
     '    setRefused("");',
     '    try {',
     `      const answer = await workspace.agent.ask({ text: ${JSON.stringify(APP_AGENT_ASK)} });`,

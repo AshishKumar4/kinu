@@ -3007,6 +3007,9 @@ export async function appAgentAnswersALentVisitor(target: FlowTarget): Promise<A
     const context = await target.browser.createBrowserContext();
     const page = await context.newPage();
     let frame = await appOnItsLink(page, made.link);
+
+    // Once the frame shows the app, past the share host's exchange: before that it is a blank page of Kinu's own origin.
+    await waitOn(page, 'the app\'s page to draw', frame.waitForFunction('document.querySelector("[data-ask]") !== null', { polling: 100 }));
     // The app's own page tries to name its visitor anonymous, on its own origin, without Kinu's sheet: refused.
     const forged = v.parse(v.number(), await frame.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ anonymous: '1' }) }).then((answer) => answer.status)`));
     const first = await askTheApp(page, frame);
@@ -3288,9 +3291,10 @@ export async function appAgentTicketsStayTheirs(target: FlowTarget): Promise<App
 
     // Then the share as anyone opens it, on Kinu's page, signed out: its app's page presents the ticket too.
     const app = await appOnItsLink(victim, made.link);
-    const drawBy = v.parse(v.number(), await victim.evaluate('performance.now()')) + 20_000;
+    const drawBy = v.parse(v.number(), await app.evaluate('performance.now()')) + 20_000;
 
-    await until(victim, 'the app\'s page, or a while', `(document.querySelector('[data-shared-slate]')?.contentDocument === null) || performance.now() > ${String(drawBy)}`);
+    // The app's page past the exchange, or what the frame shows after a while instead.
+    await waitOn(victim, 'the app\'s page, or a while', app.waitForFunction(`document.querySelector("[data-ask]") !== null || performance.now() > ${String(drawBy)}`, { polling: 200 }));
     const shown = v.parse(v.string(), await app.evaluate('`${location.pathname} ${document.body?.innerText ?? ""}`.slice(0, 400)'));
 
     // A page that never drew is the verdict's to say: its ask reads as never made.

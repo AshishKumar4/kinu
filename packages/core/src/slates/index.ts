@@ -20,7 +20,7 @@ export { initSlateStateTable, SLATE_HOST_BINDING, SLATE_STORAGE_BINDING, SqliteS
 export { SLATE_SERVER_MODULE, SLATE_CLIENT_MODULE } from './runtime-modules';
 
 export {
-  buildSlateHostContext, readSlateFrameMessage, readSlateIdentityAsk, SLATE_NEEDS_IDENTITY_MESSAGE, keptSlateContext, slateFrameSrc, slateLinkId,
+  buildSlateHostContext, readSlateFrameMessage, readSlateIdentityAsk, SLATE_NEEDS_IDENTITY_MESSAGE, SLATE_RESTARTED_REASON, keptSlateContext, slateFrameSrc, slateLinkId,
   SLATE_HOST_CONTEXT_MESSAGE, SLATE_QUERY_PARAM, SLATE_SIZE_CHANGED_MESSAGE, SLATE_THEME_TOKENS,
   type SlateHostContext,
 } from './host-context';

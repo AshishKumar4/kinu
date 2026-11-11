@@ -15,6 +15,7 @@ import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu
 import { confinedTo, SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
 import { slateVendorModule } from './vendor';
+import { SLATE_RESTARTED_REASON } from '@kinu.run/core/slates';
 import { closeAs } from '../egress/send-out';
 
 /**
@@ -32,9 +33,9 @@ function heldSocket(answer: Response, held: { readonly sockets: Set<WebSocket>; 
   // opens its next session to the process running then.
   if (held.ended()) {
     upstream.accept();
-    closeAs(upstream, 1000, 'The app restarted');
+    closeAs(upstream, 1000, SLATE_RESTARTED_REASON);
 
-    return new Response('The app restarted', { status: 503, headers: { 'cache-control': 'no-store', 'retry-after': '1' } });
+    return new Response(SLATE_RESTARTED_REASON, { status: 503, headers: { 'cache-control': 'no-store', 'retry-after': '1' } });
   }
 
   const pair = new WebSocketPair();
@@ -850,7 +851,7 @@ export class ResidentSlateProcesses {
       session.processes.setTerminator(pid, () => {
         ended = true;
 
-        for (const socket of sockets) closeAs(socket, 1000, 'The app restarted');
+        for (const socket of sockets) closeAs(socket, 1000, SLATE_RESTARTED_REASON);
         sockets.clear();
         // Every resident exit passes here; the stack records who ended the pid.
         diagnostics.event('slate.resident.terminated', {
