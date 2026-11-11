@@ -22,7 +22,7 @@
  */
 import type { Frame, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { AccountMemoryProposalSchema, APP_ROUTES, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, LIVE_SHARE_CHAT_PATH, LIVE_SHARE_CHATS_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, VIEWER_EXCHANGE_PATH, PERSONAL_ASSISTANT_ID, ShareChatsSchema, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, APP_ROUTES, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, LIVE_SHARE_CHAT_PATH, LIVE_SHARE_CHATS_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, MODE_KEY, VIEWER_EXCHANGE_PATH, PERSONAL_ASSISTANT_ID, ShareChatsSchema, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
@@ -2745,14 +2745,20 @@ async function shoot(page: Page, name: string): Promise<void> {
     await page.setViewport({ width, height });
 
     for (const mode of ['light', 'dark'] as const) {
-      // As the app's theme store applies a mode (use-theme.ts `apply`): its attribute and the colour scheme together,
-      // which tokens resolved by `light-dark()` follow; the attribute alone draws a mix of both modes.
-      await page.evaluate(`document.documentElement.dataset.mode = ${JSON.stringify(mode)}; document.documentElement.style.colorScheme = ${JSON.stringify(mode)}`);
+      // Through the app's own theme store (use-theme.ts): the device's stored mode, which the store reads again when the
+      // system's preference changes, so the page redraws every token in that mode as a person's switch would.
+      await page.evaluate(`localStorage.setItem(${JSON.stringify(MODE_KEY)}, ${JSON.stringify(mode)})`);
+      await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode === 'light' ? 'dark' : 'light' }]);
+      await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode }]);
+      await until(page, `the page drawn ${mode}`, `document.documentElement.dataset.mode === ${JSON.stringify(mode)}`);
       await page.screenshot({ path: `${directory}/${name}-${size}-${mode}.png` });
     }
   }
 
   if (viewport !== null) await page.setViewport(viewport);
+  // The device's own choice again, for whatever the row does next.
+  await page.evaluate(`localStorage.removeItem(${JSON.stringify(MODE_KEY)})`);
+  await page.emulateMediaFeatures([]);
 }
 
 /** Where the app-agent rows' app lives: its files, written into a fresh workspace of the row's. */
