@@ -8,7 +8,7 @@ import {
   type AppAgentAbout, type AppAgentConversation, type LentChat, type ShareMode, type AppAgentPayer, type AppAgentSession, type ShareChat, type AppAgentEntry, type ServerSend, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateCallFrom, type SlateLaunch, type SlateLineage, type ToolContract,
 } from '@kinu.run/core/slates';
 import {
-  ephemeralSlateAddress, ingressAdmitted, onceMoreIfNotAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
+  ephemeralSlateAddress, onceMoreIfNotAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation, SLATE_DRIVEN_MEMBERS,
   isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal, reoriginateRequest,
   escapeHtml, keptSlateContext, publicPage, sharedBuildRefusal, VIEWER_EXCHANGE_PATH,
@@ -16,7 +16,6 @@ import {
   type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ShareViewerClaim, type MissionGovernor, type EphemeralSlateAddress,
   type SlateFileChange, type SlateOperation, type EgressPrincipal, type Usage,
 } from '@kinu.run/core';
-import type { KvStore } from '@kinu.run/agent-utils';
 import { attempt, attemptInItsWords, CODE_IS_REFUSAL, ERROR_CODES, KinuError, refusalOf, settle, settleLogged, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import type { ApprovalSpend } from '@kinu.run/core';
 import { Cause, Effect } from 'effect';
@@ -70,8 +69,6 @@ export interface SlateHostDeps extends Omit<ResidentSlateDeps, 'retained' | 'bun
   catalog(): Promise<SlateSurfaceCatalog>;
   /** The app's page a share is entered through, its one link, or null where this deployment names no app origin. */
   shareEntry(share: string): string | null;
-  /** Absent means no per-viewer rate bound, as at the edge. */
-  kv?: KvStore;
   /** Debits the per-share per-day spend label; absent means no spend bound. */
   budget?(): MissionGovernor;
   /** The name the workspace's owner gave their account, as a share's visitors are told it; null where they gave none. */
@@ -142,6 +139,28 @@ function refusalFromThrown(input: { cause: unknown }): Refusal | null {
 /** The surface namespace an answer's page's own server's methods are asked under: `[OWN_SERVER, method]`. */
 const OWN_SERVER = '$server';
 
+/** Fixed one-minute windows of counts by key, in memory: what was counted in an earlier minute is dropped as the next begins. */
+class MinuteCounts {
+  private window = 0;
+  private counts = new Map<string, number>();
+
+  /** Whether `key` may make one more request this minute, `perMinute` in all. */
+  admit(key: string, perMinute: number): boolean {
+    const now = Math.floor(Date.now() / 60_000);
+
+    if (now !== this.window) {
+      this.window = now;
+      this.counts = new Map();
+    }
+
+    const count = (this.counts.get(key) ?? 0) + 1;
+
+    this.counts.set(key, count);
+
+    return count <= perMinute;
+  }
+}
+
 /** How many conversations' objects are ended at once. */
 const ENDS_AT_ONCE = 8;
 
@@ -188,7 +207,6 @@ export class SlateHost {
 
   constructor(private readonly deps: SlateHostDeps) {
     const sql = deps.ctx.storage.sql;
-    const { kv } = deps;
 
     initSlateLiveShareTables((ddl) => { sql.exec(ddl); });
     initEphemeralSlateTable((ddl) => { sql.exec(ddl); });
@@ -221,7 +239,10 @@ export class SlateHost {
       call: (request) => this.call(request),
       catalog: () => deps.catalog(),
       shareEntry: (share) => deps.shareEntry(share),
-      ...(kv !== undefined && { admitted: async (key: string, perMinute: number) => ingressAdmitted(kv, 'slate-share', key, perMinute) }),
+      // Counted here, in the one object every request of the share reaches: a page's load is a burst of requests under one
+      // key, and KV takes one write a second per key (staging fc3f743f5, 2026-11-11: "KV PUT failed: 429" made a
+      // visitor's page an internal error).
+      admitted: async (key: string, perMinute: number) => this.viewerRequests.admit(key, perMinute),
       ...(deps.budget !== undefined && { budget: deps.budget.bind(deps) }),
       ...(deps.ownerUserId !== undefined && { ownerUserId: deps.ownerUserId.bind(deps) }),
       ...(deps.viewerKey !== undefined && { viewerKey: deps.viewerKey.bind(deps) }),
@@ -460,6 +481,9 @@ export class SlateHost {
 
     return this.surfaceCall({ caller: ROOT_SLATE_CALLER, id, name: 'workspace', lineage }, asked);
   }
+
+  /** Each share viewer's requests this minute (`SlateShareViewers` S2's bound), counted in this object. */
+  private readonly viewerRequests = new MinuteCounts();
 
   /** The workspace's My-access conversations, which their owner may read (core slates/app-agent.ts). */
   private readonly chats: AppAgentChats;

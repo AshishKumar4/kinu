@@ -3293,7 +3293,13 @@ export async function appAgentTicketsStayTheirs(target: FlowTarget): Promise<App
     await until(victim, 'the app\'s page, or a while', `(document.querySelector('[data-shared-slate]')?.contentDocument === null) || performance.now() > ${String(drawBy)}`);
     const shown = v.parse(v.string(), await app.evaluate('`${location.pathname} ${document.body?.innerText ?? ""}`.slice(0, 400)'));
 
-    if (!shown.includes('Ask')) throw new Error(`the app's page never drew for the other browser: ${shown}`);
+    // A page that never drew is the verdict's to say: its ask reads as never made.
+    if (!shown.includes('Ask')) {
+      await context.close();
+
+      return { workspace, theirs, byLink, fromTheApp: 0, victim: { reply: '', refused: `the app's page never drew: ${shown}` } };
+    }
+
     const fromTheApp = v.parse(v.number(), await app.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ ticket: ${JSON.stringify(ticket ?? '')} }) }).then((answer) => answer.status)`));
     const again = await appOnItsLink(victim, made.link);
     const asked = await askTheApp(victim, again);

@@ -9376,7 +9376,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         return descriptor === undefined ? null : { preset: descriptor.presetId ?? null, tool: member };
       },
       shareEntry: (share) => liveShareEntryPage(this.env, this.name, share),
-      kv: this.env.AUTH_KV,
       budget: () => this.budget,
       // A refusal or a consent page is not failed for a name: an account that does not answer leaves it unnamed.
       ownerName: async () => {
