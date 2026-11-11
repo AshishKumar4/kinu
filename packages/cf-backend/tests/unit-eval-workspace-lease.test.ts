@@ -97,14 +97,14 @@ test("an eval workspace's account-memory proposals leave with it; a person's acc
   const next = { workspaceToken: await provisionTestWorkspace(harness, 'eval-office-5-ef34gh') };
 
   await harness.userDO.accountMemory_propose(trial, { kind: 'note', content: 'Answer style: terse' }, { by: 'background' });
-  const kept = await harness.userDO.accountMemory_propose(next, { kind: 'note', content: 'Owner: no questions' }, { by: 'background' });
+  const kept = (await harness.userDO.accountMemory_propose(next, { kind: 'note', content: 'Owner: no questions' }, { by: 'background' })).id;
 
   await harness.userDO.removeWorkspace(owner, 'eval-office-4-ab12cd', ACCOUNT);
   expect((await harness.userDO.accountMemory_view(owner)).pending.map((pending) => pending.id)).toEqual([kept]);
 
   const person = await account('ada@example.com');
   const own = { workspaceToken: await provisionTestWorkspace(person.harness, 'eval-looks-like-one-abc123') };
-  const theirs = await person.harness.userDO.accountMemory_propose(own, { kind: 'note', content: 'Invoices go to accounts' }, { by: 'background' });
+  const theirs = (await person.harness.userDO.accountMemory_propose(own, { kind: 'note', content: 'Invoices go to accounts' }, { by: 'background' })).id;
 
   await person.harness.userDO.removeWorkspace(owner, 'eval-looks-like-one-abc123', ACCOUNT);
   expect((await person.harness.userDO.accountMemory_view(owner)).pending.map((pending) => pending.id)).toEqual([theirs]);

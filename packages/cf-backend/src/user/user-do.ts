@@ -46,8 +46,8 @@ import { UserTerminals } from './terminals';
 import { UserScreens } from './screens';
 import { UserChatGptSignIn, type ChatGptMachineSignIn, type ChatGptPlanStatus } from './chatgpt-sign-in';
 import { UserMcpServers, type McpToolCall, type McpToolSurface } from './mcp-servers';
-import { UserAccountMemory } from './account-memory';
-import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposer, Fact, InvocationSurface, SqlValue } from '@kinu.run/core';
+import { UserAccountMemory, type AccountImportSource } from './account-memory';
+import type { AccountMemoryView, AccountNoteHit, AccountProposal, AccountProposalFiled, AccountProposer, AccountRead, Fact, ImportedFact, InvocationSurface, SqlValue } from '@kinu.run/core';
 import {
   UserSessions, type BrowserSessionIdentity, type CliAgentConnectTicketVerification, type CliTokenVerification, type LiveBrowserSession,
 } from './sessions';
@@ -57,7 +57,8 @@ import { UserSecrets } from './secrets';
 import { GitHubHooks, type GitHubHookAsk } from './github-hooks';
 import { UserWorkspaces, type WorkspaceAdmission, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
-import { accountAppAgentModel, accountSlateAi, addSlateAiSpend, slateAiSpendOf, type AccountSlateAiHost } from './slate-ai-account';
+import { accountAppAgentModel, accountFastJudge, accountSlateAi, addSlateAiSpend, slateAiSpendOf, type AccountSlateAiHost } from './slate-ai-account';
+import { AccountImportJobs } from './account-imports';
 import { testAvailableModel } from './available-models';
 import type { ModelTestResult } from '@kinu.run/core';
 import {
@@ -154,6 +155,7 @@ export class UserDO extends Agent<Env> {
     this.lifecycle.use(this.evalLeases);
     this.lifecycle.use(this.workspaceDeletions);
     this.lifecycle.use(this.accountDeletion);
+    this.lifecycle.use(this.accountImports);
     startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
@@ -178,6 +180,7 @@ export class UserDO extends Agent<Env> {
     if (this.storageRefusal !== undefined) return;
     this.workspaceDeletions.adoptMarked();
     this.accountDeletion.adopt();
+    this.accountImports.adopt();
   }
 
   private readonly host: UserObjectHost = {
@@ -223,9 +226,16 @@ export class UserDO extends Agent<Env> {
   /** One approval admits one exact effect; these disappear with the transient runs on eviction. */
   private readonly effectApprovals = new EffectApprovals();
 
-  private readonly accountMemory = new UserAccountMemory({
+  private readonly accountMemory: UserAccountMemory = new UserAccountMemory({
     ...this.host,
     sql: <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => this.ctx.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(statementText(query), ...values).toArray(),
+    importDue: async () => this.accountImports.due(),
+    importJudge: async () => accountFastJudge(this.slateAiHost(), await ownerCaller(this.env)),
+  });
+
+  private readonly accountImports: AccountImportJobs = new AccountImportJobs({
+    owed: () => this.accountMemory.importOwed(),
+    readNext: async () => this.accountMemory.readNextImportPiece(),
   });
 
   private readonly shareCards = new ShareCardJobs({
@@ -1087,27 +1097,35 @@ export class UserDO extends Agent<Env> {
     return this.accountMemory.accountMemory_facts(caller);
   }
 
-  /** The account's facts for one turn: its memory's, and its limits near their end once a period, in the one read. */
-  async accountMemory_turnFacts(caller: UserCaller): Promise<Fact[]> {
-    const [facts, near] = await Promise.all([this.accountMemory.accountMemory_facts(caller), this.accountLimits.nearFact(caller)]);
+  /** The account's read for one turn: its memory's facts, and its limits near their end once a period, in the one read. */
+  async accountMemory_turnFacts(caller: UserCaller): Promise<AccountRead> {
+    const [facts, limits] = await Promise.all([this.accountMemory.accountMemory_facts(caller), this.accountLimits.nearForTurn(caller)]);
 
-    return near === null ? facts : [...facts, near];
+    return { facts, limits };
   }
 
   accountMemory_searchNotes(caller: UserCaller, query: string, limit: number): Promise<AccountNoteHit[]> {
     return this.accountMemory.accountMemory_searchNotes(caller, query, limit);
   }
 
-  accountMemory_propose(caller: UserCaller, proposal: AccountProposal, proposer: AccountProposer, delivery?: string): Promise<string> {
+  accountMemory_propose(caller: UserCaller, proposal: AccountProposal, proposer: AccountProposer, delivery?: string): Promise<AccountProposalFiled> {
     return this.accountMemory.accountMemory_propose(caller, proposal, proposer, delivery);
+  }
+
+  accountMemory_import(caller: UserCaller, source: AccountImportSource): Promise<string> {
+    return this.accountMemory.accountMemory_import(caller, source);
+  }
+
+  accountMemory_retryImport(caller: UserCaller, id: string): Promise<boolean> {
+    return this.accountMemory.accountMemory_retryImport(caller, id);
   }
 
   accountMemory_view(caller: UserCaller): Promise<AccountMemoryView> {
     return this.accountMemory.accountMemory_view(caller);
   }
 
-  accountMemory_decide(caller: UserCaller, id: string, decision: 'accept' | 'decline'): Promise<boolean> {
-    return this.accountMemory.accountMemory_decide(caller, id, decision);
+  accountMemory_decide(caller: UserCaller, id: string, decision: 'accept' | 'decline', facts?: readonly ImportedFact[]): Promise<boolean> {
+    return this.accountMemory.accountMemory_decide(caller, id, decision, facts);
   }
 
   accountMemory_put(caller: UserCaller, key: string, value: JsonValue, workspace?: string): Promise<string> {

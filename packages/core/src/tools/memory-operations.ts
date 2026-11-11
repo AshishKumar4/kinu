@@ -7,6 +7,7 @@ import type { VectorStore } from '../memory/vector-store';
 import { appendMemoryNote } from '../memory/note';
 import { normalizeFactKey, type Fact, type FactsStore, type MemoryScope } from '../memory/facts';
 import type { AccountMemory } from '../memory/account';
+import { ACCOUNT_PROFILE_CHARS } from '../memory/account-profile';
 import { searchMemoryHits } from '../memory/memory-search';
 import type { ConversationRecall } from '../memory/conversation-search';
 import { KinuError, renderThrownChain, toKinuError } from '../obs/index';
@@ -50,7 +51,7 @@ export function serveMemory(deps: () => MemoryDeps): readonly Served[] {
 
   const served = [
     serve(ops.note, async ({ content, scope }: NoteCall) => {
-      if (scope === 'account' && account !== undefined) return { pending: true as const, proposal: await account.propose({ kind: 'note', content }) };
+      if (scope === 'account' && account !== undefined) return { pending: true as const, proposal: (await account.propose({ kind: 'note', content })).id };
       const { memory, actor } = deps();
 
       await appendMemoryNote(memory, content, { by: actor.name });
@@ -71,7 +72,12 @@ export function serveMemory(deps: () => MemoryDeps): readonly Served[] {
     serve(ops.remember, async ({ key, value, confidence, scope }: RememberCall) => {
       const stored = normalizeFactKey(key);
 
-      if (scope === 'account' && account !== undefined) return { key: stored, pending: true as const, proposal: await account.propose({ kind: 'fact', key: stored, value }) };
+      if (scope === 'account' && account !== undefined) {
+        const { id, unshown } = await account.propose({ kind: 'fact', key: stored, value });
+
+        return { key: stored, pending: true as const, proposal: id, ...(unshown !== null && { notShown: { chars: unshown.chars, budget: ACCOUNT_PROFILE_CHARS } }) };
+      }
+
       facts.upsert(stored, value, { confidence, origin: { by: 'agent', agent: deps().actor.name } });
 
       return { key: stored };

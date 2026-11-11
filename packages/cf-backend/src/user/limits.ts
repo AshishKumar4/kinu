@@ -8,7 +8,7 @@ import { ACCOUNT_DELETING_KEY } from './account-deletion';
 import {
   accountClassOf, admitComputerStart, admitPlatformTurn, admitStoredBytes, admitWorkspace, AccountLimitsStore,
   freeTierOf, isLimited, limitReadings, nearLimitNote, startSize, limitsReport, type AccountClass, type AccountLimits, type AccountUse,
-  type Admission, type ComputerSize, type Fact, type FreeTier, type LimitsReport, type StoredClass, type UserCaller,
+  type Admission, type ComputerSize, type FreeTier, type LimitsReport, type StoredClass, type UserCaller,
 } from '@kinu.run/core';
 import { isListedOperator } from '../control-plane/admin-caller';
 import type { UserObjectHost } from './user-host';
@@ -249,13 +249,11 @@ export class UserLimits {
     return nearLimitNote(report.limits, now, (limit, period) => this.store.noticeOnce(limit, period, now));
   }
 
-  /** The near note as a turn's account fact; none when there is nothing new, or the note could not be read (logged). */
-  nearFact(caller: UserCaller): Promise<Fact | null> {
+  /** The near note for a turn; none when there is nothing new, or the note could not be read (logged). */
+  nearForTurn(caller: UserCaller): Promise<string | null> {
     const read = attempt({ doing: "reading the account's near limits for a turn", otherwise: 'unavailable' }, () => this.nearNote(caller));
 
-    return settle(Effect.catch(Effect.map(read, (note): Fact | null => (note === null ? null : {
-      key: 'account limits', value: note, confidence: 1, source: 'limits', lastObservedAt: Date.now(), importance: 0.9, veracity: 'tool', origin: null,
-    })), (failure) => Effect.sync(() => {
+    return settle(Effect.catch(read, (failure) => Effect.sync(() => {
       diagnostics.failure('limits.near_note_unread', failure);
 
       return null;

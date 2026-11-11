@@ -32,7 +32,7 @@ export {
 export { SleepTimeLane, initSleepTimeTables } from './orchestrator/sleep-time-lane';
 
 export {
-  assembleActorTurn, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, actorTurnSources,
+  assembleActorTurn, accountTurnView, withCompactionTrigger, conversationKey, vfsTurnSkills, materializeTurnSources, turnSourcesFromBundle, actorTurnSources,
   type RunTurnSources, type TurnAssemblyRequest, type TurnAssemblySources, type TurnModelSources,
   type TurnReads, type TurnTools,
 } from './orchestrator/turn-assembly';
@@ -1243,10 +1243,17 @@ export {
 } from './memory/facts';
 
 export {
-  AccountMemoryStore, AccountMemoryProposalSchema, AccountNoteSchema,
-  type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNoteHit, type AccountProposal,
-  type AccountProposer,
+  AccountImportStatusSchema, AccountMemoryStore, AccountMemoryProposalSchema, AccountNoteSchema, AccountProfileUseSchema,
+  type AccountImportStatus, type AccountMemory, type AccountMemoryProposal, type AccountMemoryView, type AccountNoteHit, type AccountProposal,
+  type AccountProposalFiled, type AccountProposer,
 } from './memory/account';
+
+export {
+  ACCOUNT_PROFILE_CHARS, accountProfile, effectiveProfileFacts,
+  type AccountProfile, type AccountRead, type AccountTurnRead, type AccountTurnView, type ProfileFact, type UnshownFact,
+} from './memory/account-profile';
+
+export { extractImportPiece, factsAsDocument, ImportedFactsSchema, importPieces, type ImportedFact, type ImportJudge } from './memory/account-import';
 
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema, renderIssuesUnquoted,
@@ -1935,7 +1942,7 @@ export { activeOperationProfile, captureOperationProfile, currentOperationProfil
   withOperationProfile, operationProfileStream, type OperationProfile,} from './profiles/operation';
 
 export {
-  bindRoute, completeOnRoute, createRoutedModelLane, routedLlm, type ModelLaneComponents, type RouteModelBinder,
+  bindRoute, completeOnRoute, createRoutedModelLane, objectOnRoute, routedLlm, type ModelLaneComponents, type RouteModelBinder,
   type RouteModelBinding,
 } from './profiles/model-lane';
 

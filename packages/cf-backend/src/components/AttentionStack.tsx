@@ -61,6 +61,8 @@ function kindOf(ask: OwnerAsk): AskKind {
 function remembered(memory: AccountMemoryProposal): string {
   const { proposal } = memory;
 
+  if (proposal.kind === "import") return `${String(proposal.facts.length)} facts from a document you imported`;
+
   return proposal.kind === "fact" ? memoryLabel(proposal.key) : proposal.content;
 }
 
@@ -166,6 +168,20 @@ function ConsentBody({ consent }: { consent: PendingConsent }) {
 
 function MemoryBody({ memory }: { memory: AccountMemoryProposal }) {
   const { origin, proposal } = memory;
+
+  if (proposal.kind === 'import') {
+    return (
+      <>
+        <div className="t-body p-text">Keep these {proposal.facts.length} facts for every workspace?</div>
+        <Surface look="tile" className="mt-1 max-h-56 overflow-auto px-2 py-2 space-y-1">
+          {proposal.facts.map((fact) => <MemoryFact key={fact.key} factKey={fact.key} value={fact.value} />)}
+        </Surface>
+        <div className="t-meta mt-1 p-text-3">
+          Read from a document you imported{proposal.replaces.length > 0 ? `, in place of ${String(proposal.replaces.length)} facts` : ''}. Edit them first under Settings → Memory.
+        </div>
+      </>
+    );
+  }
 
   return (
     <>

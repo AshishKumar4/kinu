@@ -11,8 +11,9 @@ import { renderUnverifiedInstructions } from '../prompt';
 import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { stepContextLimit, type ModelWindow } from '../context-window';
-import { factLine, renderMemoryBlock, unifiedFacts, type Fact, type FactsStore } from '../memory/facts';
+import { factLine, renderMemoryBlock, type FactsStore } from '../memory/facts';
 import type { RecalledMemory } from '../memory/turn-recall';
+import type { AccountTurnView } from '../memory/account-profile';
 import { isoDate } from '../utils/date';
 import { Cause, Effect } from 'effect';
 import { diagnostics, settle, toKinuError } from '../obs/index';
@@ -145,11 +146,9 @@ export function filterToolSetBySkills(tools: ToolSet, activeSkills: ActiveSkillS
   return allowed === null ? tools : Object.fromEntries(Object.entries(tools).filter(([name]) => allowed(name)));
 }
 
-/** The memory block's allowance in characters, the facts block's before recall: 2,000 (about 500 tokens at four characters
- *  a token), 3,000 with the account's facts. What the turn recalls takes the place of newer facts, never more room. */
-function memoryBlockChars(account: readonly Fact[]): number {
-  return account.length === 0 ? 2000 : 3000;
-}
+/** The memory block's allowance in characters: 2,000, about 500 tokens at four characters a token. What the turn recalls
+ *  takes the place of newer facts, never more room. */
+const MEMORY_BLOCK_CHARS = 2000;
 
 /** The newest workspace facts the block shows after what the turn matched. */
 const NEWEST_FACTS = 20;
@@ -161,48 +160,35 @@ function noteLine(note: Extract<RecalledMemory, { kind: 'note' }>): string {
   return `note ${note.ref}${marks.length === 0 ? '' : ` (${marks.join(', ')})`}: ${note.text.replace(/\s+/gu, ' ').trim()}`;
 }
 
-/** The memory block's lines a turn's words recalled, and the facts among them, by `scope:key`. */
-interface RecalledLines {
-  readonly lines: readonly string[];
-  readonly shown: ReadonlySet<string>;
-}
-
-/** What the turn's words recalled, best first, each fact as it now is and when it was last observed. */
-function recalledLines(recalled: readonly RecalledMemory[], own: Pick<FactsStore, 'recall'>, shared: readonly Fact[]): RecalledLines {
-  const shown = new Set<string>();
-
-  const lines = recalled.flatMap((memory) => {
-    if (memory.kind === 'note') return [noteLine(memory)];
-    const fact = memory.scope === 'account' ? shared.find((each) => each.key === memory.key) : own.recall(memory.key) ?? undefined;
-
-    if (fact === undefined || shown.has(`${memory.scope}:${fact.key}`)) return [];
-    shown.add(`${memory.scope}:${fact.key}`);
-
-    return [factLine({ ...fact, scope: memory.scope }, `as of ${isoDate(fact.lastObservedAt)}`)];
-  });
-
-  return { lines, shown };
-}
-
 /**
  * Rendered fresh each step, so it never enters the cacheable prefix: first what the turn's words recalled
- * (`recallForTurn`), then the workspace's newest facts and the account's, which the turn read once
- * (`TurnAssemblySources.accountFacts`), within {@link memoryBlockChars}: a matched fact or note is never crowded out
- * by a newer one, and one long note crowds out nothing after it.
+ * (`recallForTurn`), then the workspace's newest facts, within {@link MEMORY_BLOCK_CHARS}: a matched fact or note is
+ * never crowded out by a newer one, and one long note crowds out nothing after it. A key the account's profile shows
+ * (this workspace's value in its place where it holds one) is not shown again; the account's limits near their end lead.
  */
 export function renderMemoryForTurn(
-  facts: Pick<FactsStore, 'recentTopK' | 'all' | 'recall'>, account: readonly Fact[] = [], recalled: readonly RecalledMemory[] = [],
+  facts: Pick<FactsStore, 'recentTopK' | 'recall'>, recalled: readonly RecalledMemory[] = [], account?: AccountTurnView,
 ): string | undefined {
-  // Every key this workspace holds suppresses the account's.
-  const held = account.length === 0 ? new Set<string>() : new Set(facts.all().map((fact) => fact.key));
-  const shared = account.filter((fact) => !held.has(fact.key));
-  const matched = recalledLines(recalled, facts, shared);
-  const newest = unifiedFacts(facts.recentTopK(NEWEST_FACTS), shared).filter((fact) => !matched.shown.has(`${fact.scope}:${fact.key}`)).map((fact) => factLine(fact));
+  const shown = new Set(account?.profile.shown);
+  const limits = account?.limits == null ? [] : [factLine({ key: 'account limits', value: account.limits, scope: 'account' })];
 
-  const block = renderMemoryBlock(matched.lines.length === 0 ? [{ lines: newest }] : [
-    { heading: "# What this turn's words match, best first", lines: matched.lines },
+  const matched = recalled.flatMap((memory) => {
+    if (memory.kind === 'note') return [noteLine(memory)];
+    const fact = memory.scope === 'workspace' ? facts.recall(memory.key) : null;
+
+    if (fact === null || shown.has(fact.key)) return [];
+    shown.add(fact.key);
+
+    return [factLine(fact, `as of ${isoDate(fact.lastObservedAt)}`)];
+  });
+
+  const newest = facts.recentTopK(NEWEST_FACTS).filter((fact) => !shown.has(fact.key)).map((fact) => factLine(fact));
+
+  const block = renderMemoryBlock(matched.length === 0 ? [{ lines: [...limits, ...newest] }] : [
+    { lines: limits },
+    { heading: "# What this turn's words match, best first", lines: matched },
     { heading: '# Your newest facts', lines: newest },
-  ], memoryBlockChars(account));
+  ], MEMORY_BLOCK_CHARS);
 
   return block === '' ? undefined : block;
 }

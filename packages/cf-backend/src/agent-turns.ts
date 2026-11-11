@@ -2,7 +2,7 @@
 import { diagnostics, hold, KinuError, logged, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect, Exit } from 'effect';
 import {
-  AgentOpenTurns, TurnFences, type FencedRow, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, scaffoldProviders, runWorkModeInvocation,
+  accountTurnView, AgentOpenTurns, TurnFences, type FencedRow, decodeModelMessageValues, encodeModelMessageValues, materializeTurnSources, callableToolNames, buildHeadMessages, scaffoldProviders, runWorkModeInvocation,
   announcementOf, type SeatedActor, type TurnSurface,
   type ActorReference, type DynamicContext, type ModelPricing, type ResolvedTurnProfile, type TierId, type WorkMode,
   type HeadInput, type RunInference, type HeadReport, type SqlExecutor, type MissionBudgetPort, type MissionGovernor, type Executor, turnTags,
@@ -12,7 +12,7 @@ import {
 import type { TurnCall } from './agent-facets';
 import type { TurnBound, TurnCapabilityOf } from './agent-facet/agent-turn';
 import { prepareHostedTurn, type ActorSurface, type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn } from './hosted-actors';
-import type { AgentHeadDelta, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, Fact, AgentOwes, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpeningAsk, TurnReads } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentOwes, FrozenAuthority, JsonObject, PreparedAgentTurn, RunEndReport, StoredRow, TaskPlan, OpenedAt, TurnFacts, TurnOpeningAsk, TurnReads } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -80,8 +80,8 @@ interface OpenTurn {
   readonly reference: ActorReference;
   readonly request: HostedTurnRequest;
   prepared: PreparedHostedTurn | null;
-  /** The account's facts, read once when the turn is read, so every step's block is the same bytes. */
-  accountFacts?: readonly Fact[];
+  /** The account's profile and limits note, read once with its sources, so every request carries the same bytes. */
+  account?: TurnReads['account'];
   /** The agent's unread mail, read with the facts for the same reason. */
   mail?: TurnReads['mail'];
   /** MEMORY.md's tail, read with its sources for the same reason. */
@@ -427,7 +427,7 @@ export class AgentTurns {
 
     const reads: TurnReads = {
       memoryTail: turn.memoryTail, activeSkills: null,
-      ...(turn.accountFacts !== undefined && { accountFacts: turn.accountFacts }), ...(turn.mail !== undefined && { mail: turn.mail }),
+      ...(turn.account !== undefined && { account: turn.account }), ...(turn.mail !== undefined && { mail: turn.mail }),
       ...(turn.recalled !== undefined && { recalled: turn.recalled }),
     };
 
@@ -559,7 +559,7 @@ export class AgentTurns {
       at = now;
     };
 
-    [turn.accountFacts, turn.mail] = await Promise.all([surface.sources.accountFacts?.(), surface.sources.mail?.()]);
+    turn.mail = await surface.sources.mail?.();
     lap('accountMail');
     const version = await actor.runtime.identity.scaffold.version();
 
@@ -580,7 +580,7 @@ export class AgentTurns {
       return value;
     };
 
-    const [recalled, sources] = await Promise.all([stamped('recall', Promise.resolve(surface.sources.recall?.(input.task, turn.accountFacts))), stamped('materialize', materializeTurnSources(
+    const [recalled, sources] = await Promise.all([stamped('recall', Promise.resolve(surface.sources.recall?.(input.task))), stamped('materialize', materializeTurnSources(
       { ...surface.sources, toolset: () => ({ tools: surface.offered, stores: surface.stores }), externalTools: async () => ({}) },
       {
         userText: input.task, workMode: mode,
@@ -594,6 +594,9 @@ export class AgentTurns {
     turn.recalled = recalled;
 
     turn.memoryTail = sources.memoryTail ?? undefined;
+
+    // Read beside its other sources, where the agent's own facts are, and carried to its isolate in the bundle.
+    if (sources.account !== null) turn.account = accountTurnView(sources.account);
     const advisorTools = await this.advisorTools(turn, surface);
 
     lap('advisor');

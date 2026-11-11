@@ -5,8 +5,8 @@
  */
 import * as v from 'valibot';
 import {
-  accountSpendOfCall, DEFAULT_ROLE_ID, webSearchChainOf, pricedModelCallEvent, loadProfileAuthorityInputs, ModelCatalogSession, resolveTurnProfile, specModelInfo,
-  type AccountSpend, type ModelCallReport, type ProfileCatalogEnvelope, type ResolvedTurnProfile, type SlateSurfaceValue, type Usage, type UserCaller,
+  accountSpendOfCall, DEFAULT_ROLE_ID, objectOnRoute, resolveModelRoute, routedLlm, webSearchChainOf, pricedModelCallEvent, loadProfileAuthorityInputs, ModelCatalogSession, resolveTurnProfile, specModelInfo,
+  type AccountSpend, type ImportJudge, type ModelCallReport, type ProfileCatalogEnvelope, type ResolvedTurnProfile, type SlateSurfaceValue, type Usage, type UserCaller,
 } from '@kinu.run/core';
 import { recordModelRow } from '@kinu.run/core/analytics';
 import { OwnedModelServices, type OwnedModelEnv } from '../owned-model-services';
@@ -94,6 +94,28 @@ export async function accountAppAgentModel<Id>(host: AccountSlateAiHost<Id>, cal
   const { tier, retries } = (await accountModel(host, caller, workspace, undefined)).profile;
 
   return { spec: tier.model, reasoning: tier.reasoningEffort, retries, fallbacks: tier.fallbacks.map(({ model, reasoningEffort }) => ({ model, reasoning: reasoningEffort })) };
+}
+
+/** Where an account's own model calls are counted and keyed for caching when no workspace makes them. */
+const ACCOUNT_MEMORY_WORKSPACE = 'account-memory';
+
+/**
+ * The account's fast tier, as a workspace's background passes call theirs (`rt.fastLlm`): its configured chain walked on
+ * a failure, each call priced and kept in the account's own spend.
+ */
+export async function accountFastJudge<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller): Promise<ImportJudge> {
+  const { services, pricing, profile } = await accountModel(host, caller, ACCOUNT_MEMORY_WORKSPACE, undefined);
+  const route = resolveModelRoute('fast', profile);
+  const report = (call: ModelCallReport): void => { recordSlateAi(host, ACCOUNT_MEMORY_WORKSPACE, call, pricing); };
+
+  await pricing.warm([route.model, ...route.fallbacks.map((fallback) => fallback.model)]);
+
+  const lane = {
+    attemptOf: async (spec: string) => services.attemptFor(spec),
+    llm: (serving: typeof route) => routedLlm((bound) => services.resolveModelWithEffort(bound.model, bound.reasoningEffort), serving, { report }),
+  };
+
+  return { object: async (prompt, schema) => objectOnRoute(route, lane, prompt, schema) };
 }
 
 /** The tally's usage columns, each with the `Usage` field it sums. */

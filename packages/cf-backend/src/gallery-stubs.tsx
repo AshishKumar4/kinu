@@ -1,6 +1,6 @@
 /** The gallery's page-wide stand-ins, installed as it loads: /api fetches, sockets and window hooks answering from fixtures. */
 import { deployFixture } from "@/gallery-deploy-fixture";
-import { GOOGLE_OAUTH_CRED_KEY, restoredRows, requestUrl, type RosterFrame } from "@kinu.run/core";
+import { accountProfile, effectiveProfileFacts, GOOGLE_OAUTH_CRED_KEY, restoredRows, requestUrl, type RosterFrame } from "@kinu.run/core";
 import { delegatedTaskMetadata } from "@kinu.run/core";
 import { toKinuError, tolerate } from "@kinu.run/core/obs";
 import { hostedActorSocketPath, SLATE_PUSH_EVENT, mcpPresetById, type McpPreset, READS_CHANGED_EVENT } from "@kinu.run/core";
@@ -720,12 +720,45 @@ const ACCOUNT_MEMORY_FIXTURE: JsonValue = {
   notes: [{ id: "acn_1", content: "Invoices go to accounts@example.com on the first of each month.", origin: { by: "agent", workspace: "Support inbox", agent: "main" }, createdAt: NOW - 2 * 864e5 }],
 };
 
-/** The read and the roster socket answer one list of proposals, as the user object does. */
+/** A profile kept as whole document sections, as an import before the one step was: each too long for the profile. */
+const PROFILE_SECTIONS = [
+  ["Home and travel", "I live in Austin, Texas, and moved there from Raleigh in 2024. I fly out of AUS; RDU was my home airport before the move. I keep a window seat and carry on only."],
+  ["Work", "I build Kinu, an agent framework on Cloudflare Workers, and ship it from my own PC through a release train. Production deploys go out after staging is green; I read production logs before I call a release done."],
+  ["Preferences", "Short answers, plain words, no filler. Show the command and its output, not a summary of it. Ask before anything that costs money or touches production data."],
+].map(([title, content], at) => {
+  // About as long as each section of a real profile kept this way: 1,400 to 3,400 characters.
+  const value = { title, source: "my notes", provenance: "pasted 2026-10-17", content: Array.from({ length: 20 }, () => content).join(" ") };
+
+  return {
+    key: `profile.section-${String(at + 1).padStart(2, "0")}`, value, importance: 0.5, veracity: "stated", lastObservedAt: NOW - 25 * 864e5,
+    origin: { by: "agent", workspace: "Support inbox", agent: "main" },
+    history: [{ forgotten: false, value, origin: { by: "agent", workspace: "Support inbox", agent: "main" }, at: NOW - 25 * 864e5 }],
+  };
+});
+
+/** `&memory=importing` and `&memory=stopped`: an import of those sections reading, or stopped on its provider's refusal. */
+const GALLERY_IMPORTS = {
+  importing: { id: "amp_import", pieces: 6, read: 2, facts: 9, replaces: 3, failure: null, parked: false, createdAt: NOW - 40_000 },
+  stopped: {
+    id: "amp_import", pieces: 6, read: 4, facts: 14, replaces: 3, parked: true, createdAt: NOW - 600_000,
+    failure: "workers-ai: Your account has used its daily allocation of 10,000 neurons. (code 4006)",
+  },
+} satisfies Readonly<Record<string, JsonValue>>;
+
+/** The read and the roster socket answer one list of proposals, as the user object does; the profile is the user
+ *  object's own measure of the facts it holds. */
 function accountMemoryFixture(path: string, method: string): Response | null {
   if (path !== "/api/user/memory" || method !== "GET") return null;
-  const memory = v.parse(v.looseObject({ facts: v.array(JsonValueSchema) }), ACCOUNT_MEMORY_FIXTURE);
+  const Facts = v.array(v.looseObject({ key: v.string(), value: JsonValueSchema }));
+  const fixture = v.parse(v.looseObject({ facts: Facts }), ACCOUNT_MEMORY_FIXTURE);
+  const running = galleryMemoryState === "importing" || galleryMemoryState === "stopped" ? GALLERY_IMPORTS[galleryMemoryState] : undefined;
+  const sections = galleryMemoryState === "profile" || galleryMemoryState === "import" || running !== undefined ? PROFILE_SECTIONS : [];
+  const facts = [...fixture.facts, ...sections, ...v.parse(Facts, galleryKeptFacts)];
+  const { used, budget, unshown } = accountProfile(effectiveProfileFacts(facts, []));
 
-  return fixtureJson({ ...memory, facts: [...memory.facts, ...galleryKeptFacts], pending: galleryMemoryPending });
+  return fixtureJson(v.parse(JsonValueSchema, {
+    ...fixture, facts, pending: galleryMemoryPending, imports: running === undefined ? [] : [running], profile: { used, budget, unshown },
+  }));
 }
 
 /** `&mail=off`: setup on a deployment with no mail domain, which offers no address. */
@@ -897,9 +930,29 @@ const MEMORY_PROPOSALS = new Map<string, JsonValue>([
     id: "amp_1", proposal: { kind: "fact", key: "timezone", value: "Asia/Kolkata" },
     origin: { by: "background", workspace: "API Worker" }, createdAt: NOW - 36e5,
   }],
+  // `&memory=import`: the batch an import of the profile's sections proposes, in place of them.
+  ["import", {
+    id: "amp_import",
+    proposal: {
+      kind: "import", read: 3, replaces: ["profile.section-01", "profile.section-02", "profile.section-03"],
+      notes: ["Home and travel …", "Work …", "Preferences …"],
+      facts: [
+        { key: "home.city", value: "Austin, Texas", importance: 0.9 },
+        { key: "home.previous_city", value: "Raleigh (moved 2024)", importance: 0.4 },
+        { key: "travel.home_airport", value: "AUS", importance: 0.6 },
+        { key: "travel.seat", value: "window, carry-on only", importance: 0.4 },
+        { key: "work.project", value: "Kinu, an agent framework on Cloudflare Workers", importance: 0.8 },
+        { key: "answers.style", value: "short, plain words, show the command and its output", importance: 0.8 },
+        { key: "ask_before", value: "spending money or touching production data", importance: 0.9 },
+      ],
+    },
+    origin: { by: "import" }, createdAt: NOW - 30_000,
+  }],
 ]);
 
-const seededProposal = MEMORY_PROPOSALS.get(galleryQuery.get("memory") ?? "");
+const galleryMemoryState = galleryQuery.get("memory") ?? "";
+
+const seededProposal = MEMORY_PROPOSALS.get(galleryMemoryState);
 
 let galleryMemoryPending: JsonValue[] = seededProposal === undefined ? [] : [seededProposal];
 
@@ -916,13 +969,14 @@ function galleryMemoryFrame(socket: EventTarget): void {
 /** The facts the owner kept from proposals here. */
 let galleryKeptFacts: JsonValue[] = [];
 
-function keptFact(proposal: JsonValue): JsonValue {
-  const { proposal: fact, origin } = v.parse(v.object({ proposal: v.object({ key: v.string(), value: v.string() }), origin: JsonValueSchema }), proposal);
+function keptFacts(proposal: JsonValue): JsonValue[] {
+  const Kept = v.object({ key: v.string(), value: JsonValueSchema });
+  const { proposal: kept, origin } = v.parse(v.object({ proposal: v.union([Kept, v.object({ facts: v.array(Kept) })]), origin: JsonValueSchema }), proposal);
 
-  return {
+  return ("facts" in kept ? kept.facts : [kept]).map((fact) => ({
     key: fact.key, value: fact.value, importance: 0.5, veracity: "stated", lastObservedAt: NOW, origin,
     history: [{ forgotten: false, value: fact.value, origin, at: NOW }],
-  };
+  }));
 }
 
 /** The owner's decision on a proposal, recorded (`data-gallery-memory-decisions`), then what is left sent to every page. */
@@ -938,7 +992,7 @@ function galleryMemoryDecision(path: string, method: string, body: BodyInit | nu
   galleryMemoryPending = galleryMemoryPending.filter((row) => row !== decided);
 
   // A fact kept is a fact the next read answers, as the user object keeps it.
-  if (decision === "accept" && decided !== undefined) galleryKeptFacts = [...galleryKeptFacts, keptFact(decided)];
+  if (decision === "accept" && decided !== undefined) galleryKeptFacts = [...galleryKeptFacts, ...keptFacts(decided)];
   queueMicrotask(() => { for (const socket of rosterSockets) galleryMemoryFrame(socket); });
 
   // The route's own answer, as written: its body is the wire's, not a result this gallery decides.

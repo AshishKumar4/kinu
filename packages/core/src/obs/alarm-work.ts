@@ -17,6 +17,8 @@ export const ALARM_WORK = {
   // Clears what a marked account holds outside its storage once its workspaces are gone (cf-backend
   // `user/account-deletion.ts`); the alarm after it destroys the account.
   AccountDeletionJob: ['account.cleared'],
+  // Reads an owner's import one piece a run, each a model call of the account's own (cf-backend `user/account-imports.ts`).
+  AccountImportJobs: [],
   // Drops or expires a deploy run nobody finished, an hour after its last call (cf-backend `deploy/deploy-do.ts`).
   DeployRunDO: ['deploy.run_dropped', 'deploy.run_expired'],
   // Deletes a CLI sign-in's object at the end of its retention (cf-backend `cli/auth-do.ts`).

@@ -77,5 +77,7 @@ export function MemoryProvenance({ origin }: { origin: MemoryOrigin }) {
 
   if (origin.by === 'agent') return <>Said{where}, kept by {origin.agent ?? 'an agent'}</>;
 
+  if (origin.by === 'import' && name === undefined) return <>Read from a document you imported</>;
+
   return <>{origin.by === 'background' ? `Noticed${where} in your own words` : `Copied${where}`}</>;
 }

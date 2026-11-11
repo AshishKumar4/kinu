@@ -19,7 +19,8 @@ import { SUBMIT_PLAN_TOOL } from '../tools/registry';
 import type { ActiveSkillSet } from '../skills/types';
 import type { TurnReason } from '../types/turn';
 import type { ToolSet } from 'ai';
-import type { Fact, FactsStore } from '../memory/facts';
+import type { FactsStore } from '../memory/facts';
+import type { AccountTurnView } from '../memory/account-profile';
 import type { RecalledMemory } from '../memory/turn-recall';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -27,7 +28,7 @@ import { ASKED, type Holds } from '../utils/held-reads';
 
 /** The rows a dynamic block reads from its agent's stores. */
 export interface DynamicReads {
-  readonly facts: Pick<FactsStore, 'recentTopK' | 'all' | 'recall'>;
+  readonly facts: Pick<FactsStore, 'recentTopK' | 'recall'>;
   readonly recoveryFindings: () => string[];
   readonly toolLessons: (tools: readonly string[]) => ShownLesson[];
   readonly runningJobs: AgentStores['jobs']['listRunning'];
@@ -50,7 +51,6 @@ export function dynamicReads(stores: AgentStores, sql: SqlExecutor, actor: Actor
     // FactsStore's upsert, observe and forget, and a fork's section import.
     facts: {
       recentTopK: holds.holdEach(['agent_facts'], (k: number) => stores.facts.recentTopK(k)),
-      all: holds.hold(['agent_facts'], () => stores.facts.all()),
       recall: holds.holdEach(['agent_facts'], (key: string) => stores.facts.recall(key)),
     },
     // recordLesson.
@@ -81,8 +81,8 @@ export interface DynamicContextInput {
   readonly activeSkills?: ActiveSkillSet;
   /** Read once per turn by the caller. */
   readonly memoryTail: string | undefined;
-  /** The account's facts, read once per turn by the caller; absent where no account is wired. */
-  readonly accountFacts?: readonly Fact[];
+  /** The account's profile and limits note, read once per turn by the caller; absent where no account is wired. */
+  readonly account?: AccountTurnView;
   /** What the turn's words recalled of memory, read once per turn by the caller. */
   readonly recalled?: readonly RecalledMemory[];
   readonly missingCapabilities: readonly MissingCapability[];
@@ -133,8 +133,8 @@ export function collectDynamicContext(input: DynamicContextInput): DynamicContex
     // What `codemode.list` answers in this turn's programs: none where the turn cannot run one.
     connections: runnableSandbox(input.tools, profile) === undefined ? [] : connectedServers(input.externalTools ?? {}),
     // A note MEMORY.md's tail shows already is not shown twice, unless a fact has since changed what it says.
-    factsBlock: renderMemoryForTurn(reads.facts, input.accountFacts, input.recalled?.filter((memory) => memory.kind === 'fact' || memory.supersededBy !== null
-      || input.memoryTail?.includes(memory.text.trim()) !== true)),
+    factsBlock: renderMemoryForTurn(reads.facts, input.recalled?.filter((memory) => memory.kind === 'fact' || memory.supersededBy !== null
+      || input.memoryTail?.includes(memory.text.trim()) !== true), input.account),
     memoryTail: input.memoryTail,
     recoveryFindings: reads.recoveryFindings(),
     toolLessons: reads.toolLessons(Object.keys(input.tools)),

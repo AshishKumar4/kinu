@@ -1,6 +1,6 @@
 /** Fixture state for the landing page's frames, which mount the product's own components.
  *  Nothing here is served; only the install command comes from the deployment. */
-import { mainPanelAgent, satisfactionInterval, wilsonInterval, type ActivitySnapshot, type AgentStatus, type DirEntry, type EnvironmentInfo, type ExecutorInfo, type MemoryEntry, type TerminalPaneOutput, type PanelAgent, type PlanReview, type QualityWindow, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
+import { ACCOUNT_PROFILE_CHARS, mainPanelAgent, satisfactionInterval, wilsonInterval, type ActivitySnapshot, type AgentStatus, type DirEntry, type EnvironmentInfo, type ExecutorInfo, type MemoryEntry, type TerminalPaneOutput, type PanelAgent, type PlanReview, type QualityWindow, type SlateSummary, type TabPresence, type ModelMenuEntry, type RosterPage } from '@kinu.run/core';
 import type { Important } from '@/lib/mail-api';
 import type { AccountMemoryState, DeviceConsent, UserDevice, UserProfile } from '@/lib/user-api';
 import { answeringRpc, type WorkspaceRpc } from '@/lib/workspace-rpc';
@@ -57,7 +57,7 @@ export const LANDING_ACCOUNT_READS: ReadonlyMap<string, object> = new Map<string
   ['/api/user/workspaces', LANDING_ROSTER],
   ['/api/user/devices', [] satisfies UserDevice[]],
   ['/api/user/devices/consents', [] satisfies DeviceConsent[]],
-  ['/api/user/memory', { facts: [], notes: [], pending: [] } satisfies AccountMemoryState],
+  ['/api/user/memory', { facts: [], notes: [], pending: [], imports: [], profile: { used: 0, budget: ACCOUNT_PROFILE_CHARS, unshown: [] } } satisfies AccountMemoryState],
   ['/api/user/mail/important', { enabled: false, unread: 0, items: [] } satisfies Important],
 ]);
 

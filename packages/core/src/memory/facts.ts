@@ -32,6 +32,9 @@ export const FactOriginSchema = v.object({
 
 export type FactOrigin = v.InferOutput<typeof FactOriginSchema>;
 
+/** A key as an account's store keeps it: normalized, with something left once it is. */
+export const FactKeySchema = v.pipe(v.string(), v.maxLength(200), v.transform(normalizeFactKey), v.nonEmpty('An account fact needs a key.'));
+
 const VeracitySchema = v.picklist(VERACITIES);
 
 export const FactSchema = v.object({

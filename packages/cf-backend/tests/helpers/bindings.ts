@@ -345,6 +345,8 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     accountMemory_put: refuse('accountMemory_put'),
     accountMemory_forget: refuse('accountMemory_forget'),
     accountMemory_forgetNote: refuse('accountMemory_forgetNote'),
+    accountMemory_import: refuse('accountMemory_import'),
+    accountMemory_retryImport: refuse('accountMemory_retryImport'),
     // An account's own AI in other people's slates: none in these tests.
     slateAiSpend: async () => [],
     userMcp_list: refuse('userMcp_list'),
