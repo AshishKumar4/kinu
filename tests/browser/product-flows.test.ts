@@ -797,6 +797,7 @@ describe(productFlowTestName('app-agent-lent', 'an anonymous visitor on a My-acc
 
     expect(lent.owner.chats).toBe(1);
     expect(lent.owner.said).toContain(APP_AGENT_SLATE.stop);
+    expect(lent.ownerView).toContain(APP_AGENT_SLATE.stop);
     expect(lent.mainHeard).toBe(false);
   });
 });

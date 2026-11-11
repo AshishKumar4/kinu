@@ -2731,6 +2731,28 @@ export async function reopenedWorkspaceRunsTheDeployedBuild(target: FlowTarget):
   }
 }
 
+/**
+ * The page as it stands, kept in `KINU_FLOW_SHOTS` when a run names one: at both widths, in both modes, the open sheet
+ * left as it is. Evidence for a reader of the run, never a verdict.
+ */
+async function shoot(page: Page, name: string): Promise<void> {
+  const directory = process.env.KINU_FLOW_SHOTS;
+
+  if (directory === undefined || directory === '') return;
+  const viewport = page.viewport();
+
+  for (const [width, height, size] of [[1280, 860, 'desktop'], [390, 844, 'mobile']] as const) {
+    await page.setViewport({ width, height });
+
+    for (const mode of ['light', 'dark'] as const) {
+      await page.evaluate(`document.documentElement.dataset.mode = ${JSON.stringify(mode)}`);
+      await page.screenshot({ path: `${directory}/${name}-${size}-${mode}.png` });
+    }
+  }
+
+  if (viewport !== null) await page.setViewport(viewport);
+}
+
 /** Where the app-agent rows' app lives: its files, written into a fresh workspace of the row's. */
 async function appAgentWorkspace(target: FlowTarget, subject: string): Promise<string> {
   const workspace = await createFlowWorkspace(target, subject);
@@ -2909,9 +2931,31 @@ export interface AppAgentLentVerdict {
   readonly sheet: AssistantSheet | null;
   /** Their ask once they continued anonymously. */
   readonly anonymous: AppAsked;
-  /** What the owner's share sheet reads of it. */
+  /** What the owner's share sheet reads of it, and what its chat list draws once opened. */
   readonly owner: { readonly chats: number; readonly said: string };
+  readonly ownerView: string;
   readonly mainHeard: boolean;
+}
+
+/** The owner opens the app's share sheet, its chats with the assistant, and the newest one: what its transcript draws. */
+async function ownerOpensTheChat(target: FlowTarget, workspace: string): Promise<string> {
+  const page = await signedInPage(target.browser, target);
+
+  try {
+    await page.goto(`${target.origin}/slates`, { waitUntil: 'load' });
+    await until(page, 'the app\'s tile in Slates', `document.querySelector(${JSON.stringify(appAgentTile(workspace))}) !== null`);
+    await pressRowMenu(page, appAgentTile(workspace), '[data-drive-share-slate]');
+    await until(page, 'the share\'s chats', 'document.querySelector(\'[role="dialog"] [data-live-share-chats] summary\') !== null');
+    await page.click('[role="dialog"] [data-live-share-chats] summary');
+    await until(page, 'a chat in the list', 'document.querySelector(\'[role="dialog"] [data-live-share-chat]\') !== null');
+    await page.click('[role="dialog"] [data-live-share-chat]');
+    await until(page, 'the chat\'s transcript', `(document.querySelector('[role="dialog"] [data-live-share-transcript]')?.textContent ?? '').includes(${JSON.stringify(APP_AGENT_SLATE.stop)})`);
+    await shoot(page, 'owner-chat-view');
+
+    return v.parse(v.string(), await page.evaluate('document.querySelector(\'[role="dialog"] [data-live-share-transcript]\')?.textContent ?? ""'));
+  } finally {
+    await page.close();
+  }
 }
 
 /**
@@ -2940,6 +2984,7 @@ export async function appAgentAnswersALentVisitor(target: FlowTarget): Promise<A
     await until(page, 'the share page\'s sheet', 'document.querySelector(\'[role="dialog"]\') !== null');
     const sheet = await openSheet(page);
 
+    await shoot(page, 'lent-identity-sheet');
     await page.click('[role="dialog"] [data-assistant-anonymous]');
     await until(page, 'the sheet to close', 'document.querySelector(\'[role="dialog"]\') === null');
     // The frame goes through the share host's exchange, which names this browser, and back to the app.
@@ -2948,14 +2993,16 @@ export async function appAgentAnswersALentVisitor(target: FlowTarget): Promise<A
     await waitOn(page, 'the app back after the exchange', frame.waitForFunction('!location.pathname.startsWith("/__kinu/") && document.querySelector("[data-ask]") !== null', { polling: 100 }));
     const anonymous = await askTheApp(page, frame);
 
+    await shoot(page, 'lent-visitor-answered');
     await context.close();
     const owner = await ownerReadsChats(target, workspace, share);
+    const ownerView = await ownerOpensTheChat(target, workspace);
     const kinu = await appInKinu(target, workspace);
     const heard = await mainHeard(kinu.page);
 
     await kinu.page.close();
 
-    return { workspace, first, sheet, anonymous, owner, mainHeard: heard };
+    return { workspace, first, sheet, anonymous, owner, ownerView, mainHeard: heard };
   } finally {
     if (share !== null) await revokeFlowShare(target, workspace, share);
     await removeFlowWorkspace(target, workspace);
@@ -2999,6 +3046,8 @@ export async function appAgentAnswersAVisitorOnTheirOwn(target: FlowTarget): Pro
     await until(away, 'the share page\'s sheet', 'document.querySelector(\'[role="dialog"]\') !== null');
     const signInSheet = await openSheet(away);
 
+    await shoot(away, 'own-sign-in-sheet');
+
     await context.close();
     const page = await signedInPage(target.browser, visitor);
     const frame = await appOnItsLink(page, made.link);
@@ -3006,6 +3055,8 @@ export async function appAgentAnswersAVisitorOnTheirOwn(target: FlowTarget): Pro
 
     await until(page, 'the consent sheet', 'document.querySelector("[data-consent-allow]") !== null');
     const consentSheet = await openSheet(page);
+
+    await shoot(page, 'own-consent-sheet');
 
     await page.click('[data-consent-allow]');
     await until(page, 'the consent to be kept', 'document.querySelector(\'[role="dialog"]\') === null');
