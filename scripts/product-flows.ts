@@ -2773,6 +2773,9 @@ export interface AppAsked {
   readonly refused: string;
 }
 
+/** How long the share page takes to open its sheet once the app's ask was refused: one read of the share. */
+const SHEET_OPENS_MS = 10_000;
+
 /** How long one ask of the app's assistant may take on the scripted model: a few model steps and one app call. */
 const ASK_SETTLES_MS = 90_000;
 
@@ -3144,7 +3147,13 @@ export interface AppAgentFlipVerdict {
 async function askAndRead(page: Page, frame: Frame): Promise<FlipAsked> {
   const asked = await askTheApp(page, frame);
 
-  if (asked.reply === '') await until(page, 'the share page\'s sheet', 'document.querySelector(\'[role="dialog"]\') !== null');
+  // A refused ask opens a sheet; one that never settled may open none, and the verdict reads that, after a moment's wait.
+  if (asked.reply === '') {
+    const giveUpAt = v.parse(v.number(), await page.evaluate('performance.now()')) + SHEET_OPENS_MS;
+
+    await until(page, 'the share page\'s sheet', `document.querySelector('[role="dialog"]') !== null || performance.now() > ${String(giveUpAt)}`);
+  }
+
   const sheet = await openSheet(page);
   const lentBar = v.parse(v.boolean(), await page.evaluate('document.querySelector("[data-shared-lent]") !== null'));
 
