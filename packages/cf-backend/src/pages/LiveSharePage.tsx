@@ -7,7 +7,7 @@
  * site, so the ticket's cookie reaches it inside the frame.
  */
 import { Button } from "@/components/ui/Button";
-import { APP_AGENT_CONSENT, appAgentConsent, readSlateIdentityAsk, slateFrameSrc, VIEWER_EXCHANGE_PATH, type LiveShareOpen } from "@kinu.run/core";
+import { APP_AGENT_CONSENT, appAgentConsent, readSlateIdentityAsk, slateFrameSrc, VIEWER_EXCHANGE_PATH, type LiveShareOpen, type ShareMode } from "@kinu.run/core";
 import { detachPromise } from "@kinu.run/core/obs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
@@ -16,7 +16,7 @@ import { Loader } from "@/components/ui/Loader";
 import { useSlateHostContext } from "@/components/slates/InlineSlate";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { usePartHost } from "@/hooks/use-part-host";
-import { openLiveShare } from "@/lib/shared-api";
+import { acknowledgeShare, openLiveShare } from "@/lib/shared-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { signInAndReturn } from "@/lib/sign-in";
 import { Notice } from "@/components/ui/Notice";
@@ -27,29 +27,52 @@ import { AssistantConsentDecision } from "@/components/sharing/PartDecisions";
 /** What a share's visitor must do before its app agent answers them (core slates/app-agent.ts). */
 type AssistantAsk =
   | { readonly kind: "identity" }
+  | { readonly kind: "lent" }
   | { readonly kind: "sign-in" }
-  | { readonly kind: "consent"; readonly slate: string; readonly revision: string; readonly changed: boolean };
+  | { readonly kind: "consent"; readonly slate: string; readonly revision: string; readonly reason: ConsentReason };
+
+/** Why the visitor is asked to let the assistant use their models: first, after its code changed, or after the share did. */
+type ConsentReason = "new" | "code" | "mode";
+
+/** How the share lends now, as its page last read it, and what its visitor must accept before they ask again. */
+interface AssistantState {
+  readonly mode: ShareMode | null;
+  readonly ask: AssistantAsk | null;
+}
+
+/** Allowed at this revision, it is the share that changed; allowed at another, the code; else it is the first ask. */
+function consentReason(current: boolean, earlier: boolean): ConsentReason {
+  if (current) return "mode";
+
+  return earlier ? "code" : "new";
+}
 
 /**
- * Read from Kinu as the share stands now, never from the app's page, which only says that its visitor must act: say who
- * they are where the owner lends their model, else sign in and let it use theirs, at this revision of its code.
+ * Read from Kinu as the share stands now, never from the app's page, which only says that its visitor must act. On the
+ * owner's model: say who they are, or, signed in, accept that the owner reads it. On their own: sign in, then let it use
+ * their models at this revision of its code. Each, for how the share lends now: a share that changed asks again.
  */
-async function assistantAsk(workspace: string, share: string): Promise<AssistantAsk | null> {
+async function assistantState(workspace: string, share: string): Promise<AssistantState> {
   const now = await openLiveShare({ workspace, share });
 
-  if (now === null || !now.signedIn) return now?.mode === "owner" ? { kind: "identity" } : { kind: "sign-in" };
+  if (now === null) return { mode: null, ask: { kind: "sign-in" } };
 
-  if (now.mode === "owner") return null;
+  if (!now.signedIn) return { mode: now.mode, ask: now.mode === "owner" ? { kind: "identity" } : { kind: "sign-in" } };
+
+  if (now.mode === "owner") return { mode: now.mode, ask: now.acknowledged === "owner" ? null : { kind: "lent" } };
   const given = (await readConsents(workspace, now.slate)).filter((consent) => consent.server === APP_AGENT_CONSENT);
+  const current = given.some((consent) => consent.revision === now.revision);
 
-  return given.some((consent) => consent.revision === now.revision) ? null : { kind: "consent", slate: now.slate, revision: now.revision, changed: given.length > 0 };
+  if (current && now.acknowledged === "own") return { mode: now.mode, ask: null };
+
+  return { mode: now.mode, ask: { kind: "consent", slate: now.slate, revision: now.revision, reason: consentReason(current, given.length > 0) } };
 }
 
 /**
  * The share's slate, framed with its host context as the owner's previews frame it, so its page knows the app it answers
  * to and frames its parts from; and the parts it hosts, a decision opening over it.
  */
-function SharedSlate({ workspace, share, opened }: { workspace: string; share: string; opened: LiveShareOpen }) {
+function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; share: string; opened: LiveShareOpen; onMode: (mode: ShareMode) => void }) {
   const frame = useRef<HTMLIFrameElement | null>(null);
   const decision = usePartHost({ workspace, slate: opened.slate, title: opened.title, slateFrame: frame });
   const context = useSlateHostContext("pane", "window" in globalThis ? window.innerWidth : 0);
@@ -57,6 +80,15 @@ function SharedSlate({ workspace, share, opened }: { workspace: string; share: s
   // A snapshot, as the previews' is: a theme flip after it never reloads the slate.
   const src = useMemo(() => slateFrameSrc(opened.url, contextRef.current), [opened.url]);
   const [asking, setAsking] = useState<AssistantAsk | null>(null);
+
+  // The share as it stands now: the bar says how it lends, and the sheet asks what is needed for that.
+  const reread = useCallback(async () => {
+    const state = await assistantState(workspace, share);
+
+    if (state.mode !== null) onMode(state.mode);
+    setAsking(state.ask);
+  }, [workspace, share, onMode]);
+
   // Where the frame goes once its visitor continues anonymously: the share's host gives this browser an id, then the app.
   const [anonymous, setAnonymous] = useState<string | null>(null);
 
@@ -64,13 +96,19 @@ function SharedSlate({ workspace, share, opened }: { workspace: string; share: s
     const origin = new URL(opened.url).origin;
 
     const heard = (event: MessageEvent) => {
-      if (readSlateIdentityAsk(event, frame.current?.contentWindow, origin)) detachPromise(async () => { setAsking(await assistantAsk(workspace, share)); });
+      if (readSlateIdentityAsk(event, frame.current?.contentWindow, origin)) detachPromise(async () => { await reread(); });
     };
 
     window.addEventListener("message", heard);
 
     return () => window.removeEventListener("message", heard);
-  }, [opened.url, workspace, share]);
+  }, [opened.url, reread]);
+
+  /** Accepted as the sheet said: kept for how the share lends now, or, changed meanwhile, read again. */
+  const accept = (mode: ShareMode): void => detachPromise(async () => {
+    if (await acknowledgeShare({ workspace, share, mode })) setAsking(null);
+    else await reread();
+  });
 
   const continueAnonymously = (): void => {
     const exchange = new URL(VIEWER_EXCHANGE_PATH, opened.url);
@@ -85,12 +123,13 @@ function SharedSlate({ workspace, share, opened }: { workspace: string; share: s
       <iframe ref={frame} src={anonymous ?? src} title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
       {decision}
       {asking?.kind === "identity" && <IdentitySheet onClose={() => setAsking(null)} onAnonymous={continueAnonymously} />}
+      {asking?.kind === "lent" && <LentSheet onClose={() => setAsking(null)} onContinue={() => accept("owner")} />}
       {asking?.kind === "sign-in" && <SignInSheet onClose={() => setAsking(null)} />}
       {asking?.kind === "consent" && (
-        <AssistantConsentDecision slate={opened.title} changed={asking.changed} onClose={() => setAsking(null)}
+        <AssistantConsentDecision slate={opened.title} reason={asking.reason} onClose={() => setAsking(null)}
           onAllow={() => detachPromise(async () => {
             await giveConsent(appAgentConsent(workspace, asking.slate, asking.revision));
-            setAsking(null);
+            accept("own");
           })} />
       )}
     </>
@@ -109,6 +148,21 @@ function IdentitySheet({ onClose, onAnonymous }: { onClose: () => void; onAnonym
         </>
       )}>
       <p className="t-body p-text-2">This app&apos;s assistant runs on its owner&apos;s model, and its owner can read your conversation. Sign in, or continue anonymously: this browser keeps your conversation for 30 days.</p>
+    </Modal>
+  );
+}
+
+/** Signed in on My access: the visitor accepts that the assistant runs on the owner's model, who reads the chat. */
+function LentSheet({ onClose, onContinue }: { onClose: () => void; onContinue: () => void }) {
+  return (
+    <Modal title="Its owner can read this chat" width="md" onClose={onClose}
+      footer={(
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose}>Not now</Button>
+          <Button variant="primary" size="sm" data-assistant-continue onClick={onContinue}>Continue</Button>
+        </>
+      )}>
+      <p className="t-body p-text-2">This app&apos;s assistant runs on its owner&apos;s model, and its owner can read your conversation with it. Nothing you asked was sent yet.</p>
     </Modal>
   );
 }
@@ -144,6 +198,9 @@ export default function LiveSharePage() {
   const open = useCallback(() => openLiveShare({ workspace, share }), [workspace, share]);
   const { resource } = useAsyncResource(open);
   const opened = resource.status === "ready" ? resource.value : null;
+  // How the share lends as last read: at load, then each time its page asks again.
+  const [mode, setMode] = useState<ShareMode | null>(null);
+  const lends = mode ?? opened?.mode ?? null;
   const signedOut = resource.status === "ready" && resource.value === null;
   const err = resource.status === "error" ? resource.message : null;
 
@@ -152,9 +209,9 @@ export default function LiveSharePage() {
       <header className="flex h-11 shrink-0 items-center gap-3 border-b p-border px-4">
         <a href="/" aria-label="Kinu home" className="flex shrink-0 items-center"><KinuLogo /></a>
         <span className="t-item min-w-0 flex-1 truncate" data-shared-title>{opened?.title ?? "Shared slate"}</span>
-        {opened?.mode === "owner" && <span className="t-meta min-w-0 p-text-3" data-shared-lent>Its assistant runs on its owner&apos;s model, and they can read your chat with it.</span>}
+        {lends === "owner" && <span className="t-meta min-w-0 p-text-3" data-shared-lent>Its assistant runs on its owner&apos;s model, and they can read your chat with it.</span>}
       </header>
-      {opened !== null && <SharedSlate workspace={workspace} share={share} opened={opened} />}
+      {opened !== null && <SharedSlate workspace={workspace} share={share} opened={opened} onMode={setMode} />}
       {signedOut && <SignInToOpen />}
       {opened === null && !signedOut && err === null && <div className="flex flex-1 items-center justify-center"><Loader size="base" /></div>}
       {err !== null && <main className="mx-auto w-full max-w-3xl px-6 py-8"><Notice tone="danger">{err}</Notice></main>}

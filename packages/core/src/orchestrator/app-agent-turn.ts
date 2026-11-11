@@ -4,7 +4,7 @@
  * payer's effort and fallbacks. Its one tool is the app's functions. Each step is admitted by the ask's session first,
  * and its messages are kept, and its spend told, as it ends.
  */
-import { isStepCount, type ModelMessage } from 'ai';
+import type { ModelMessage } from 'ai';
 import { runChat, type ChatOptions } from '../chat';
 import type { ModelCallReport } from '../events/model-call';
 import { normalizeUsage } from '../usage';
@@ -29,9 +29,6 @@ export interface AppAgentTurn {
   readonly report: (report: ModelCallReport) => void;
 }
 
-/** The most steps one ask may take: its calls are the app's functions, and whoever pays for them is not watching each. */
-const APP_AGENT_STEPS = 16;
-
 export async function runAppAgentTurn(turn: AppAgentTurn): Promise<void> {
   const { chat, session } = turn;
   let wrote = false;
@@ -43,7 +40,6 @@ export async function runAppAgentTurn(turn: AppAgentTurn): Promise<void> {
     system: turn.system,
     history: [...turn.history, turn.asked],
     tools: { [APP_AGENT_TOOL]: appAgentTool(session) },
-    stopWhen: isStepCount(APP_AGENT_STEPS),
     // The share it was asked on admits each step as it stands then: a revoke, a mode change or a paused day stops it.
     paceStep: async () => {
       await session.admit();

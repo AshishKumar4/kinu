@@ -21,6 +21,7 @@ import {
 } from './sharing';
 import { admitNestedViewerCall, routeViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, type SlateCall, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
 import { ANONYMOUS_SUBJECT_PREFIX, appAgentVisitorPayer, type AppAgentPayer } from './app-agent';
+import type { ShareMode } from './share-modes';
 
 /** Every signed-in viewer, where the deployment keeps no key to tell them apart by. */
 const SIGNED_IN_VIEWER = 'viewer';
@@ -242,6 +243,8 @@ export class SlateShareViewers {
   ask(input: {
     readonly id: string;
     readonly viewer: SlateViewer;
+    /** What the visitor last acknowledged of how the share lends (app-agent.ts `acknowledgedMode`). */
+    readonly acknowledged: ShareMode | null;
     readonly run: (payer: AppAgentPayer, share: LiveShareRecord) => Promise<SlateSurfaceResult>;
   }): Promise<SlateCallResult> {
     return settle(Effect.gen({ self: this }, function* () {
@@ -261,6 +264,12 @@ export class SlateShareViewers {
           const why = payer.needs === 'identity' ? 'Sign in, or continue anonymously, to talk to this app\'s assistant' : 'Sign in to talk to this app\'s assistant: it answers on your own models';
 
           return { ok: false as const, ...refusalOf(new KinuError('denied', why)), needs: 'identity' as const };
+        }
+
+        // Run only under how the share lends now as the visitor accepted it: a share whose mode changed since asks them
+        // again, before anything of theirs runs or is kept.
+        if (input.acknowledged !== share.mode) {
+          return { ok: false as const, ...refusalOf(new KinuError('denied', 'This app\'s assistant changed how it answers you: see what changed first')), needs: 'identity' as const };
         }
 
         // Signed-in visitors this deployment cannot tell apart would share one conversation the owner lends.

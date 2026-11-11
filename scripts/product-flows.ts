@@ -22,7 +22,7 @@
  */
 import type { Frame, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { AccountMemoryProposalSchema, APP_ROUTES, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, LIVE_SHARE_CHAT_PATH, LIVE_SHARE_CHATS_PATH, PERSONAL_ASSISTANT_ID, ShareChatsSchema, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, APP_ROUTES, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, LIVE_SHARE_CHAT_PATH, LIVE_SHARE_CHATS_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, PERSONAL_ASSISTANT_ID, ShareChatsSchema, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
@@ -2851,15 +2851,16 @@ async function appOnItsLink(page: Page, link: string): Promise<Frame> {
 export interface AssistantSheet {
   readonly signIn: boolean;
   readonly anonymous: boolean;
+  readonly continue: boolean;
   readonly allow: boolean;
 }
 
 async function openSheet(page: Page): Promise<AssistantSheet | null> {
-  return v.parse(v.nullable(v.object({ signIn: v.boolean(), anonymous: v.boolean(), allow: v.boolean() })), await page.evaluate(`(() => {
+  return v.parse(v.nullable(v.object({ signIn: v.boolean(), anonymous: v.boolean(), continue: v.boolean(), allow: v.boolean() })), await page.evaluate(`(() => {
     const dialog = document.querySelector('[role="dialog"]');
     if (dialog === null) return null;
     const has = (marker) => dialog.querySelector('[' + marker + ']') !== null;
-    return { signIn: has('data-assistant-sign-in'), anonymous: has('data-assistant-anonymous'), allow: has('data-consent-allow') };
+    return { signIn: has('data-assistant-sign-in'), anonymous: has('data-assistant-anonymous'), continue: has('data-assistant-continue'), allow: has('data-consent-allow') };
   })()`));
 }
 
@@ -3079,6 +3080,104 @@ export async function appAgentAnswersAVisitorOnTheirOwn(target: FlowTarget): Pro
     await kinu.page.close();
 
     return { workspace, signedOut, signInSheet, beforeConsent, consentSheet, visitor: asked, withdrawn, owner, mainHeard: heard };
+  } finally {
+    if (share !== null) await revokeFlowShare(target, workspace, share);
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+/** Sets how a share of the row's lends, as its owner's share sheet does: My access approved at the app's revision now. */
+async function setFlowShareMode(target: FlowTarget, workspace: string, share: string, mode: 'own' | 'owner'): Promise<void> {
+  const headers = { ...webHeaders(target.identity), 'content-type': 'application/json' };
+  const opened = await fetch(`${target.origin}${LIVE_SHARE_OPEN_PATH}`, { method: 'POST', headers, body: JSON.stringify({ workspace, share }) });
+
+  if (!opened.ok) throw new Error(`reading the share answered ${String(opened.status)}`);
+  const { revision } = v.parse(LiveShareOpenSchema, await opened.json());
+  const body = mode === 'own' ? { workspace, share, mode } : { workspace, share, mode, revision, approved: [] };
+  const set = await fetch(`${target.origin}${LIVE_SHARE_MODE_PATH}`, { method: 'POST', headers, body: JSON.stringify(body) });
+
+  if (!set.ok) throw new Error(`setting the share to ${mode} answered ${String(set.status)}: ${await set.text()}`);
+}
+
+/** What the visitor's page shows after one ask: the app's answer, the sheet over it, and whether its bar says the owner reads. */
+export interface FlipAsked {
+  readonly asked: AppAsked;
+  readonly sheet: AssistantSheet | null;
+  readonly lentBar: boolean;
+}
+
+export interface AppAgentFlipVerdict {
+  readonly workspace: string;
+  /** On the visitor's own access, consented: their answer. */
+  readonly own: AppAsked;
+  /** The owner switched to My access with the page open: the next ask, and the owner's chats then. */
+  readonly toLent: FlipAsked;
+  readonly chatsBeforeAccepting: number;
+  /** Accepted: the ask after, and the owner's chats then. */
+  readonly lent: FlipAsked;
+  readonly chatsAfterAccepting: number;
+  /** Switched back to their own access: the next ask. */
+  readonly backToOwn: FlipAsked;
+}
+
+/** One ask on the open page, and what it shows once its sheet, if any, is up. */
+async function askAndRead(page: Page, frame: Frame): Promise<FlipAsked> {
+  const asked = await askTheApp(page, frame);
+
+  if (asked.reply === '') await until(page, 'the share page\'s sheet', 'document.querySelector(\'[role="dialog"]\') !== null');
+  const sheet = await openSheet(page);
+  const lentBar = v.parse(v.boolean(), await page.evaluate('document.querySelector("[data-shared-lent]") !== null'));
+
+  return { asked, sheet, lentBar };
+}
+
+/**
+ * Row: a signed-in visitor chats on their own model; the owner switches the share to My access with the page open. The
+ * visitor's next ask runs nothing until they accept that the owner reads it, and the owner's chat list stays empty until
+ * then; switched back, the next ask asks for their consent again. Red before the ask was bound to the mode its visitor
+ * accepted: the next ask ran on the owner's model, into a chat the owner reads, under a page that still said private.
+ */
+export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<AppAgentFlipVerdict> {
+  const workspace = await appAgentWorkspace(target, 'app-agent-flip');
+  let share: string | null = null;
+  const visitor = { origin: target.origin, identity: { ...target.identity, account: 'visitor' as const } };
+
+  try {
+    // Opened once in Kinu first: My access is approved over a built version of the app.
+    const opened = await appInKinu(target, workspace);
+
+    await waitOn(opened.page, 'the app\'s page to draw', opened.frame.waitForFunction('document.querySelector("[data-ask]") !== null', { polling: 100 }));
+    await opened.page.close();
+    const made = await shareTheApp(target, workspace, 'own');
+
+    share = made.share;
+    const page = await signedInPage(target.browser, visitor);
+    const frame = await appOnItsLink(page, made.link);
+
+    await askTheApp(page, frame);
+    await until(page, 'the consent sheet', 'document.querySelector("[data-consent-allow]") !== null');
+    await page.click('[data-consent-allow]');
+    await until(page, 'the consent to be kept', 'document.querySelector(\'[role="dialog"]\') === null');
+    const own = await askTheApp(page, frame);
+
+    await setFlowShareMode(target, workspace, share, 'owner');
+    const toLent = await askAndRead(page, frame);
+
+    await shoot(page, 'flip-to-lent-sheet');
+    const chatsBeforeAccepting = (await ownerReadsChats(target, workspace, share)).chats;
+
+    await page.click('[role="dialog"] [data-assistant-continue]');
+    await until(page, 'the sheet to close', 'document.querySelector(\'[role="dialog"]\') === null');
+    const lent = await askAndRead(page, frame);
+    const chatsAfterAccepting = (await ownerReadsChats(target, workspace, share)).chats;
+
+    await setFlowShareMode(target, workspace, share, 'own');
+    const backToOwn = await askAndRead(page, frame);
+
+    await shoot(page, 'flip-to-own-sheet');
+    await page.close();
+
+    return { workspace, own, toLent, chatsBeforeAccepting, lent, chatsAfterAccepting, backToOwn };
   } finally {
     if (share !== null) await revokeFlowShare(target, workspace, share);
     await removeFlowWorkspace(target, workspace);

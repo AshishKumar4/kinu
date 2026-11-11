@@ -198,9 +198,21 @@ export type LiveShareListingBody = v.InferOutput<typeof LiveShareListingBodySche
  *  at which revision of its code, which its page asks its visitor about before the app agent answers them. */
 export const LIVE_SHARE_OPEN_PATH = '/api/shared/live/open';
 
-export const LiveShareOpenSchema = v.object({ url: v.string(), slate: v.string(), title: v.string(), mode: ShareModeSchema, revision: v.string(), signedIn: v.boolean() });
+export const LiveShareOpenSchema = v.object({
+  url: v.string(), slate: v.string(), title: v.string(), mode: ShareModeSchema, revision: v.string(), signedIn: v.boolean(),
+  /** What this signed-in person last acknowledged of how it lends (app-agent.ts `ShareDisclosures`); null for none. */
+  acknowledged: v.nullable(ShareModeSchema),
+});
 
 export type LiveShareOpen = v.InferOutput<typeof LiveShareOpenSchema>;
+
+/**
+ * `POST`, signed in: the person acknowledges how a share lends now (`mode`), as its page told them; refused when it
+ * lends otherwise by then. Kinu's own share page sends it, never the app's.
+ */
+export const LIVE_SHARE_ACKNOWLEDGE_PATH = '/api/shared/live/acknowledge';
+
+export const LiveShareAcknowledgeSchema = v.object({ workspace: v.string(), share: v.string(), mode: ShareModeSchema });
 
 /** `POST`, its owner's: the My-access conversations of one share (app-agent.ts), newest first. */
 export const LIVE_SHARE_CHATS_PATH = '/api/shared/live/chats';

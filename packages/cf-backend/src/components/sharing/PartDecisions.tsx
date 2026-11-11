@@ -62,19 +62,26 @@ export function ConsentDecision({ slate, ask, changed, onAllow, onClose }: {
   );
 }
 
+/** The consent sheet's title, by why it is asked: first, after the app's code changed, or after its share did. */
+const ASSISTANT_CONSENT_TITLES = {
+  new: (slate: string) => `Let ${slate}'s assistant use your models?`,
+  code: (slate: string) => `${slate} changed since you allowed its assistant`,
+  mode: (slate: string) => `${slate}'s assistant now answers on your models`,
+} as const;
+
 /**
  * Letting this app's assistant answer the visitor on their own models (core slates/app-agent.ts), at this revision of
- * its code; `changed`, when they allowed an earlier one.
+ * its code; `reason` says why it is asked again, when it is.
  */
-export function AssistantConsentDecision({ slate, changed, onAllow, onClose }: {
+export function AssistantConsentDecision({ slate, reason, onAllow, onClose }: {
   slate: string;
-  changed: boolean;
+  reason: keyof typeof ASSISTANT_CONSENT_TITLES;
   onAllow: () => void;
   onClose: () => void;
 }) {
   return (
-    <Modal title={changed ? `${slate} changed since you allowed its assistant` : `Let ${slate}'s assistant use your models?`} icon={<PlugIcon size={18} className="p-accent-fg" />} onClose={onClose}
-      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose} data-consent-dismiss>Not now</Button><Button variant="primary" size="sm" data-consent-allow onClick={onAllow}>{changed ? "Allow again" : "Allow"}</Button></div>}>
+    <Modal title={ASSISTANT_CONSENT_TITLES[reason](slate)} icon={<PlugIcon size={18} className="p-accent-fg" />} onClose={onClose}
+      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose} data-consent-dismiss>Not now</Button><Button variant="primary" size="sm" data-consent-allow onClick={onAllow}>{reason === "new" ? "Allow" : "Allow again"}</Button></div>}>
       <Lets
         yes={[
           <span key="model">Answer you on your own default model</span>,

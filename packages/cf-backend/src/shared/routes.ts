@@ -11,7 +11,7 @@ import {
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
   LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, type LiveShareBody,
-  LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema,
+  LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema, LIVE_SHARE_ACKNOWLEDGE_PATH, LiveShareAcknowledgeSchema,
   type OwnedLiveShare, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
@@ -132,6 +132,27 @@ sharedRoutes.post(LIVE_SHARE_LISTING_PATH, async (c) => shareChange({
 sharedRoutes.post(LIVE_SHARE_PREAPPROVALS_PATH, async (c) => shareChange({
   request: c.req.raw, env: c.env, identity: c.get('identity'), schema: SlatePreapprovalsBodySchema, usage: '{ workspace, slate }',
 }, async (owned, body) => owned.slatePreapprovals(body.slate)));
+
+// A share's signed-in visitor acknowledges how it lends, from Kinu's own share page: their asks run under that mode alone.
+sharedRoutes.post(LIVE_SHARE_ACKNOWLEDGE_PATH, async (c) => {
+  const identity = c.get('identity');
+  // Kinu's page alone: an app's frame on a share host is same-site, and must never acknowledge for its visitor.
+  const elsewhere = crossSiteRejection(c.req.raw);
+
+  if (elsewhere !== null) return elsewhere;
+
+  if (identity === null) return err(401, 'Sign in first');
+  const body = await safeJson(c.req.raw, LiveShareAcknowledgeSchema);
+
+  if (!body) return err(400, 'Body must be { workspace, share, mode }');
+  const viewer = await shareViewerKey(c.env, body.share, identity.userId);
+
+  if (viewer === null) return err(503, 'This deployment cannot tell its signed-in visitors apart');
+
+  return await workspaceOwner(c.env, body.workspace).acknowledgeShareMode(body.share, viewer, body.mode)
+    ? json({ body: { acknowledged: body.mode } })
+    : err(409, 'This share lends otherwise now: read it again');
+});
 
 // A My-access share's conversations with its app agent, which its owner reads in its share sheet, and one of them.
 sharedRoutes.post(LIVE_SHARE_CHATS_PATH, async (c) => shareChange({
@@ -402,5 +423,5 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity | nul
 
   if (url === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
 
-  return json({ body: { url, slate, title: reading.value.title, mode, revision: reading.value.revision, signedIn: identity !== null } satisfies LiveShareOpen });
+  return json({ body: { url, slate, title: reading.value.title, mode, revision: reading.value.revision, signedIn: identity !== null, acknowledged: reading.value.acknowledged } satisfies LiveShareOpen });
 }

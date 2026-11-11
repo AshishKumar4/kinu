@@ -1,7 +1,7 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
 import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf,
 } from '@kinu.run/core';
-import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateRevision as builtRevision, type AppAgentEntry, type ShareChat, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
+import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateRevision as builtRevision, type AppAgentEntry, type ShareChat, type ShareMode, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
  * OrchestratorAgent: the workspace's one Durable Object, every agent of it hosted inside as a logical actor.
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -9584,7 +9584,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    * here at most once an hour, so the Gallery is never written per open.
    */
   async openLiveShare(share: string, reader: string | null, viewer: string): Promise<SlateAnswer<LiveShareReading>> {
-    const { controller } = await this.slates();
+    const slates = await this.slates();
+    const { controller } = slates;
     const read = await controller.readLiveShareRecord(share);
 
     if (!read.ok) return read;
@@ -9601,7 +9602,9 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       }
     }
 
-    return { ...read, value: { ...read.value, admits, revision: builtRevision(controller.builds, record.slate) ?? '' } };
+    const acknowledged = reader === null ? null : slates.acknowledgedShareMode(share, viewer);
+
+    return { ...read, value: { ...read.value, admits, revision: builtRevision(controller.builds, record.slate) ?? '', acknowledged } };
   }
 
   /** A live share's tree, for a user forking it, held to the share's admission and grant. */
@@ -9629,6 +9632,11 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   /** DO-only, for the same reason: a slate's standing approvals, as its owner's share sheet lists them. */
   async slatePreapprovals(slate: string): Promise<SlateAnswer<SlatePreapprovals>> {
     return (await this.slates()).controller.slatePreapprovals(slate);
+  }
+
+  /** DO-only: a share's signed-in visitor, by the share's key for them, acknowledges how it lends, as its page told them. */
+  async acknowledgeShareMode(share: string, viewer: string, mode: ShareMode): Promise<boolean> {
+    return (await this.slates()).acknowledgeShareMode(share, viewer, mode);
   }
 
   /** DO-only, for the same reason: a My-access share's conversations with its app agent, as its owner's share sheet lists them. */

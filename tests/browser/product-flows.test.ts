@@ -23,7 +23,7 @@ import {
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
   computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindReturnsTheAsk, activityIsShown, slatePicturesFollowMode, claudeCodePageExchanges, type AgentPlanVerdict, type AgentReturnVerdict,
-  appAgentAnswersItsOwner, appAgentAnswersALentVisitor, appAgentAnswersAVisitorOnTheirOwn, type AppAgentOwnerVerdict, type AppAgentLentVerdict, type AppAgentOwnVerdict,
+  appAgentAnswersItsOwner, appAgentAnswersALentVisitor, appAgentAnswersAVisitorOnTheirOwn, appAgentFollowsTheShareMode, type AppAgentOwnerVerdict, type AppAgentLentVerdict, type AppAgentOwnVerdict, type AppAgentFlipVerdict,
   type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
   type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
@@ -813,7 +813,7 @@ describe(productFlowTestName('app-agent-own', 'on a default link a visitor signs
     const own = verdictOf(observed, 'app-agent-own');
 
     expect(own.signedOut.reply).toBe('');
-    expect(own.signInSheet).toEqual({ signIn: true, anonymous: false, allow: false });
+    expect(own.signInSheet).toEqual({ signIn: true, anonymous: false, continue: false, allow: false });
   });
 
   test('signed in, they are asked to let it use their models, then answered from the app\'s own function', () => {
@@ -837,6 +837,39 @@ describe(productFlowTestName('app-agent-own', 'on a default link a visitor signs
 
     expect(own.owner.chats).toBe(0);
     expect(own.mainHeard).toBe(false);
+  });
+});
+
+describe(productFlowTestName('app-agent-flip', 'a share that changes how it lends runs nothing until its visitor accepts the change'), () => {
+  let observed: AppAgentFlipVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('app-agent-flip', appAgentFollowsTheShareMode);
+  });
+
+  test('switched to My access with the page open, the next ask runs nothing and asks them to accept that the owner reads it', () => {
+    const flip = verdictOf(observed, 'app-agent-flip');
+
+    expect(flip.own.reply).toContain(APP_AGENT_SLATE.stop);
+    expect(flip.toLent.asked.reply).toBe('');
+    expect(flip.toLent.sheet).toMatchObject({ continue: true, allow: false });
+    expect(flip.toLent.lentBar).toBe(true);
+    expect(flip.chatsBeforeAccepting).toBe(0);
+  });
+
+  test('once they accept, the owner\'s model answers, into a chat the owner reads', () => {
+    const flip = verdictOf(observed, 'app-agent-flip');
+
+    expect(flip.lent.asked.reply).toContain(APP_AGENT_SLATE.stop);
+    expect(flip.chatsAfterAccepting).toBe(1);
+  });
+
+  test('switched back to their own access, the next ask asks for their consent again', () => {
+    const { backToOwn } = verdictOf(observed, 'app-agent-flip');
+
+    expect(backToOwn.asked.reply).toBe('');
+    expect(backToOwn.sheet).toMatchObject({ allow: true });
+    expect(backToOwn.lentBar).toBe(false);
   });
 });
 

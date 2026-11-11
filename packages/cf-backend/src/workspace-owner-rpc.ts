@@ -7,7 +7,7 @@ import type {
   BlueprintBundle, BlueprintFork, JsonValue, LiveShareRecord, OwnedLiveShare, OperationCaller, OperationListing, OperationResult, ShareViewerClaim, SlateAnswer,
   RoomService, SlateCallRequest, SlateCallResult, SlateFileChange, SlateOperation, SlateShareRecord, SlateSurfaceResult,
 } from '@kinu.run/core';
-import type { BlueprintReading, PartRunAnswer, PartRunRequest, PartShowRequest, ShareUser } from '@kinu.run/core/slates';
+import type { BlueprintReading, PartRunAnswer, PartRunRequest, PartShowRequest, ShareMode, ShareUser } from '@kinu.run/core/slates';
 import type { PartViewer } from './slates/part-runs';
 import type { ObjectNamespace } from '@kinu.run/core';
 
@@ -20,6 +20,8 @@ export interface LiveShareReading {
   readonly admits: boolean;
   /** Its slate's code's revision now, which a visitor's consent to its app agent names. */
   readonly revision: string;
+  /** What the signed-in reader last acknowledged of how it lends; null for none, or signed out. */
+  readonly acknowledged: ShareMode | null;
 }
 
 /** Slate operations made as a caller; the browser's `@callable slate` mints the root caller locally. */
@@ -53,6 +55,7 @@ export interface WorkspaceOwnerRpc {
   // The claim is built at the edge, never trusted.
   routeSlateShare(handle: string, claim: ShareViewerClaim, request: Request, pathname: string): Promise<Response>;
   openLiveShare(share: string, reader: string | null, viewer: string): Promise<SlateAnswer<LiveShareReading>>;
+  acknowledgeShareMode(share: string, viewer: string, mode: ShareMode): Promise<boolean>;
   galleryNeeds(share: string): Promise<SlateAnswer<RoomService[]>>;
   shareLiveWith(share: string, users: readonly ShareUser[]): Promise<SlateAnswer<OwnedLiveShare>>;
   // Fork flag and the caller's admission are checked in the owner's object, never trusted from the route.

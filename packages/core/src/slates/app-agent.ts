@@ -16,7 +16,7 @@ import type { SqlExec } from '../types/primitives';
 import type { Usage } from '../usage';
 import type { ReasoningEffort } from '../providers/reasoning-effort';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
-import { APP_AGENT_CONSENT, type ShareMode, type SlateConsent } from './share-modes';
+import { APP_AGENT_CONSENT, ShareModeSchema, type ShareMode, type SlateConsent } from './share-modes';
 import type { SlateCallResult } from './rpc';
 import { AGENT_ASK_MEMBER } from './members';
 import { slateCallAddress } from './surface';
@@ -73,6 +73,15 @@ export function appAgentKey(conversation: AppAgentConversation): string {
   const { payer, workspace, slate, share, subject } = conversation;
 
   return JSON.stringify(payer.kind === 'own' ? ['own', payer.userId, workspace, slate] : ['lent', payer.userId, workspace, slate, share, subject]);
+}
+
+/**
+ * How a share lends that its visitor was told and accepted, as their asks are held to it: an anonymous visitor accepted
+ * the owner's model when they continued anonymously, the one way to become one; a signed-in one by what they
+ * acknowledged last (`ShareDisclosures`). Null for none.
+ */
+export function acknowledgedMode(subject: string, recorded: ShareMode | null): ShareMode | null {
+  return subject.startsWith(ANONYMOUS_SUBJECT_PREFIX) ? 'owner' : recorded;
 }
 
 /** What a visitor must do before their ask can be answered: say who they are, or sign in. */
@@ -291,5 +300,32 @@ export class AppAgentChats {
   /** One forgotten, once its conversation ended. */
   forget(chat: LentChat): void {
     this.db.exec('DELETE FROM slate_agent_chats WHERE slate = ? AND share_id = ? AND viewer_subject = ?', chat.slate, chat.share, chat.subject);
+  }
+}
+
+const DisclosureRow = v.object({ mode: ShareModeSchema });
+
+/**
+ * What each signed-in visitor of a share last acknowledged of how it lends (`slate_share_disclosures`): the owner's model
+ * and their reading of it, or the visitor's own. Written by Kinu's own share page, never the app's, once the visitor
+ * accepts it; read at each ask, which runs only under the mode the share has now. Forgotten with the share or the person.
+ */
+export class ShareDisclosures {
+  constructor(private readonly db: SqlExec, private readonly now: () => number = () => Date.now()) {}
+
+  acknowledge(share: string, subject: string, mode: ShareMode): void {
+    this.db.exec('INSERT INTO slate_share_disclosures (share_id, viewer_subject, mode, acknowledged_at) VALUES (?, ?, ?, ?) '
+      + 'ON CONFLICT (share_id, viewer_subject) DO UPDATE SET mode = excluded.mode, acknowledged_at = excluded.acknowledged_at', share, subject, mode, this.now());
+  }
+
+  of(share: string, subject: string): ShareMode | null {
+    const [row] = this.db.exec('SELECT mode FROM slate_share_disclosures WHERE share_id = ? AND viewer_subject = ?', share, subject).toArray();
+
+    return row === undefined ? null : v.parse(DisclosureRow, row).mode;
+  }
+
+  forget(share: string, subject?: string): void {
+    if (subject === undefined) this.db.exec('DELETE FROM slate_share_disclosures WHERE share_id = ?', share);
+    else this.db.exec('DELETE FROM slate_share_disclosures WHERE share_id = ? AND viewer_subject = ?', share, subject);
   }
 }

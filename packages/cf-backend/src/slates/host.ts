@@ -4,8 +4,8 @@ import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateController, type SlateControllerPorts, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateStorageCall,
-  ROOT_SLATE_CALLER, shareCaller, slateAnswer, AppAgentChats, appAgentAsk, asksAppAgent, lentConversation, ownConversation, ownerConversation, slateRevision, visitorLabel,
-  type AppAgentAbout, type AppAgentConversation, type LentChat, type AppAgentPayer, type AppAgentSession, type ShareChat, type AppAgentEntry, type ServerSend, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateCallFrom, type SlateLaunch, type SlateLineage, type ToolContract,
+  ROOT_SLATE_CALLER, shareCaller, slateAnswer, AppAgentChats, ShareDisclosures, acknowledgedMode, appAgentAsk, asksAppAgent, lentConversation, ownConversation, ownerConversation, slateRevision, visitorLabel,
+  type AppAgentAbout, type AppAgentConversation, type LentChat, type ShareMode, type AppAgentPayer, type AppAgentSession, type ShareChat, type AppAgentEntry, type ServerSend, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateCallFrom, type SlateLaunch, type SlateLineage, type ToolContract,
 } from '@kinu.run/core/slates';
 import {
   ephemeralSlateAddress, ingressAdmitted, onceMoreIfNotAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
@@ -194,6 +194,7 @@ export class SlateHost {
     initEphemeralSlateTable((ddl) => { sql.exec(ddl); });
     initSlateUsageTable((ddl) => { sql.exec(ddl); });
     this.chats = new AppAgentChats(sql);
+    this.disclosures = new ShareDisclosures(sql);
     this.controller = new SlateController({
       workspace: deps.workspace, sql, builds: deps.builds, transaction: (body) => deps.ctx.storage.transactionSync(body),
       session: deps.session, apps: deps.apps,
@@ -463,6 +464,9 @@ export class SlateHost {
   /** The workspace's My-access conversations, which their owner may read (core slates/app-agent.ts). */
   private readonly chats: AppAgentChats;
 
+  /** What each signed-in visitor last acknowledged of how a share lends, which their asks are held to. */
+  private readonly disclosures: ShareDisclosures;
+
   /** Each share's asks whose replies are being written now: what its end stops at once. */
   private readonly openAsks = new Map<string, Map<string, AppAgentConversation>>();
 
@@ -574,6 +578,9 @@ export class SlateHost {
       async () => { await this.deps.appAgentObject?.(conversation).stop(); }, { share })));
     const slate = this.controller.live.get(share)?.slate;
 
+    // What each visitor acknowledged was of how it lent then: a share lending otherwise now asks them again.
+    this.disclosures.forget(share);
+
     if (slate !== undefined) await this.endChats(this.chats.of(share).map(({ subject }) => ({ slate, share, subject })));
   }
 
@@ -598,6 +605,8 @@ export class SlateHost {
 
   /** A deleted account's conversations the owner lent it here end: `viewers` names each share and its key for them. */
   private async forgetChatsOf(viewers: readonly { readonly share: string; readonly viewer: string }[]): Promise<void> {
+    for (const { share, viewer } of viewers) this.disclosures.forget(share, `viewer:${viewer}`);
+
     const chats = viewers.flatMap(({ share, viewer }): LentChat[] => {
       const slate = this.controller.live.get(share)?.slate;
       const chat = { slate: slate ?? '', share, subject: `viewer:${viewer}` };
@@ -621,6 +630,24 @@ export class SlateHost {
   /** The owner's own conversations with each app's agent end, as the workspace does; its shares' end with them. */
   async endOwnAppAgents(): Promise<void> {
     await this.endChats(this.chats.owners());
+  }
+
+  /**
+   * A signed-in visitor (`viewer`, the share's key for them) acknowledges how `share` lends, as Kinu's share page told
+   * them: kept only while the share lends so; false when it lends otherwise by now, or is no more.
+   */
+  acknowledgeShareMode(share: string, viewer: string, mode: ShareMode): boolean {
+    const record = this.controller.live.get(share);
+
+    if (record === undefined || record.revokedAt !== null || record.mode !== mode) return false;
+    this.disclosures.acknowledge(share, `viewer:${viewer}`, mode);
+
+    return true;
+  }
+
+  /** What that visitor last acknowledged of how `share` lends; null for nothing yet. */
+  acknowledgedShareMode(share: string, viewer: string): ShareMode | null {
+    return this.disclosures.of(share, `viewer:${viewer}`);
   }
 
   /** `share`'s My-access conversations, newest first, for its owner's share sheet. */
@@ -749,7 +776,11 @@ export class SlateHost {
     // The app agent's own call asking it again would queue behind the very turn that waits on it.
     if (issued?.agent === id) return Effect.succeed(refused({ cause: new KinuError('denied', "agent.ask came from a call the app's assistant made, which waits on its answer: the assistant cannot ask itself") }));
 
-    if (viewer !== undefined) return viewerWords(async () => this.controller.viewers.ask({ id, viewer, run: async (payer, share) => this.visitorAsk(payer, share, viewer.subject, args) }), refused);
+    if (viewer !== undefined) {
+      const acknowledged = acknowledgedMode(viewer.subject, this.disclosures.of(viewer.share, viewer.subject));
+
+      return viewerWords(async () => this.controller.viewers.ask({ id, viewer, acknowledged, run: async (payer, share) => this.visitorAsk(payer, share, viewer.subject, args) }), refused);
+    }
 
     if (caller.share !== undefined) return Effect.succeed(refused({ cause: new KinuError('denied', `Slate ${id} runs for a share, and called out under no viewer's request`) }));
 

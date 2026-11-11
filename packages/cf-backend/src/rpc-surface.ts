@@ -385,6 +385,8 @@ const ORCHESTRATOR_METHODS = [
   // The owner's read of the conversations a My-access share's app agent had on their model (core slates/app-agent.ts).
   'shareChats',
   'shareChatTranscript',
+  // A share's signed-in visitor acknowledging how it lends, from Kinu's own share page (core slates/app-agent.ts).
+  'acknowledgeShareMode',
   // Worker-only: the mail router hands a filed arrival to the workspace it woke (mail/handler.ts), and the owner's
   // route a thread they sent it (mail/routes.ts).
   'mailArrived',
