@@ -7,7 +7,9 @@
  * site, so the ticket's cookie reaches it inside the frame.
  */
 import { Button } from "@/components/ui/Button";
-import { readSlateIdentityAsk, slateFrameSrc, VIEWER_EXCHANGE_PATH, type LiveShareOpen } from "@kinu.run/core";
+import { APP_AGENT_CONSENT, appAgentConsent, readSlateIdentityAsk, slateFrameSrc, VIEWER_EXCHANGE_PATH, type LiveShareOpen } from "@kinu.run/core";
+import { detach } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { useParams } from "react-router-dom";
@@ -20,19 +22,42 @@ import { useAsyncResource } from "@/hooks/use-async-resource";
 import { signInAndReturn } from "@/lib/sign-in";
 import { Notice } from "@/components/ui/Notice";
 import { Surface } from "@/components/ui/Surface";
+import { giveConsent, readConsents } from "@/lib/parts-api";
+import { AssistantConsentDecision } from "@/components/sharing/PartDecisions";
+
+/** What a share's visitor must do before its app agent answers them (core slates/app-agent.ts). */
+type AssistantAsk =
+  | { readonly kind: "identity" }
+  | { readonly kind: "sign-in" }
+  | { readonly kind: "consent"; readonly slate: string; readonly revision: string; readonly changed: boolean };
+
+/**
+ * Read from Kinu as the share stands now, never from the app's page, which only says that its visitor must act: say who
+ * they are where the owner lends their model, else sign in and let it use theirs, at this revision of its code.
+ */
+async function assistantAsk(workspace: string, share: string): Promise<AssistantAsk | null> {
+  const now = await openLiveShare({ workspace, share });
+
+  if (now === null || !now.signedIn) return now?.mode === "owner" ? { kind: "identity" } : { kind: "sign-in" };
+
+  if (now.mode === "owner") return null;
+  const given = (await readConsents(workspace, now.slate)).filter((consent) => consent.server === APP_AGENT_CONSENT);
+
+  return given.some((consent) => consent.revision === now.revision) ? null : { kind: "consent", slate: now.slate, revision: now.revision, changed: given.length > 0 };
+}
 
 /**
  * The share's slate, framed with its host context as the owner's previews frame it, so its page knows the app it answers
  * to and frames its parts from; and the parts it hosts, a decision opening over it.
  */
-function SharedSlate({ workspace, opened }: { workspace: string; opened: LiveShareOpen }) {
+function SharedSlate({ workspace, share, opened }: { workspace: string; share: string; opened: LiveShareOpen }) {
   const frame = useRef<HTMLIFrameElement | null>(null);
   const decision = usePartHost({ workspace, slate: opened.slate, title: opened.title, slateFrame: frame });
   const context = useSlateHostContext("pane", "window" in globalThis ? window.innerWidth : 0);
   const contextRef = useRef(context);
   // A snapshot, as the previews' is: a theme flip after it never reloads the slate.
   const src = useMemo(() => slateFrameSrc(opened.url, contextRef.current), [opened.url]);
-  const [asking, setAsking] = useState(false);
+  const [asking, setAsking] = useState<AssistantAsk | null>(null);
   // Where the frame goes once its visitor continues anonymously: the share's host gives this browser an id, then the app.
   const [anonymous, setAnonymous] = useState<string | null>(null);
 
@@ -40,32 +65,37 @@ function SharedSlate({ workspace, opened }: { workspace: string; opened: LiveSha
     const origin = new URL(opened.url).origin;
 
     const heard = (event: MessageEvent) => {
-      if (readSlateIdentityAsk(event, frame.current?.contentWindow, origin)) setAsking(true);
+      if (readSlateIdentityAsk(event, frame.current?.contentWindow, origin)) detach(Effect.map(Effect.promise(async () => assistantAsk(workspace, share)), setAsking));
     };
 
     window.addEventListener("message", heard);
 
     return () => window.removeEventListener("message", heard);
-  }, [opened.url]);
+  }, [opened.url, workspace, share]);
 
   const continueAnonymously = (): void => {
     const exchange = new URL(VIEWER_EXCHANGE_PATH, opened.url);
 
     exchange.searchParams.set("anonymous", "1");
     setAnonymous(slateFrameSrc(exchange.toString(), contextRef.current));
-    setAsking(false);
+    setAsking(null);
   };
 
   return (
     <>
       <iframe ref={frame} src={anonymous ?? src} title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
       {decision}
-      {asking && <IdentitySheet onClose={() => setAsking(false)} onAnonymous={continueAnonymously} />}
+      {asking?.kind === "identity" && <IdentitySheet onClose={() => setAsking(null)} onAnonymous={continueAnonymously} />}
+      {asking?.kind === "sign-in" && <SignInSheet onClose={() => setAsking(null)} />}
+      {asking?.kind === "consent" && (
+        <AssistantConsentDecision slate={opened.title} changed={asking.changed} onClose={() => setAsking(null)}
+          onAllow={() => detach(Effect.map(Effect.promise(async () => giveConsent(appAgentConsent(workspace, asking.slate, asking.revision))), () => setAsking(null)))} />
+      )}
     </>
   );
 }
 
-/** What a shared app asked of its visitor needs to know who asks: they sign in, or go on as this browser, anonymously. */
+/** The app's assistant on its owner's model needs to know who asks: they sign in, or go on as this browser, anonymously. */
 function IdentitySheet({ onClose, onAnonymous }: { onClose: () => void; onAnonymous: () => void }) {
   return (
     <Modal title="Say who's asking" width="md" onClose={onClose}
@@ -76,7 +106,22 @@ function IdentitySheet({ onClose, onAnonymous }: { onClose: () => void; onAnonym
           <Button variant="primary" size="sm" onClick={() => signInAndReturn()}>Sign in</Button>
         </>
       )}>
-      <p className="t-body p-text-2">This app talks to its owner&apos;s agent for you, and the owner sees the conversation. Sign in, or continue anonymously: this browser keeps your conversation for 30 days.</p>
+      <p className="t-body p-text-2">This app&apos;s assistant runs on its owner&apos;s model, and its owner can read your conversation. Sign in, or continue anonymously: this browser keeps your conversation for 30 days.</p>
+    </Modal>
+  );
+}
+
+/** The app's assistant on the visitor's own models needs their account: they sign in, and land back here. */
+function SignInSheet({ onClose }: { onClose: () => void }) {
+  return (
+    <Modal title="Sign in to use its assistant" width="md" onClose={onClose}
+      footer={(
+        <>
+          <Button variant="ghost" size="sm" onClick={onClose}>Not now</Button>
+          <Button variant="primary" size="sm" onClick={() => signInAndReturn()}>Sign in</Button>
+        </>
+      )}>
+      <p className="t-body p-text-2">This app&apos;s assistant answers on your own models, and your conversation stays in your account. Sign in to talk to it.</p>
     </Modal>
   );
 }
@@ -106,7 +151,7 @@ export default function LiveSharePage() {
         <a href="/" aria-label="Kinu home" className="flex shrink-0 items-center"><KinuLogo /></a>
         <span className="t-item min-w-0 flex-1 truncate" data-shared-title>{opened?.title ?? "Shared slate"}</span>
       </header>
-      {opened !== null && <SharedSlate workspace={workspace} opened={opened} />}
+      {opened !== null && <SharedSlate workspace={workspace} share={share} opened={opened} />}
       {signedOut && <SignInToOpen />}
       {opened === null && !signedOut && err === null && <div className="flex flex-1 items-center justify-center"><Loader size="base" /></div>}
       {err !== null && <main className="mx-auto w-full max-w-3xl px-6 py-8"><Notice tone="danger">{err}</Notice></main>}

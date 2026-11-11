@@ -23,6 +23,7 @@
   "request_renders",
   "slate_live_share_users",
   "slate_live_shares",
+  "slate_share_guests",
   "sleep_time_updates",
   "trial_turns",
   "turn_craft_usage",

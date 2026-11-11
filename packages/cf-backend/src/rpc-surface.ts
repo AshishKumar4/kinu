@@ -64,6 +64,9 @@ const USER_DO_METHODS = [
   'withdrawSlateConsent',
   'slatePartTool',
   'slatePartAi',
+  // An app agent's conversation object asking its payer's account, once per ask (app-agent-do.ts).
+  'appAgentGrant',
+  'appAgentSpent',
   'decideSlateEffect',
   'accountMemory_decide',
   'accountMemory_facts',
@@ -379,6 +382,9 @@ const ORCHESTRATOR_METHODS = [
   'slatePreapprovals',
   'withdrawSlatePreapproval',
   'galleryNeeds',
+  // The owner's read of the conversations a My-access share's app agent had on their model (core slates/app-agent.ts).
+  'shareChats',
+  'shareChatTranscript',
   // Worker-only: the mail router hands a filed arrival to the workspace it woke (mail/handler.ts), and the owner's
   // route a thread they sent it (mail/routes.ts).
   'mailArrived',

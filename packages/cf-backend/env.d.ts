@@ -2,6 +2,7 @@
 import type { OrchestratorAgent } from "./src/orchestrator";
 import type { KinuDevbox } from "./src/kinu-devbox";
 import type { UserDO } from "./src/user/user-do";
+import type { AppAgentDO } from "./src/app-agent-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { DeployRunDO } from "./src/deploy/deploy-do";
@@ -33,6 +34,8 @@ declare global {
     OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
     /** Per-user DO: profile + agent registry + credentials + defaults. */
     UserDO: DurableObjectNamespace<UserDO>;
+    /** One app agent's conversation, named by `appAgentKey` (app-agent-do.ts). */
+    APP_AGENT: DurableObjectNamespace<AppAgentDO>;
     /** Singleton DO: synthetic monitoring incidents and alert outbox. */
     MonitorDO: DurableObjectNamespace<MonitorDO>;
     /** Singleton admin control-plane index and audit log; reachable only via a capability derived from

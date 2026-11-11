@@ -43,7 +43,7 @@ function accountServices<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, w
  * A collaborator's slate AI call, priced as every model call is (`pricedModelCallEvent` over the account's own provider
  * catalog), kept in the account's spend, and counted with every model call.
  */
-function recordSlateAi<Id>(host: AccountSlateAiHost<Id>, workspace: string, report: ModelCallReport, pricing: ModelCatalogSession): void {
+export function recordSlateAi<Id>(host: Pick<AccountSlateAiHost<Id>, 'env' | 'spent'>, workspace: string, report: ModelCallReport, pricing: ModelCatalogSession): void {
   const event = pricedModelCallEvent(report, pricing);
   const spec = report.spec ?? '';
   const cut = spec.indexOf('/');
@@ -55,29 +55,44 @@ function recordSlateAi<Id>(host: AccountSlateAiHost<Id>, workspace: string, repo
   });
 }
 
-/** One `ai.run` or `ai.stream`, resolved and run as this account's own: no tier, model or key of the slate owner's. */
-export async function accountSlateAi<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
-  const { workspace } = request;
-
+/**
+ * The model this account's default role names for `tier` (its default tier without one), resolved as a turn of its own
+ * resolves it, its services and its own priced catalog with it.
+ */
+async function accountModel<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, workspace: string, tier: string | undefined)
+  : Promise<{ readonly services: OwnedModelServices<Id>; readonly pricing: ModelCatalogSession; readonly spec: string; readonly tier: string }> {
   // The rate is the account's own provider catalog's, read as a workspace reads its model's (`OrchestratorAgent.catalogEntry`).
   const pricing = new ModelCatalogSession({
     effectiveSpec: () => '', lookup: async (spec) => specModelInfo(services.providerRegistry().registry, services.providerRegistry().deps, spec), measured: () => null,
   });
 
-  const record = (report: ModelCallReport): void => { recordSlateAi(host, workspace, report, pricing); };
-
-  const services = accountServices(host, caller, workspace, record);
+  const services = accountServices(host, caller, workspace, (report) => { recordSlateAi(host, workspace, report, pricing); });
   const inputs = await loadProfileAuthorityInputs({ envelope: async () => host.catalog(caller), provider: async () => services.profileProviderSnapshot() });
 
   const profile = resolveTurnProfile({
-    ...inputs, roleId: DEFAULT_ROLE_ID, explicitTier: request.route.tier, workMode: 'build', availableTools: [], activeSkills: [],
+    ...inputs, roleId: DEFAULT_ROLE_ID, explicitTier: tier, workMode: 'build', availableTools: [], activeSkills: [],
   });
 
-  await pricing.warm([profile.tier.model]);
+  return { services, pricing, spec: profile.tier.model, tier: profile.tier.id };
+}
 
-  return slateAiAnswer(request.route, { spec: profile.tier.model, tier: profile.tier.id }, {
-    resolveModel: (spec) => services.resolveModel(spec), report: record, operations: () => {},
+/** One `ai.run` or `ai.stream`, resolved and run as this account's own: no tier, model or key of the slate owner's. */
+export async function accountSlateAi<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
+  const { workspace } = request;
+  const { services, pricing, spec, tier } = await accountModel(host, caller, workspace, request.route.tier);
+
+  await pricing.warm([spec]);
+
+  return slateAiAnswer(request.route, { spec, tier }, {
+    resolveModel: (named) => services.resolveModel(named), report: (report) => { recordSlateAi(host, workspace, report, pricing); }, operations: () => {},
   });
+}
+
+/** An app agent's model on this account (core slates/app-agent.ts): its default tier, and its credentials' revision. */
+export async function accountAppAgentModel<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, workspace: string): Promise<{ readonly spec: string; readonly tier: string; readonly credentialsRevision: number }> {
+  const { spec, tier } = await accountModel(host, caller, workspace, undefined);
+
+  return { spec, tier, credentialsRevision: await host.credentialsRevision(caller) };
 }
 
 /** The tally's usage columns, each with the `Usage` field it sums. */

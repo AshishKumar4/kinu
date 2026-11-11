@@ -220,8 +220,6 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   childSpoke(): Promise<void>;
   modelSaw(workspace: string, texts: readonly string[]): Promise<void>;
   callerObserved(): Promise<void>;
-  guestVisit(workspace: string, asks: readonly { readonly subject: string; readonly text: string }[]): Promise<import('./hire-shapes').GuestVisit>;
-  guestShareEnded(workspace: string): Promise<import('./hire-shapes').GuestVisit['guests']>;
   openHire(workspace: string, prompt: string): Promise<void>;
   reenter(workspace: string): Promise<void>;
   wakeReturned(workspace: string): Promise<void>;

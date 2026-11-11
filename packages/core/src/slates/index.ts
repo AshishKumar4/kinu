@@ -35,7 +35,11 @@ export { SIGNED_OUT_VIEWER, SlateLiveShareStore, initSlateLiveShareTables } from
 
 export { declareShareSpend } from './share-viewers';
 
-export { ANONYMOUS_SUBJECT_PREFIX, SlateShareGuests, guestAuthorization, identifiedOnlyBySource, type GuestAuthorization, type GuestPrincipal } from './guest';
+export {
+  ANONYMOUS_SUBJECT_PREFIX, SlateShareChats, appAgentAsk, asksAppAgent, appAgentConsented, appAgentKey, appAgentMessage,
+  appAgentSystem, appAgentTranscript, appAgentTurn, appAgentVisitorPayer, fittedHistory, identifiedOnlyBySource, visitorLabel,
+  type AppAgentAbout, type AppAgentConversation, type AppAgentEntry, type AppAgentGrant, type AppAgentNeeds, type AppAgentPayer, type AppAgentSession, type ShareChat,
+} from './app-agent';
 
 export { confinedTo } from './scoped-reader';
 
@@ -56,7 +60,7 @@ export { GalleryIndex, initGalleryTables } from './gallery';
 export { codecAdmits, CodecSchema, UNDECLARED, type Codec } from './codec';
 
 export {
-  GalleryListingSyncSchema, ShareModeSchema, SlateConsentSchema,
+  APP_AGENT_CONSENT, GalleryListingSyncSchema, ShareModeSchema, SlateConsentSchema, appAgentConsent,
   type GalleryCard, type GalleryListingSync, type ShareMode, type SlateConsent, type SlateRevision,
 } from './share-modes';
 

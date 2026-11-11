@@ -71,7 +71,7 @@ export function readSlateFrameMessage(
   return parsed.success ? { ...parsed.output, height: Math.min(parsed.output.height, SLATE_INLINE_HEIGHT_LIMIT) } : null;
 }
 
-/** A shared app's page tells its host that a call of its visitor's needs them to say who they are (slates/guest.ts). */
+/** A shared app's page tells its host that its visitor must act before the app agent answers them (app-agent.ts `needs`). */
 export const SLATE_NEEDS_IDENTITY_MESSAGE = 'needs-identity';
 
 const SlateIdentityAskSchema = v.strictObject({ kinu: v.literal(SLATE_NEEDS_IDENTITY_MESSAGE) });

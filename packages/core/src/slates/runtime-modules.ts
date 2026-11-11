@@ -137,8 +137,8 @@ export const slate = new Proxy(Object.create(null), {
   },
 });
 
-// A shared app's call that needs its visitor to say who they are tells the page's host, which asks them; the call still
-// fails, so the page says so its own way.
+// A shared app's call that needs its visitor to act first tells the page's host, which asks them; the call still fails,
+// so the page says so its own way.
 async function asked(call) {
   try {
     return await call;

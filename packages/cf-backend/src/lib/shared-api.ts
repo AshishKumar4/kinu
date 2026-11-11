@@ -4,6 +4,7 @@ import {
   BlueprintForkSchema, BlueprintViewSchema, SharedLibrarySchema, LiveShareCreatedSchema, OwnedLiveShareSchema, LIVE_SHARE_LISTING_PATH, LIVE_SHARE_MODE_PATH,
   LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen, LIVE_SHARE_PREAPPROVALS_PATH, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalsSchema,
   type SlatePreapprovals, type SlatePreapprovalWithdraw,
+  LIVE_SHARE_CHATS_PATH, ShareChatsSchema, LIVE_SHARE_CHAT_PATH, ShareChatTranscriptSchema, type ShareChats, type ShareChatTranscript,
   type BlueprintFork, type BlueprintView, type JsonValue, type SharedLibrary, type LiveShareCreated, type LiveShareBody, type LiveShareListingBody, type LiveShareModeBody, type OwnedLiveShare,
 } from '@kinu.run/core';
 import { settle } from '@kinu.run/core/obs';
@@ -99,6 +100,16 @@ export function openLiveShare(input: { workspace: string; share: string }): Prom
 
     return v.parse(LiveShareOpenSchema, yield* Effect.promise(async () => res.json()));
   }));
+}
+
+/** A My-access share's conversations with its app agent, newest first. */
+export function readShareChats(input: { workspace: string; share: string }): Promise<ShareChats['guests']> {
+  return settle(Effect.map(api(ShareChatsSchema, 'POST', LIVE_SHARE_CHATS_PATH, input), (answer) => answer.guests));
+}
+
+/** One of them, read-only, as the transcript viewer draws it. */
+export function readShareChat(input: { workspace: string; share: string; subject: string }): Promise<ShareChatTranscript['entries']> {
+  return settle(Effect.map(api(ShareChatTranscriptSchema, 'POST', LIVE_SHARE_CHAT_PATH, input), (answer) => answer.entries));
 }
 
 /** What the owner answered "Always for this slate" to that stands now, at the slate's revision. */

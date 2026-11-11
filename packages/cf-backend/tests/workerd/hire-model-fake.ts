@@ -7,7 +7,7 @@
 
 import * as v from 'valibot';
 import {
-  CHAIN_BOTTOM, CHILD_ANSWER, GUEST_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, JOB_COMMAND, JOB_MISSION, JOB_NOTED,
+  CHAIN_BOTTOM, CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, JOB_COMMAND, JOB_MISSION, JOB_NOTED,
   HIRE_PLAN_ASK, JOB_STARTED, NEST_MISSION, NEST_RELAY, PROCESS_COMMAND, PROCESS_NOTED, PROCESS_STARTED, REPORT_MARK, type ChildScript,
 } from './hire-shapes';
 
@@ -489,9 +489,6 @@ const ModelsPathSchema = v.tuple([v.literal(''), v.literal('w'), v.pipe(v.string
 async function speakerLane(run: HireRun, body: OutboundBody, results: readonly string[]): Promise<Response> {
   // The hire runs on the workspace's pin too: it is the conversation that opened on the brief.
   if (run.childScript === 'job' && openedOn(body) === JOB_MISSION) return jobLane(body, results);
-
-  // A shared app's guest: its one tool is `app`, which no other speaker carries.
-  if (toolNames(body).includes('app')) return textBody(body.model ?? HIRE_CHILD_MODEL, GUEST_ANSWER);
 
   // The child's lane: `report` is deps-gated, so only a hired actor carries it.
   if (toolNames(body).includes('report')) return await childLane(run, body, results);

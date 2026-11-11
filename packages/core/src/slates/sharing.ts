@@ -8,6 +8,7 @@ import { LiveShareVisibilitySchema } from './live-share-visibility';
 import { ShareModeSchema, ShareStartSchema } from './share-modes';
 import { GalleryCategorySchema } from './gallery-api';
 import { isoDate } from '../utils/date';
+import { UIMessageSchema } from '../utils/ui-message';
 
 
 export const SHARE_KINDS = ['blueprint', 'live'] as const;
@@ -192,13 +193,32 @@ export const LiveShareListingBodySchema = v.variant('listed', [
 
 export type LiveShareListingBody = v.InferOutput<typeof LiveShareListingBodySchema>;
 
-/** `POST`, signed in: where a live share opens for this person (a public share's address, else their signed entry to
- *  one that names them), with the slate it serves and its title, which the page that frames it names it by. */
+/** `POST`, signed in or not: where a live share opens for this person (their signed entry when signed in, else the
+ *  share's address), with the slate it serves and its title, which the page that frames it names it by, and how it lends
+ *  at which revision of its code, which its page asks its visitor about before the app agent answers them. */
 export const LIVE_SHARE_OPEN_PATH = '/api/shared/live/open';
 
-export const LiveShareOpenSchema = v.object({ url: v.string(), slate: v.string(), title: v.string() });
+export const LiveShareOpenSchema = v.object({ url: v.string(), slate: v.string(), title: v.string(), mode: ShareModeSchema, revision: v.string(), signedIn: v.boolean() });
 
 export type LiveShareOpen = v.InferOutput<typeof LiveShareOpenSchema>;
+
+/** `POST`, its owner's: the My-access conversations of one share (app-agent.ts), newest first. */
+export const LIVE_SHARE_CHATS_PATH = '/api/shared/live/chats';
+
+export const LiveShareChatsBodySchema = v.object({ workspace: v.string(), share: v.string() });
+
+export const ShareChatsSchema = v.object({ guests: v.array(v.object({ subject: v.string(), label: v.string(), startedAt: v.number() })) });
+
+export type ShareChats = v.InferOutput<typeof ShareChatsSchema>;
+
+/** `POST`, its owner's: one of them, read-only, as the transcript viewer draws it. */
+export const LIVE_SHARE_CHAT_PATH = '/api/shared/live/chat';
+
+export const LiveShareChatBodySchema = v.object({ workspace: v.string(), share: v.string(), subject: v.string() });
+
+export const ShareChatTranscriptSchema = v.object({ entries: v.array(v.object({ message: UIMessageSchema, steers: v.tuple([]) })) });
+
+export type ShareChatTranscript = v.InferOutput<typeof ShareChatTranscriptSchema>;
 
 /** `POST`, its owner's: the standing approvals of a slate's shared server that stand now, as its share sheet lists
  *  them beside the reach. */

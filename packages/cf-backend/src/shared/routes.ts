@@ -11,6 +11,7 @@ import {
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
   LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, type LiveShareBody,
+  LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema,
   type OwnedLiveShare, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl, viewerEntryUrl } from '../slate-share-route';
@@ -25,7 +26,7 @@ import { ownerGate, rawParam, type ApiVariables, type FamilyEnv } from '../api/c
 import { accountNamed } from '../user/workspace-placement';
 
 /** The owner's workspace, once the app host proved it is theirs. */
-type OwnedWorkspace = Pick<DurableObjectStub<OrchestratorAgent>, 'setLiveShareMode' | 'setLiveShareListing' | 'slatePreapprovals' | 'withdrawSlatePreapproval' | 'slateAs'>;
+type OwnedWorkspace = Pick<DurableObjectStub<OrchestratorAgent>, 'setLiveShareMode' | 'setLiveShareListing' | 'slatePreapprovals' | 'withdrawSlatePreapproval' | 'slateAs' | 'shareChats' | 'shareChatTranscript'>;
 
 /** Its own salt and info, so preview and blueprint tokens never verify each other. */
 const blueprintSigner = labelSigner('kinu.blueprint.salt', 'kinu.blueprint.v1');
@@ -131,6 +132,15 @@ sharedRoutes.post(LIVE_SHARE_LISTING_PATH, async (c) => shareChange({
 sharedRoutes.post(LIVE_SHARE_PREAPPROVALS_PATH, async (c) => shareChange({
   request: c.req.raw, env: c.env, identity: c.get('identity'), schema: SlatePreapprovalsBodySchema, usage: '{ workspace, slate }',
 }, async (owned, body) => owned.slatePreapprovals(body.slate)));
+
+// A My-access share's conversations with its app agent, which its owner reads in its share sheet, and one of them.
+sharedRoutes.post(LIVE_SHARE_CHATS_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: LiveShareChatsBodySchema, usage: '{ workspace, share }',
+}, async (owned, body) => owned.shareChats(body.share)));
+
+sharedRoutes.post(LIVE_SHARE_CHAT_PATH, async (c) => shareChange({
+  request: c.req.raw, env: c.env, identity: c.get('identity'), schema: LiveShareChatBodySchema, usage: '{ workspace, share, subject }',
+}, async (owned, body) => owned.shareChatTranscript(body.share, body.subject)));
 
 // One taken back, from every share of its slate.
 sharedRoutes.post(LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, async (c) => shareChange({
@@ -383,13 +393,14 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity | nul
 
   if (!reading.ok || !reading.value.admits) return err(404, NOT_FOUND);
 
-  const { handle, visibility, slate } = reading.value.record;
+  const { handle, slate, mode } = reading.value.record;
 
-  const url = identity === null || visibility === 'public'
+  // Signed in, the share's host is told who they are, public share or not: their app agent may be theirs to pay for.
+  const url = identity === null
     ? await slateShareUrl(env, body.workspace, handle)
     : await viewerEntryUrl(env, body.workspace, handle, identity.userId);
 
   if (url === null) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
 
-  return json({ body: { url, slate, title: reading.value.title } satisfies LiveShareOpen });
+  return json({ body: { url, slate, title: reading.value.title, mode, revision: reading.value.revision, signedIn: identity !== null } satisfies LiveShareOpen });
 }

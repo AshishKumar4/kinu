@@ -57,13 +57,14 @@ import { UserSecrets } from './secrets';
 import { GitHubHooks, type GitHubHookAsk } from './github-hooks';
 import { UserWorkspaces, type WorkspaceAdmission, type WorkspaceRegistration, type WorkspaceRegistrationSource } from './workspaces';
 import { UserProfileStore, type ProfileCatalogWriteResult } from './profile';
-import { accountSlateAi, addSlateAiSpend, slateAiSpendOf } from './slate-ai-account';
+import { accountAppAgentModel, accountSlateAi, addSlateAiSpend, slateAiSpendOf, type AccountSlateAiHost } from './slate-ai-account';
 import { testAvailableModel } from './available-models';
 import type { ModelTestResult } from '@kinu.run/core';
 import {
-  EffectApprovals, SlateConsentSchema, SlateConsentStore, partAiCall, partCallVerdict, resolvePartCall,
-  type PartAiAnswer, type PartConnectionAnswer, type SlateAiRoute, type SlateConsent,
+  APP_AGENT_CONSENT, appAgentConsented, EffectApprovals, SlateConsentSchema, SlateConsentStore, partAiCall, partCallVerdict, resolvePartCall,
+  type AppAgentGrant, type PartAiAnswer, type PartConnectionAnswer, type SlateAiRoute, type SlateConsent,
 } from '@kinu.run/core/slates';
+import { appAgentObject } from '../app-agent-do';
 import { McpToolSurfaceSchema } from '@kinu.run/core';
 import { parseJsonValue } from '../../../core/src/utils/json';
 import { Effect } from 'effect';
@@ -412,10 +413,42 @@ export class UserDO extends Agent<Env> {
   async slateAi(caller: UserCaller, request: { readonly workspace: string; readonly route: SlateAiRoute }): Promise<SlateSurfaceValue> {
     await this.requireTier(caller, 'credentials.model');
 
-    return accountSlateAi({
+    return accountSlateAi(this.slateAiHost(), caller, request);
+  }
+
+  /** What this account's model calls in slates read and keep of it: its catalog, credentials' revision and spend. */
+  private slateAiHost(): AccountSlateAiHost<DurableObjectId> {
+    return {
       env: this.env, accountId: this.name, catalog: (asker) => this.profile.getProfileCatalog(asker), credentialsRevision: (asker) => this.credentials.getCredentialsRevision(asker),
       spent: (spend) => { addSlateAiSpend(this.ctx.storage.sql, spend); },
-    }, caller, request);
+    };
+  }
+
+  /**
+   * One app agent's ask on this account's models (core slates/app-agent.ts), asked by its conversation's object once per
+   * ask: the account's default model and credentials' revision; or, where this person asks as a share's visitor, the
+   * consent it waits for. A deleted account lends nothing.
+   */
+  async appAgentGrant(caller: UserCaller, request: { readonly workspace: string; readonly slate: string; readonly revision: string; readonly visitor: boolean }): Promise<AppAgentGrant> {
+    await this.requireTier(caller, 'credentials.model');
+
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.ctx.storage.kv.get(ACCOUNT_DELETED_KEY) !== undefined) return yield* new KinuError('denied', 'This account was deleted');
+      const { workspace, slate, revision } = request;
+
+      if (request.visitor && !appAgentConsented(this.slateConsentStore.find(workspace, slate, APP_AGENT_CONSENT, {}), revision)) {
+        return { kind: 'needs-consent' as const };
+      }
+
+      return { kind: 'granted' as const, ...yield* Effect.promise(async () => accountAppAgentModel(this.slateAiHost(), caller, workspace)) };
+    }));
+  }
+
+  /** What one app agent's ask spent of this account's models, kept with its spend in other slates. */
+  async appAgentSpent(caller: UserCaller, spends: readonly AccountSpend[]): Promise<void> {
+    await this.requireTier(caller, 'credentials.model');
+
+    for (const spend of spends) addSlateAiSpend(this.ctx.storage.sql, spend);
   }
 
   /** This account's model calls in other people's slates, per provider account: read with its workspaces' in its usage. */
@@ -444,10 +477,20 @@ export class UserDO extends Agent<Env> {
     }));
   }
 
+  /** A consent taken back; the app agent's ends its conversation on this account's models then, what runs included. */
   async withdrawSlateConsent(caller: UserCaller, request: { readonly workspace: string; readonly slate: string; readonly server: string; readonly root: Readonly<Record<string, string>> }): Promise<boolean> {
     await this.requireTier(caller, 'account');
+    const { workspace, slate, server } = request;
+    const withdrawn = this.slateConsentStore.withdraw(workspace, slate, server, request.root);
 
-    return this.slateConsentStore.withdraw(request.workspace, request.slate, request.server, request.root);
+    if (withdrawn && server === APP_AGENT_CONSENT) await this.endAppAgent(workspace, slate);
+
+    return withdrawn;
+  }
+
+  /** This person's own conversation with a share's app agent, ended. */
+  private async endAppAgent(workspace: string, slate: string): Promise<void> {
+    await appAgentObject(this.env, { payer: { kind: 'own', userId: this.name }, workspace, slate, share: '', subject: '' }).end();
   }
 
   /** `mcp.tools` is the same floor as userMcp_callTool: the account's connection, with this slate's consent checked too. */
@@ -1807,6 +1850,9 @@ export class UserDO extends Agent<Env> {
     }
 
     if (builtinSignInOn(this.env)) await objectNamed(this.env.UserDO, BUILTIN_ACCOUNTS_OBJECT).builtinRemoveAccount(caller, person);
+
+    // Each of its conversations with an app agent on its own models: one per consent it gave for one.
+    for (const { workspace, slate } of this.slateConsentStore.slatesFor(APP_AGENT_CONSENT)) await this.endAppAgent(workspace, slate);
 
     this.ctx.storage.kv.put(ACCOUNT_CLEARED_KEY, true);
     diagnostics.event('account.cleared', { owner: ownerUserId });

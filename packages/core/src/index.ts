@@ -340,6 +340,8 @@ export {
   type SlateGraphMember, type SlateGraphNamespace, type SlateCapabilityGraph,
   type LiveShareRecord, type OwnedLiveShare, type LiveShareCreated, type ShareViewerClaim,
   LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, type LiveShareOpen,
+  LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, ShareChatsSchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema, ShareChatTranscriptSchema,
+  type ShareChats, type ShareChatTranscript,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, SlatePreapprovalsSchema,
   type SharePreapproval, type SlatePreapprovals, type SlatePreapprovalWithdraw,
   SlateReachSchema, LiveShareBodySchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema,
@@ -367,7 +369,7 @@ export {
   type ConsentAsk, type EffectAsk, type PartAction, type PartRunAnswer, type PartRunRequest, type PartShowRequest,
 } from './slates/personal-parts';
 
-export { type SlateConsent } from './slates/share-modes';
+export { APP_AGENT_CONSENT, appAgentConsent, type SlateConsent } from './slates/share-modes';
 
 export {
   type SlateSurfaceCatalog,
@@ -916,7 +918,6 @@ export {
 } from './steer-branch';
 
 // Inbox: the one way anything reaches an agent.
-export { TurnReplies } from './orchestrator/turn-replies';
 
 export {
   signalCardId, PromptFileSchema,
@@ -2830,7 +2831,3 @@ export { refusedRun, writesSnapshotRows } from './subagents/agent-isolate';
 
 export { describeAgentTools } from './subagents/tool-descriptors';
 
-export {
-  GUEST_APP_TOOL, GUEST_ASK_METADATA, GUEST_ROLE, guestAnswer, guestAppTool, guestDynamicContext, guestSoul, guestTitle, guestVisitorLabel,
-  NO_GUEST_INSTRUCTIONS, NO_GUEST_SKILLS, turnEntries,
-} from './orchestrator/guest-turn';

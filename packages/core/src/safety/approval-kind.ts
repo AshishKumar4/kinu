@@ -47,11 +47,6 @@ export interface SlateEffect {
   readonly payload: JsonValue;
   /** Who the call ran for: shown to the owner. */
   readonly viewer: string;
-  /**
-   * The guest agent that made the call itself (slates/guest.ts): the owner decides this one call alone, never for the
-   * slate, and their decision wakes that guest.
-   */
-  readonly guest?: string;
 }
 
 /** A message an agent asked to send, exactly as the owner is asked to let it leave. */
@@ -106,7 +101,7 @@ const JsonValueSchema: v.GenericSchema<JsonValue> = v.lazy(() => v.union([
 
 const SlateEffectSchema = v.strictObject({
   slate: v.string(), caller: v.string(), revision: v.string(), server: v.string(), tool: v.string(),
-  root: v.record(v.string(), v.string()), payload: JsonValueSchema, viewer: v.string(), guest: v.optional(v.string()),
+  root: v.record(v.string(), v.string()), payload: JsonValueSchema, viewer: v.string(),
 });
 
 /** The text a write parks under, from its digests. */

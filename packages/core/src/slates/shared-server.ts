@@ -17,15 +17,14 @@ import type { SlateEffectVerdict } from '../safety/deferred-approval';
 import { sha256Hex } from '../safety/argument-digest';
 import type { SlateInvocation } from './surface';
 import type { SlateCaller } from './caller';
-import { AGENT_ASK_MEMBER, shareMemberRefusal } from './members';
+import { shareMemberRefusal } from './members';
 
 /** Where a shared server's effects wait for its owner, how a send takes the approval, and how its run settles it. */
 export interface OwnerEffects {
   ask(id: string, effect: SlateEffect): SlateEffectVerdict;
-  /** Synchronous: called where the call is sent. `guest`: the guest that asked it, where one made the call itself. */
-  take(id: string, guest?: string): ApprovalSpend | null;
-  /** `guest`: as `take`'s, the guest whose ask it spent. */
-  settle(spend: ApprovalSpend, outcome: ApprovalSpendOutcome, guest?: string): Promise<boolean>;
+  /** Synchronous: called where the call is sent. */
+  take(id: string): ApprovalSpend | null;
+  settle(spend: ApprovalSpend, outcome: ApprovalSpendOutcome): Promise<boolean>;
 }
 
 /**
@@ -72,13 +71,6 @@ export interface ServerCall {
   readonly args: readonly JsonValue[];
   /** Whom the call is for, shown to the owner on an ask: never what it may do. */
   readonly on: string;
-  /** A share's viewer's call, their browser's or their guest's: its `agent.*` reaches the guest, never the owner's agent. */
-  readonly viewer?: true;
-  /**
-   * The guest agent that makes the call itself (slates/guest.ts), already classified: `effect` is its owner's exact
-   * approval, which no standing pre-approval answers, and the grant's member list does not bound it.
-   */
-  readonly guest?: string;
   /** The calling process's lineage and the record its call names, read again at the send (`lineage`). */
   readonly fence?: { readonly lineage: SlateLineage; readonly record: SlateInvocation | null };
 }
@@ -102,13 +94,7 @@ function ownAccessRefusal(owner: string): KinuError {
 }
 
 /** Why a member only the owner's own app reaches is refused on a shared one, however it is shared; null for any other. */
-function ownerOnlyRefusal(call: Pick<ServerCall, 'address' | 'viewer'>, owner: string): KinuError | null {
-  const { address } = call;
-
-  if (address.namespace === 'agent' && address.member === AGENT_ASK_MEMBER && call.viewer !== true) {
-    return new KinuError('denied', `This app's chat goes to ${owner}'s own agent, which answers only in Kinu itself, never on a shared link.`);
-  }
-
+function ownerOnlyRefusal(address: ServerCall['address']): KinuError | null {
   const refusal = shareMemberRefusal(address);
 
   return refusal === null ? null : new KinuError('denied', refusal);
@@ -176,7 +162,7 @@ export class SharedServers {
    * Why the call is beyond the shared servers on its way now (lends nothing, or does not reach it); null if within. A
    * fenced call (`ServerCall.fence`) is first held to the sharing its process and request began under.
    */
-  beyond(call: Pick<ServerCall, 'slate' | 'chain' | 'address' | 'fence' | 'viewer'>, owner = 'its owner'): KinuError | null {
+  beyond(call: Pick<ServerCall, 'slate' | 'chain' | 'address' | 'fence'>, owner = 'its owner'): KinuError | null {
     const stale = call.fence === undefined ? null : this.lineage(call.slate, call.fence.lineage, call.fence.record);
 
     if (stale !== null) return stale;
@@ -186,7 +172,7 @@ export class SharedServers {
   }
 
   /** {@link beyond}, naming the owner who can change it where the server lends nothing. */
-  bounded(call: Pick<ServerCall, 'slate' | 'chain' | 'address' | 'viewer'>): Effect.Effect<KinuError | null> {
+  bounded(call: Pick<ServerCall, 'slate' | 'chain' | 'address'>): Effect.Effect<KinuError | null> {
     return Effect.map(Effect.promise(async () => this.owner()), (owner) => this.beyond(call, owner));
   }
 
@@ -229,7 +215,7 @@ export class SharedServers {
       if (!call.effect || now.preapproved) return null;
 
       if (approval === null) return yield* new KinuError('denied', `${call.address.member} on ${call.address.namespace} waits for the owner to approve it`);
-      const spend = this.deps.ownerEffects?.take(approval, call.guest) ?? null;
+      const spend = this.deps.ownerEffects?.take(approval) ?? null;
 
       return spend ?? (yield* new KinuError('denied', "The owner's approval of this call was taken back before it was made"));
     });
@@ -245,21 +231,21 @@ export class SharedServers {
 
     if (origin === undefined) return { kind: 'unbounded' };
     // First: no sharing of any server on its way lends it, so turning one to the owner's access would not either.
-    const ownerOnly = ownerOnlyRefusal(call, owner);
+    const ownerOnly = ownerOnlyRefusal(call.address);
 
     if (ownerOnly !== null) return { kind: 'refused', error: ownerOnly };
 
     for (const { slate, authority } of servers) {
       if (authority.kind === 'none') return { kind: 'refused', error: this.lendsNothing(slate, owner) };
 
-      if (authority.kind === 'grant' && call.guest === undefined && grantAdmits(authority.grant, call.slate, call.address.namespace, call.address.member) === null) {
+      if (authority.kind === 'grant' && grantAdmits(authority.grant, call.slate, call.address.namespace, call.address.member) === null) {
         return { kind: 'refused', error: new KinuError('denied', `This shared app runs on ${owner}'s access, which does not reach ${call.address.namespace}.${call.address.member}: ${owner} can add it in its share settings`) };
       }
     }
 
     const revision = this.deps.revision(origin.slate) ?? '';
 
-    const preapproved = root !== null && origin.authority.kind === 'grant' && call.guest === undefined
+    const preapproved = root !== null && origin.authority.kind === 'grant'
       && preapprovedEffect(origin.authority.grant, { slate: call.slate, ...call.address, root }, revision);
 
     return { kind: 'bounded', origin: origin.slate, preapproved };
@@ -289,7 +275,6 @@ export class SharedServers {
 
       const effect: SlateEffect = {
         slate: origin, caller: call.slate, revision: this.deps.revision(origin) ?? '', server, tool, root: { ...root }, payload, viewer: call.on,
-        ...(call.guest !== undefined && { guest: call.guest }),
       };
 
       const id = sha256Hex(slateEffectText(effect), 32);

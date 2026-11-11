@@ -22,7 +22,10 @@ export function isSlateMethodName(name: string): boolean {
 /** The refusal is a value so it crosses a Durable Object RPC boundary intact. */
 export type SlateAnswer<Value> =
   | { readonly ok: true; readonly value: Value; readonly listing?: 'pending' }
-  /** `needs`: what the caller must do before it may ask again: a share's visitor says who they are (slates/guest.ts). */
+  /**
+   * `needs`: a share's visitor must act before their app agent answers them (app-agent.ts): say who they are, sign in, or
+   * allow it their models. The share's page reads which from Kinu, never from the app.
+   */
   | ({ readonly ok: false; readonly needs?: 'identity' } & Refusal);
 
 export type SlateCallResult = SlateAnswer<JsonValue>;

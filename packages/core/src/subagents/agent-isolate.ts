@@ -91,7 +91,7 @@ export interface PreparedAgentTurn {
   readonly credentialsRevision: number | null;
   readonly scaffold: StoredRow;
   readonly languages: readonly [string, ...string[]];
-  /** A run's framing; for a chat turn, a shared app's guest's role alone, in place of its owner's catalog's. */
+  /** A run's framing, from the tools its turn may call. */
   readonly brief?: string;
   readonly opening: readonly JsonValue[];
   readonly tools: readonly AgentToolDescriptor[];

@@ -93,7 +93,7 @@ export function sharedSlateDocument(): string {
 function openedShare(frame: string): Response {
   if (frame === "shared-live-signed-out") return Response.json({ error: "Sign in to open this share" }, { status: 401 });
 
-  return Response.json({ url: `${location.origin}${location.pathname}?frame=${SHARED_SLATE_PAGE}`, slate: SLATE, title: TITLE });
+  return Response.json({ url: `${location.origin}${location.pathname}?frame=${SHARED_SLATE_PAGE}`, slate: SLATE, title: TITLE, mode: "own", revision: "rev-1", signedIn: true });
 }
 
 /** The part routes, answered at the top as the server answers its one viewer. */

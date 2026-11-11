@@ -18,6 +18,8 @@ export interface LiveShareReading {
   readonly title: string;
   readonly description: string;
   readonly admits: boolean;
+  /** Its slate's code's revision now, which a visitor's consent to its app agent names. */
+  readonly revision: string;
 }
 
 /** Slate operations made as a caller; the browser's `@callable slate` mints the root caller locally. */

@@ -19,7 +19,7 @@ import { Cause, Effect, Exit } from 'effect';
 import * as v from 'valibot';
 import {
   JsonObjectSchema, JsonValueSchema, MESSAGE_AMENDED_FRAME, newestOpener, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
-  UIMessageSchema, type SentWords, type ChatTransport, type ChatWindow, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent, type TurnReplies,
+  UIMessageSchema, type SentWords, type ChatTransport, type ChatWindow, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, hold as holdExit, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
@@ -54,9 +54,6 @@ export interface ChatWire {
   /** Of `ids`, in order, those the agent holds neither as a durable row nor as an accepted send's reservation: the hook
    *  resends its whole list per request, and the agent keeps each message under the id its tab gave it. */
   unseen(ids: readonly string[]): Promise<readonly string[]>;
-  /** Each slate `agent.ask` reply: told where its message's card is shown, fed that turn's text deltas, and told when
-   *  the turn ends. */
-  readonly replies?: Pick<TurnReplies, 'card' | 'feed' | 'ended'>;
   /** The open turn's first answer text reached the room: told once a turn, as the text streams in. */
   firstText?(): void;
   /** Rejects when the loop refuses the message: nothing was written and no turn ran. `admitted` is told once the words
@@ -637,7 +634,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
   private endStream(live: LiveStream): void {
     this.live = null;
-    this.wire.replies?.ended(live.turnId, live.failure);
     this.pendingResume.clear();
     this.done(live.requestId, live.failure === null ? {} : { error: live.failure });
 
@@ -686,12 +682,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
 
         if (live === null) return;
 
-        // A Stop is not a failure: an `error` frame here makes the SDK client paint an error card. A reply ends on it.
-        if (event.interrupted === true) {
-          this.wire.replies?.ended(live.turnId, event.message);
-
-          return;
-        }
+        // A Stop is not a failure: an `error` frame here makes the SDK client paint an error card.
+        if (event.interrupted === true) return;
 
         // Their resume names this stream: its own terminal frame, with the error, settles it.
         this.pendingResume.clear();
@@ -701,8 +693,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
       }
 
       case 'broadcast':
-        // A message lands where the agent's isolate shows its card: the turn running here then (a slate's ask among them).
-        this.wire.replies?.card(event.event, this.live?.turnId ?? null);
+        // A message lands where the agent's isolate shows its card: the turn running here then.
         this.wire.broadcast(JSON.stringify(event.event));
 
         return;
@@ -782,7 +773,6 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
         if (chunk.type === 'text-delta') {
           if (!live.spoke) this.wire.firstText?.();
           live.spoke = true;
-          this.wire.replies?.feed(live.turnId, chunk.delta);
         }
       }
     });

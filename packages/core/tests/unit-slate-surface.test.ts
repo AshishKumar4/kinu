@@ -101,15 +101,6 @@ test('agent.send routes one inbox message carrying its slate id', () => {
   }
 });
 
-test('agent.ask routes the same message, asking for the agent\'s own reply; a share\'s viewer reaches it only as its grant names it', () => {
-  expect(call(['agent', 'ask'], [{ text: 'hi', data: { n: 1 } }])).toMatchObject({
-    route: { kind: 'agent', slate: 'notes', text: 'hi', data: { n: 1 }, ask: true }, address: { namespace: 'agent', member: 'ask' }, impact: 'externalSend',
-  });
-  expect(() => call(['agent', 'ask'], [{ text: '' }])).toThrow('agent.ask takes one { text, data? } object');
-  // Owner, 2026-11-08: a visitor's message reaches their own guest of the agent (slates/guest.ts), where the share lends it.
-  expect(() => viewerCall(['agent', 'ask'], [{ text: 'hi' }])).toThrow('Slate issues does not grant agent.ask to viewers');
-});
-
 test('ai.run routes one model call, the tier the call names', () => {
   expect(call(['ai', 'run'], [{ prompt: 'sum this' }]).route).toEqual({ kind: 'ai', prompt: 'sum this' });
   expect(call(['ai', 'run'], [{ prompt: 'p', system: 's', tier: 'deep' }]).route).toEqual({ kind: 'ai', prompt: 'p', system: 's', tier: 'deep' });
@@ -147,7 +138,7 @@ const viewerGrant: ShareGrant = {
 };
 
 const viewerCall = (path: string[], args: JsonValue[] = []) => routeViewerCall({
-  id: 'issues', request: { path, args, invocation: null }, chain: [], viewer, grant: viewerGrant,
+  id: 'issues', request: { path, args, invocation: null }, chain: [], grant: viewerGrant,
 });
 
 test('a viewer call refuses what the owner call refuses, then what the grant does not name', () => {
@@ -162,7 +153,7 @@ test('a viewer cannot call the computer directly or from a crafted tool, even wi
     const owner = call(path);
     const grant: ShareGrant = { slates: ['issues'], members: [{ slate: 'issues', ...address, impact: owner.impact }] };
 
-    expect(() => routeViewerCall({ id: 'issues', request: { path, args: [], invocation: null }, chain: [], viewer, grant }))
+    expect(() => routeViewerCall({ id: 'issues', request: { path, args: [], invocation: null }, chain: [], grant }))
       .toThrow(/computer.*viewer.*(?:credentials|secrets)/isu);
     expect(() => admitNestedViewerCall(grant, 'issues', address)).toThrow(/computer.*viewer.*(?:credentials|secrets)/isu);
   }
@@ -178,9 +169,8 @@ test('a granted member routes with the impact the grant admits', () => {
     route: { kind: 'mcp', server: 'github', tool: 'read_issue', args: { n: 1 }, readOnly: true }, impact: 'observe',
   });
   expect(viewerCall(['mcp', 'github', 'create_issue'], [{}])).toMatchObject({ route: { kind: 'mcp', tool: 'create_issue' }, impact: 'externalSend' });
-  expect(viewerCall(['agent', 'send'], [{ text: 'hi' }])).toMatchObject({
-    route: { kind: 'agent', slate: 'issues', text: 'hi', viewer: { share: 's1', subject: 'user:u7' } }, impact: 'externalSend',
-  });
+  // No share's visitor reaches the owner's agent, even through a grant that names it: they talk to the app agent.
+  expect(() => viewerCall(['agent', 'send'], [{ text: 'hi' }])).toThrow(expect.objectContaining({ code: 'denied' }));
 });
 
 test('a call into another slate admits only slates the grant walks', () => {

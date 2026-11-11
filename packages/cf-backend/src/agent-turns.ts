@@ -44,8 +44,6 @@ export interface AgentTurnsDeps {
   credentialsRevision(): number | null;
   /** The governor an agent's chat turns spend under, when its missions are the workspace's: main's (D9). */
   missions(actorId: string): MissionGovernor | null;
-  /** What a shared app's guest's chat turn spends under (its share's daily label, slates/guest.ts); null for any other agent. */
-  guestSpend(actorId: string): string | null;
   /** The agent has no turn open here any more, or it was stopped: what it held for its turns lets go, the computer's
    *  desktop among it (D89). Its owner runs it detached: nothing of the turn waits on it. */
   turnsEnded(actorId: string): void;
@@ -133,9 +131,9 @@ class PerTurn<T> {
   }
 }
 
-/** A run's framing, from the tools its turn may call; for a chat turn, a shared app's guest's role alone. */
-function briefOf(run: RunInference | undefined, mode: WorkMode, surface: Pick<ActorSurface, 'offered' | 'guest'>): string | undefined {
-  return run?.brief?.(callableToolNames(mode, surface.offered)) ?? surface.guest?.role;
+/** A run's framing, from the tools its turn may call. */
+function briefOf(run: RunInference | undefined, mode: WorkMode, surface: Pick<ActorSurface, 'offered'>): string | undefined {
+  return run?.brief?.(callableToolNames(mode, surface.offered));
 }
 
 export class AgentTurns {
@@ -722,9 +720,8 @@ export class AgentTurns {
   /** Main's chat turn names its missions when it is prepared under any. */
   private chatMission(actorId: string, turn: OpenTurn): readonly string[] {
     if (turn.request.run !== undefined || this.deps.missions(actorId) === null) return [];
-    const guest = this.deps.guestSpend(actorId);
 
-    return guest === null ? [...turnTags({ metadata: turn.request.driving }).missionLabels] : [guest];
+    return [...turnTags({ metadata: turn.request.driving }).missionLabels];
   }
 
   async program(actorId: string, turnId: string, ...[code, providers, opts]: Parameters<Executor['execute']>) {
@@ -740,9 +737,7 @@ export class AgentTurns {
   }
 
   /** The turn's advisor's read tools over the agent's stores, kept on the turn, and as its isolate is told of them. */
-  private async advisorTools(turn: OpenTurn, surface: Pick<ActorSurface, 'stores' | 'guest'>): Promise<readonly AgentToolDescriptor[]> {
-    // A shared app's guest has no advisor: its reads would reach what the guest does not.
-    if (surface.guest !== undefined) return [];
+  private async advisorTools(turn: OpenTurn, surface: Pick<ActorSurface, 'stores'>): Promise<readonly AgentToolDescriptor[]> {
     const { stores } = surface;
 
     turn.advisor = advisorReadTools({ files: stores.deps.files, memory: stores.deps.memory });

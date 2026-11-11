@@ -62,6 +62,33 @@ export function ConsentDecision({ slate, ask, changed, onAllow, onClose }: {
   );
 }
 
+/**
+ * Letting this app's assistant answer the visitor on their own models (core slates/app-agent.ts), at this revision of
+ * its code; `changed`, when they allowed an earlier one.
+ */
+export function AssistantConsentDecision({ slate, changed, onAllow, onClose }: {
+  slate: string;
+  changed: boolean;
+  onAllow: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title={changed ? `${slate} changed since you allowed its assistant` : `Let ${slate}'s assistant use your models?`} icon={<PlugIcon size={18} className="p-accent-fg" />} onClose={onClose}
+      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose} data-consent-dismiss>Not now</Button><Button variant="primary" size="sm" data-consent-allow onClick={onAllow}>{changed ? "Allow again" : "Allow"}</Button></div>}>
+      <Lets
+        yes={[
+          <span key="model">Answer you on your own default model</span>,
+          <span key="calls">Call {slate}&apos;s own functions for you, as you</span>,
+        ]}
+        no={[
+          <span key="others">Show your conversation to anyone but you</span>,
+          <span key="reach">Use your connections, files or other apps</span>,
+        ]} />
+      <p className="t-meta p-text-3">What it sends {slate}, its owner can see, and the app can ask it for you while you have it open. For this app, at this version of its code.</p>
+    </Modal>
+  );
+}
+
 /** Approving one effect, with exactly the payload it will run with, once. */
 export function ApprovalDecision({ slate, ask, onApprove, onDecline }: {
   slate: string;

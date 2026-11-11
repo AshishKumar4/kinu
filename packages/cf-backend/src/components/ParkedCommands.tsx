@@ -119,10 +119,6 @@ export function AlwaysLine({ action }: { action: PendingAction }) {
     return <span data-parked-always="environment" className="t-meta block p-text-3">Always records a standing approval for this environment; revoke it under Settings → Standing approvals.</span>;
   }
 
-  if (effect.guest === true) {
-    return <span data-parked-always="once" className="t-meta block p-text-3">The guest that answers a visitor of {effect.slate} asked this itself: approving lets this exact call run once.</span>;
-  }
-
   const on = rootWords(effect.root);
 
   return (
@@ -204,11 +200,11 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: {
           onClick={() => detachPromise(() => flow.decide("approved", [...chosen]))}>
           Approve {countLabel(chosen.size, actions.length)}
         </Button>
-        {!(picked.length === 0 ? actions : picked).every((action) => action.effect?.guest === true) && <Button size="sm" variant="secondary" disabled={state.busy || chosen.size === 0}
+        <Button size="sm" variant="secondary" disabled={state.busy || chosen.size === 0}
           onClick={() => detachPromise(() => flow.decide("always", [...chosen]))}
           title={saysAlways ? "Approve these, and allow each from now on as its row says." : "Approve these checks for this environment. Revoke under Settings → Standing approvals."}>
           {alwaysLabel(picked.length === 0 ? actions : picked, countLabel(chosen.size, actions.length))}
-        </Button>}
+        </Button>
         <Button size="sm" variant="ghost" disabled={state.busy || chosen.size === 0}
           onClick={() => detachPromise(() => flow.decide("denied", [...chosen]))}>
           Deny {countLabel(chosen.size, actions.length)}

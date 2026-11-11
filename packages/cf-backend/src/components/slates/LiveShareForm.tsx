@@ -11,7 +11,8 @@ import * as v from "valibot";
 import { OwnedLiveShareSchema, SlateReachSchema, SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, type LiveShareBody, type LiveShareCreated, type LiveShareVisibility, type OwnedLiveShare, type SharePreapproval, type ShareMode, type SlateCapabilityGraph, type SlateGraphNamespace, type SlateGraphMember, type SlateReach, countOf } from "@kinu.run/core";
 import { showing, detach } from "@kinu.run/core/obs";
 import { CopyButton } from "@/components/ui/CopyButton";
-import { listShare, readPreapprovals, revokeShare, setShareMode, shareLive, withdrawPreapproval } from "@/lib/shared-api";
+import { listShare, readPreapprovals, readShareChat, readShareChats, revokeShare, setShareMode, shareLive, withdrawPreapproval } from "@/lib/shared-api";
+import { KeptTranscript } from "@/components/KeptTranscript";
 import { ShareListing, type ListShare } from "./ShareListing";
 import { answered } from "./BlueprintShareForm";
 import { AccessPicker, EmailsField, emailsOf, Failure, Lead, type AccessOption } from "./ShareParts";
@@ -389,7 +390,55 @@ function rowMenu(row: OwnedLiveShare, actions: SharedRowActions, onListing: () =
 }
 
 /** One share, on one compact row: who, whose access and its numbers, the one action a stopped share needs, and a menu. */
-function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowActions }) {
+/** No message of an app agent's conversation is ever kept out of its transcript. */
+const NONE_UNAVAILABLE: ReadonlySet<string> = new Set();
+
+/** One visitor's conversation with the app's assistant, read-only, as the chat draws a kept transcript. */
+function ChatTranscript({ workspace, share, subject }: { workspace: string; share: string; subject: string }) {
+  const read = useCallback(async () => readShareChat({ workspace, share, subject }), [workspace, share, subject]);
+  const { resource } = useAsyncResource(read);
+
+  if (resource.status === "loading") return <Loader size="sm" />;
+
+  if (resource.status === "error") return <Notice tone="danger">{resource.message}</Notice>;
+
+  return (
+    <div data-live-share-transcript={subject} className="max-h-96 space-y-3 overflow-auto">
+      <KeptTranscript entries={resource.value} unavailable={NONE_UNAVAILABLE} />
+    </div>
+  );
+}
+
+/** What this share's visitors said with the app's assistant on your model: each conversation, opened in place. */
+function ShareChatList({ workspace, share }: { workspace: string; share: string }) {
+  const read = useCallback(async () => readShareChats({ workspace, share }), [workspace, share]);
+  const { resource } = useAsyncResource(read);
+  const [open, setOpen] = useState<string | null>(null);
+
+  if (resource.status !== "ready" || resource.value.length === 0) return null;
+
+  return (
+    <details data-live-share-chats={share} className="group space-y-2">
+      <summary className="t-status flex cursor-pointer list-none items-center gap-2 p-text-3">
+        <CaretRightIcon size={12} className="transition-transform group-open:rotate-90" />Chats with its assistant ({resource.value.length})
+      </summary>
+      <Group list>
+        {resource.value.map((guest) => (
+          <li key={guest.subject} className="space-y-2 px-3 py-2">
+            <Pressable data-live-share-chat={guest.subject} aria-expanded={open === guest.subject} onClick={() => setOpen((shown) => (shown === guest.subject ? null : guest.subject))} className="flex w-full items-center gap-3">
+              <span className="t-meta min-w-0 flex-1 truncate p-text-2">{guest.label}</span>
+              <span className="t-meta shrink-0 p-text-3">{new Date(guest.startedAt).toLocaleDateString()}</span>
+            </Pressable>
+            {open === guest.subject && <ChatTranscript workspace={workspace} share={share} subject={guest.subject} />}
+          </li>
+        ))}
+      </Group>
+      <p className="t-meta p-text-3">They ran on your model. A visitor on their own access keeps theirs private.</p>
+    </details>
+  );
+}
+
+function SharedRow({ workspace, row, actions }: { workspace: string; row: OwnedLiveShare; actions: SharedRowActions }) {
   const [listing, setListing] = useState(false);
   const who = row.visibility === "public" ? "Anyone with the link" : "People you added";
 
@@ -410,18 +459,19 @@ function SharedRow({ row, actions }: { row: OwnedLiveShare; actions: SharedRowAc
           <Button size="sm" variant="secondary" data-live-share-review={row.id} onClick={() => actions.onReview(row.id)} disabled={actions.disabled}>Review the new reach</Button>
         )}
         {listing && row.mode === "own" && <ShareListing share={row} onList={(next) => actions.onList(row.id, next)} disabled={actions.disabled} />}
+        <ShareChatList workspace={workspace} share={row.id} />
       </div>
       <Menu name={who} items={rowMenu(row, actions, () => setListing((open) => !open))} className="relative shrink-0" />
     </li>
   );
 }
 
-function SharedNow({ shares, actions }: { shares: readonly OwnedLiveShare[]; actions: SharedRowActions }) {
+function SharedNow({ workspace, shares, actions }: { workspace: string; shares: readonly OwnedLiveShare[]; actions: SharedRowActions }) {
   return (
     <div className="space-y-2">
       <p className="t-status p-text-3">Shared now</p>
       <Group list>
-        {shares.map((row) => <SharedRow key={row.id} row={row} actions={actions} />)}
+        {shares.map((row) => <SharedRow key={row.id} workspace={workspace} row={row} actions={actions} />)}
       </Group>
     </div>
   );
@@ -749,7 +799,7 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
         <ShareChoices choices={{ mode, start, fork }} set={{ mode: setMode, start: setStart, fork: setFork }} first={shares.length === 0} reviewing={reviewing !== null}
           reach={{ graph, failed: err !== null, visibility, approved, onToggle: toggle }} busy={busy} />
         {shares.length > 0 && (
-          <SharedNow shares={shares} actions={{
+          <SharedNow workspace={workspace} shares={shares} actions={{
             onStop: (id) => revoke(id), onOwnAccess: ownAccess, onList: list, disabled: busy,
             onReview: (id) => { setMode("owner"); setReviewing(id); },
           }} />

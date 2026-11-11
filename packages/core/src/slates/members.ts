@@ -22,7 +22,7 @@ export const AI_RUN_MEMBER = 'run';
 /** `workspace.ai.stream({ prompt, system?, tier? })`: the same call, its text handed over as it is written. */
 export const AI_STREAM_MEMBER = 'stream';
 
-/** `workspace.agent.ask({ text, data? })`: `agent.send` answered with the agent's own reply as it writes it. */
+/** `workspace.agent.ask({ text, data? })`: the slate's app agent's reply (app-agent.ts), answered by the slate's host. */
 export const AGENT_ASK_MEMBER = 'ask';
 
 /** A tool call's chip: whether it only looked. */
@@ -88,9 +88,6 @@ export function declaredImpact(address: { readonly namespace: string; readonly m
 /** A member only the owner's own slate reaches, as the owner: a hosted actor's slate never holds it, and a share grants it
  *  only where `shareMemberRefusal` says. */
 export function slateOwnerOnly(address: { readonly namespace: string; readonly member: string }): boolean {
-  // A reply is the owner's agent speaking to the owner: no share's viewer is handed it.
-  if (address.namespace === 'agent' && address.member === AGENT_ASK_MEMBER) return true;
-
   const wired = WIRED.get(address.namespace);
 
   if (wired !== undefined) return wired.slate === 'owner' && wired.impacts.has(address.member);
@@ -102,8 +99,9 @@ export function slateOwnerOnly(address: { readonly namespace: string; readonly m
 export function shareMemberRefusal(address: { readonly namespace: string; readonly member: string }): string | null {
   if (address.namespace === 'computer') return COMPUTER_OWNER_ONLY;
 
-  // A share's visitor asks their own guest (slates/guest.ts), never the owner's agent: a share may grant it.
-  if (address.namespace === 'agent' && address.member === AGENT_ASK_MEMBER) return null;
+  // `agent.send` reaches the owner's agent, which no shared app's server speaks to, whoever's request it serves; a
+  // share's visitor talks to the app agent (`agent.ask`), which the host answers before any grant is read.
+  if (address.namespace === 'agent') return `agent.${address.member} reaches its owner's own agent, so it runs only in an unshared slate`;
 
   return slateOwnerOnly(address) ? `${address.namespace}.${address.member} runs only in its owner's own slate` : null;
 }
@@ -123,7 +121,7 @@ export function slateAddressImpact(address: { readonly namespace: string; readon
     default: break;
   }
 
-  if (address.namespace === 'agent' && (address.member === 'send' || address.member === AGENT_ASK_MEMBER)) return 'externalSend';
+  if (address.namespace === 'agent' && address.member === 'send') return 'externalSend';
 
   // `ai` has two members, one call answered whole or as it is written; any other is no model call, and no namespace of the actor's either.
   if (address.namespace === 'ai') return address.member === AI_RUN_MEMBER || address.member === AI_STREAM_MEMBER ? 'execute' : null;

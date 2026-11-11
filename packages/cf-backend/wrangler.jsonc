@@ -120,6 +120,9 @@
       // Per-user DO: profile + agent registry + credentials + defaults.
       // Keyed by the stable Kinu userId derived from the verified email.
       { "class_name": "UserDO", "name": "UserDO" },
+      // One app agent's conversation (src/app-agent-do.ts), named by its payer, app and person (core
+      // slates/app-agent.ts `appAgentKey`): its turns run there, apart from the payer's account.
+      { "class_name": "AppAgentDO", "name": "APP_AGENT" },
       // Synthetic monitoring — one instance ("site"), driven by the cron
       // trigger below. Holds open incidents (so an outage alerts once, not
       // every tick) and the alert outbox.
@@ -190,6 +193,7 @@
     "OrchestratorAgent": { "type": "durable-object", "storage": "sqlite" },
     "KinuDevbox": { "type": "durable-object", "storage": "sqlite" },
     "UserDO": { "type": "durable-object", "storage": "sqlite" },
+    "AppAgentDO": { "type": "durable-object", "storage": "sqlite" },
     "MonitorDO": { "type": "durable-object", "storage": "sqlite" },
     "ControlPlaneDO": { "type": "durable-object", "storage": "sqlite" },
     "DeployRunDO": { "type": "durable-object", "storage": "sqlite" },
@@ -504,6 +508,7 @@
         "bindings": [
           { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
           { "class_name": "UserDO", "name": "UserDO" },
+          { "class_name": "AppAgentDO", "name": "APP_AGENT" },
           { "class_name": "MonitorDO", "name": "MonitorDO" },
           { "class_name": "KinuDevbox", "name": "KinuDevbox" },
           { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" },

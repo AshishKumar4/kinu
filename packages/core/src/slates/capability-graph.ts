@@ -72,9 +72,6 @@ function riskBody({ namespace, title, member, workspace }: RiskSubject, impact: 
     case 'externalSend':
       if (head === 'mcp') return `Calls ${member} on ${title} with your credentials. The server does not mark it read-only, so it can create or change data there.`;
 
-      // A visitor's message reaches their own guest (guest.ts), never your agent.
-      if (namespace === 'agent') return 'Lets each visitor talk to a guest of your agent that sees only this app. Anything else it asks you first, and you see every conversation.';
-
       return `Sends ${namespace}.${member} out of workspace ${workspace} as you: your agent reads it and acts on it.`;
     case 'execute':
       if (head === 'ai') return 'Runs a model call on your inference. Every call spends it.';

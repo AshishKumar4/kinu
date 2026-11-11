@@ -42,7 +42,7 @@ const RootSchema = v.record(v.string(), v.string());
 export const SlateConsentSchema = v.object({
   workspace: Name,
   slate: Name,
-  /** `mcp.<server>`, `ai` or `web`. */
+  /** `mcp.<server>`, `ai`, `web`, or `agent`, the app agent answering on their models (app-agent.ts). */
   server: Name,
   root: RootSchema,
   tools: v.array(Name),
@@ -52,6 +52,14 @@ export const SlateConsentSchema = v.object({
 });
 
 export type SlateConsent = v.InferOutput<typeof SlateConsentSchema>;
+
+/** A visitor's consent for an app's agent to answer them on their own models (app-agent.ts): a row of its own. */
+export const APP_AGENT_CONSENT = 'agent';
+
+/** That consent, for this revision of the app's code, as the visitor gives it. */
+export function appAgentConsent(workspace: string, slate: string, revision: string): SlateConsent {
+  return { workspace, slate, server: APP_AGENT_CONSENT, root: {}, tools: [], effects: false, revision };
+}
 
 /** What a listing's card shows, as its owner set it on the share sheet: what the Gallery's index finds and sorts by. */
 const GalleryCardSchema = v.object({

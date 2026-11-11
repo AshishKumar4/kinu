@@ -100,6 +100,8 @@ export { AgentIsolateTail, AgentWorkspaceRPC } from "./agent-facets";
 
 export { UserDO } from "./user/user-do";
 
+export { AppAgentDO } from "./app-agent-do";
+
 // Mossaic Drive DOs, renamed to avoid clashing with `UserDO`; the SDK
 // addresses them by binding name (`MOSSAIC_USER`, `MOSSAIC_SHARD`).
 export { MossaicUserDO, MossaicShardDO } from "./drive/mossaic-objects";

@@ -6,21 +6,21 @@ import * as v from 'valibot';
 import { Effect } from 'effect';
 import { KinuError, refusalOf } from '../obs/error';
 import { settle, settleSync } from '../obs/effect';
-import { usageTotal, UsageSchema } from '../usage';
+import { usageTotal, UsageSchema, type Usage } from '../usage';
 import type { MissionGovernor } from '../mission-budget';
 import type { JsonValue } from '../utils/json';
 import { shareCaller, type SlateCaller } from './caller';
 import type { SlateLiveShareStore } from './live-shares';
 import type { ApprovalSpend } from '../safety/approval-gate';
 import type { OwnerEffects, ServerSend } from './shared-server';
-import { slateAddressImpact } from './members';
+import { AGENT_ASK_MEMBER, slateAddressImpact } from './members';
 import { isJsonAnswer, type SlateCallResult, type SlateSurfaceResult } from './rpc';
 import {
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel,
   type LiveShareRecord, type ShareViewerClaim, type ViewerCall,
 } from './sharing';
-import { admitNestedViewerCall, routeGuestCall, routeViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, type SlateCall, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
-import { admitGuestNested, ANONYMOUS_SUBJECT_PREFIX, identifiedOnlyBySource, type GuestPrincipal } from './guest';
+import { admitNestedViewerCall, routeViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, type SlateCall, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
+import { ANONYMOUS_SUBJECT_PREFIX, appAgentVisitorPayer, type AppAgentPayer } from './app-agent';
 
 /** Every signed-in viewer, where the deployment keeps no key to tell them apart by. */
 const SIGNED_IN_VIEWER = 'viewer';
@@ -62,7 +62,7 @@ export type ViewerAdmission =
 export type ViewerRun = (route: SlateRoute, nested: (namespace: string, member: string) => void, admit: () => void) => Promise<SlateSurfaceResult>;
 
 /**
- * A viewer's answer is JSON: their guest's reply arrives as its whole text, and routing refuses a viewer every other
+ * A viewer's answer is JSON: their app agent's reply arrives as its whole text, and routing refuses a viewer every other
  * streamed member, so any other stream here is a routing fault.
  */
 async function viewerAnswer(result: SlateSurfaceResult): Promise<SlateCallResult> {
@@ -74,6 +74,13 @@ async function viewerAnswer(result: SlateSurfaceResult): Promise<SlateCallResult
   if (!(value instanceof ReadableStream)) return { ok: true, value: { reply: await new Response(value.reply).text() } };
 
   return { ok: false, ...refusalOf(new KinuError('io', 'A share viewer\'s call answered a stream')) };
+}
+
+/** What a call's answer says it spent, where it says so (an `ai.run`'s `usage`). */
+function usageOf(value: JsonValue): Usage | undefined {
+  const parsed = v.safeParse(v.object({ usage: v.optional(UsageSchema) }), value);
+
+  return parsed.success ? parsed.output.usage : undefined;
 }
 
 export class SlateShareViewers {
@@ -118,46 +125,27 @@ export class SlateShareViewers {
     if (!input.claim.consented && namespaces.length > 0) return { kind: 'consent', share, namespaces };
     const request = this.deps.live.openRequest({ share: share.id, viewer: subject, path: input.pathname });
 
-    return { kind: 'admitted', caller: shareCaller(share.id), share, viewer: { share: share.id, subject, request } };
+    const viewer: SlateViewer = { share: share.id, subject, request, ...(input.claim.userId !== null && { userId: input.claim.userId }) };
+
+    return { kind: 'admitted', caller: shareCaller(share.id), share, viewer };
   }
 
-  /**
-   * A viewer's call routed and weighed before anything of the owner's is asked: a guest's own call as its scope says
-   * (slates/guest.ts), any other as the grant admits it, held first to the shared server's bound; whether it acts; or
-   * what its visitor must do first, where one known only by where they came from talks to a guest.
-   */
-  private routed(input: Parameters<SlateShareViewers['call']>[0], share: LiveShareRecord, viewer: SlateViewer)
-    : Effect.Effect<{ readonly call: SlateCall; readonly effect: boolean } | { readonly needs: 'identity' }, KinuError> {
+  /** A viewer's call routed and weighed before anything of the owner's is asked: held first to the shared server's
+   *  bound, then to the grant; and whether it acts. */
+  private routed(input: Parameters<SlateShareViewers['call']>[0], share: LiveShareRecord): Effect.Effect<{ readonly call: SlateCall; readonly effect: boolean }, KinuError> {
     return Effect.gen({ self: this }, function* () {
-      const { id, request, chain, guest } = input;
-
-      // The guest's own call: what its scope admits runs as its visitor's, anything else on its owner's exact approval.
-      if (guest !== undefined) {
-        const call = routeGuestCall({ id, request, chain, slates: share.grant.slates });
-
-        return { call, effect: call.authorization === 'ask-exact' };
-      }
-
+      const { id, request, chain } = input;
       const beyond = yield* input.bound(slateCallAddress(request.path));
 
       if (beyond !== null) return yield* beyond;
-      const call = routeViewerCall({ id, request, chain, viewer, grant: share.grant });
-
-      // A call on a guest's way (its app's server answering it) reaches only what the guest's scope names alone.
-      admitGuestNested(viewer.guest, share.grant.slates, call.address);
+      const call = routeViewerCall({ id, request, chain, grant: share.grant });
       // A browser member the class runs acts there once the host authorizes it, so that ask is what acts; its host
       // member only ever reports the class's refusal (web-operations.ts), which acts on nothing.
       const reportOnly = request.authorize !== true && call.address.namespace === 'web' && SLATE_DRIVEN_MEMBERS.includes(call.address.member);
-      const acts = call.impact !== 'observe' && !reportOnly;
 
-      // Talking to a guest needs to know who talks: its guest is theirs alone, signed in or anonymous.
-      if (identifiedOnlyBySource(viewer.subject) && call.route.kind === 'agent') return { needs: 'identity' as const };
-
-      // A message reaches the visitor's own guest, which acts on nothing itself: what the guest then calls is what asks.
-      return { call, effect: acts && call.route.kind !== 'agent' };
+      return { call, effect: call.impact !== 'observe' && !reportOnly };
     });
   }
-
 
   /** Reads the ledger row, never `guard`, which stamps exhaustion and fires the once-per-label event. */
   paused(share: LiveShareRecord): boolean {
@@ -178,14 +166,12 @@ export class SlateShareViewers {
     readonly request: SlateCallRequest;
     readonly chain: readonly string[];
     readonly issued: SlateInvocation | null;
-    /** The guest agent making this call itself (slates/guest.ts); absent for its visitor's browser and every call on its way. */
-    readonly guest?: GuestPrincipal;
     readonly run: ViewerRun;
     /**
      * The shared server's word on the routed call (shared-server.ts `SharedServers.gate`): refused where it lends nothing
      * or does not reach it, or where its owner has not approved the effect; else the send, which weighs it again.
      */
-    readonly gate: (call: { readonly address: { readonly namespace: string; readonly member: string }; readonly effect: boolean; readonly guest?: string }) => Effect.Effect<ServerSend, KinuError>;
+    readonly gate: (call: { readonly address: { readonly namespace: string; readonly member: string }; readonly effect: boolean }) => Effect.Effect<ServerSend, KinuError>;
     /** The shared server's bound alone, met first (it asks no one): why it lends nothing or no reach here, or null. */
     readonly bound: (address: { readonly namespace: string; readonly member: string }) => Effect.Effect<KinuError | null>;
   }): Promise<SlateCallResult> {
@@ -198,21 +184,13 @@ export class SlateShareViewers {
       // What the audit row says, as far as the call got: refused until it is routed and answered.
       let row: ViewerCall = { slate: id, ...named, impact: slateAddressImpact(named) ?? 'administer', ok: false };
       const share = this.deps.live.live(input.share);
-      const governor = this.deps.budget?.();
 
       const answered = Effect.gen({ self: this }, function* () {
-        // S2: the per-day spend bound refuses as 'budget'.
-        if (governor !== undefined && governor.guard('model_call', [shareSpendLabel(share.id)]) !== null) {
-          return yield* new KinuError('budget', 'This share is paused for today');
-        }
-
-        const routed = yield* this.routed(input, share, viewer);
-
-        // Answered as a value: the share's page reads `needs` to ask its visitor who they are.
-        if ('needs' in routed) return { ok: false as const, ...refusalOf(new KinuError('denied', 'Sign in, or continue anonymously, to talk to this app\'s assistant')), needs: routed.needs };
+        yield* this.notPaused(share);
+        const routed = yield* this.routed(input, share);
         const { call } = routed;
         row = { slate: id, ...call.address, impact: call.impact, ok: false };
-        const send = yield* input.gate({ address: call.address, effect: routed.effect, ...(input.guest !== undefined && { guest: input.guest.actorId }) });
+        const send = yield* input.gate({ address: call.address, effect: routed.effect });
         const taken: ApprovalSpend[] = [];
 
         // The share's and the server's word read again where the call acts: a revoke, a mode change or an approval
@@ -224,26 +202,20 @@ export class SlateShareViewers {
           if (spend !== null) taken.push(spend);
         };
 
-        // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there. On a
-        // guest's way, it meets the guest's scope too.
-        const nested = (namespace: string, member: string) => {
-          const grant = this.deps.live.live(input.share).grant;
-
-          admitNestedViewerCall(grant, id, { namespace, member });
-          admitGuestNested(viewer.guest, grant.slates, { namespace, member });
-        };
+        // What the call reaches inside itself meets the grant as it stands then: a revoke mid-call ends it there.
+        const nested = (namespace: string, member: string) => { admitNestedViewerCall(this.deps.live.live(input.share).grant, id, { namespace, member }); };
 
         const ran = yield* Effect.exit(Effect.promise(async () => input.run(call.route, nested, admit)));
         const [spend = null] = taken;
 
         // The approval is used once the call was handed on: a failure after that may have acted, so it never runs twice
         // on one word of the owner's. The same call made again asks again.
-        if (spend !== null) yield* Effect.promise(async () => this.deps.ownerEffects?.settle(spend, 'spent', input.guest?.actorId));
+        if (spend !== null) yield* Effect.promise(async () => this.deps.ownerEffects?.settle(spend, 'spent'));
         const surfaced = yield* ran;
         const result = yield* Effect.promise(async () => viewerAnswer(surfaced));
         row = { ...row, ok: result.ok };
 
-        if (result.ok) this.debit(share, result.value);
+        if (result.ok) this.debit(share, usageOf(result.value));
 
         return result;
       });
@@ -263,25 +235,86 @@ export class SlateShareViewers {
     }));
   }
 
+  /**
+   * A viewer's `agent.ask`, admitted as the share stands now: who pays for their app agent (app-agent.ts), or what they
+   * must do first; audited as each of their calls is. `run` answers it as that payer, the share lending as it does now.
+   */
+  ask(input: {
+    readonly id: string;
+    readonly viewer: SlateViewer;
+    readonly run: (payer: AppAgentPayer, share: LiveShareRecord) => Promise<SlateSurfaceResult>;
+  }): Promise<SlateCallResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const { id, viewer } = input;
+      const share = this.deps.live.live(viewer.share);
+      let row: ViewerCall = { slate: id, namespace: 'agent', member: AGENT_ASK_MEMBER, impact: 'observe', ok: false };
+
+      const answered = Effect.gen({ self: this }, function* () {
+        if (id !== share.slate) return yield* new KinuError('denied', `A share's assistant answers for its app, ${share.slate}, alone`);
+        const owner = this.deps.ownerUserId?.() ?? null;
+
+        if (owner === null) return yield* new KinuError('unavailable', 'This app has no owner to lend its assistant');
+        const payer = appAgentVisitorPayer({ mode: share.mode, subject: viewer.subject, userId: viewer.userId ?? null, owner });
+
+        // Answered as a value: the share's page reads `needs`, and asks Kinu what its visitor must do.
+        if ('needs' in payer) {
+          const why = payer.needs === 'identity' ? 'Sign in, or continue anonymously, to talk to this app\'s assistant' : 'Sign in to talk to this app\'s assistant: it answers on your own models';
+
+          return { ok: false as const, ...refusalOf(new KinuError('denied', why)), needs: 'identity' as const };
+        }
+
+        if (payer.kind === 'lent') yield* this.notPaused(share);
+        const result = yield* Effect.promise(async () => viewerAnswer(await input.run(payer, share)));
+        row = { ...row, ok: result.ok };
+
+        if (result.ok) this.debit(share, undefined);
+
+        return result;
+      });
+
+      return yield* Effect.ensuring(answered, Effect.sync(() => { this.deps.live.recordCall(viewer.request, row); }));
+    }));
+  }
+
+  /**
+   * A step of an app agent the owner lends on `lent`: refused once the share ended, changed how it lends, or is paused
+   * for the day. Throws to refuse.
+   */
+  admitLent(lent: LiveShareRecord): void {
+    this.stillLends(lent);
+
+    return settleSync(this.notPaused(this.deps.live.live(lent.id)));
+  }
+
+  /** What a step of an app agent the owner lends on `share` spent of their model, counted against the share's day. */
+  lentSpent(share: string, usage: Usage): void {
+    this.debit(this.deps.live.live(share), usage, 0);
+  }
+
+  /** S2: the per-day spend bound refuses as 'budget'. */
+  private notPaused(share: LiveShareRecord): Effect.Effect<void, KinuError> {
+    const governor = this.deps.budget?.();
+
+    return governor !== undefined && governor.guard('model_call', [shareSpendLabel(share.id)]) !== null
+      ? Effect.fail(new KinuError('budget', 'This share is paused for today'))
+      : Effect.void;
+  }
+
   /** The label carries the UTC day, so the bound renews without a rollover job; unparented so no turn owns it. */
-  private debit(share: LiveShareRecord, value: JsonValue): void {
+  private debit(share: LiveShareRecord, usage: Usage | undefined, calls = 1): void {
     const governor = this.deps.budget?.();
 
     if (governor === undefined) return;
     const label = declareShareSpend(governor, share.id);
-    const usage = v.safeParse(v.object({ usage: v.optional(UsageSchema) }), value);
 
-    governor.debit(usage.success && usage.output.usage !== undefined ? usageTotal(usage.output.usage) ?? 0 : 0, {
-      labels: [label], calls: 1,
-      usage: usage.success ? usage.output.usage : undefined,
-    });
+    governor.debit(usage === undefined ? 0 : usageTotal(usage) ?? 0, { labels: [label], calls, usage });
   }
 }
 
 
 /**
  * `share`'s spend label for today, declared on `governor` at the share's daily cap: what its viewers' calls and their
- * guests' model calls spend, one label on the workspace's one governor. Unparented, so no turn owns it.
+ * app agents' model calls on My access spend, one label on the workspace's one governor. Unparented, so no turn owns it.
  */
 export function declareShareSpend(governor: MissionGovernor, share: string): string {
   const label = shareSpendLabel(share);

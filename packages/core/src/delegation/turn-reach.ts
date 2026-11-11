@@ -8,7 +8,6 @@ import type { TurnAuthorship } from '../types/turn';
 import { planSubmissionReach } from '../plans/review';
 import type { ActorPolicy } from './actor-policy';
 import type { ExecutionLane } from '../orchestrator/execution';
-import type { GuestPrincipal } from '../slates/guest';
 
 /** Whose lane a turn runs in: its hirer's only when the agent has one; an agent without a hirer answers its owner. */
 export type TurnLane = 'owner' | 'hirer';
@@ -57,16 +56,11 @@ export interface ActorReach {
    * evolution's verdicts, its fresh ones run the evolved tool text, it spends and scopes the
    * workspace's missions and switches its role, and its jobs are the workspace's).
    * `confined`: a hire's, a head's or a swarm node's: its web, files and state, and none of the above.
-   * `guest`: a shared app's guest (slates/guest.ts): the app's surface as its one visitor reaches it, and nothing of its
-   * own workspace's.
    */
-  readonly kind: 'workspace' | 'confined' | 'guest';
+  readonly kind: 'workspace' | 'confined';
 }
 
-/** `guest`: which share and visitor the agent answers, read from the workspace's guests; null for any other agent. */
-export function actorReach(policy: Pick<ActorPolicy, 'workspaceAgent'>, guest: GuestPrincipal | null = null): ActorReach {
-  if (guest !== null) return { kind: 'guest' };
-
+export function actorReach(policy: Pick<ActorPolicy, 'workspaceAgent'>): ActorReach {
   return { kind: policy.workspaceAgent ? 'workspace' : 'confined' };
 }
 
@@ -82,10 +76,7 @@ export function surfaceReach(
   lane: Pick<ExecutionLane, 'authorship' | 'mode' | 'driving' | 'awaitsReply'>,
   /** See {@link turnReach}. */
   ownerSurface: boolean,
-  guest: GuestPrincipal | null = null,
 ): SurfaceReach {
-  // A guest answers its visitor alone: it asks the owner nothing, plans nothing and reports to no one.
-  if (guest !== null) return { actor: actorReach(policy, guest), turn: { report: false, askOwner: false, submitPlan: false, replyToComment: false } };
   const turn = turnReach({ lane: turnLane(policy, lane.authorship), mode: lane.mode, driving: lane.driving, ownerSurface, awaitsReply: lane.awaitsReply });
 
   return { actor: actorReach(policy), turn };

@@ -50,6 +50,12 @@ export class SlateConsentStore {
     );
   }
 
+  /** The slates this account consented `server` for, by workspace. */
+  slatesFor(server: string): { readonly workspace: string; readonly slate: string }[] {
+    return this.sql.exec('SELECT workspace, slate FROM slate_consents WHERE server = ?', server).toArray()
+      .map((row) => v.parse(v.object({ workspace: v.string(), slate: v.string() }), row));
+  }
+
   withdraw(workspace: string, slate: string, server: string, root: Readonly<Record<string, string>>): boolean {
     return this.sql.exec('DELETE FROM slate_consents WHERE workspace = ? AND slate = ? AND server = ? AND root = ? RETURNING workspace', workspace, slate, server, canonicalRoot(root)).toArray().length > 0;
   }
