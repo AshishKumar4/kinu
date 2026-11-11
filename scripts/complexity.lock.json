@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-11-09",
-  "files": 3985,
-  "functions": 105697,
+  "measuredAt": "2026-11-11",
+  "files": 3982,
+  "functions": 105765,
   "ceiling": 87,
   "line": 24,
   "inventory": [
@@ -474,6 +474,10 @@
       "complexity": 24
     },
     {
+      "key": "packages/cf-backend/src/slates/host.ts#SlateHost.surfaceCall>promise",
+      "complexity": 24
+    },
+    {
       "key": "packages/cf-backend/src/user/devices.ts#UserDevices.deviceRpc>gen",
       "complexity": 24
     },
@@ -575,10 +579,6 @@
     },
     {
       "key": "scripts/ladder.ts#recordArmadaRow",
-      "complexity": 24
-    },
-    {
-      "key": "scripts/live-app-rows.ts#liveRows>run>startScriptedModel",
       "complexity": 24
     },
     {

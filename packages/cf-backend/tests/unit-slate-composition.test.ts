@@ -1,15 +1,15 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
-import { describe, expect, test } from 'bun:test';
+import { expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, agentCred, agentHome, agentIdentity,
   openWorkspaceMainActor, RunEventRecorder, SESSION_UID, WORKSPACE_RUN_ID,
-  INTERRUPTED_TURN, isJsonAnswer, type JsonValue, type SlateSurfaceResult, actorHomeName } from '@kinu.run/core';
+  type JsonValue, type SlateSurfaceResult, actorHomeName } from '@kinu.run/core';
 import {
-  catalogTurn, gatewayWorkspace, hostedSubagentHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
+  gatewayWorkspace, hostedSubagentHarness, chatSessionTurns, orchestratorHarness, reactivateOrchestratorHarness, storedChat, workspaceFiles,
 } from './helpers/actor-harness';
-import { chatCompletion, wordByWordCompletion, GATEWAY_MODEL, openingOf, requestOf, stubAiBinding, textThenToolCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
+import { chatCompletion, wordByWordCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import { createWorkspaceBundle } from '../../core/tests/helpers';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { mcpTestServer, storedMcpServer } from './helpers/mcp-server';
@@ -498,127 +498,6 @@ test('the owner\'s own slate hires a subagent and lists it as the owner does; a 
   }
 });
 
-/** A model step that answers nothing until the turn is stopped, then fails as the Stop aborted it. */
-function untilStopped(run: RecordedGatewayRun): Promise<Response> {
-  return new Promise<Response>((_answer, refuse) => { run.signal?.addEventListener('abort', () => { refuse(run.signal?.reason); }); });
-}
-
-/** A reply as its reader holds it once it ends: the pieces read, and why it ended when it did not end cleanly. */
-async function readReply(answer: SlateSurfaceResult): Promise<{ pieces: string[]; failure: string | null }> {
-  if (!answer.ok || answer.value instanceof ReadableStream || isJsonAnswer(answer.value)) throw new Error(`agent.ask answered no reply: ${JSON.stringify(answer)}`);
-  const reader = answer.value.reply.getReader();
-  const decoder = new TextDecoder();
-  const pieces: string[] = [];
-
-  try {
-    for (let read = await reader.read(); !read.done; read = await reader.read()) pieces.push(decoder.decode(read.value));
-
-    return { pieces, failure: null };
-  } catch (cause) {
-    return { pieces, failure: cause instanceof Error ? cause.message : String(cause) };
-  }
-}
-
-/** The text of the chat's last answer, as the transcript stores it. */
-async function lastAnswer(harness: ReturnType<typeof gatewayWorkspace>): Promise<string> {
-  const answer = (await storedChat(harness)).filter((message) => message.role === 'assistant').at(-1);
-
-  return (answer?.parts ?? []).flatMap((part) => (part.type === 'text' ? [part.text] : [])).join('');
-}
-
-async function chatSlate(harness: ReturnType<typeof gatewayWorkspace>) {
-  const files = workspaceFiles(harness.agent);
-  await files.mkdir('/slates/chat', { recursive: true });
-  await writeText(files, '/slates/chat/package.json', JSON.stringify({ main: 'server.ts' }));
-
-  return surface(harness.agent, ROOT_SLATE_CALLER, 'chat');
-}
-
-describe('a slate asking the agent', () => {
-  test('reads the reply as the turn writes it, the same words the chat keeps as its answer', async () => {
-    const words = ['The ', 'board ', 'has ', 'three ', 'cards.'];
-    const gateway = stubAiBinding((run) => wordByWordCompletion(run, words));
-    const workspace = gatewayWorkspace(gateway);
-    const chat = await chatSlate(workspace);
-
-    // The reply ends where the turn's answer is stored, so the transcript holds it once the reply has ended.
-    const read = await readReply(await chat(['agent', 'ask'], [{ text: 'How many cards?' }]));
-
-    expect(read.failure).toBeNull();
-    expect(read.pieces.join('')).toBe(words.join(''));
-    expect(read.pieces.length).toBeGreaterThan(1);
-    expect(await lastAnswer(workspace)).toBe(words.join(''));
-    // The agent was told where its words go.
-    expect(JSON.stringify(gateway.runs.at(-1)?.query)).toContain('streams to slate chat');
-  });
-
-  test('asked mid-turn, the reply is only what the turn writes after the message lands', async () => {
-    const asked = Promise.withResolvers<SlateSurfaceResult>();
-    let chat: Awaited<ReturnType<typeof chatSlate>> | null = null;
-
-    const gateway = stubAiBinding(async (run) => {
-      if (!openingOf(run).includes('Tidy the board.')) return chatCompletion(run, 'unexpected');
-
-      if (requestOf(run).messages.some((message) => message.role === 'tool')) return wordByWordCompletion(run, ['The ', 'newest ', 'is ', 'Launch.']);
-
-      // The slate asks while this turn runs, before the step that takes its message in.
-      asked.resolve(await present(chat, 'the chat slate')(['agent', 'ask'], [{ text: 'Which card is newest?' }]));
-
-      return textThenToolCompletion(run, 'Looking at the board. ', { tool: 'eval', args: { code: 'return 1;' } }, 'eval_0');
-    });
-
-    const workspace = gatewayWorkspace(gateway);
-    chat = await chatSlate(workspace);
-    await catalogTurn(workspace.agent, 'Tidy the board.');
-
-    expect(await readReply(await asked.promise)).toEqual({ pieces: ['The ', 'newest ', 'is ', 'Launch.'], failure: null });
-  });
-
-  test('a message asked mid-turn and let go by a Stop before the turn read it ends its reply', async () => {
-    const asked = Promise.withResolvers<SlateSurfaceResult>();
-    let chat: Awaited<ReturnType<typeof chatSlate>> | null = null;
-
-    const gateway = stubAiBinding(async (run) => {
-      if (!openingOf(run).includes('Tidy the board.')) return chatCompletion(run, 'unexpected');
-      // The slate asks while this turn's step runs: its message waits for the next step, which a Stop takes away.
-      asked.resolve(await present(chat, 'the chat slate')(['agent', 'ask'], [{ text: 'Which card is newest?' }]));
-
-      return await untilStopped(run);
-    });
-
-    const workspace = gatewayWorkspace(gateway);
-    chat = await chatSlate(workspace);
-    const turn = catalogTurn(workspace.agent, 'Tidy the board.');
-    const answer = await asked.promise;
-
-    await workspace.agent.cancelCurrentWork();
-    await Promise.allSettled([turn]);
-    await workspace.agent.harnessAgentsIdle();
-
-    // Ended, as its reader reads it: a reply left open would hold its reader past every piece of work.
-    expect(await readReply(answer)).toMatchObject({ pieces: [], failure: expect.any(String) });
-  });
-
-  test('a stopped turn ends the reply with why', async () => {
-    const started = Promise.withResolvers<void>();
-
-    const gateway = stubAiBinding((run) => {
-      started.resolve();
-
-      return untilStopped(run);
-    });
-
-    const workspace = gatewayWorkspace(gateway);
-    const chat = await chatSlate(workspace);
-    const answer = await chat(['agent', 'ask'], [{ text: 'Summarize everything.' }]);
-
-    // The owner's Stop, as the chat's stop control sends it.
-    await started.promise;
-    await workspace.agent.cancelCurrentWork();
-
-    expect(await readReply(answer)).toEqual({ pieces: [], failure: INTERRUPTED_TURN });
-  });
-});
 
 test('a slate\'s file write in Plan is refused before it lands', async () => {
   const actor = orchestratorHarness();

@@ -207,7 +207,7 @@ export const LIVE_SHARE_CHATS_PATH = '/api/shared/live/chats';
 
 export const LiveShareChatsBodySchema = v.object({ workspace: v.string(), share: v.string() });
 
-export const ShareChatsSchema = v.object({ guests: v.array(v.object({ subject: v.string(), label: v.string(), startedAt: v.number() })) });
+export const ShareChatsSchema = v.object({ chats: v.array(v.object({ subject: v.string(), label: v.string(), startedAt: v.number() })) });
 
 export type ShareChats = v.InferOutput<typeof ShareChatsSchema>;
 

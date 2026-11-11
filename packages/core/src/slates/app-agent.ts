@@ -53,6 +53,21 @@ export interface AppAgentConversation {
   readonly subject: string;
 }
 
+/** The owner's own conversation with their app's agent, in Kinu. */
+export function ownerConversation(owner: string, workspace: string, slate: string): AppAgentConversation {
+  return { payer: { kind: 'lent', userId: owner }, workspace, slate, share: '', subject: '' };
+}
+
+/** A share's visitor's conversation on the model its owner lends there. */
+export function lentConversation(owner: string, at: { readonly workspace: string; readonly slate: string; readonly share: string; readonly subject: string }): AppAgentConversation {
+  return { payer: { kind: 'lent', userId: owner }, ...at };
+}
+
+/** A visitor's own conversation with an app's agent, on their models: one per app, whichever share they came by. */
+export function ownConversation(visitor: string, workspace: string, slate: string): AppAgentConversation {
+  return { payer: { kind: 'own', userId: visitor }, workspace, slate, share: '', subject: '' };
+}
+
 /** The name of a conversation's object: whoever builds it from the same conversation reaches the same one, no one else. */
 export function appAgentKey(conversation: AppAgentConversation): string {
   const { payer, workspace, slate, share, subject } = conversation;
@@ -99,11 +114,9 @@ export function appAgentConsented(consent: SlateConsent | null, revision: string
 /** The model a payer's default tier names, as their own turns run it: its effort, then its fallbacks in order. */
 export interface AppAgentModel {
   readonly spec: string;
-  readonly tier: string;
   readonly reasoning: ReasoningEffort | null;
   readonly fallbacks: readonly { readonly model: string; readonly reasoning: ReasoningEffort | null }[];
   readonly retries: number;
-  readonly credentialsRevision: number;
 }
 
 /** The payer's account's word on one ask: their default model, or that it waits for their consent. */
@@ -243,9 +256,8 @@ export class SlateShareChats {
     });
   }
 
-  /** Every conversation of `share`, forgotten: the subjects whose conversations its caller ends. */
-  forget(share: string): string[] {
-    return this.db.exec('DELETE FROM slate_share_chats WHERE share_id = ? RETURNING viewer_subject AS subject', share).toArray()
-      .map((raw) => v.parse(v.object({ subject: v.string() }), raw).subject);
+  /** One forgotten, once its conversation ended. */
+  forget(share: string, subject: string): void {
+    this.db.exec('DELETE FROM slate_share_chats WHERE share_id = ? AND viewer_subject = ?', share, subject);
   }
 }

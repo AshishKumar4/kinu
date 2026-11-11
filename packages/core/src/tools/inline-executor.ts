@@ -37,9 +37,6 @@ interface ShellExec {
   exec(command: string, opts?: { signal?: AbortSignal }): Promise<ShellExecResult>;
 }
 
-/** What the actor running a program stamps on its `workspace.slates` calls: the turn the program runs in. */
-export const SlateProgramSchema = v.object({ turn: v.string() });
-
 export interface InlineExecutorDeps {
   /** The plane the tools reach; `resolve` says where a path landed. */
   vfs: VFS & Partial<Pick<VfsMountRouting, 'resolve'>>;
@@ -65,9 +62,8 @@ export interface InlineExecutorDeps {
   toolchain?: readonly ExecutorCapability[];
   /** Capabilities the host can neither claim nor rule out; declared, since an omission reads as a measured absence. */
   unmeasured?: readonly ExecutorCapability[];
-  /** The owning workspace's slate operations; absent when this backend has no slate host. `turn`: the turn whose program
-   *  makes the operation (`SlateInvocation.turn`). */
-  slate?: (operation: SlateOperation, turn?: string) => Promise<SlateCallResult>;
+  /** The owning workspace's slate operations; absent when this backend has no slate host. */
+  slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
 }
 
 
@@ -254,7 +250,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const slateRefusal = (refused: { readonly reason: string; readonly error: string }): JsonValue => ({ success: false, reason: refused.reason, error: refused.error });
 
   if (slate !== undefined) {
-    // Captured and shadowed by `bindSlates`; the second argument is the program's own, stamped by the actor running it.
+    // Captured and shadowed by `bindSlates`.
     tools.slates = {
       planAllowed: true,
       description: 'The slate operations behind the workspace.slates members.',
@@ -264,8 +260,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         if (!parsed.success) return refusalOf(new KinuError('bad_input',
           'workspace.slates received an operation outside its members', { cause: new v.ValiError(parsed.issues) }));
         requireSlateWorkMode(parsed.output, currentWorkMode());
-        const program = v.safeParse(SlateProgramSchema, args[1]);
-        const result = await slate(parsed.output, program.success ? program.output.turn : undefined);
+        const result = await slate(parsed.output);
 
         return result.ok ? result.value : slateRefusal(result);
       },

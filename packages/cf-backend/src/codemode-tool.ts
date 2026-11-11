@@ -6,7 +6,7 @@
 import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool } from 'ai';
-import { DESKTOP_MEMBERS, execCallArgs, execContext, readCraftRaised, readDeviceRequestChannel, scopedTurnSurface, SlateProgramSchema, type CodemodeSurface, type CraftRaised, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
+import { DESKTOP_MEMBERS, execCallArgs, execContext, readCraftRaised, readDeviceRequestChannel, type CodemodeSurface, type CraftRaised, type DeviceRequestChannel, type ExecutorProviderSurface } from "@kinu.run/core";
 import { renderCodemodeDescription, nativeToolFunctions, programSurface, servedImpacts, CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -51,11 +51,10 @@ function guarded(provider: CodemodeProvider, nested: (namespace: string, member:
   };
 }
 
-/** One program's own: what stops it, the device requests it owns, and the turn it runs in, each absent outside one. */
+/** One program's own: what stops it and the device requests it owns, each absent outside one. */
 interface ProgramContext {
   readonly stop?: AbortSignal;
   readonly channel?: DeviceRequestChannel;
-  readonly turn?: string;
 }
 
 export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
@@ -63,7 +62,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
   // a program moved to the background keeps calling while the next one runs, so each call carries its own program's
   // stop and channel. The channel is read per call: a detach changes the owning job mid-program.
   const programExecutor = (program: ProgramContext) => (p: ExecutorProviderSurface): ExecutorProviderSurface => {
-    const { stop: programStop, channel: deviceRequests, turn } = program;
+    const { stop: programStop, channel: deviceRequests } = program;
     const wrapped: typeof p.tools = {};
 
     for (const [name, entry] of Object.entries(p.tools)) {
@@ -73,9 +72,6 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       const drivesDesktop = p.name === 'computer' && DESKTOP_MEMBERS.some((member) => member === name);
 
       const called = (args: unknown[]): unknown[] => {
-        // Stamped here, never by the program: the turn it runs in, which a chain it begins keeps (`SlateInvocation.turn`).
-        if (name === 'slates') return turn === undefined ? [args[0]] : [args[0], { turn } satisfies v.InferOutput<typeof SlateProgramSchema>];
-
         if (drivesDesktop) return [args[0], { ...v.parse(v.optional(v.looseObject({}), {}), args[1]), ...execContext({ signal: programStop, channel: deviceRequests }) }];
 
         return carriesOwnership ? execCallArgs(args, { channel: deviceRequests }) : args;
@@ -172,9 +168,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         ...build('build', {}),
         execute: (input, context) => {
           const channel = readDeviceRequestChannel({ toolOptions: context });
-          // Read as the program starts, inside its tool call's turn: its RPC callbacks run outside that scope.
-          const turn = scopedTurnSurface()?.key.turnId;
-          const program = { stop: context.abortSignal, ...channel !== undefined && { channel }, ...turn !== undefined && { turn } };
+          const program = { stop: context.abortSignal, ...channel !== undefined && { channel } };
           const written = v.is(v.object({ code: v.string() }), input) ? input.code : undefined;
           const execute = build(currentWorkMode() === 'plan' ? 'plan' : 'build', program, written, readCraftRaised({ toolOptions: context })).execute;
 

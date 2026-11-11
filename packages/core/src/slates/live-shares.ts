@@ -185,7 +185,10 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
    * naming it: its edit marks name no one, and its views, keyed per share by `viewerKey`, are deleted. Its requests were
    * never kept under its account (`SlateShareViewersDeps.viewerKey`).
    */
-  async forgetPerson(person: { readonly userId: string; readonly email: string }, viewerKey: (share: string) => Promise<string | null>): Promise<void> {
+  /** Each share and its key for the person, whose views are forgotten here. */
+  async forgetPerson(person: { readonly userId: string; readonly email: string }, viewerKey: (share: string) => Promise<string | null>): Promise<{ share: string; viewer: string }[]> {
+    const forgotten: { share: string; viewer: string }[] = [];
+
     this.forgetUser(person);
     this.db.exec('UPDATE slate_edit_marks SET editor = ? WHERE lower(editor) = ?', FORGOTTEN_PERSON, person.email);
 
@@ -193,8 +196,12 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
     for (const { id } of this.db.exec(`SELECT id FROM slate_shares WHERE kind = 'live'`).toArray().map((row) => v.parse(v.object({ id: v.string() }), row))) {
       const key = await viewerKey(id);
 
-      if (key !== null) this.db.exec('DELETE FROM slate_share_views WHERE share = ? AND viewer = ?', id, key);
+      if (key === null) continue;
+      this.db.exec('DELETE FROM slate_share_views WHERE share = ? AND viewer = ?', id, key);
+      forgotten.push({ share: id, viewer: key });
     }
+
+    return forgotten;
   }
 
   markEdit(slate: string, editor: string): void {

@@ -103,8 +103,8 @@ export function openLiveShare(input: { workspace: string; share: string }): Prom
 }
 
 /** A My-access share's conversations with its app agent, newest first. */
-export function readShareChats(input: { workspace: string; share: string }): Promise<ShareChats['guests']> {
-  return settle(Effect.map(api(ShareChatsSchema, 'POST', LIVE_SHARE_CHATS_PATH, input), (answer) => answer.guests));
+export function readShareChats(input: { workspace: string; share: string }): Promise<ShareChats['chats']> {
+  return settle(Effect.map(api(ShareChatsSchema, 'POST', LIVE_SHARE_CHATS_PATH, input), (answer) => answer.chats));
 }
 
 /** One of them, read-only, as the transcript viewer draws it. */

@@ -81,10 +81,10 @@ export function AssistantConsentDecision({ slate, changed, onAllow, onClose }: {
           <span key="calls">Call {slate}&apos;s own functions for you, as you</span>,
         ]}
         no={[
-          <span key="others">Show your conversation to anyone but you</span>,
+          <span key="others">Let the app&apos;s owner read your conversation in Kinu</span>,
           <span key="reach">Use your connections, files or other apps</span>,
         ]} />
-      <p className="t-meta p-text-3">What it sends {slate}, its owner can see, and the app can ask it for you while you have it open. For this app, at this version of its code.</p>
+      <p className="t-meta p-text-3">{slate} itself sees what you ask through it and each reply, as does what it sends on, and it can ask its assistant for you while you have it open. For this app, at this version of its code.</p>
     </Modal>
   );
 }

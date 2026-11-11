@@ -55,7 +55,7 @@ KINU_EVAL_BACKEND=cloud KINU_TOKEN="${RESOLVED[1]}" bun scripts/scripted-tier.ts
 
 # The app agent's own-access row is answered on its visitor's own model: a second eval account, also on the scripted
 # model, set up the same way (product-flows.ts `appAgentAnswersAVisitorOnTheirOwn`).
-if [[ "$FLOW" == "--flow=app-agent-own" ]]; then
+if [[ "$FLOW" != --flow=* || "$FLOW" == "--flow=app-agent-own" ]]; then
   KINU_EVAL_ACCOUNT=visitor bun scripts/eval-session-mint.ts || exit 1
   mapfile -t VISITING <<< "$(KINU_EVAL_ACCOUNT=visitor bun scripts/eval-credentials.ts)"
   if [[ ${#VISITING[@]} -ne 2 || "${VISITING[0]}" != "$KINU_EVAL_ORIGIN" ]]; then

@@ -2286,7 +2286,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     if (!this._rt) {
       const hooks: CFRuntimeHooks = {
         deferrals: () => this.deferralChannel(),
-        slate: (operation, turn) => this.programSlate(operation, turn),
+        // The workspace agent's own program acts on its slates as the owner's browser does.
+        slate: async (operation) => this.slate(operation),
         reportModelCall: (report) => this.accounting.reportModelCall(report),
         modelOperations: this.accounting.operations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
@@ -4727,9 +4728,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       boxUse: this.boxUse,
       modelOperations: this.accounting.operations,
       tracing: () => this.tracing,
-      slate: (actor, operation, turn) => this.slateAs(
-        { path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation, turn,
-      ),
+      slate: (actor, operation) => this.slateAs({ path: [{ name: actor.name }], cred: ROOT_SLATE_CALLER.cred, workMode: 'build' }, operation),
       deferrals: (actorId) => this.deferralChannel(actorId),
       jobs: (actor) => this.jobRunnerOf(actor),
       processEnds: () => this.processEnds,
@@ -8891,8 +8890,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
     // Its agents' browsers on Browser Run hold their pages until they sit idle out: closed now.
     await closeWorkspaceBrowserSessions(this.ctx.storage.sql, this.env.BROWSER);
-    // Every conversation its app agents had on its owner's model, kept in objects of their own.
-    await (await this.slates()).endAppAgents();
 
     const sb = this.computerBox();
 
@@ -8924,6 +8921,9 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       if (ownerUserId !== null) {
         yield* logged('workspace.shares_end_failed', { doing: "ending a deleted workspace's live shares", otherwise: 'unavailable' },
           async () => { await (await this.slates()).controller.endLiveShares(); }, { workspace: this.name });
+        // And the owner's own conversations with its apps' agents, kept in objects of their own; its shares' ended with them.
+        yield* logged('workspace.app_agents_end_failed', { doing: "ending a deleted workspace's app agent conversations", otherwise: 'unavailable' },
+          async () => { await (await this.slates()).endOwnAppAgents(); }, { workspace: this.name });
       }
 
       yield* this.quietAgents();
@@ -9329,14 +9329,9 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     return (await this.slates()).controller.operation(this.slateCaller(), operation);
   }
 
-  /** The workspace agent's own program acting on its slates, from the turn it runs in. */
-  protected async programSlate(operation: SlateOperation, turn?: string): Promise<SlateCallResult> {
-    return (await this.slates()).controller.operation(this.slateCaller(), operation, turn);
-  }
-
-  /** An actor of this workspace acting as itself, from the program `turn` runs; DO-only, like `workspaceBoxOp`. */
-  async slateAs(caller: SlateCaller, operation: SlateOperation, turn?: string): Promise<SlateCallResult> {
-    return (await this.slates()).controller.operation(caller, operation, turn);
+  /** An actor of this workspace acting as itself, from a program it runs; DO-only, like `workspaceBoxOp`. */
+  async slateAs(caller: SlateCaller, operation: SlateOperation): Promise<SlateCallResult> {
+    return (await this.slates()).controller.operation(caller, operation);
   }
 
   async slateBuild(slate: string): Promise<SlateCallResult> {
@@ -9637,8 +9632,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   }
 
   /** DO-only, for the same reason: a My-access share's conversations with its app agent, as its owner's share sheet lists them. */
-  async shareChats(share: string): Promise<SlateAnswer<{ guests: ShareChat[] }>> {
-    return { ok: true, value: { guests: (await this.slates()).shareChats(share) } };
+  async shareChats(share: string): Promise<SlateAnswer<{ chats: ShareChat[] }>> {
+    return { ok: true, value: { chats: (await this.slates()).shareChats(share) } };
   }
 
   /** DO-only, for the same reason: one of them, read-only. */

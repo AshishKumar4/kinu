@@ -2825,12 +2825,19 @@ async function appOnItsLink(page: Page, link: string): Promise<Frame> {
   return appFrameNow(page);
 }
 
-/** The modal the share's page opened over its app, by its title and buttons; null when none is open. */
-async function openSheet(page: Page): Promise<{ readonly title: string; readonly buttons: readonly string[] } | null> {
-  return v.parse(v.nullable(v.object({ title: v.string(), buttons: v.array(v.string()) })), await page.evaluate(`(() => {
+/** What the sheet the share's page opened over its app offers its visitor, by its buttons' markers; null when none is open. */
+export interface AssistantSheet {
+  readonly signIn: boolean;
+  readonly anonymous: boolean;
+  readonly allow: boolean;
+}
+
+async function openSheet(page: Page): Promise<AssistantSheet | null> {
+  return v.parse(v.nullable(v.object({ signIn: v.boolean(), anonymous: v.boolean(), allow: v.boolean() })), await page.evaluate(`(() => {
     const dialog = document.querySelector('[role="dialog"]');
     if (dialog === null) return null;
-    return { title: dialog.getAttribute('aria-label') ?? '', buttons: [...dialog.querySelectorAll('button')].map((button) => (button.textContent ?? '').trim()).filter((text) => text !== '') };
+    const has = (marker) => dialog.querySelector('[' + marker + ']') !== null;
+    return { signIn: has('data-assistant-sign-in'), anonymous: has('data-assistant-anonymous'), allow: has('data-consent-allow') };
   })()`));
 }
 
@@ -2899,7 +2906,7 @@ export interface AppAgentLentVerdict {
   readonly workspace: string;
   /** A signed-out visitor's first ask, refused until they say who they are, and the sheet the share's page opened. */
   readonly first: AppAsked;
-  readonly sheet: { readonly title: string; readonly buttons: readonly string[] } | null;
+  readonly sheet: AssistantSheet | null;
   /** Their ask once they continued anonymously. */
   readonly anonymous: AppAsked;
   /** What the owner's share sheet reads of it. */
@@ -2933,7 +2940,7 @@ export async function appAgentAnswersALentVisitor(target: FlowTarget): Promise<A
     await until(page, 'the share page\'s sheet', 'document.querySelector(\'[role="dialog"]\') !== null');
     const sheet = await openSheet(page);
 
-    await page.evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find((button) => (button.textContent ?? '').trim() === 'Continue anonymously')?.click()`);
+    await page.click('[role="dialog"] [data-assistant-anonymous]');
     await until(page, 'the sheet to close', 'document.querySelector(\'[role="dialog"]\') === null');
     // The frame goes through the share host's exchange, which names this browser, and back to the app.
     await until(page, 'the app to open anonymously', 'document.querySelector("[data-shared-slate]")?.getAttribute("src")?.includes("anonymous=1") === true');
@@ -2959,11 +2966,13 @@ export interface AppAgentOwnVerdict {
   readonly workspace: string;
   /** A signed-out visitor's ask, and the sheet the share's page opened for it. */
   readonly signedOut: AppAsked;
-  readonly signInSheet: { readonly title: string; readonly buttons: readonly string[] } | null;
+  readonly signInSheet: AssistantSheet | null;
   /** A signed-in visitor's first ask, refused until they consent, the sheet that asked it, and their ask after. */
   readonly beforeConsent: AppAsked;
-  readonly consentSheet: { readonly title: string; readonly buttons: readonly string[] } | null;
+  readonly consentSheet: AssistantSheet | null;
   readonly visitor: AppAsked;
+  /** Their ask once they took the consent back: refused again, its sheet open. */
+  readonly withdrawn: { readonly asked: AppAsked; readonly sheet: AssistantSheet | null };
   /** What the owner's share sheet reads of the share's chats: none, the visitor's being theirs. */
   readonly owner: { readonly chats: number; readonly said: string };
   readonly mainHeard: boolean;
@@ -3001,20 +3010,24 @@ export async function appAgentAnswersAVisitorOnTheirOwn(target: FlowTarget): Pro
     await page.click('[data-consent-allow]');
     await until(page, 'the consent to be kept', 'document.querySelector(\'[role="dialog"]\') === null');
     const asked = await askTheApp(page, frame);
+    // The visitor takes their consent back, which ends their own conversation with it: their next ask asks again.
+    const root = encodeURIComponent('{}');
+    const taken = await fetch(`${target.origin}/api/slates/${encodeURIComponent(workspace)}/${APP_AGENT_SLATE.id}/consents?server=agent&root=${root}`, { method: 'DELETE', headers: webHeaders(visitor.identity) });
+
+    if (!taken.ok) throw new Error(`withdrawing the visitor's consent answered ${String(taken.status)}`);
+    const again = await askTheApp(page, frame);
+
+    await until(page, 'the consent sheet again', 'document.querySelector("[data-consent-allow]") !== null');
+    const withdrawn = { asked: again, sheet: await openSheet(page) };
 
     await page.close();
-    // The visitor takes their consent back, which ends their own conversation with it.
-    const root = encodeURIComponent('{}');
-    const withdrawn = await fetch(`${target.origin}/api/slates/${encodeURIComponent(workspace)}/${APP_AGENT_SLATE.id}/consents?server=agent&root=${root}`, { method: 'DELETE', headers: webHeaders(visitor.identity) });
-
-    if (!withdrawn.ok) console.warn(`product-flows: withdrawing the visitor's consent answered ${String(withdrawn.status)}`);
     const owner = await ownerReadsChats(target, workspace, share);
     const kinu = await appInKinu(target, workspace);
     const heard = await mainHeard(kinu.page);
 
     await kinu.page.close();
 
-    return { workspace, signedOut, signInSheet, beforeConsent, consentSheet, visitor: asked, owner, mainHeard: heard };
+    return { workspace, signedOut, signInSheet, beforeConsent, consentSheet, visitor: asked, withdrawn, owner, mainHeard: heard };
   } finally {
     if (share !== null) await revokeFlowShare(target, workspace, share);
     await removeFlowWorkspace(target, workspace);

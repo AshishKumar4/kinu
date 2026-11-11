@@ -93,11 +93,7 @@ export async function accountSlateAi<Id>(host: AccountSlateAiHost<Id>, caller: U
 export async function accountAppAgentModel<Id>(host: AccountSlateAiHost<Id>, caller: UserCaller, workspace: string): Promise<AppAgentModel> {
   const { tier, retries } = (await accountModel(host, caller, workspace, undefined)).profile;
 
-  return {
-    spec: tier.model, tier: tier.id, reasoning: tier.reasoningEffort, retries,
-    fallbacks: tier.fallbacks.map(({ model, reasoningEffort }) => ({ model, reasoning: reasoningEffort })),
-    credentialsRevision: await host.credentialsRevision(caller),
-  };
+  return { spec: tier.model, reasoning: tier.reasoningEffort, retries, fallbacks: tier.fallbacks.map(({ model, reasoningEffort }) => ({ model, reasoning: reasoningEffort })) };
 }
 
 /** The tally's usage columns, each with the `Usage` field it sums. */

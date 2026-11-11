@@ -12,13 +12,13 @@ import { DurableObject } from 'cloudflare:workers';
 import type { LanguageModel, ModelMessage } from 'ai';
 import {
   actorAffinity, DynamicContextLedger, ExtensionHost, ModelCatalogSession, ownerCaller, parseModelSpec, runAppAgentTurn, specModelInfo,
-  type AccountSpend, type AuthResolution, type CredentialSummary, type JsonValue, type ModelCallReport, type UserCaller,
+  type AccountSpend, type AuthResolution, type CredentialSummary, type JsonValue, type ModelCallReport, type Usage, type UserCaller,
 } from '@kinu.run/core';
 import {
   appAgentKey, appAgentMessage, appAgentSystem, appAgentTranscript,
   type AppAgentConversation, type AppAgentEntry, type AppAgentModel, type AppAgentSession,
 } from '@kinu.run/core/slates';
-import { KinuError, settleSync } from '@kinu.run/core/obs';
+import { attemptInItsWords, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
   compactionDiagnostics, compactionTranscriptPath, createCompactionExtension, createModelSummarizer,
@@ -41,6 +41,9 @@ export type AppAgentAnswer = { readonly kind: 'reply'; readonly reply: ReadableS
 
 /** Who pays for the conversation, written at its first ask: what its transcript's reader is held to. */
 const PAYER_KEY = 'payer';
+
+/** The conversation's name to the chat loop's compaction, the same in every object. */
+const APP_AGENT_CONVERSATION = 'app-agent';
 
 /** The next message's number. */
 const NEXT_KEY = 'next';
@@ -197,6 +200,19 @@ async function turnOf(env: Env, storage: DurableObjectStorage, input: {
     recordSlateAi({ env, spent: (spend) => { spends.push(spend); } }, workspace, call, pricing);
   };
 
+  // A fold's summary is the payer's model too: told to the share it was lent on before the next step is admitted.
+  const folded: Usage[] = [];
+
+  const told: AppAgentSession = {
+    about: async () => session.about(),
+    call: async (method, args) => session.call(method, args),
+    spent: async (usage) => session.spent(usage),
+    admit: async () => {
+      for (const usage of folded.splice(0)) await session.spent(usage);
+      await session.admit();
+    },
+  };
+
   const [about] = await Promise.all([session.about(), pricing.warm([spec, ...fallbacks.map((fallback) => fallback.spec)])]);
   const model = registry.resolveModel(spec, affinity);
   const routed = routedModelReads(registry);
@@ -213,14 +229,15 @@ async function turnOf(env: Env, storage: DurableObjectStorage, input: {
         })),
         attemptOf: async (served) => routed.attemptFor(served),
         countInputTokens: async (counted) => routed.countInputTokens(spec, counted),
-        extensions: conversationCompaction(storage, { model: () => model, spec, report }),
-        conversationKey: key,
+        extensions: conversationCompaction(storage, { model: () => model, spec, report: (call) => { report(call); folded.push(call.usage); } }),
+        // One object is one conversation: what compaction names it by need tell the model nothing of whose it is.
+        conversationKey: APP_AGENT_CONVERSATION,
         signal: input.signal,
       },
       system: appAgentSystem(about),
       history: messagesOf(storage),
       asked: appAgentMessage(input.request.text, input.request.data),
-      session,
+      session: told,
       keep: (messages) => { keep(storage, messages); },
       write: input.write,
       report,
@@ -240,36 +257,41 @@ export class AppAgentDO extends DurableObject<Env> {
   async ask(request: AppAgentAskRequest, session: AppAgentSession): Promise<AppAgentAnswer> {
     const { conversation } = request;
     const { payer, workspace, slate } = conversation;
+    const stop = new AbortController();
+
+    // Held from the ask's first wait: an end while its payer's account weighs it, or while it waits its turn, stops it.
+    this.running.add(stop);
     const caller = await ownerCaller(this.env);
     const account = accountNamed(this.env.UserDO, payer.userId);
-    const grant = await account.appAgentGrant(caller, { workspace, slate, revision: request.revision, visitor: payer.kind === 'own' });
+
+    const grant = await account.appAgentGrant(caller, { workspace, slate, revision: request.revision, visitor: payer.kind === 'own' })
+      .finally(() => { this.running.delete(stop); });
 
     if (grant.kind === 'needs-consent') return { kind: 'needs-consent' };
-    // The object's name holds the payer's kind, so this only ever writes what it already holds.
-    this.ctx.storage.kv.put(PAYER_KEY, payer.kind);
-    const stop = new AbortController();
+
+    if (stop.signal.aborted) return settleSync(Effect.fail(new KinuError('denied', 'This conversation ended while it was asked')));
+    this.running.add(stop);
+
+    // Written once: the object's name holds the payer's kind, so no later ask could name another.
+    if (this.ctx.storage.kv.get(PAYER_KEY) === undefined) this.ctx.storage.kv.put(PAYER_KEY, payer.kind);
     const held = heldSession(session);
     const encoder = new TextEncoder();
 
-    // Held from the ask, not the turn: an end while it waits for the turn before it stops it too.
-    this.running.add(stop);
-
     const reply = new ReadableStream<Uint8Array>({
       start: (stream) => {
-        const turn = async () => {
-          try {
+        // Never fails: a turn's failure errors its reply, and the next ask's turn starts after it all the same.
+        const turn = async (): Promise<void> => settle(Effect.ensuring(
+          Effect.match(attemptInItsWords('io', async () => {
             stop.signal.throwIfAborted();
             await turnOf(this.env, this.ctx.storage, { conversation, caller, grant, request, session: held.session, signal: stop.signal, write: (text) => { stream.enqueue(encoder.encode(text)); } });
-            stream.close();
-          } catch (cause) {
-            stream.error(cause);
-          } finally {
+          }), { onFailure: (failure) => { stream.error(failure); }, onSuccess: () => { stream.close(); } }),
+          Effect.sync(() => {
             this.running.delete(stop);
             held.release();
-          }
-        };
+          }),
+        ));
 
-        this.turns = this.turns.then(turn, turn);
+        this.turns = this.turns.then(turn);
       },
       // The asker went away (a page closed, a share ended): the model call stops where it is.
       cancel: () => { stop.abort(new KinuError('denied', 'The ask was let go')); },

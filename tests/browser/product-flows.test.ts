@@ -782,7 +782,7 @@ describe(productFlowTestName('app-agent-lent', 'an anonymous visitor on a My-acc
     const lent = verdictOf(observed, 'app-agent-lent');
 
     expect(lent.first.reply).toBe('');
-    expect(lent.sheet?.buttons).toContain('Continue anonymously');
+    expect(lent.sheet?.anonymous).toBe(true);
   });
 
   test('anonymous, the visitor is answered from the app\'s own function', () => {
@@ -812,17 +812,23 @@ describe(productFlowTestName('app-agent-own', 'on a default link a visitor signs
     const own = verdictOf(observed, 'app-agent-own');
 
     expect(own.signedOut.reply).toBe('');
-    expect(own.signInSheet?.buttons).toContain('Sign in');
-    expect(own.signInSheet?.buttons).not.toContain('Continue anonymously');
+    expect(own.signInSheet).toEqual({ signIn: true, anonymous: false, allow: false });
   });
 
   test('signed in, they are asked to let it use their models, then answered from the app\'s own function', () => {
     const own = verdictOf(observed, 'app-agent-own');
 
     expect(own.beforeConsent.reply).toBe('');
-    expect(own.consentSheet?.buttons).toContain('Allow');
+    expect(own.consentSheet?.allow).toBe(true);
     expect(own.visitor.refused).toBe('');
     expect(own.visitor.reply).toContain(APP_AGENT_SLATE.stop);
+  });
+
+  test('once they take the consent back, their next ask asks for it again', () => {
+    const { withdrawn } = verdictOf(observed, 'app-agent-own');
+
+    expect(withdrawn.asked.reply).toBe('');
+    expect(withdrawn.sheet?.allow).toBe(true);
   });
 
   test('the owner reads none of it, and their main agent hears nothing', () => {

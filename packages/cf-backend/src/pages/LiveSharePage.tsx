@@ -102,8 +102,8 @@ function IdentitySheet({ onClose, onAnonymous }: { onClose: () => void; onAnonym
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>Not now</Button>
-          <Button variant="secondary" size="sm" onClick={onAnonymous}>Continue anonymously</Button>
-          <Button variant="primary" size="sm" onClick={() => signInAndReturn()}>Sign in</Button>
+          <Button variant="secondary" size="sm" data-assistant-anonymous onClick={onAnonymous}>Continue anonymously</Button>
+          <Button variant="primary" size="sm" data-assistant-sign-in onClick={() => signInAndReturn()}>Sign in</Button>
         </>
       )}>
       <p className="t-body p-text-2">This app&apos;s assistant runs on its owner&apos;s model, and its owner can read your conversation. Sign in, or continue anonymously: this browser keeps your conversation for 30 days.</p>
@@ -118,10 +118,10 @@ function SignInSheet({ onClose }: { onClose: () => void }) {
       footer={(
         <>
           <Button variant="ghost" size="sm" onClick={onClose}>Not now</Button>
-          <Button variant="primary" size="sm" onClick={() => signInAndReturn()}>Sign in</Button>
+          <Button variant="primary" size="sm" data-assistant-sign-in onClick={() => signInAndReturn()}>Sign in</Button>
         </>
       )}>
-      <p className="t-body p-text-2">This app&apos;s assistant answers on your own models, and your conversation stays in your account. Sign in to talk to it.</p>
+      <p className="t-body p-text-2">This app&apos;s assistant answers on your own models, and its owner can&apos;t read your conversation in Kinu. Sign in to talk to it.</p>
     </Modal>
   );
 }
@@ -150,7 +150,7 @@ export default function LiveSharePage() {
       <header className="flex h-11 shrink-0 items-center gap-3 border-b p-border px-4">
         <a href="/" aria-label="Kinu home" className="flex shrink-0 items-center"><KinuLogo /></a>
         <span className="t-item min-w-0 flex-1 truncate" data-shared-title>{opened?.title ?? "Shared slate"}</span>
-        {opened?.mode === "owner" && <span className="t-meta min-w-0 truncate p-text-3" data-shared-lent>Its assistant runs on its owner&apos;s model, and they can read your chat with it.</span>}
+        {opened?.mode === "owner" && <span className="t-meta min-w-0 p-text-3" data-shared-lent>Its assistant runs on its owner&apos;s model, and they can read your chat with it.</span>}
       </header>
       {opened !== null && <SharedSlate workspace={workspace} share={share} opened={opened} />}
       {signedOut && <SignInToOpen />}

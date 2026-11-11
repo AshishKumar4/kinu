@@ -263,6 +263,9 @@ export class SlateShareViewers {
           return { ok: false as const, ...refusalOf(new KinuError('denied', why)), needs: 'identity' as const };
         }
 
+        // Signed-in visitors this deployment cannot tell apart would share one conversation the owner lends.
+        if (payer.kind === 'lent' && viewer.subject === SIGNED_IN_VIEWER) return yield* new KinuError('unavailable', 'This deployment cannot tell its signed-in visitors apart, so its assistant answers none of them');
+
         if (payer.kind === 'lent') yield* this.notPaused(share);
         const result = yield* Effect.promise(async () => viewerAnswer(await input.run(payer, share)));
         row = { ...row, ok: result.ok };

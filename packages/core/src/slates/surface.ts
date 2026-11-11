@@ -76,11 +76,10 @@ export interface SlateInvocation {
   readonly chain: readonly string[];
   readonly viewer?: SlateViewer;
   /**
-   * The turn whose program began this chain, stamped by the actor that ran it and kept by every hop on the chain; absent
-   * for a chain a person's page, a share or a timer began. Its agent cannot answer the chain's `agent.ask` while that
-   * turn runs: the turn waits on the program, which would wait on the turn.
+   * The app whose agent made the call that began this chain, kept by every hop on it (app-agent.ts): that app's
+   * `agent.ask` on it would queue behind the very turn that waits on it, so it is refused.
    */
-  readonly turn?: string;
+  readonly agent?: string;
   readonly incarnation: string;
   readonly generations: Readonly<Record<string, number>>;
 }

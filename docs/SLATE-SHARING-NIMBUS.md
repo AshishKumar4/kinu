@@ -97,22 +97,23 @@ CREATE TABLE IF NOT EXISTS slate_consents (
 
 A consent names the revision it was given for. A part run at another revision answers `needs-consent`.
 
-## 2a. The app's guest (owner, 2026-11-08)
+## 2a. The app agent (owner, 2026-11-10)
 
-A shared app's chat (`agent.ask`, `agent.send`) reaches a guest of the owner's agent, never the agent itself, once the
-owner ticks it in the share sheet. Each visitor gets their own guest: a hire of the workspace's agent, recorded in
-`slate_share_guests` (share, visitor subject), which the actor's reach reads (`core/src/slates/guest.ts`). A visitor known
-only by where they came from is first asked to sign in or continue anonymously (an `anon:` subject in the share's signed
-cookie, kept 30 days).
+Every app has one assistant, its app agent (`core/src/slates/app-agent.ts`), which a slate reaches with `agent.ask`. It
+is the same for the owner in Kinu and every visitor of a share, and never reaches the owner's agent. Its one tool calls
+the app's server methods as the person's page does, through the same gates; its prompt holds the app's title,
+description and methods, and its conversation.
 
-The guest runs no program. Its one tool, `app`, calls the app as the visitor's page does, so it has no network, no MCP
-discovery and none of the owner's secrets. Its prompt holds the app and its own conversation, nothing of the owner's. One
-table decides each call: the app's own methods and granted slates, and `ai.run`, run as the visitor's would; anything
-else of the owner's, its files and MCP tools included, runs only on the owner's approval of that exact call,
-once ("always" never stands for a guest); `agent.*`, `agents.*`, `computer` and `device` never. A member reached inside a
-call on a guest's way runs only where its address alone is in scope. Ending the share, or changing its mode, retires its
-guests, and their conversations stay for the owner. Their model calls spend the share's daily label. A share on each
-visitor's own access has no guest: a guest's model is its owner's.
+Each conversation is an object of its own (`cf-backend/src/app-agent-do.ts`), named by who pays and whom it is with:
+
+- The owner in Kinu, and a visitor on My access, run on the owner's model. A visitor known only by where they came from
+  is first asked to sign in or continue anonymously (an `anon:` subject in the share's signed cookie, kept 30 days). The
+  owner reads My-access chats in the share sheet (`slate_share_chats`); each step spends the share's daily label, and
+  stops once the share ends, changes mode, pauses for the day or its code changes past the approved revision.
+- A visitor on a default link runs on their own model, under an `agent` consent in their own account at the app's
+  revision. Signed out, they are asked to sign in. No one else can read their conversation; taking the consent back ends it.
+
+`agent.send` stays the owner's own page's signal to their agent, refused on any share.
 
 ## 3. Personal parts
 

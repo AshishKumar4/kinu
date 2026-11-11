@@ -1109,7 +1109,7 @@ export {
 } from './execution/parent';
 
 export {
-  createInlineExecutor, createNimbusWorkspaceExecutor, workspaceCapabilities, SlateProgramSchema,
+  createInlineExecutor, createNimbusWorkspaceExecutor, workspaceCapabilities,
   type InlineExecutorDeps,
 } from './tools/inline-executor';
 

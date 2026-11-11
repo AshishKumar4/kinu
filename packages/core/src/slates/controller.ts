@@ -79,8 +79,8 @@ export interface SlateAppCall {
   readonly args: JsonValue[];
   readonly chain?: readonly string[];
   readonly viewer?: SlateViewer;
-  /** The turn whose program began the chain (`SlateInvocation.turn`). */
-  readonly turn?: string;
+  /** The app whose agent made it (app-agent.ts): that app's ask it reaches would wait on the turn that waits on it (`SlateInvocation.agent`). */
+  readonly agent?: string;
   /** The caller's word on the call, read again where it is sent with nothing awaited between: it throws to refuse. */
   readonly admit?: () => void;
 }
@@ -118,6 +118,8 @@ export interface SlateControllerPorts<Source extends RunnableSlateSource, Proces
   shareChanged?(slate: string): Promise<void>;
   /** `share` ended or changed how it lends: its app agents' conversations stop (app-agent.ts), and those it lent end. */
   appAgentsEnded?(share: string): Promise<void>;
+  /** A deleted account's conversations lent it end: each share, and its key for them there. */
+  forgetChatsOf?(viewers: readonly { readonly share: string; readonly viewer: string }[]): Promise<void>;
   /** `slate` was removed: its owner's own conversation with its app agent goes with it. */
   forgetAppAgent?(slate: string): Promise<void>;
   /** The name the workspace's owner gave their account, as people a share refuses are told it; absent or null, "its owner". */
@@ -407,7 +409,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    * answers only for this workspace's slates.
    */
   /** `turn`: the turn whose program makes this operation, stamped by the actor that runs it (`SlateInvocation.turn`). */
-  operation(caller: SlateCaller, input: SlateOperation, turn?: string): Promise<SlateCallResult> {
+  operation(caller: SlateCaller, input: SlateOperation): Promise<SlateCallResult> {
     return settle(Effect.catchCause(Effect.gen({ self: this }, function* () {
       const parsed = v.safeParse(SlateOperationSchema, input);
 
@@ -416,18 +418,18 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
 
       requireSlateWorkMode(operation, caller.workMode);
 
-      return yield* this.dispatch(caller, operation, turn);
+      return yield* this.dispatch(caller, operation);
     }), (failed) => Effect.map(refusing('slate operation', 'io')(failed), (refusal): SlateCallResult => ({ ok: false, ...refusal }))));
   }
 
-  private dispatch(caller: SlateCaller, operation: SlateOperation, turn: string | undefined): Effect.Effect<SlateCallResult, KinuError> {
+  private dispatch(caller: SlateCaller, operation: SlateOperation): Effect.Effect<SlateCallResult, KinuError> {
     const running = <Value>(run: () => Promise<Value>) => Effect.promise(run);
 
     switch (operation.op) {
       case 'list': return Effect.map(running(async () => this.list(caller)), (value) => answered({ value }));
       case 'preview': return running(async () => this.preview(caller, operation.id));
       case 'methods': return Effect.map(running(async () => this.processes.booted(caller, operation.id)), ({ process }) => answered({ value: [...process.methods] }));
-      case 'call': return running(async () => this.ports.call({ caller, id: operation.id, method: operation.method, args: operation.args ?? [], ...turn !== undefined && { turn } }));
+      case 'call': return running(async () => this.ports.call({ caller, id: operation.id, method: operation.method, args: operation.args ?? [] }));
       case 'remove': return running(async () => this.remove(caller, operation.id));
       case 'history': return Effect.map(this.history(operation.id, operation.after), (value) => answered({ value }));
       case 'commit': return running(async () => answered({ value: (await (await this.slates(caller.cred)).commit(new SlateId(operation.id))).toData() }));
@@ -625,8 +627,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
     if (held.gallery !== null) await this.ports.listingChanged?.(revoked);
 
     await this.processes.stopWhere((running) => running.caller.share === revoked.id);
-    await this.ports.appAgentsEnded?.(revoked.id);
     await this.sharingChanged(revoked.slate);
+    await this.ports.appAgentsEnded?.(revoked.id);
 
     return revoked;
   }
@@ -641,7 +643,7 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
    */
   async forgetPerson(person: { readonly userId: string; readonly email: string }, viewerKey: (share: string) => Promise<string | null>): Promise<void> {
     new SlateShareStore(this.ports.sql).forgetUser(person);
-    await this.live.forgetPerson(person, viewerKey);
+    await this.ports.forgetChatsOf?.(await this.live.forgetPerson(person, viewerKey));
     await this.ports.sharesChanged?.();
   }
 
@@ -715,8 +717,8 @@ export class SlateController<Source extends RunnableSlateSource, Process extends
         if (input.mode === 'owner' && mark !== null) this.live.restoreEditMark(held.slate, null);
       }))));
       this.ports.ownerEffects?.retire(held.slate);
-      yield* Effect.promise(async () => this.ports.appAgentsEnded?.(held.id));
       yield* Effect.promise(async () => this.sharingChanged(held.slate));
+      yield* Effect.promise(async () => this.ports.appAgentsEnded?.(held.id));
 
       return this.owned(this.live.get(held.id) ?? held);
     })));

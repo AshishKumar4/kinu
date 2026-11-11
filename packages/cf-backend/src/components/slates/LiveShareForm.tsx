@@ -103,7 +103,7 @@ function StartChoice({ value, onChange, disabled }: { value: ShareStart; onChang
 function OwnerWarning() {
   return (
     <Notice tone="warning" data-share-owner-warning="">
-      Everyone you share it with acts as you, within this reach: what it reads of yours, they see. Any change it makes waits for you to approve it, and a change to its code stops it until you approve the new reach. It can't be listed in the Gallery.
+      Everyone you share it with acts as you, within this reach: what it reads of yours, they see. Its assistant answers them on your model, and you can read those chats here. Any change it makes waits for you to approve it, and a change to its code stops it until you approve the new reach. It can't be listed in the Gallery.
     </Notice>
   );
 }
@@ -389,7 +389,6 @@ function rowMenu(row: OwnedLiveShare, actions: SharedRowActions, onListing: () =
   return items;
 }
 
-/** One share, on one compact row: who, whose access and its numbers, the one action a stopped share needs, and a menu. */
 /** No message of an app agent's conversation is ever kept out of its transcript. */
 const NONE_UNAVAILABLE: ReadonlySet<string> = new Set();
 
@@ -438,6 +437,7 @@ function ShareChatList({ workspace, share }: { workspace: string; share: string 
   );
 }
 
+/** One share, on one compact row: who, whose access and its numbers, the one action a stopped share needs, and a menu. */
 function SharedRow({ workspace, row, actions }: { workspace: string; row: OwnedLiveShare; actions: SharedRowActions }) {
   const [listing, setListing] = useState(false);
   const who = row.visibility === "public" ? "Anyone with the link" : "People you added";
@@ -596,8 +596,9 @@ interface ShareChoicesState {
 }
 
 /** What one share asks of a person, by the slate's reach: requests a minute each, and model spend a day where it reaches. */
-function limitsWords(graph: SlateReach): string {
-  return graph.namespaces.length > 0
+/** A My-access share spends the owner's model, its assistant's at least; on their own access, each person spends theirs. */
+function limitsWords(lends: boolean): string {
+  return lends
     ? `Each person gets ${String(SHARE_VIEWER_REQUESTS_PER_MINUTE)} requests a minute; the share gets $${String(SHARE_SPEND_CAP_USD_PER_DAY)} of model spend a day.`
     : `Each person gets ${String(SHARE_VIEWER_REQUESTS_PER_MINUTE)} requests a minute.`;
 }
@@ -633,7 +634,7 @@ function ShareChoices({ choices, set, first, reviewing, reach, busy }: {
           }} />}
           <ModeChoice value={mode} onChange={set.mode} disabled={busy || reviewing} unbuilt={graph !== null && graph.revision === null} emptyCopy={start === "empty"} />
           {mode === "owner" && <OwnerReach graph={graph} failed={reach.failed} visibility={reach.visibility} approved={reach.approved} onToggle={reach.onToggle} disabled={busy} />}
-          {graph !== null && <p className="t-meta p-text-3" data-share-limits>{limitsWords(graph)}</p>}
+          {graph !== null && <p className="t-meta p-text-3" data-share-limits>{limitsWords(mode === "owner")}</p>}
         </div>
       )}
     </>
