@@ -269,7 +269,9 @@ export class SlateShareViewers {
         // Run only under how the share lends now as the visitor accepted it: a share whose mode changed since asks them
         // again, before anything of theirs runs or is kept.
         if (input.acknowledged !== share.mode) {
-          return { ok: false as const, ...refusalOf(new KinuError('denied', 'This app\'s assistant changed how it answers you: see what changed first')), needs: 'identity' as const };
+          const why = input.acknowledged === null ? 'See how this app\'s assistant answers you first' : 'This app\'s assistant changed how it answers you: see what changed first';
+
+          return { ok: false as const, ...refusalOf(new KinuError('denied', why)), needs: 'identity' as const };
         }
 
         // Signed-in visitors this deployment cannot tell apart would share one conversation the owner lends.
