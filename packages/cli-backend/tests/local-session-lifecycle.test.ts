@@ -24,6 +24,9 @@ import * as v from 'valibot';
 import { setDiagnosticsSink } from '@kinu.run/core/obs';
 import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, swarmsOn, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, SEARCH_ASK, SEARCH_TASK, textStream, toolCallStream, } from './helpers/local-session';
 
+/** The effort a model call was sent, as the SDK's own `reasoning` (a v2 test model's options type does not name it). */
+const CalledEffortSchema = v.looseObject({ reasoning: v.optional(v.string()) });
+
 const jobStatus = (db: Database, id: string) => jobColumn(db, id, 'status');
 
 describe('LocalAgentSession — BackendHost + lifecycle', () => {
@@ -402,14 +405,16 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(turn.turn.assistantResponse).toBe('from b');
   });
 
-  test('tier reasoning effort merges with prompt-cache options', async () => {
+  test('tier reasoning effort goes beside the prompt-cache options', async () => {
     let providerOptions: LanguageModelV2CallOptions['providerOptions'];
+    let effort: string | undefined;
     const base = fakeModel('reasoned');
 
     const model = new TestLanguageModelV2({
       provider: base.provider, modelId: base.modelId, doGenerate: base.doGenerate,
       doStream: async (options) => {
         providerOptions = options.providerOptions;
+        effort = v.parse(CalledEffortSchema, options).reasoning;
 
         return base.doStream(options);
       },
@@ -445,12 +450,12 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('think hard', { id: crypto.randomUUID() });
     // A GPT-5 model on the direct route also asks for server-side compaction, in the same namespace; the call's retries
     // ride beside it for the model stack, which this bare test model is not inside.
-    expect(providerOptions).toEqual({
-      openai: {
-        reasoningEffort: 'high',
-        contextManagement: [{ type: 'compaction', compactThreshold: expect.any(Number) }],
+    expect({ effort, providerOptions }).toEqual({
+      effort: 'high',
+      providerOptions: {
+        openai: { contextManagement: [{ type: 'compaction', compactThreshold: expect.any(Number) }] },
+        kinu: { retries: expect.any(Number) },
       },
-      kinu: { retries: expect.any(Number) },
     });
     expect(session.getReasoningEffort()).toEqual({ effort: null });
     expect(session.setReasoningEffort('low')).toEqual({ ok: true, effort: 'low' });
@@ -547,7 +552,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       provider: 'fake',
       modelId: 'fake-model',
       doStream: async (options) => {
-        sent = options.providerOptions;
+        sent = v.parse(CalledEffortSchema, options).reasoning;
 
         return fakeModel('ok').doStream(options);
       },
@@ -575,18 +580,17 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
     await session.send('hello', { id: crypto.randomUUID() });
 
-    expect(sent).toMatchObject({ openai: { reasoningEffort: 'high' } });
+    expect(sent).toBe('high');
   });
 
   test('a fallback is sent the level the tier wants as the fallback declares it, and a model declaring none is sent none', async () => {
     const sent = new Map<string, string | null>();
-    const OpenAIOptions = v.object({ openai: v.optional(v.object({ reasoningEffort: v.optional(v.string()) })) });
 
     const listening = (modelId: string, refuse: boolean) => new TestLanguageModelV2({
       provider: 'fake',
       modelId,
       doStream: async (options) => {
-        sent.set(modelId, v.parse(OpenAIOptions, options.providerOptions).openai?.reasoningEffort ?? null);
+        sent.set(modelId, v.parse(CalledEffortSchema, options).reasoning ?? null);
 
         if (!refuse) return fakeModel('ok').doStream(options);
 
