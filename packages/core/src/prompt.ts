@@ -1,6 +1,7 @@
 /** Canonical system-prompt builder for both surfaces. Wording lives in `prompting/section-templates.ts`; this
  *  file decides branches and slots, so sections are evolvable without their conditions. */
 import type { AgentRuntime } from './types/agent-runtime';
+import type { AccountTurnView } from './memory/account-profile';
 import {
   BUILTIN_TOOL_SPECS,
   type BuiltinToolName,
@@ -20,6 +21,7 @@ import {
   WORKSPACE_INSTRUCTIONS_DELIMITER, WORKSPACE_INSTRUCTIONS_TAG, sealDelimiters, sealSoul,
 } from './utils/prompt-sections';
 import {
+  ACCOUNT_PROFILE_SECTION,
   AGENT_NAMES_LINE,
   BACKGROUND_WORK_SECTION,
   BUILTIN_TOOL_LINE,
@@ -88,6 +90,8 @@ export interface SystemPromptOptions extends PromptSurfaceOptions {
   /** Promoted section replacements, read by the backend once per activation; this builder does no I/O. Absent
    *  renders built-in sources, which the layergate prefix digest is locked against. */
   sectionOverrides?: PromptSectionOverrides;
+  /** The account's read as the turn's requests carry it (`accountTurnView`); absent where no account is wired. */
+  account?: AccountTurnView | undefined;
 }
 
 /** Date-only, never time: the dynamic block's runtime section changes at most once a day. */
@@ -103,6 +107,18 @@ function renderOperatingGuidance(surface: PromptSurface, render: RenderSection):
   return render(OPERATING_GUIDANCE, {
     familyDelta: promptFamilyDelta(OPERATING_GUIDANCE.id, family),
   });
+}
+
+/** The account owner's facts, last of the prompt; empty where the account holds none. */
+function renderAccountProfile(account: AccountTurnView | undefined, render: RenderSection): string {
+  if (account === undefined) return '';
+  const { profile } = account;
+
+  if (profile.lines.length + profile.unshown.length === 0) return '';
+
+  return render(ACCOUNT_PROFILE_SECTION, {
+    lines: profile.lines.join('\n'), unshown: String(profile.unshown.length), hasUnshown: profile.unshown.length > 0,
+  }).trim();
 }
 
 /** Names for this agent and workspace; empty when neither has one, never the slug. */
@@ -394,6 +410,7 @@ export function buildSystemPromptParts(
     hasUnverifiedInstructions(opts) ? render(WORKSPACE_INSTRUCTIONS_SECTION, {}) : '',
     renderAgentNames(surface, render),
     renderRoleSection(surface, render),
+    renderAccountProfile(opts.account, render),
   ];
 
   return { shared: shared.filter(Boolean).join('\n\n'), own: own.filter(Boolean).join('\n\n') };

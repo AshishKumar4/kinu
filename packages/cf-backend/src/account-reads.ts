@@ -5,7 +5,7 @@
  */
 import { Effect } from 'effect';
 import { connectionEnvironment } from '@kinu.run/core';
-import type { AccountMemory, AccountProposer, CommandEnvironment, CommitAuthor, Fact, GrantedSecrets, ProfileCatalogEnvelope, ProviderListing, UserCaller } from '@kinu.run/core';
+import type { AccountMemory, AccountProposer, AccountRead, CommandEnvironment, CommitAuthor, GrantedSecrets, ProfileCatalogEnvelope, ProviderListing, UserCaller } from '@kinu.run/core';
 import { attempt, diagnostics, settle, type KinuError } from '@kinu.run/core/obs';
 import type { UserDO } from './user/user-do';
 import type { UserDoRpcMethod } from './rpc-surface';
@@ -106,11 +106,11 @@ export class AccountReads {
     return this.host.owned() ? this.memory(proposer) : undefined;
   }
 
-  /** The account's facts for one turn's memory block, a free account's limits near their end among them once
-   *  a period; a user object that does not answer costs the turn that block's account lines, never the turn. */
-  factsForTurn(): Promise<readonly Fact[]> {
+  /** The account's facts for one turn's profile, and a free account's limits near their end once a period; a user object
+   *  that does not answer costs the turn its profile, never the turn. */
+  forTurn(): Promise<AccountRead> {
     return settle(Effect.catch(attempt({ doing: "reading the account's facts for the turn", otherwise: 'unavailable' },
-      () => this.ask((stub, caller) => stub.accountMemory_turnFacts(caller))), this.unread('facts', [])));
+      () => this.ask((stub, caller) => stub.accountMemory_turnFacts(caller))), this.unread('facts', { facts: [], limits: null })));
   }
 
   /** A read the turn does without when the account does not answer: logged under its name, `instead` in its place. */

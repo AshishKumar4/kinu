@@ -7,7 +7,8 @@ import { pictureKey, PictureAddressSchema, readPictureInMode, type PictureBucket
 import { connectedPath, GOOGLE_OAUTH_CRED_KEY, FILES_VIEW_CONFIG_KEY, filesViewNamed, PROFILE_CATALOG_CONFIG_KEY, THEME_CONFIG_KEY, THEME_NAMES, themeNamed, USER_WEB_SEARCH_TEST_PATH } from '@kinu.run/core';
 import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
 import { accountComputerSize, COMPUTER_SIZE_CONFIG_KEY } from '../computer-size';
-import { DEVICE_TIERS, JsonValueSchema, MCP_OAUTH_CALLBACK_PATH } from '@kinu.run/core';
+import { DEVICE_TIERS, ImportedFactsSchema, JsonValueSchema, MCP_OAUTH_CALLBACK_PATH } from '@kinu.run/core';
+import { AccountImportSourceSchema } from './account-memory';
 import { diagnostics, authoredRefusal, renderThrownChain, settle, type KinuError } from '@kinu.run/core/obs';
 import { isEvalServiceIdentity } from '../eval/abort-route';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
@@ -49,6 +50,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'userMcp_handleOAuthCallback'
   | 'userMcp_beginConnect' | 'userMcp_reconnect' | 'evalAbortActivation'
   | 'accountMemory_view' | 'accountMemory_decide' | 'accountMemory_put' | 'accountMemory_forget' | 'accountMemory_forgetNote'
+  | 'accountMemory_import' | 'accountMemory_retryImport'
   | 'slateAiSpend'
   | 'listSecrets' | 'putSecrets' | 'setSecretDestination' | 'deleteSecret' | 'grantSecret' | 'revokeSecretGrant'
 >;
@@ -615,21 +617,39 @@ userRoutes.delete('/api/user/mcp/servers/:id', (c) => settle(Effect.tryPromise({
 // The account's memory, owner only (`memory.account.manage`): every fact with its history, every note, what waits.
 userRoutes.get('/api/user/memory', mcpRead((stub, owner) => stub.accountMemory_view(owner)));
 
-const MemoryDecisionSchema = v.object({ decision: v.picklist(['accept', 'decline']) });
+// `facts`: an import's facts as the owner kept and edited them.
+const MemoryDecisionSchema = v.object({ decision: v.picklist(['accept', 'decline']), facts: v.optional(ImportedFactsSchema) });
 
 const MemoryFactSchema = v.object({ value: JsonValueSchema, workspace: v.optional(v.pipe(v.string(), v.nonEmpty())) });
 
 userRoutes.post('/api/user/memory/proposals/:id', (c) => settle(Effect.gen(function* () {
   const body = yield* Effect.promise(async () => safeJson(c.req.raw, MemoryDecisionSchema));
 
-  if (body === null) return err(400, 'Body must be JSON: { "decision": "accept" | "decline" }');
+  if (body === null) return err(400, 'Body must be JSON: { "decision": "accept" | "decline", "facts"?: [...] }');
 
   const decided = yield* Effect.tryPromise({
-    try: async () => await c.get('stub').accountMemory_decide(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), body.decision),
+    try: async () => await c.get('stub').accountMemory_decide(c.get('owner'), decodeURIComponent(rawParam(c, 'id')), body.decision, body.facts),
     catch: (cause) => authoredRefusal({ doing: 'deciding this account memory proposal', cause }),
   });
 
   return decided ? json({ body: { ok: true } }) : err(404, 'No pending proposal has that id');
+})));
+
+// The owner's import: a document, or facts the account holds, read into one batch of short facts (`account-imports.ts`).
+userRoutes.post('/api/user/memory/import', (c) => settle(Effect.gen(function* () {
+  const body = yield* Effect.promise(async () => safeJson(c.req.raw, AccountImportSourceSchema));
+
+  if (body === null) return err(400, 'Body must be JSON: { "document": string } or { "facts": [key, ...] }');
+
+  return yield* Effect.tryPromise({
+    try: async () => json({ body: { id: await c.get('stub').accountMemory_import(c.get('owner'), body) } }),
+    catch: (cause) => authoredRefusal({ doing: 'importing into your account memory', cause }),
+  });
+})));
+
+userRoutes.post('/api/user/memory/imports/:id/retry', (c) => settle(Effect.tryPromise({
+  try: async () => json({ body: { retried: await c.get('stub').accountMemory_retryImport(c.get('owner'), decodeURIComponent(rawParam(c, 'id'))) } }),
+  catch: (cause) => authoredRefusal({ doing: 'retrying this import', cause }),
 })));
 
 // An edit, or the owner promoting a workspace fact: `workspace` names where it came from.

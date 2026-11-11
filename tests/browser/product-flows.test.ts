@@ -801,6 +801,10 @@ describe(productFlowTestName('app-agent-lent', 'an anonymous visitor on a My-acc
     expect(lent.ownerView).toContain(APP_AGENT_SLATE.stop);
     expect(lent.mainHeard).toBe(false);
   });
+
+  test("the visitor's assistant reads none of the owner's account memory", () => {
+    expect(verdictOf(observed, 'app-agent-lent').ownerFactHeard).toBe(false);
+  });
 });
 
 describe(productFlowTestName('app-agent-own', 'on a default link a visitor signs in, consents, and is answered on their own model, privately'), () => {

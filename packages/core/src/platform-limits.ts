@@ -112,6 +112,7 @@ export const PLATFORM_LIMITS = {
   'facet.rpc_timeout_ms': { value: 30_000, unit: 'ms' },
   'provider.stream.idle_ms': { value: 360_000, unit: 'ms' },
   'job.context_silence_ms': { value: 600_000, unit: 'ms' },
+  'memory.account_profile_chars': { value: 8_000, unit: 'count' },
   'browser.session.keep_alive_ms': { value: 1_200_000, unit: 'ms' },
   'do.placement.location_hint': null,
   'provider.region.served': null,

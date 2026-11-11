@@ -15,11 +15,14 @@ import { scrubSecrets } from '../safety/secret-patterns';
 import { scrubMemoryValue } from './scrub';
 import { expandedTokenGroups, lexicalGroupRelevance, minimumRelevance } from './lexical-recall';
 import {
-  ACCOUNT_FACTS_ACTOR, createFactsStore, FactOriginSchema, FactRevisionSchema, FactSchema, initFactsTable, normalizeFactKey,
+  ACCOUNT_FACTS_ACTOR, createFactsStore, FactKeySchema, FactOriginSchema, FactRevisionSchema, FactSchema, initFactsTable,
   type Fact, type FactOrigin, type FactsStore,
 } from './facts';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { stableStringify } from '../safety/argument-digest';
+import { PLATFORM_LIMITS } from '../platform-limits';
+import { accountProfile, effectiveProfileFacts, unshownIfKept, type UnshownFact } from './account-profile';
+import { ImportedFactSchema, ImportedFactsSchema, mergeImported, type ImportedFact } from './account-import';
 
 /** One account note a query matched. */
 export interface AccountNoteHit {
@@ -30,8 +33,6 @@ export interface AccountNoteHit {
   readonly at: number;
 }
 
-/** A key as the store keeps it: normalized, with something left once it is. */
-const FactKeySchema = v.pipe(v.string(), v.maxLength(200), v.transform(normalizeFactKey), v.nonEmpty('An account fact needs a key.'));
 
 export const AccountProposalSchema = v.variant('kind', [
   v.strictObject({
@@ -43,14 +44,42 @@ export const AccountProposalSchema = v.variant('kind', [
 
 export type AccountProposal = v.InferInput<typeof AccountProposalSchema>;
 
+
+/**
+ * A document the owner imported (`account-import.ts`): its notes, the facts read from them so far (`read` of the notes),
+ * and the facts it replaces once accepted. `failure` is the last read's failure, in its provider's words.
+ */
+const AccountImportSchema = v.strictObject({
+  kind: v.literal('import'),
+  notes: v.pipe(v.array(v.string()), v.minLength(1)),
+  read: v.pipe(v.number(), v.integer(), v.minValue(0)),
+  facts: v.array(ImportedFactSchema),
+  replaces: v.array(FactKeySchema),
+  failure: v.optional(v.string()),
+});
+
+/** What a proposal row holds: an agent's or the background pass's fact or note, or an owner's import. */
+const StoredProposalSchema = v.variant('kind', [...AccountProposalSchema.options, AccountImportSchema]);
+
+type StoredProposal = v.InferOutput<typeof StoredProposalSchema>;
+
+type AccountImport = v.InferOutput<typeof AccountImportSchema>;
+
+
 /** Who proposes: an agent by its name, or the background pass, which reads the owner's own words. Never a name alone,
- *  as a workspace may name its agent anything. */
+ *  as a workspace may name its agent anything. An owner's import files its own batch (`startImport`). */
 export type AccountProposer = { readonly by: 'agent'; readonly agent: string } | { readonly by: 'background' };
 
 const AccountProposerSchema = v.variant('by', [
   v.strictObject({ by: v.literal('agent'), agent: v.pipe(v.string(), v.nonEmpty()) }),
   v.strictObject({ by: v.literal('background') }),
 ]);
+
+/** A proposal filed: its id, and, for a fact the profile would leave out once kept, its size against the budget. */
+export interface AccountProposalFiled {
+  readonly id: string;
+  readonly unshown: UnshownFact | null;
+}
 
 /** A proposal as it is filed: what is proposed, by whom, and the delivery that carries it, so a replayed delivery files
  *  nothing new even after the owner decided the first. */
@@ -66,8 +95,8 @@ export interface AccountMemory {
   facts(): Promise<readonly Fact[]>;
   /** The account's notes a query matches, best first. */
   searchNotes(query: string, limit: number): Promise<readonly AccountNoteHit[]>;
-  /** Files a pending promotion for the owner to accept or decline; its id. `delivery` names a replayable delivery. */
-  propose(proposal: AccountProposal, delivery?: string): Promise<string>;
+  /** Files a pending promotion for the owner to accept or decline. `delivery` names a replayable delivery. */
+  propose(proposal: AccountProposal, delivery?: string): Promise<AccountProposalFiled>;
 }
 
 export const AccountNoteSchema = v.object({
@@ -85,21 +114,48 @@ export type AccountNote = Readonly<v.InferOutput<typeof AccountNoteSchema>>;
  */
 export const AccountMemoryProposalSchema = v.object({
   id: v.string(),
-  proposal: AccountProposalSchema,
+  proposal: StoredProposalSchema,
   origin: v.variant('by', [
     v.object({ ...AccountProposerSchema.options[0].entries, workspace: v.optional(v.string()) }),
     v.object({ ...AccountProposerSchema.options[1].entries, workspace: v.optional(v.string()) }),
+    v.object({ by: v.literal('import'), workspace: v.optional(v.string()) }),
   ]),
   createdAt: v.number(),
 });
 
 export type AccountMemoryProposal = Readonly<v.InferOutput<typeof AccountMemoryProposalSchema>>;
 
-/** Settings → Memory: every account fact with its history, every note, and what waits on the owner. */
+/** An import still reading its document, or stopped on a failure until the owner retries it. */
+export const AccountImportStatusSchema = v.object({
+  id: v.string(),
+  pieces: v.number(),
+  read: v.number(),
+  facts: v.number(),
+  replaces: v.number(),
+  failure: v.nullable(v.string()),
+  /** Stopped until the owner retries: its failure is one no wait mends. */
+  parked: v.boolean(),
+  createdAt: v.number(),
+});
+
+export type AccountImportStatus = v.InferOutput<typeof AccountImportStatusSchema>;
+
+/** The profile's use of its budget, and the facts it leaves out, as Settings shows them. */
+export const AccountProfileUseSchema = v.object({
+  used: v.number(), budget: v.number(),
+  unshown: v.pipe(v.array(v.object({ key: v.string(), chars: v.number() })), v.readonly()),
+});
+
+/**
+ * Settings → Memory: every account fact with its history, every note, what waits on the owner, the imports under way,
+ * and the profile every agent reads: its use of the budget and the facts it leaves out.
+ */
 const AccountMemoryViewSchema = v.object({
   facts: v.pipe(v.array(v.object({ ...FactSchema.entries, history: v.pipe(v.array(FactRevisionSchema), v.readonly()) })), v.readonly()),
   notes: v.pipe(v.array(AccountNoteSchema), v.readonly()),
   pending: v.pipe(v.array(AccountMemoryProposalSchema), v.readonly()),
+  imports: v.pipe(v.array(AccountImportStatusSchema), v.readonly()),
+  profile: AccountProfileUseSchema,
 });
 
 export type AccountMemoryView = Readonly<v.InferOutput<typeof AccountMemoryViewSchema>>;
@@ -128,10 +184,24 @@ export function initAccountMemoryTables(execRaw: RawSqlExec): void {
 }
 
 /** Two proposals are the same ask when they name the same fact key and value, or the same note; importance aside. */
-function sameAsk(a: v.InferOutput<typeof AccountProposalSchema>, b: v.InferOutput<typeof AccountProposalSchema>): boolean {
+function sameAsk(a: v.InferOutput<typeof AccountProposalSchema>, b: StoredProposal): boolean {
   if (a.kind === 'fact') return b.kind === 'fact' && a.key === b.key && stableStringify(a.value) === stableStringify(b.value);
 
   return b.kind === 'note' && a.content === b.content;
+}
+
+/** One stored row's ceiling, which an import's whole record must fit. */
+const ROW_BYTES = PLATFORM_LIMITS['do.sqlite.row_bytes'].value;
+
+/** `record` as its row stores it; a refusal naming the ceiling where it does not fit. */
+const rowBytes = (json: string): number => new TextEncoder().encode(json).length;
+
+function importRow(record: AccountImport): Effect.Effect<string, KinuError> {
+  const json = JSON.stringify(record);
+  const bytes = rowBytes(json);
+
+  return bytes <= ROW_BYTES ? Effect.succeed(json) : Effect.fail(new KinuError('bad_input',
+    `This import is ${bytes.toLocaleString('en-US')} bytes stored, and one stored row holds at most ${ROW_BYTES.toLocaleString('en-US')} (do.sqlite.row_bytes). Import the document in parts.`));
 }
 
 /** mnemopi's lexical recall over the account's notes (lexical-recall.ts), best first, above its noise floor. */
@@ -153,6 +223,20 @@ interface ProposalRow {
   proposal_json: string;
   origin_json: string;
   created_at: number;
+}
+
+interface ImportRow {
+  id: string;
+  proposal_json: string;
+  status: string;
+  created_at: number;
+}
+
+function readImport(row: Pick<ImportRow, 'id' | 'proposal_json'>): Effect.Effect<AccountImport, KinuError> {
+  return Effect.try({
+    try: () => v.parse(AccountImportSchema, parseJsonValue(row.proposal_json)),
+    catch: (cause) => new KinuError('io', `Corrupt account memory import ${row.id}`, { cause }),
+  });
 }
 
 interface NoteRow {
@@ -197,18 +281,19 @@ export class AccountMemoryStore {
    * Files a proposal, answering its id: the pending one of the same subject when there is one, and the one a delivery
    * already filed whatever became of it. `workspace` is where it was said.
    */
-  propose(filing: AccountProposalFiling, workspace: string | null): string {
+  propose(filing: AccountProposalFiling, workspace: string | null): AccountProposalFiled {
     const filed = v.parse(AccountProposalSchema, filing.proposal);
+    const unshown = filed.kind === 'fact' ? unshownIfKept(this.factsStore.all(), filed.key, filed.value) : null;
     // Kept scrubbed (`memory/scrub.ts`): an accepted proposal is written as it was filed.
     const proposal = filed.kind === 'fact' ? { ...filed, value: scrubMemoryValue(filed.value) } : { ...filed, content: scrubSecrets(filed.content) };
     const proposer = v.parse(AccountProposerSchema, filing.proposer);
     const delivered = filing.delivery === undefined ? undefined : this.sql<{ id: string }>`SELECT id FROM account_memory_proposals WHERE delivery = ${filing.delivery}`[0];
 
-    if (delivered !== undefined) return delivered.id;
+    if (delivered !== undefined) return { id: delivered.id, unshown };
     // One pending proposal per subject: the owner's queue is short, and its rows are the canonical proposals.
-    const pending = this.pending().find((waiting) => sameAsk(waiting.proposal, proposal));
+    const pending = this.pending().find((waiting) => sameAsk(proposal, waiting.proposal));
 
-    if (pending !== undefined) return pending.id;
+    if (pending !== undefined) return { id: pending.id, unshown };
     const origin: FactOrigin = { ...proposer, ...(workspace !== null && { workspace }) };
     const id = `amp_${nanoid(12)}`;
 
@@ -216,33 +301,132 @@ export class AccountMemoryStore {
       VALUES (${id}, ${JSON.stringify(proposal)}, ${JSON.stringify(origin)}, ${filing.delivery ?? null}, 'pending', ${Date.now()})`;
     markStoreChanged(this.sql);
 
-    return id;
+    return { id, unshown };
   }
 
   view(): AccountMemoryView {
-    return settleSync(Effect.map(this.notes(), (notes) => ({
-      facts: this.factsStore.all().map((fact) => ({ ...fact, history: this.factsStore.history(fact.key) })),
-      notes,
-      pending: this.pending(),
-    })));
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const notes = yield* this.notes();
+      const facts = this.factsStore.all();
+      const { used, budget, unshown } = accountProfile(effectiveProfileFacts(facts, []));
+
+      const imports = yield* Effect.forEach(this.sql<ImportRow>`SELECT id, proposal_json, status, created_at FROM account_memory_proposals
+        WHERE status IN ('importing', 'failed') ORDER BY created_at, id`, (row) => Effect.map(readImport(row), (record): AccountImportStatus => ({
+        id: row.id, pieces: record.notes.length, read: record.read, facts: record.facts.length, replaces: record.replaces.length,
+        failure: record.failure ?? null, parked: row.status === 'failed', createdAt: row.created_at,
+      })));
+
+      return {
+        facts: facts.map((fact) => ({ ...fact, history: this.factsStore.history(fact.key) })),
+        notes, pending: this.pending(), imports, profile: { used, budget, unshown },
+      };
+    }));
   }
 
-  /** Accepting writes the proposal with who asked for it; either way it leaves the queue. Answers whether it was pending. */
-  decide(id: string, decision: 'accept' | 'decline'): boolean {
+  /**
+   * Accepting writes the proposal with who asked for it; either way it leaves the queue. An import is accepted whole, with
+   * `edited` the facts the owner kept of it as they left them, and declined at any point, its reading too. Answers whether
+   * it was there to decide.
+   */
+  decide(id: string, decision: 'accept' | 'decline', edited?: readonly ImportedFact[]): boolean {
     return settleSync(Effect.gen({ self: this }, function* () {
-      const row = this.sql<ProposalRow>`SELECT id, proposal_json, origin_json, created_at FROM account_memory_proposals WHERE id = ${id} AND status = 'pending'`[0];
+      const row = this.sql<ProposalRow & { status: string }>`SELECT id, proposal_json, origin_json, created_at, status FROM account_memory_proposals
+        WHERE id = ${id} AND status IN ('pending', 'importing', 'failed')`[0];
 
-      if (row === undefined) return false;
+      if (row === undefined || (decision === 'accept' && row.status !== 'pending')) return false;
       const { proposal, origin } = yield* readProposal(row);
+      const kept = proposal.kind === 'import' && edited !== undefined ? { ...proposal, facts: v.parse(ImportedFactsSchema, edited) } : proposal;
 
       this.transaction(() => {
-        if (decision === 'accept') this.write(proposal, origin);
+        if (decision === 'accept') this.write(kept, origin);
         void this.sql`UPDATE account_memory_proposals SET status = ${decision === 'accept' ? 'accepted' : 'declined'} WHERE id = ${id}`;
       });
       markStoreChanged(this.sql);
 
       return true;
     }));
+  }
+
+  /** Files the owner's import of `notes`, reading none of it yet; `replaces` are the facts it takes the place of once
+   *  accepted. Its id. */
+  startImport(notes: readonly string[], replaces: readonly string[]): string {
+    return settleSync(Effect.gen({ self: this }, function* () {
+      // Kept scrubbed (`memory/scrub.ts`), as every note is.
+      const record: AccountImport = { kind: 'import', notes: notes.map((note) => scrubSecrets(note)), read: 0, facts: [], replaces: replaces.map((key) => v.parse(FactKeySchema, key)) };
+
+      if (record.notes.length === 0) return yield* new KinuError('bad_input', 'The document holds no words to import.');
+      const json = yield* importRow(record);
+      const id = `amp_${nanoid(12)}`;
+
+      void this.sql`INSERT INTO account_memory_proposals (id, proposal_json, origin_json, delivery, status, created_at)
+        VALUES (${id}, ${json}, ${JSON.stringify({ by: 'import' })}, ${null}, 'importing', ${Date.now()})`;
+      markStoreChanged(this.sql);
+
+      return id;
+    }));
+  }
+
+  /** The imports still reading their document: each its next piece, and what the account will hold beside it. */
+  importsDue(): { readonly id: string; readonly piece: { readonly text: string; readonly index: number; readonly total: number }; readonly known: ImportedFact[] }[] {
+    return settleSync(Effect.forEach(this.sql<ImportRow>`SELECT id, proposal_json, status, created_at FROM account_memory_proposals
+      WHERE status = 'importing' ORDER BY created_at, id`, (row) => Effect.map(readImport(row), (record) => {
+      const replaced = new Set(record.replaces);
+      // What it replaces is not what the account holds: the extractor would skip a subject it found there.
+      const held = this.factsStore.all().filter((fact) => !replaced.has(fact.key)).map(({ key, value }) => ({ key, value }));
+
+      return {
+        id: row.id,
+        piece: { text: record.notes[record.read] ?? '', index: record.read, total: record.notes.length },
+        known: mergeImported(held, record.facts),
+      };
+    })));
+  }
+
+  /** The facts `id`'s piece `index` stated, kept with its earlier ones; the last piece files the batch for the owner.
+   *  Answers whether more is left to read. A piece already read, or an import declined meanwhile, changes nothing. */
+  importRead(id: string, index: number, facts: readonly ImportedFact[]): boolean {
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const row = this.sql<ImportRow>`SELECT id, proposal_json, status, created_at FROM account_memory_proposals WHERE id = ${id} AND status = 'importing'`[0];
+
+      if (row === undefined) return false;
+      const record = yield* readImport(row);
+
+      if (record.read !== index) return record.read < record.notes.length;
+      const next: AccountImport = { kind: 'import', notes: record.notes, read: index + 1, facts: mergeImported(record.facts, facts), replaces: record.replaces };
+      const done = next.read >= next.notes.length;
+      const json = yield* importRow(next);
+
+      void this.sql`UPDATE account_memory_proposals SET proposal_json = ${json}, status = ${done ? 'pending' : 'importing'} WHERE id = ${id}`;
+      markStoreChanged(this.sql);
+
+      return !done;
+    }));
+  }
+
+  /** `id`'s last read failed, in `failure`'s words; `parked`: no wait mends it, so it waits for the owner's retry. */
+  importFailed(id: string, failure: string, parked: boolean): void {
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const row = this.sql<ImportRow>`SELECT id, proposal_json, status, created_at FROM account_memory_proposals WHERE id = ${id} AND status = 'importing'`[0];
+
+      if (row === undefined) return;
+      const record = yield* readImport(row);
+      const said = JSON.stringify({ ...record, failure });
+      // A record at its row's ceiling keeps its words out rather than fail to stop: it parks all the same.
+      const kept = rowBytes(said) <= ROW_BYTES ? said : row.proposal_json;
+
+      void this.sql`UPDATE account_memory_proposals SET proposal_json = ${kept}, status = ${parked ? 'failed' : 'importing'}
+        WHERE id = ${id}`;
+      markStoreChanged(this.sql);
+    }));
+  }
+
+  /** The owner retries a stopped import from the piece it stopped at. Answers whether one was stopped. */
+  retryImport(id: string): boolean {
+    const retried = this.sql<{ id: string }>`UPDATE account_memory_proposals SET status = 'importing' WHERE id = ${id} AND status = 'failed' RETURNING id`;
+
+    if (retried.length > 0) markStoreChanged(this.sql);
+
+    return retried.length > 0;
   }
 
   /** The owner's own write: an edit, or a workspace fact promoted from its world model (`workspace` names it). */
@@ -271,7 +455,21 @@ export class AccountMemoryStore {
     return existed;
   }
 
-  private write(proposal: v.InferOutput<typeof AccountProposalSchema>, origin: FactOrigin): void {
+  private write(proposal: StoredProposal, origin: FactOrigin): void {
+    if (proposal.kind === 'import') {
+      const kept = new Set(proposal.facts.map((fact) => fact.key));
+
+      for (const content of proposal.notes) this.insertNote(content, origin);
+
+      for (const key of proposal.replaces) if (!kept.has(key)) this.factsStore.forget(key, origin);
+
+      for (const fact of proposal.facts) {
+        this.factsStore.upsert(fact.key, fact.value, { veracity: 'stated', origin, ...(fact.importance !== undefined && { importance: fact.importance }) });
+      }
+
+      return;
+    }
+
     if (proposal.kind === 'fact') {
       this.factsStore.upsert(proposal.key, proposal.value, {
         veracity: origin.by === 'background' ? 'inferred' : 'stated', origin,
@@ -281,8 +479,12 @@ export class AccountMemoryStore {
       return;
     }
 
+    this.insertNote(proposal.content, origin);
+  }
+
+  private insertNote(content: string, origin: FactOrigin): void {
     void this.sql`INSERT INTO account_notes (id, content, origin_json, created_at)
-      VALUES (${`acn_${nanoid(12)}`}, ${proposal.content}, ${JSON.stringify(origin)}, ${Date.now()})`;
+      VALUES (${`acn_${nanoid(12)}`}, ${content}, ${JSON.stringify(origin)}, ${Date.now()})`;
   }
 
   private notes(): Effect.Effect<AccountNote[], KinuError> {

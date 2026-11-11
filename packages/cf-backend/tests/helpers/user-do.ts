@@ -38,6 +38,8 @@ import * as v from 'valibot';
 import type { PictureBucket } from '../../src/slates/pictures';
 import type { ShareCardRecipient } from '../../src/user/share-cards';
 import { kvOf } from './platform-context';
+import { platformGatewayEnv, type StubbedAiBinding } from './platform-gateway';
+import type { WorkersAIBinding } from '@kinu.run/core';
 
 mockAgentsSdk();
 
@@ -204,6 +206,8 @@ export function testOwner(): Promise<UserCaller> {
 }
 
 export interface TestUserDOOptions {
+  /** The platform gateway the account's own model calls reach (an import's reading); absent, none is bound. */
+  aiGateway?: StubbedAiBinding;
   /** The accounts this one writes to by id, as `env.UserDO` resolves them: a share's recipients. */
   accounts?: (userId: string) => ShareCardRecipient;
   /** Without a connected device every device call short-circuits before the consent path. */
@@ -334,11 +338,13 @@ function servedAsset(pathname: string, build: TestUserDOOptions['servedBuild']):
 }
 
 interface TestUserEnvironment {
-  UserDO?: { idFromName(name: string): string; get(id: string): ShareCardRecipient | Pick<UserDOInstance, 'builtinRemoveAccount'> };
+  UserDO?: { idFromName(name: string): string; get(id: string): ShareCardRecipient | Pick<UserDOInstance, 'builtinRemoveAccount'> | UserDOInstance };
   ControlPlaneDO?: { idFromName(name: string): string; get(id: string): IndexFeedSink & Pick<ControlPlaneDO, 'forgetUser'> };
   MAILBOX: { idFromName(name: string): string; get(id: string): Pick<MailboxDO, 'deleteBox' | 'retireWorkspace'> };
   CREDENTIAL_ENCRYPTION_KEY: string;
   DEV_USER_EMAIL?: string;
+  AI_GATEWAY_URL?: string;
+  AI?: WorkersAIBinding;
   SLATE_PICTURES?: PictureBucket;
   /** Only whether it is bound is read here: the Mailbox keeps the bytes. */
   MAIL_BUCKET?: object;
@@ -696,9 +702,12 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     ...(options.cloudflareOAuthClientId !== undefined && { CLOUDFLARE_OAUTH_CLIENT_ID: options.cloudflareOAuthClientId }),
     ...(options.cloudflareOAuthClientSecret !== undefined && { CLOUDFLARE_OAUTH_CLIENT_SECRET: options.cloudflareOAuthClientSecret }),
     CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
+    ...(options.aiGateway !== undefined && platformGatewayEnv(options.aiGateway)),
     ...(options.devUserEmail !== undefined && { DEV_USER_EMAIL: options.devUserEmail }),
     // The deployment's sign-in directory answers beside the accounts: a deleted account's sign-in is removed there.
     ...(accountOf !== undefined && { UserDO: { idFromName: (name: string) => name, get: (id: string) => (id === BUILTIN_ACCOUNTS_OBJECT ? directory : accountOf(id)) } }),
+    // The account's own model calls read its credentials through its own name, as a deployed account's do.
+    ...(accountOf === undefined && options.aiGateway !== undefined && { UserDO: { idFromName: (name: string) => name, get: (): UserDOInstance => userDO } }),
     ASSETS: { fetch: async (input: Request) => servedAsset(new URL(input.url).pathname, options.servedBuild) },
     ...(options.pages !== undefined && { AUTH_KV: options.pages.AUTH_KV }),
     SLATE_PICTURES: options.slatePictures,

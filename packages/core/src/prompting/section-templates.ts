@@ -8,6 +8,7 @@
 // One import spelling across Bun/CLI, esbuild and Vite/workerd (Vite's promptText plugin;
 // tsconfig.base.json declares the Markdown module).
 import agentNamesLine from "../prompts/agent-names-line.md" with { type: 'text' };
+import accountProfile from "../prompts/account-profile.md" with { type: 'text' };
 import builtinToolLine from "../prompts/builtin-tool-line.md" with { type: 'text' };
 import operatingGuidance from "../prompts/operating-guidance.md" with { type: 'text' };
 import roleSection from "../prompts/role-section.md" with { type: 'text' };
@@ -65,6 +66,16 @@ export const AGENT_NAMES_LINE = definePromptSection(
   "identity/names",
   "{{agent}}{{workspace}}{{#if hasWorkspace}}{{/if}}{{#if isSubagent}}{{/if}}",
   agentNamesLine.trimEnd(),
+);
+
+/**
+ * The account owner's facts (`memory/account-profile.ts`), last in the system prompt's per-workspace part: a change to
+ * them leaves the cached sections before it. Not in `PROMPT_SECTIONS`: the owner's own facts, nothing to optimise.
+ */
+export const ACCOUNT_PROFILE_SECTION = definePromptSection(
+  "memory/account-profile",
+  "{{lines}}{{unshown}}{{#if hasUnshown}}{{/if}}",
+  accountProfile.trimEnd(),
 );
 
 /**

@@ -96,7 +96,11 @@ export const MEMORY_WITH_ACCOUNT = {
   remember: memoryOp({
     ...MEMORY.remember,
     input: v.strictObject({ ...MEMORY.remember.input.entries, scope: Scope }),
-    output: v.union([MEMORY.remember.output, v.strictObject({ key: v.string(), ...Pending.entries })]),
+    output: v.union([MEMORY.remember.output, v.strictObject({
+      key: v.string(), ...Pending.entries,
+      notShown: v.optional(described(v.strictObject({ chars: v.number(), budget: v.number() }),
+        'Once kept, too long for the profile every agent reads: its characters against the budget. Shorten it, or split it into facts.')),
+    })]),
   }),
   recall: memoryOp({
     ...MEMORY.recall,

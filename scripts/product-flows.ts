@@ -36,7 +36,7 @@ import {
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
   SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
   ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD, ACTIVITY_ASK, ACTIVITY_WORKSPACE, MODE_SLATE, MODE_SLATE_ASK,
-  APP_AGENT_ASK, APP_AGENT_FILES, APP_AGENT_SLATE,
+  APP_AGENT_ASK, APP_AGENT_FILES, APP_AGENT_SLATE, LENT_OWNER_FACT,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import { ACTIVE_TAB_INDEX, AGENT_TAB, AGENTS_COUNTER, agentTab, ATTENTION_BEHIND, ATTENTION_CARD, attentionBehind, attentionCard, CHAT_COMPOSER_LIVE, CHAT_IDLE, CHATS, CHECKBOX, countRpc, createFlowWorkspace, DESKTOP_RETURN, DRIVE_DIALOG_COMMIT, DRIVE_NEW, DRIVE_PLACE, drivePlace, FILES_FAILURE, frameLedger, INSPECTOR_WIDTH, MARK_REVIEWED, named, NEW_SESSION, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, PAGE_TABS, pagesTraffic, painted, PARKED_COMMAND, parkedCommand, pressMenu, pressRowMenu, recordRenderTasks, removeFlowWorkspace, RENAME_BUTTON, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn, type FlowTarget, type FrameLedger, type RpcCounts, type SendSite } from './browser-page';
@@ -2976,6 +2976,8 @@ export interface AppAgentLentVerdict {
   readonly owner: { readonly chats: number; readonly said: string };
   readonly ownerView: string;
   readonly mainHeard: boolean;
+  /** Whether the visitor's answer carried a fact of the owner's account memory, kept while they asked. */
+  readonly ownerFactHeard: boolean;
 }
 
 /** The owner opens the app's share sheet, its chats with the assistant, and the newest one: what its transcript draws. */
@@ -3017,6 +3019,7 @@ export async function appAgentAnswersALentVisitor(target: FlowTarget): Promise<A
     const made = await shareTheApp(target, workspace, 'owner');
 
     share = made.share;
+    await keepOwnerFact(target, LENT_OWNER_FACT);
     const context = await target.browser.createBrowserContext();
     const page = await context.newPage();
     let frame = await appOnItsLink(page, made.link);
@@ -3051,11 +3054,28 @@ export async function appAgentAnswersALentVisitor(target: FlowTarget): Promise<A
 
     await kinu.page.close();
 
-    return { workspace, forged, first, sheet, anonymous, owner, ownerView, mainHeard: heard };
+    return { workspace, forged, first, sheet, anonymous, owner, ownerView, mainHeard: heard, ownerFactHeard: anonymous.reply.includes(`(${LENT_OWNER_FACT.value})`) };
   } finally {
+    await forgetOwnerFact(target, LENT_OWNER_FACT.key);
+
     if (share !== null) await revokeFlowShare(target, workspace, share);
     await removeFlowWorkspace(target, workspace);
   }
+}
+
+/** The owner keeps a fact in their account's memory through Settings' own route. */
+async function keepOwnerFact(target: FlowTarget, fact: { readonly key: string; readonly value: string }): Promise<void> {
+  const kept = await fetch(`${target.origin}/api/user/memory/facts/${encodeURIComponent(fact.key)}`, {
+    method: 'PUT', headers: { ...webHeaders(target.identity), 'content-type': 'application/json' }, body: JSON.stringify({ value: fact.value }),
+  });
+
+  if (!kept.ok) throw new Error(`keeping the flow's account fact answered ${String(kept.status)}`);
+}
+
+async function forgetOwnerFact(target: FlowTarget, key: string): Promise<void> {
+  const forgotten = await fetch(`${target.origin}/api/user/memory/facts/${encodeURIComponent(key)}`, { method: 'DELETE', headers: webHeaders(target.identity) });
+
+  if (!forgotten.ok) console.warn(`product-flows: forgetting ${key} answered ${String(forgotten.status)}`);
 }
 
 export interface AppAgentOwnVerdict {

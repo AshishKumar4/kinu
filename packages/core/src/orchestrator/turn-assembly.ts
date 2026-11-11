@@ -7,7 +7,7 @@ import type { LanguageModel, ToolSet } from 'ai';
 import { Effect } from 'effect';
 import type { ModelWindow } from '../context-window';
 import type { KinuExtension } from '../extension';
-import type { Fact } from '../memory/facts';
+import { accountProfile, effectiveProfileFacts, type AccountRead, type AccountTurnRead, type AccountTurnView } from '../memory/account-profile';
 import type { RecalledMemory } from '../memory/turn-recall';
 import type { MailInContext } from '../mail/in-context';
 import type { ActiveRoster } from '../types/dynamic-context';
@@ -66,7 +66,8 @@ export interface TurnModelSources {
 export interface TurnReads {
   readonly memoryTail: string | undefined;
   readonly activeSkills: ActiveSkillSet | null;
-  readonly accountFacts?: readonly Fact[];
+  /** The account's profile and limits note; absent where no account is wired. */
+  readonly account?: AccountTurnView;
   readonly mail?: ActiveRoster<MailInContext>;
   /** What the turn's words recalled of memory. */
   readonly recalled?: readonly RecalledMemory[];
@@ -113,17 +114,17 @@ export interface TurnAssemblySources {
   readonly paceStep?: ActorExecutionInput['chat']['paceStep'];
   extensions(): readonly KinuExtension[];
   dynamic(turn: TurnReads): ActorExecutionInput['dynamic'];
-  /** The account's facts, read once per turn so every step renders the same block; absent where no account is wired.
-   *  A read that fails answers none, and the turn goes on. */
-  accountFacts?(): Promise<readonly Fact[]>;
+  /** The account's facts as this agent reads them, and its limits note, read once per turn so every request carries
+   *  the same profile; absent where no account is wired. A read that fails answers none, and the turn goes on. */
+  account?(): Promise<AccountTurnRead>;
   /** The agent's unread mail, read once per turn as the facts are; absent where it has no box, and a failed read none. */
   mail?(): Promise<ActiveRoster<MailInContext> | undefined>;
   /** MEMORY.md's tail, read once per turn so every step renders the same block. */
   memoryTail(): Promise<string | undefined>;
-  /** What the turn's words match in its memory and in `accountFacts`, the account's as the turn read them
-   *  (`recallForTurn`), read once per turn beside its other reads; it never rejects: a failed search is logged and answers
-   *  none, as a failed read of the account's facts does. */
-  recall?(question: string, accountFacts: readonly Fact[] | undefined): Promise<readonly RecalledMemory[]>;
+  /** What the turn's words match in its memory (`recallForTurn`), read once per turn beside its other reads; it never
+   *  rejects: a failed search is logged and answers none.
+   */
+  recall?(question: string): Promise<readonly RecalledMemory[]>;
   operation(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): OperationProfile;
   /** Binds the resolved profile; `toolset` is read again after it. */
   settle?(profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void | Promise<void>;
@@ -154,7 +155,7 @@ export type RunTurnSources = Omit<TurnAssemblySources, 'toolset' | 'externalTool
 /** What a backend brings to a seated actor's turn sources; the rest is read off the actor ({@link actorTurnSources}). */
 export type ActorTurnParts = Pick<RunTurnSources,
   'backend' | 'harnessMode' | 'models' | 'profileInputs' | 'choices' | 'ancestors' | 'agentsActions' | 'temporaryAsk' | 'soul' | 'agentsMd'
-  | 'budget' | 'observeStream' | 'operations' | 'attachmentBudget' | 'extensions' | 'dynamic' | 'accountFacts' | 'mail' | 'recall'> & {
+  | 'budget' | 'observeStream' | 'operations' | 'attachmentBudget' | 'extensions' | 'dynamic' | 'mail' | 'recall'> & {
   /** The workspace's identity: its own agent speaks as it, any other as a named agent of it. */
   readonly workspaceIdentity: () => Promise<PromptIdentity>;
   readonly instructionTrust: InstructionTrustResolver;
@@ -168,16 +169,26 @@ export type ActorTurnParts = Pick<RunTurnSources,
   readonly report: ModelCallSink;
   /** The run and turn its operations are captured under. */
   readonly run: { readonly runId: string; readonly turnId: string | null };
+  /** Its account's facts and limits note, once a turn; absent where no account is wired. */
+  readonly account?: () => Promise<AccountRead>;
 };
 
 /** A seated actor's turn sources on any backend: its own runtime, stores and lineage, with what the backend brings. */
 export function actorTurnSources(actor: SeatedActor, parts: ActorTurnParts): RunTurnSources {
-  const { workspaceIdentity, instructionTrust, skillReads, artifacts, affinity, report, run, ...brought } = parts;
+  const { workspaceIdentity, instructionTrust, skillReads, artifacts, affinity, report, run, account, ...brought } = parts;
   const { runtime, stores, handle, record } = actor;
   const workspace = actorPolicy(record).workspaceAgent;
 
   return {
     ...brought,
+    // The one place an agent's profile is made: its own value of a key the account holds takes the account's place.
+    ...(account !== undefined && {
+      account: async () => {
+        const { facts, limits } = await account();
+
+        return { facts: effectiveProfileFacts(facts, stores.facts.all()), limits };
+      },
+    }),
     rt: runtime,
     executors: () => runtime.executionRouter?.listExecutors() ?? [],
     config: stores.config,
@@ -297,29 +308,30 @@ function resolvedTurnProfile(sources: TurnAssemblySources, turn: Pick<TurnDraft,
 }
 
 /** Effect-free: a measure between turns assembles too. */
-/** The turn's reads started as its preparation begins: the account's facts, and the search for what `question` recalls
- *  among them and the agent's own memory, none where its sources recall nothing. */
+/** The turn's reads started as its preparation begins: the account's, and the search for what `question` recalls of
+ *  the agent's own memory, none where its sources recall nothing. */
 interface StartedReads {
-  readonly accountFacts: Promise<readonly Fact[]> | undefined;
+  readonly account: Promise<AccountTurnRead> | undefined;
   readonly recalled: Promise<readonly RecalledMemory[]> | undefined;
 }
 
 function startReads(sources: TurnAssemblySources, question: string): StartedReads {
-  const accountFacts = sources.accountFacts?.();
-
-  if (sources.recall === undefined) return { accountFacts, recalled: undefined };
-
-  return { accountFacts, recalled: (async () => await sources.recall?.(question, await accountFacts) ?? [])() };
+  return { account: sources.account?.(), recalled: sources.recall?.(question) };
 }
 
-/** What every step of the turn renders the same bytes of: MEMORY.md's tail, the account's facts, the agent's mail and
+/** The account's read as every request of the turn carries it: the profile its facts fit, and its limits note. */
+export function accountTurnView(read: AccountTurnRead): AccountTurnView {
+  return { profile: accountProfile(read.facts), limits: read.limits };
+}
+
+/** What every step of the turn renders the same bytes of: MEMORY.md's tail, the account's profile, the agent's mail and
  *  what its words recalled, started as its preparation began (`started`). */
 async function readTurnOnce(sources: TurnAssemblySources, activeSkills: ActiveSkillSet | undefined, started: StartedReads): Promise<TurnReads> {
-  const [memoryTail, accountFacts, mail, recalled] = await Promise.all([sources.memoryTail(), started.accountFacts, sources.mail?.(), started.recalled]);
+  const [memoryTail, account, mail, recalled] = await Promise.all([sources.memoryTail(), started.account, sources.mail?.(), started.recalled]);
 
   return {
     memoryTail, activeSkills: activeSkills ?? null,
-    ...(accountFacts !== undefined && { accountFacts }), ...(mail !== undefined && { mail }), ...(recalled !== undefined && { recalled }),
+    ...(account !== undefined && { account: accountTurnView(account) }), ...(mail !== undefined && { mail }), ...(recalled !== undefined && { recalled }),
   };
 }
 
@@ -376,6 +388,7 @@ export async function assembleActorTurn(sources: TurnAssemblySources, request: T
     ...(pinned && { activeSkills: pinned }),
     ...(soul !== undefined && { soulOverride: soul }),
     ...(request.pagesInAnswer === true && { pagesInAnswer: true }),
+    account: reads.account,
   };
 
   const { provider, modelId } = parseModelSpec(spec);
@@ -494,6 +507,8 @@ export interface TurnSourcesBundle {
   readonly identity: PromptIdentity;
   readonly agentsMd: AgentsMdSources;
   readonly memoryTail: string | null;
+  /** The account's read, made where the agent's own facts are, which shadow the account's. */
+  readonly account: AccountTurnRead | null;
   readonly artifacts: ReturnType<TurnAssemblySources['artifacts']>;
   readonly conversationKey: string;
   readonly models: Readonly<Record<string, { readonly window: ModelWindow; readonly media: readonly MediaModality[]; readonly callsTools: boolean | undefined }>>;
@@ -517,9 +532,9 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
   const specs = [served, ...tier.fallbacks.map((fallback) => models.normalize(fallback.model))];
   await timed('warm', models.catalog.warm(specs));
 
-  const [skills, soul, identity, agentsMd, memoryTail, windows] = await Promise.all([
+  const [skills, soul, identity, agentsMd, memoryTail, account, windows] = await Promise.all([
     timed('skills', sources.skills(request.userText, roleSkills, limits)), timed('soul', sources.soul()), timed('identity', sources.identity()),
-    timed('agentsMd', sources.agentsMd(limits)), timed('memoryTail', sources.memoryTail()),
+    timed('agentsMd', sources.agentsMd(limits)), timed('memoryTail', sources.memoryTail()), timed('account', sources.account?.()),
     timed('windows', Promise.all(specs.map(async (spec) => [spec, {
       window: await models.catalog.windowFor(spec), media: [...models.catalog.acceptedMedia(spec)], callsTools: models.catalog.callsTools(spec),
     }] as const))),
@@ -544,6 +559,7 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
     identity,
     agentsMd,
     memoryTail: memoryTail ?? null,
+    account: account ?? null,
     artifacts: sources.artifacts(),
     conversationKey: sources.conversationKey(),
     models: Object.fromEntries(windows),
@@ -553,7 +569,7 @@ export async function materializeTurnSources(sources: TurnAssemblySources, reque
 /** What the assembling isolate supplies itself. */
 export type LocalTurnSources = Omit<TurnAssemblySources,
   'backend' | 'executors' | 'profileInputs' | 'ancestors' | 'skills' | 'wiredToolNames' | 'codemodeCapabilities' | 'agentsActions' | 'temporaryAsk'
-  | 'soul' | 'identity' | 'agentsMd' | 'memoryTail' | 'artifacts' | 'conversationKey' | 'models' | 'toolset' | 'externalTools'> & {
+  | 'soul' | 'identity' | 'agentsMd' | 'memoryTail' | 'account' | 'artifacts' | 'conversationKey' | 'models' | 'toolset' | 'externalTools'> & {
   readonly models: Omit<TurnModelSources, 'catalog'>;
 };
 
@@ -591,6 +607,8 @@ export function turnSourcesFromBundle(bundle: TurnSourcesBundle, local: LocalTur
     },
   };
 
+  const { account } = bundle;
+
   return {
     ...local,
     backend: bundle.backend,
@@ -612,6 +630,7 @@ export function turnSourcesFromBundle(bundle: TurnSourcesBundle, local: LocalTur
     identity: async () => bundle.identity,
     agentsMd: async () => bundle.agentsMd,
     memoryTail: async () => bundle.memoryTail ?? undefined,
+    ...(account !== null && { account: async () => account }),
     artifacts: () => bundle.artifacts,
     conversationKey: () => bundle.conversationKey,
   };

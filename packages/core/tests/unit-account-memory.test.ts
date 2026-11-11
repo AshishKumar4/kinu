@@ -93,7 +93,7 @@ describe('the account fails alone', () => {
     const failing: AccountMemory = {
       facts: async () => { throw new Error('the user object did not answer'); },
       searchNotes: async () => [],
-      propose: async () => 'amp_1',
+      propose: async () => ({ id: 'amp_1', unshown: null }),
     };
 
     const actor = actorWith(failing);
@@ -107,32 +107,17 @@ describe('the account fails alone', () => {
 });
 
 describe("each step's memory block, as the prompt cache sees it", () => {
-  test("a workspace fact older than the newest twenty still keeps the account's of its key out of the block", () => {
+  test('the same bytes on every step of a turn until a fact itself changes', () => {
     const { facts } = createTestFactsStore();
-
-    facts.upsert('reply_language', 'English for this client');
-
-    for (let index = 0; index < 25; index += 1) facts.upsert(`note_${String(index)}`, String(index));
-
-    const block = renderMemoryForTurn(facts, [fact('reply_language', 'Hindi')]) ?? '';
-
-    expect(block).not.toContain('Hindi');
-  });
-
-
-  test('the same bytes on every step of a turn, with the account read once, until a fact itself changes', () => {
-    const { facts } = createTestFactsStore();
-    const account = [fact('owner_name', 'Ashish', { importance: 0.9 })];
 
     facts.upsert('deploy_target', 'staging');
-    const steps = [renderMemoryForTurn(facts, account), renderMemoryForTurn(facts, account), renderMemoryForTurn(facts, account)];
+    const steps = [renderMemoryForTurn(facts), renderMemoryForTurn(facts), renderMemoryForTurn(facts)];
 
     expect(new Set(steps).size).toBe(1);
-    expect(steps[0]).toContain('Ashish');
 
     // A fact the step wrote changes the block once, and it holds again after.
     facts.upsert('deploy_target', 'production');
-    const after = [renderMemoryForTurn(facts, account), renderMemoryForTurn(facts, account)];
+    const after = [renderMemoryForTurn(facts), renderMemoryForTurn(facts)];
 
     expect(after[0]).not.toBe(steps[0]);
     expect(after[1]).toBe(after[0]);
@@ -150,7 +135,7 @@ function recordingAccount(facts: Fact[]): AccountMemory & { readonly proposed: A
     propose: async (proposal) => {
       proposed.push(proposal);
 
-      return `amp_${String(proposed.length)}`;
+      return { id: `amp_${String(proposed.length)}`, unshown: null };
     },
   };
 }
@@ -298,7 +283,7 @@ describe("the background pass's proposals reach the account, once each", () => {
         if (refusing) throw new Error('the user object did not answer');
         deliveries.push(delivery);
 
-        return 'amp_1';
+        return { id: 'amp_1', unshown: null };
       },
     };
 

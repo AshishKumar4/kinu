@@ -16,7 +16,7 @@ import { convertArrayToReadableStream, MockLanguageModelV4 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, ScriptedCall, SettledTurn, TurnHarness } from './turn-harness';
 import type { ComputerSize, UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, Clock, ModelInfo, ModelRouteResolution, ActorToolsets, SeatedActor, SurfaceReach } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
-import type { AccountProposal, GitHubAnswer, GitHubRead, GoogleAnswer, GoogleCall, ObjectNamespace, WorkspaceOverview } from '@kinu.run/core';
+import type { AccountProposal, AccountProposalFiled, GitHubAnswer, GitHubRead, GoogleAnswer, GoogleCall, ObjectNamespace, WorkspaceOverview } from '@kinu.run/core';
 import type { GalleryListingSync } from '@kinu.run/core/slates';
 import type { ControlCaller } from '@kinu.run/core/control-plane';
 import { OwnedModelServices } from '../../src/owned-model-services';
@@ -1831,11 +1831,11 @@ export function makeEnv(
 
             return [];
           },
-          accountMemory_propose: async (_caller: UserCaller, proposal: AccountProposal): Promise<string> => {
+          accountMemory_propose: async (_caller: UserCaller, proposal: AccountProposal): Promise<AccountProposalFiled> => {
             if (userPlane?.accountProposals === undefined) throw new Error('harness UserDO: no account memory is served');
             userPlane.accountProposals.push(proposal);
 
-            return `proposal-${String(userPlane.accountProposals.length)}`;
+            return { id: `proposal-${String(userPlane.accountProposals.length)}`, unshown: null };
           },
           githubRead: async (_caller: UserCaller, read: GitHubRead): Promise<GitHubAnswer> => {
             if (userPlane?.github === undefined) throw new Error('harness UserDO: no GitHub connection is served');

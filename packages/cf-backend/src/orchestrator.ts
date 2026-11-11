@@ -1,5 +1,5 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
-import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf,
+import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type AccountRead, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf,
 } from '@kinu.run/core';
 import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateRevision as builtRevision, type AppAgentEntry, type ShareChat, type ShareMode, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
@@ -465,7 +465,7 @@ interface TurnMemoryReads {
   readonly memoryTail: string | undefined;
   /** Absent: the actor's own active skills for the turn. */
   readonly activeSkills?: ActiveSkillSet | null;
-  readonly accountFacts?: readonly Fact[];
+  readonly account?: TurnReads['account'];
   readonly mail?: TurnReads['mail'];
   readonly recalled?: TurnReads['recalled'];
 }
@@ -645,7 +645,7 @@ interface SourcePlanes {
   readonly device: Promise<unknown>;
   /** The account's facts its turn reads once, which never rejects (a failed read is logged and answers none); null with
    *  no turn, whose every read asks. */
-  readonly facts: Promise<readonly Fact[]> | null;
+  readonly facts: Promise<AccountRead> | null;
   /** Whether the owner holds a mail address, read once for its turn or run seat, which never rejects: null on a
    *  deployment with no mail, or where the read failed (logged), each of which offers mail as before. */
   readonly mail: Promise<boolean | null> | null;
@@ -3525,7 +3525,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     readonly reads: TurnMemoryReads;
     readonly surface: TurnSurface | null;
   }): DynamicContext {
-    const { memoryTail, accountFacts, activeSkills, mail, recalled } = step.reads;
+    const { memoryTail, account, activeSkills, mail, recalled } = step.reads;
     const held = this.heldDynamicOf(actor.reference);
     const extras = reach.kind === 'workspace' ? this.extraDynamicContext() : {};
     // The workspace's own agent is told why its turn runs and what its model holds; a hire, its model's name.
@@ -3546,7 +3546,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       // Its skills are its isolate's: a snapshot here reads only what the turn hands it.
       ...(activeSkills !== null && activeSkills !== undefined && { activeSkills }),
       memoryTail,
-      ...(accountFacts !== undefined && { accountFacts }),
+      ...(account !== undefined && { account }),
       ...(recalled !== undefined && { recalled }),
       ...(secrets !== undefined && { secrets: { granted: secrets.granted.map(({ name, hosts, position, reveal, use }) => ({ name, hosts, position, reveal, ...(use !== undefined && { use }) })), withheld: secrets.withheld } }),
       ...(reach.kind === 'workspace' && { unavailableMcp: this._mcpUnavailable }),
@@ -5288,7 +5288,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     return {
       descriptors: turn && reach.kind === 'workspace' ? this.userMcpDescriptors() : null,
       device: reach.kind === 'workspace' ? actor.runtime.deviceTransport.refreshStatus() : Promise.resolve(),
-      facts: turn ? this.account.factsForTurn() : null,
+      facts: turn ? this.account.forTurn() : null,
       mail,
       unreadMail: turn ? this.unreadMailOf(actor, mail) : null,
       sharedSkills: turn ? listSharedSkills(actor.runtime.storage.vfs) : null,
@@ -5392,9 +5392,9 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       report: (report) => this.accounting.reportModelCall(report),
       attachmentBudget: turn?.surface.ledgers.context ?? turnLedgers().context,
       extensions: () => (reach.kind === 'workspace' ? this.extensions.list() : []),
-      accountFacts: () => planes.facts ?? this.account.factsForTurn(),
+      account: () => planes.facts ?? this.account.forTurn(),
       mail: () => planes.unreadMail ?? this.unreadMailOf(actor, Promise.resolve(ownerMail)),
-      recall: async (question, accountFacts) => await recallForTurn({ ...this.recallSources(actor), ...(accountFacts !== undefined && { accountFacts }) }, question),
+      recall: async (question) => await recallForTurn(this.recallSources(actor), question),
       dynamic: (reads) => (profile, tools) => this.actorDynamicContext(actor, reach, { profile, tools, reads, surface: turn?.surface ?? null }),
       run: turn?.surface.key ?? { runId: WORKSPACE_RUN_ID, turnId: null },
     });

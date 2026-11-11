@@ -87,8 +87,8 @@ async function openPage(harness: TestUserDO): Promise<() => Array<v.InferOutput<
 const pendings = (page: Page): string[][] => page.frames().flatMap((frame) => (frame.type === 'account_memory' ? [frame.pending.map((row) => row.id)] : []));
 
 /** An agent of `ledger` asks the account to remember a city. */
-function propose(harness: TestUserDO, ledger: UserCaller): Promise<string> {
-  return harness.userDO.accountMemory_propose(ledger, { kind: 'fact', key: 'owner_city', value: 'Lisbon' }, { by: 'agent', agent: 'main' });
+async function propose(harness: TestUserDO, ledger: UserCaller): Promise<string> {
+  return (await harness.userDO.accountMemory_propose(ledger, { kind: 'fact', key: 'owner_city', value: 'Lisbon' }, { by: 'agent', agent: 'main' })).id;
 }
 
 async function workspace(harness: TestUserDO, name: string): Promise<UserCaller> {

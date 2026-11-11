@@ -218,6 +218,9 @@ export const APP_AGENT_ASK = 'Flow app agent: what is our next stop?';
 
 export const APP_AGENT_REPLY = 'NEXT STOP';
 
+/** An account fact the lent row keeps while a visitor asks the app's assistant, which reads none of its owner's facts. */
+export const LENT_OWNER_FACT = { key: 'flow_lent_owner_city', value: 'Porto' } as const;
+
 export const APP_AGENT_FILES = {
   'package.json': JSON.stringify({ name: APP_AGENT_SLATE.id, description: 'Plans the stops of a trip.', main: 'server.ts', browser: 'client.tsx', slate: { title: APP_AGENT_SLATE.title } }),
   'server.ts': [
@@ -312,7 +315,11 @@ function appAgentAnswer(request: ScriptedRequest): ScriptedAnswer | undefined {
   if (!request.ask.includes(APP_AGENT_ASK) || !request.available.includes('app')) return undefined;
   const called = request.askTurn.find((call) => call.name === 'app');
 
-  return called === undefined ? { toolCall: { name: 'app', arguments: { method: 'nextStop' } } } : { text: `${APP_AGENT_REPLY}: ${called.result}` };
+  if (called === undefined) return { toolCall: { name: 'app', arguments: { method: 'nextStop' } } };
+  // Says the owner's fact where its request carries it: the lent row's visitor must never hear it.
+  const owners = [request.system, ...request.userTexts].some((text) => text.includes(LENT_OWNER_FACT.key)) ? ` (${LENT_OWNER_FACT.value})` : '';
+
+  return { text: `${APP_AGENT_REPLY}: ${called.result}${owners}` };
 }
 
 /** The slate turn's calls, in the order the scripted model plays them: the two files the ask names, then its preview. */
@@ -683,11 +690,10 @@ function accountMemoryAnswer(latest: string, request: ScriptedRequest): Scripted
   const recalling = ACCOUNT_FACT_ROWS.find((row) => latest.includes(row.recall));
 
   if (recalling === undefined) return undefined;
-  const recalled = request.turn.find((call) => call.name === 'memory');
+  const { key, value } = recalling.fact;
 
-  if (recalled === undefined) return { toolCall: { name: 'memory', arguments: { op: 'recall', key: recalling.fact.key } } };
-
-  return { text: `${recalling.reply} ${recalled.result.includes(recalling.fact.value) ? recalling.fact.value : 'nowhere I know of'}` };
+  // The account's facts ride every turn's prompt (core memory/account-profile.ts): answered from it, with no memory call.
+  return { text: `${recalling.reply} ${request.system.includes(`${key}: ${value}`) ? value : 'nowhere I know of'}` };
 }
 
 /** The agent-job row (D95): the ask, the job its turn starts on the computer, and the reply once it has. */

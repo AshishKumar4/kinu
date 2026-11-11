@@ -17,7 +17,7 @@ import { rosterBucket, rosterMatches, AccountForegroundFrameSchema, AccountMemor
 import type { AccountMemoryProposal, ForegroundReport } from "@kinu.run/core";
 import {
   decideAccountMemory, getAccountMemory, listWorkspaces, registerWorkspace, ROSTER_SOCKET_ROUTE,
-  type RosterFilterBucket,
+  type KeptImportFact, type RosterFilterBucket,
 } from "@/lib/user-api";
 import { ApiError } from "@/lib/http";
 import { detach, diagnostics, renderThrownChain, settle, settleSync, tolerate } from "@kinu.run/core/obs";
@@ -60,7 +60,8 @@ interface WorkspaceRosterValue extends RosterPages {
    *  before either answers. The one list chat and Settings show; Settings reads facts and notes itself. */
   readonly accountProposals: readonly AccountMemoryProposal[] | null;
   /** Decides a proposal, then reads what waits again, so a page with no socket loses the row too. */
-  readonly decideAccountProposal: (id: string, decision: "accept" | "decline") => Promise<void>;
+  /** `facts`: an import's facts as the owner kept and edited them. */
+  readonly decideAccountProposal: (id: string, decision: "accept" | "decline", facts?: KeptImportFact[]) => Promise<void>;
   /** How many of the account's pages, on every device, the owner is looking at, as the socket last said; 0 before it has. */
   readonly accountLooking: number;
   /** Tells the account whether the owner is looking at this page: now, and again on every socket the page opens. */
@@ -282,8 +283,8 @@ export function WorkspaceRosterProvider({ children, live = openRosterSocket }: {
     return () => { memoryReads.current += 1; };
   }, [readAccountProposals]);
 
-  const decideAccountProposal = useCallback((id: string, decision: "accept" | "decline"): Promise<void> => settle(
-    Effect.andThen(Effect.promise(() => decideAccountMemory(id, decision)), readAccountProposals()),
+  const decideAccountProposal = useCallback((id: string, decision: "accept" | "decline", facts?: KeptImportFact[]): Promise<void> => settle(
+    Effect.andThen(Effect.promise(() => decideAccountMemory(id, decision, facts)), readAccountProposals()),
   ), [readAccountProposals]);
 
   const subscribe = useCallback((listener: FrameListener): () => void => {

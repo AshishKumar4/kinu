@@ -1,11 +1,11 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
 import { Cause, Effect } from 'effect';
 import {
-  AccountMemoryProposalSchema, DeviceDesktopSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
+  AccountImportStatusSchema, AccountMemoryProposalSchema, AccountProfileUseSchema, DeviceDesktopSchema, DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   AccountNoteSchema, AccountUsageSchema, FactRevisionSchema, FactSchema, GatewayCreditsReadSchema, ProfileCatalogEnvelopeSchema,
   type Credential,
   type DeviceTier,
-  type JsonValue,
+  type ImportedFact, type JsonValue,
   McpPresetAvailabilitySchema,
   McpServerSummarySchema,
   ModelMenuResponseSchema,
@@ -367,6 +367,8 @@ const AccountMemorySchema = v.object({
   })),
   notes: v.array(AccountNoteSchema),
   pending: v.array(AccountMemoryProposalSchema),
+  imports: v.array(AccountImportStatusSchema),
+  profile: AccountProfileUseSchema,
 });
 
 export type AccountMemoryState = v.InferOutput<typeof AccountMemorySchema>;
@@ -377,8 +379,19 @@ const MEMORY_PATH = '/memory';
 
 export const getAccountMemory = (): Promise<AccountMemoryState> => settle(api(AccountMemorySchema, 'GET', MEMORY_PATH));
 
-export const decideAccountMemory = (id: string, decision: 'accept' | 'decline') =>
-  settle(api(OkSchema, 'POST', `${MEMORY_PATH}/proposals/${encodeURIComponent(id)}`, { decision }));
+/** One of an import's facts as the owner keeps it. */
+export type KeptImportFact = ImportedFact;
+
+/** `facts`: an import's facts as the owner kept and edited them. */
+export const decideAccountMemory = (id: string, decision: 'accept' | 'decline', facts?: KeptImportFact[]) =>
+  settle(api(OkSchema, 'POST', `${MEMORY_PATH}/proposals/${encodeURIComponent(id)}`, { decision, ...(facts !== undefined && { facts }) }));
+
+/** A document to read into short facts, or facts the account holds, which the batch replaces once accepted. */
+export const importAccountMemory = (source: { document: string } | { facts: string[] }) =>
+  settle(api(v.object({ id: v.string() }), 'POST', `${MEMORY_PATH}/import`, source));
+
+export const retryAccountImport = (id: string) =>
+  settle(api(v.object({ retried: v.boolean() }), 'POST', `${MEMORY_PATH}/imports/${encodeURIComponent(id)}/retry`, {}));
 
 /** An edit, or a workspace fact promoted to the account: `workspace` names where it came from. */
 export const putAccountFact = (key: string, value: JsonValue, workspace?: string) =>

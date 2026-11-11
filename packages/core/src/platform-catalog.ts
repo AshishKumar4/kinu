@@ -2336,6 +2336,25 @@ export const PLATFORM_CATALOG = {
     ],
   },
 
+  'memory.account_profile_chars': {
+    subject: 'Characters of the account owner\'s facts every agent of the account reads in its system prompt, on every request',
+    origin: 'self-imposed',
+    bounds: 'count',
+    evidence: 'speculative',
+    provenance: 'packages/core/src/memory/account-profile.ts:1',
+    date: '2026-11-11',
+    trigger: 'an account whose facts, shortest first, render past the bound',
+    onBreach: 'the facts that do not fit are left out of the prompt and named, with their size against the bound, in '
+      + 'Settings (Memory) and to the agent that proposed one; memory.search and memory.recall still read them',
+    observable: [],
+    firstPartySignal: true,
+    notes: 'Unmeasured against real profiles (2026-11-11): Settings (Memory) shows each account\'s use of it, which is the '
+      + 'first measurement. It rides the cached prefix of every request: about 2,000 tokens at four characters a token, '
+      + '1 % of a 200,000-token window, and 1.6 % of 128,000 tokens, the smallest window of the Workers AI models Kinu '
+      + 'offers first (WORKERS_AI_PREFERRED_MODEL_IDS: gpt-oss-20b, its Cloudflare model page read 2026-11-11). A model '
+      + 'a person adds from another provider may hold less.',
+  },
+
   'browser.session.keep_alive_ms': {
     subject: 'Longest a Browser Run Chrome session may sit idle, with no connection, before it closes',
     origin: 'platform',
