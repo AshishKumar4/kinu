@@ -133,24 +133,15 @@ const bridged = () => document.documentElement.hasAttribute("${SLATE_BRIDGE_ATTR
 export const slate = new Proxy(Object.create(null), {
   get(_target, member) {
     if (typeof member !== "string" || member === "then") return undefined;
-    return (...args) => asked((stub) => (bridged() ? stub.$method(member, args) : stub[member](...args)));
+    return (...args) => asked(bridged() ? session().$method(member, args) : session()[member](...args));
   },
 });
 
 // A shared app's call that needs its visitor to act first tells the page's host, which asks them; the call still fails,
-// so the page says so its own way. A call the app's restart cut (its host closes the page's session as the process
-// ends, a share's change among the causes) is made once more on a new session, to the process running now: the one it
-// was sent to is gone, and with it whatever of the call it had begun.
-async function asked(make) {
-  const stub = session();
-  try {
-    return await make(stub);
-  } catch (first) {
-    const restarted = (live === null || live.stub !== stub) && String(first?.message ?? first).includes("${SLATE_RESTARTED_REASON}");
-    return await answered(restarted ? make(session()) : Promise.reject(first));
-  }
-}
-async function answered(call) {
+// so the page says so its own way. A call its app's restart cut (the host closes the page's session as the process
+// ends, "${SLATE_RESTARTED_REASON}") fails as it is, never made again: the process may have begun it, and what it began
+// may have acted. The page's next call opens a new session, to the process running then.
+async function asked(call) {
   try {
     return await call;
   } catch (cause) {
@@ -166,7 +157,7 @@ async function answered(call) {
  *  members sit at the top too, so workspace.fs.text(path) reads as it does in a program. */
 function surface(path) {
   return new Proxy(function () {}, {
-    apply(_fn, _self, args) { return asked((stub) => stub.$workspace(path, args)); },
+    apply(_fn, _self, args) { return asked(session().$workspace(path, args)); },
     get(_fn, name) {
       if (typeof name !== "string" || name === "then") return undefined;
       return surface([...path, name]);

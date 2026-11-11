@@ -848,8 +848,17 @@ describe(productFlowTestName('app-agent-flip', 'a share that changes how it lend
     observed = await flowRow('app-agent-flip', appAgentFollowsTheShareMode);
   });
 
-  test('switched to My access with the page open, a plain call of the app\'s method from it still answers', () => {
-    expect(verdictOf(observed, 'app-agent-flip').calledAfterFlip).toBe(APP_AGENT_SLATE.stop);
+  test('switched to My access with the page open, its calls still answer, and a writing call cut by the restart ran at most once', () => {
+    const flip = verdictOf(observed, 'app-agent-flip');
+    const { before, acrossFlip, after } = flip.counts;
+    // Cut by the restart, the call fails as it is, and ran once or never on the old process; else it answered.
+    const cut = acrossFlip.startsWith('refused:');
+    const ranAcross = cut ? Number(after) - Number(before) - 1 : Number(acrossFlip) - Number(before);
+
+    expect(flip.calledAfterFlip, JSON.stringify(flip.counts)).toBe(APP_AGENT_SLATE.stop);
+    expect(Number.isInteger(Number(before)) && Number.isInteger(Number(after)), JSON.stringify(flip.counts)).toBe(true);
+    expect([0, 1], JSON.stringify(flip.counts)).toContain(ranAcross);
+    expect(cut ? Number(after) : Number(after), JSON.stringify(flip.counts)).toBe(cut ? Number(before) + 1 + ranAcross : Number(acrossFlip) + 1);
   });
 
   test('switched to My access with the page open, the next ask runs nothing and asks them to accept that the owner reads it', () => {

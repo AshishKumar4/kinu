@@ -2796,14 +2796,17 @@ async function askTheApp(page: Page, frame: Frame): Promise<AppAsked> {
   return shown.reply === '' && shown.refused === '' ? { reply: '', refused: `no answer in ${String(ASK_SETTLES_MS / 1000)} s` } : shown;
 }
 
-/** Presses the app's Call, a plain call of its server's method from its page: what it shows once it settles. */
-async function callTheApp(page: Page, frame: Frame): Promise<string> {
-  await frame.evaluate('document.querySelector("[data-called]").textContent = ""');
+/**
+ * Presses one of the app's plain-call buttons (`data-call`, `data-count`) and reads its output (`data-called`,
+ * `data-counted`) once it settles: what its server's method answered, or why it was refused.
+ */
+async function callTheApp(page: Page, frame: Frame, which: 'call' | 'count' = 'call'): Promise<string> {
+  const output = which === 'call' ? '[data-called]' : '[data-counted]';
   const giveUpAt = v.parse(v.number(), await frame.evaluate('performance.now()')) + ASK_SETTLES_MS;
 
-  await frame.click('[data-call]');
-  await waitOn(page, 'the app\'s call to settle', frame.waitForFunction(`(document.querySelector("[data-called]")?.textContent ?? "") !== "" || performance.now() > ${String(giveUpAt)}`, { polling: 100 }));
-  const shown = v.parse(v.string(), await frame.evaluate('document.querySelector("[data-called]")?.textContent ?? ""'));
+  await frame.click(`[data-${which}]`);
+  await waitOn(page, 'the app\'s call to settle', frame.waitForFunction(`(document.querySelector(${JSON.stringify(output)})?.textContent ?? "") !== "" || performance.now() > ${String(giveUpAt)}`, { polling: 100 }));
+  const shown = v.parse(v.string(), await frame.evaluate(`document.querySelector(${JSON.stringify(output)})?.textContent ?? ""`));
 
   return shown === '' ? `no answer in ${String(ASK_SETTLES_MS / 1000)} s` : shown;
 }
@@ -3147,6 +3150,8 @@ export interface AppAgentFlipVerdict {
   readonly workspace: string;
   /** On the visitor's own access, consented: their answer. */
   readonly own: AppAsked;
+  /** A writing method's counts from the open page: before the change, sent across it, and after it. */
+  readonly counts: { readonly before: string; readonly acrossFlip: string; readonly after: string };
   /** The owner switched to My access with the page open: a plain call of the app's method from it, then. */
   readonly calledAfterFlip: string;
   /** The owner switched to My access with the page open: the next ask, and the owner's chats then. */
@@ -3205,9 +3210,13 @@ export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<A
     await page.click('[data-consent-allow]');
     await until(page, 'the consent to be kept', 'document.querySelector(\'[role="dialog"]\') === null');
     const own = await askTheApp(page, frame);
+    const countedBefore = await callTheApp(page, frame, 'count');
 
     await setFlowShareMode(target, workspace, share, 'owner');
-    // The page stayed open across the change: a plain call of the app's own method still answers.
+    // The page stayed open across the change. A writing call sent as its process ended may be cut, and then fails as
+    // it is, never made again; the page's next call reaches the process running now.
+    const countedAcrossFlip = await callTheApp(page, frame, 'count');
+    const countedAfter = await callTheApp(page, frame, 'count');
     const calledAfterFlip = await callTheApp(page, frame);
     const toLent = await askAndRead(page, frame);
 
@@ -3230,7 +3239,7 @@ export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<A
     await shoot(page, 'flip-to-own-sheet');
     await page.close();
 
-    return { workspace, own, calledAfterFlip, toLent, chatsBeforeAccepting, lent, chatsAfterAccepting, backToOwn };
+    return { workspace, own, counts: { before: countedBefore, acrossFlip: countedAcrossFlip, after: countedAfter }, calledAfterFlip, toLent, chatsBeforeAccepting, lent, chatsAfterAccepting, backToOwn };
   } finally {
     if (share !== null) await revokeFlowShare(target, workspace, share);
     await removeFlowWorkspace(target, workspace);
