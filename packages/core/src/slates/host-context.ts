@@ -74,18 +74,29 @@ export function readSlateFrameMessage(
 /** A shared app's page tells its host that its visitor must act before the app agent answers them (app-agent.ts `needs`). */
 export const SLATE_NEEDS_IDENTITY_MESSAGE = 'needs-identity';
 
+/** A shared app's frame tells its host that its grant reaches what its visitor has not accepted on Kinu's page. */
+export const SLATE_NEEDS_CONSENT_MESSAGE = 'needs-consent';
+
 /** Why a page's session to its app closed as the app's process ended: what its runtime makes a cut call again on. */
 export const SLATE_RESTARTED_REASON = 'The app restarted';
 
-const SlateIdentityAskSchema = v.strictObject({ kinu: v.literal(SLATE_NEEDS_IDENTITY_MESSAGE) });
+const SlateNeedSchema = v.strictObject({ kinu: v.picklist([SLATE_NEEDS_IDENTITY_MESSAGE, SLATE_NEEDS_CONSENT_MESSAGE]) });
 
-/** Whether `event` is the slate's own window asking its host for its visitor's identity. */
-export function readSlateIdentityAsk(
+/**
+ * What the share's frame says its visitor must do first: say who they are, or accept what the grant reaches; null for
+ * any other message. Its word is only a prompt: what the page asks is read from Kinu, never from the frame.
+ */
+export function readSlateNeed(
   event: { readonly source: unknown; readonly origin: string; readonly data: unknown },
   source: Window | MessagePort | null | undefined,
   origin: string,
-): boolean {
-  return event.source === source && event.origin === origin && v.is(SlateIdentityAskSchema, event.data);
+): 'identity' | 'consent' | null {
+  if (event.source !== source || event.origin !== origin) return null;
+  const said = v.safeParse(SlateNeedSchema, event.data);
+
+  if (!said.success) return null;
+
+  return said.output.kinu === SLATE_NEEDS_IDENTITY_MESSAGE ? 'identity' : 'consent';
 }
 
 export function buildSlateHostContext(input: {

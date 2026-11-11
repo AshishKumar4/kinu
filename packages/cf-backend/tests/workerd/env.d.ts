@@ -496,14 +496,16 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   share(approved?: readonly { namespace: string; member: string }[], mode?: 'own' | 'owner'): Promise<ProbeAnswer>;
   liveShares(): Promise<ProbeAnswer>;
   importBlueprint(): Promise<{ fork: string; running: number }>;
-  viewerHop(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<string>;
+  viewerHop(handle: string, claim: { userId: string | null; source: string; consented: string | null }): Promise<string>;
   viewerSocketAcross(
-    handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string, change: 'revoke' | 'spend',
+    handle: string, claim: { userId: string | null; source: string; consented: string | null }, share: string, change: 'revoke' | 'spend',
   ): Promise<{ before: string | null; after: string; late: string }>;
-  viewerFetch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ status: number; body: string }>;
-  viewerBatch(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
-  viewerRefusals(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string; mutate: string }>;
-  viewerCall(handle: string, claim: { userId: string | null; source: string; consented: boolean }, method: string): Promise<string>;
+  /** A visitor with no account who accepted the share's grant as it stands, as Kinu's page's acceptance leaves them. */
+  accepted(handle: string): Promise<{ userId: null; source: string; consented: string | null }>;
+  viewerFetch(handle: string, claim: { userId: string | null; source: string; consented: string | null }): Promise<{ status: number; body: string }>;
+  viewerBatch(handle: string, claim: { userId: string | null; source: string; consented: string | null }): Promise<{ probe: string | null; mutateError: string }>;
+  viewerRefusals(handle: string, claim: { userId: string | null; source: string; consented: string | null }): Promise<{ probe: string; mutate: string }>;
+  viewerCall(handle: string, claim: { userId: string | null; source: string; consented: string | null }, method: string): Promise<string>;
   ownersOwnWrite(): Promise<{ first: string; asked: string[]; second: string; after: number }>;
   exerciseHop(member?: string): Promise<void>;
   inheritedRaw(): Promise<{ answered: string; written: boolean }>;
@@ -520,17 +522,17 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   ownersHeldWrite(): Promise<{ answered: string; written: boolean }>;
   environments(): Promise<string[]>;
   ownerCall(method: string): Promise<string>;
-  hopWrites(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ viewer: string; owner: string; asked: number }>;
-  viewerAfterLastRevoke(handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string): Promise<ProbeAnswer>;
+  hopWrites(handle: string, claim: { userId: string | null; source: string; consented: string | null }): Promise<{ viewer: string; owner: string; asked: number }>;
+  viewerAfterLastRevoke(handle: string, claim: { userId: string | null; source: string; consented: string | null }, share: string): Promise<ProbeAnswer>;
   launchAcrossShare(): Promise<{ actors: number; afterShare: number; refused: string; running: number }>;
-  viewerSocket(handle: string, claim: { userId: string | null; source: string; consented: boolean }): Promise<{ probe: string | null; mutateError: string }>;
+  viewerSocket(handle: string, claim: { userId: string | null; source: string; consented: string | null }): Promise<{ probe: string | null; mutateError: string }>;
   replay(share: string): Promise<ProbeAnswer>;
   requests(share: string): Promise<ProbeAnswer>;
   revoke(share: string): Promise<ProbeAnswer>;
   stopped(): Promise<boolean>;
   drive(session: string): Promise<string>;
   typed(say: string): Promise<string>;
-  driveShared(session: string, approved: readonly string[], claim: { userId: string | null; source: string; consented: boolean }): Promise<{ answer: string; dialed: number }>;
+  driveShared(session: string, approved: readonly string[], claim: { userId: string | null; source: string }): Promise<{ answer: string; dialed: number }>;
   setMode(share: string, revision: string): Promise<ProbeAnswer>;
   ownerQueue(): Promise<{ tool: string; server: string; viewer: string; payload: import('@kinu.run/core').JsonValue; revision: string }[]>;
   ownerDecides(approve: boolean): Promise<number>;
@@ -539,7 +541,7 @@ interface SlateShareProbeRpc extends Rpc.DurableObjectBranded {
   preapproveWrites(): Promise<string[]>;
   withdrawWrites(): Promise<void>;
   preapprovals(): Promise<{ revision: string | null; members: string[] }>;
-  heldWrite(handle: string, claim: { userId: string | null; source: string; consented: boolean }, share: string, change: 'revoke' | 'own'): Promise<{ mutateError: string; written: boolean }>;
+  heldWrite(handle: string, claim: { userId: string | null; source: string; consented: string | null }, share: string, change: 'revoke' | 'own'): Promise<{ mutateError: string; written: boolean }>;
   listShare(share: string): Promise<ProbeAnswer>;
   told(): Promise<string[]>;
   startParts(): Promise<string>;

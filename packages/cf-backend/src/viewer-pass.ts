@@ -52,13 +52,39 @@ function ticketMessage(workspace: string, handle: string, userId: string, expire
   return `kinu:viewer-ticket:v1:${workspace}:${handle}:${userId}:${expiresAt}`;
 }
 
-function cookieMessage(workspace: string, handle: string, subject: string, expiresAt: number): string {
-  return `kinu:viewer-cookie:v1:${workspace}:${handle}:${subject}:${expiresAt}`;
+/** The share's cookie: who the visitor is, until when, and the grant they accepted by its key ('' for none). */
+function cookieMessage(cookie: { readonly workspace: string; readonly handle: string; readonly subject: string; readonly expiresAt: number; readonly consented: string }): string {
+  const { workspace, handle, subject, expiresAt, consented } = cookie;
+
+  return `kinu:viewer-cookie:v2:${workspace}:${handle}:${subject}:${expiresAt}:${consented}`;
 }
 
-/** Diverged from the identity cookie's message so one cookie never verifies as the other. */
-function consentMessage(workspace: string, handle: string, subject: string, expiresAt: number): string {
-  return `kinu:viewer-consent:v1:${workspace}:${handle}:${subject}:${expiresAt}`;
+/** Kinu's own page's word that its visitor accepted the share's grant, by its key, until `expiresAt`. */
+function consentMessage(workspace: string, handle: string, grant: string, expiresAt: number): string {
+  return `kinu:viewer-consent-binding:v1:${workspace}:${handle}:${grant}:${expiresAt}`;
+}
+
+/**
+ * What Kinu's share page posts into the share's frame once its visitor accepts what the grant reaches: the grant's key,
+ * signed, for ten minutes. The share host takes it from Kinu's own origin alone (slate-share-route.ts).
+ */
+export async function mintConsentBinding(env: LabelSignerEnv, workspace: string, handle: string, grant: string): Promise<string | null> {
+  const secret = viewerSigner.secret(env);
+
+  if (secret === undefined || grant === '') return null;
+  const expiresAt = Date.now() + 10 * 60 * 1000;
+
+  return `${grant}.${expiresAt}.${await viewerSigner.token(secret, consentMessage(workspace, handle, grant, expiresAt))}`;
+}
+
+/** The grant key a binding names, where it is Kinu's own, unexpired, and for this share; null otherwise. */
+export async function consentBindingGrant(env: LabelSignerEnv, workspace: string, handle: string, binding: string): Promise<string | null> {
+  const [grant, expiresAtText, sig] = binding.split('.');
+  const expiresAt = Number(expiresAtText);
+
+  if (grant === undefined || grant === '' || sig === undefined || !Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
+
+  return await viewerSigner.verify(env, consentMessage(workspace, handle, grant, expiresAt), sig) ? grant : null;
 }
 
 export async function mintViewerTicket(env: LabelSignerEnv, workspace: string, handle: string, userId: string): Promise<string | null> {
@@ -72,28 +98,28 @@ export async function mintViewerTicket(env: LabelSignerEnv, workspace: string, h
   return `${userId}.${expiresAt}.${sig}`;
 }
 
-/** A public viewer's consent subject is its source hash, so `userId` is null for it; an anonymous one's is its id. */
+/**
+ * A public viewer's subject is its source hash, so `userId` is null for it; an anonymous one's is its id. `consented`:
+ * the grant it accepted, by its key; null for none. A cookie of an earlier shape reads as none, and its visitor is asked
+ * again.
+ */
 export async function viewerCookie(
   env: LabelSignerEnv, workspace: string, handle: string, cookieHeader: string | null,
-): Promise<{ userId: string | null; anonymous: string | null; subject: string; consented: boolean } | null> {
+): Promise<{ userId: string | null; anonymous: string | null; subject: string; consented: string | null } | null> {
   const value = cookieHeader?.split(';').map((part) => part.trim())
     .find((part) => part.startsWith(`${VIEWER_COOKIE_NAME}=`))
     ?.slice(VIEWER_COOKIE_NAME.length + 1);
 
-  const [subject, expiresAtText, sig] = value?.split('.') ?? [];
+  const [subject, expiresAtText, consented, sig, ...rest] = value?.split('.') ?? [];
 
-  if (subject === undefined || expiresAtText === undefined || sig === undefined) return null;
+  if (subject === undefined || expiresAtText === undefined || consented === undefined || sig === undefined || rest.length > 0) return null;
   const expiresAt = Number(expiresAtText);
 
   if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) return null;
 
-  const known = { userId: USER_ID_RE.test(subject) ? subject : null, anonymous: ANONYMOUS_SUBJECT_RE.exec(subject)?.[1] ?? null, subject };
+  if (!await viewerSigner.verify(env, cookieMessage({ workspace, handle, subject, expiresAt, consented }), sig)) return null;
 
-  if (await viewerSigner.verify(env, cookieMessage(workspace, handle, subject, expiresAt), sig)) return { ...known, consented: false };
-
-  if (await viewerSigner.verify(env, consentMessage(workspace, handle, subject, expiresAt), sig)) return { ...known, consented: true };
-
-  return null;
+  return { userId: USER_ID_RE.test(subject) ? subject : null, anonymous: ANONYMOUS_SUBJECT_RE.exec(subject)?.[1] ?? null, subject, consented: consented === '' ? null : consented };
 }
 
 export async function ticketUser(
@@ -117,22 +143,23 @@ const VIEWER_COOKIE_LIFE_MS = 12 * 60 * 60 * 1000;
 /** How long an anonymous visitor keeps their id, renewed each time they continue anonymously: past it, they are new. */
 const ANONYMOUS_COOKIE_LIFE_MS = 30 * 24 * 60 * 60 * 1000;
 
-/** The viewer cookie's signed value, `subject.expiresAt.sig`, or null on a deployment with no signing secret. */
+/** The viewer cookie's signed value, `subject.expiresAt.consented.sig`, or null on a deployment with no signing secret. */
 async function signedViewerCookie(
-  env: LabelSignerEnv, scope: { readonly workspace: string; readonly handle: string; readonly subject: string; readonly consent?: boolean }, lifeMs = VIEWER_COOKIE_LIFE_MS,
+  env: LabelSignerEnv, scope: { readonly workspace: string; readonly handle: string; readonly subject: string; readonly consented?: string | null }, lifeMs = VIEWER_COOKIE_LIFE_MS,
 ): Promise<string | null> {
   const secret = viewerSigner.secret(env);
 
   if (secret === undefined) return null;
   const expiresAt = Date.now() + lifeMs;
-  const sig = await viewerSigner.token(secret, (scope.consent === true ? consentMessage : cookieMessage)(scope.workspace, scope.handle, scope.subject, expiresAt));
+  const consented = scope.consented ?? '';
+  const sig = await viewerSigner.token(secret, cookieMessage({ workspace: scope.workspace, handle: scope.handle, subject: scope.subject, expiresAt, consented }));
 
-  return `${scope.subject}.${expiresAt}.${sig}`;
+  return `${scope.subject}.${expiresAt}.${consented}.${sig}`;
 }
 
 /** Sets the viewer cookie on this host and sends its visitor on to `location`, a path on the same host. */
 export async function viewerCookieResponse(
-  env: LabelSignerEnv, scope: { readonly workspace: string; readonly handle: string; readonly subject: string; readonly consent?: boolean }, location: string,
+  env: LabelSignerEnv, scope: { readonly workspace: string; readonly handle: string; readonly subject: string; readonly consented?: string | null }, location: string,
 ): Promise<Response> {
   const lifeMs = ANONYMOUS_SUBJECT_RE.test(scope.subject) ? ANONYMOUS_COOKIE_LIFE_MS : VIEWER_COOKIE_LIFE_MS;
   const value = await signedViewerCookie(env, scope, lifeMs);
@@ -201,6 +228,22 @@ export async function verifiedPreview(env: PreviewSuffixEnv & LabelSignerEnv, ho
 
   return { kind: 'computer', port: computer.port, workspace, handle: computerPreviewHandle(computer.token) };
 }
+
+/**
+ * The cookie the workspace's own capture of one of its listed shares carries to its host: it names no person, and has
+ * accepted the grant as it stands (`grant`, its key), being the owner's own look at what they share. Set on the capture's
+ * browser directly, never handed to a page.
+ */
+export async function shareCapturePass(
+  env: LabelSignerEnv, workspace: string, handle: string, grant: string,
+): Promise<{ readonly name: string; readonly value: string } | null> {
+  const value = await signedViewerCookie(env, { workspace, handle, subject: SHARE_CAPTURE, consented: grant === '' ? null : grant }, SELF_PASS_LIFE_MS);
+
+  return value === null ? null : { name: VIEWER_COOKIE_NAME, value };
+}
+
+/** The subject of a workspace's capture of its own share: no account, no anonymous id, no person. */
+const SHARE_CAPTURE = 'capture';
 
 /**
  * The cookie the workspace's own browser or fetch carries to one of its previews (`cookie` header form), or null for

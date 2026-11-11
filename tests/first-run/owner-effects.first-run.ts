@@ -9,7 +9,7 @@ import { callSharedSlate, consentToShare, type EvalObservation, type EvalSubgoal
 import { approvalKindOf, JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { turnOnMyAccess } from './my-access';
-import { shareHost } from './share-entry';
+import { shareEntry } from './share-entry';
 import { webHeaders } from '../../evals/src/workspace-roster';
 import { executorWords } from '../../evals/src/session';
 
@@ -77,14 +77,15 @@ END`));
         const shared = v.safeParse(Answered, await session.slateOp({ op: 'share', id: SLATE, visibility: 'public', approved: [WRITE] }));
         const created = shared.success ? v.safeParse(LiveShareCreatedSchema, shared.output.value) : null;
         const share = created?.success === true ? created.output.share.id : null;
-        const url = await shareHost(plan.origin, session.workspace, share ?? undefined);
+        const entry = await shareEntry(plan.origin, session.workspace, share ?? undefined);
+        const url = entry?.url ?? null;
 
         const lent = share === null ? null : await turnOnMyAccess({
           origin: plan.origin, headers: webHeaders(plan.identity), workspace: session.workspace, share,
           graph: await session.slateOp({ op: 'graph', id: SLATE }), approved: [WRITE],
         });
 
-        const cookie = url === null ? null : await consentToShare(url);
+        const cookie = url === null ? null : await consentToShare({ url, origin: entry?.origin ?? '', binding: entry?.binding ?? null });
         const write = async () => (url === null || cookie === null ? null : callSharedSlate(url, 'mark', JsonValueSchema, cookie));
         const marked = async () => v.parse(Exec, await session.execute('workspace', `cat ${MARK} 2>&1 || echo EFFECTS-NO-MARK`)).stdout ?? '';
         const asked = await write();

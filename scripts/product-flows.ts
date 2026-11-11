@@ -3133,15 +3133,22 @@ export async function appAgentAnswersAVisitorOnTheirOwn(target: FlowTarget): Pro
   }
 }
 
-/** Sets how a share of the row's lends, as its owner's share sheet does: My access approved at the app's revision now. */
-async function setFlowShareMode(target: FlowTarget, workspace: string, share: string, mode: 'own' | 'owner'): Promise<void> {
+/** What a row's owner lends on My access beyond what the app only reads: its write to the owner's workspace. */
+const LENT_WRITE = [{ slate: APP_AGENT_SLATE.id, namespace: 'workspace', member: 'fs.write' }] as const;
+
+/**
+ * Sets how a share of the row's lends, as its owner's share sheet does: My access approved at the app's revision now,
+ * lending `approved` of what the app reaches.
+ */
+async function setFlowShareMode(target: FlowTarget, at: { readonly workspace: string; readonly share: string }, mode: 'own' | 'owner', approved: readonly { slate: string; namespace: string; member: string }[] = []): Promise<void> {
+  const { workspace, share } = at;
   const headers = { ...webHeaders(target.identity), 'content-type': 'application/json' };
   const opened = await fetch(`${target.origin}${LIVE_SHARE_OPEN_PATH}`, { method: 'POST', headers, body: JSON.stringify({ workspace, share }) });
 
   if (!opened.ok) throw new Error(`reading the share answered ${String(opened.status)}`);
   // Only the revision is read: the owner's reading of their own share, at whatever build the deployment serves.
   const { revision } = v.parse(v.object({ revision: v.string() }), await opened.json());
-  const body = mode === 'own' ? { workspace, share, mode } : { workspace, share, mode, revision, approved: [] };
+  const body = mode === 'own' ? { workspace, share, mode } : { workspace, share, mode, revision, approved };
   const set = await fetch(`${target.origin}${LIVE_SHARE_MODE_PATH}`, { method: 'POST', headers, body: JSON.stringify(body) });
 
   if (!set.ok) throw new Error(`setting the share to ${mode} answered ${String(set.status)}: ${await set.text()}`);
@@ -3162,6 +3169,8 @@ export interface AppAgentFlipVerdict {
   readonly counts: { readonly before: string; readonly acrossFlip: string; readonly after: string };
   /** The owner switched to My access with the page open: a plain call of the app's method from it, then. */
   readonly calledAfterFlip: string;
+  /** The owner widened what My access lends with the page open: what the page showed, and what it took to go on. */
+  readonly widened: WidenedVerdict;
   /** The owner switched to My access with the page open: the next ask, and the owner's chats then. */
   readonly toLent: FlipAsked;
   readonly chatsBeforeAccepting: number;
@@ -3170,6 +3179,51 @@ export interface AppAgentFlipVerdict {
   readonly chatsAfterAccepting: number;
   /** Switched back to their own access: the next ask. */
   readonly backToOwn: FlipAsked;
+}
+
+/** What widening a share's grant with its page open came to: before the visitor accepted, the app's try, and after. */
+export interface WidenedVerdict {
+  /** A plain call from the open page right after: refused, and Kinu's page asks them to accept what the grant reaches. */
+  readonly calledBefore: string;
+  readonly reachSheet: boolean;
+  readonly namespaces: readonly string[];
+  /** The app's own script posting the acceptance, with a genuine binding: what the share's host answered. */
+  readonly appPosted: number;
+  /** After Kinu's sheet's Continue: the same call. */
+  readonly calledAfter: string;
+}
+
+/**
+ * The owner widens what My access lends (the app's write to their workspace) while the visitor's page is open: nothing
+ * runs for them until they accept it on Kinu's page, which the app's own page cannot do for them.
+ */
+async function widenWithThePageOpen(target: FlowTarget, page: Page, at: { readonly workspace: string; readonly share: string; readonly visitor: Pick<FlowTarget, 'origin' | 'identity'> }): Promise<WidenedVerdict> {
+  await setFlowShareMode(target, { workspace: at.workspace, share: at.share }, 'owner', LENT_WRITE);
+  const calledBefore = await callTheApp(page, await appFrameNow(page));
+  const reachBy = v.parse(v.number(), await page.evaluate('performance.now()')) + SHEET_OPENS_MS;
+
+  await until(page, 'the reach sheet, or a while', `document.querySelector("[data-reach-continue]") !== null || performance.now() > ${String(reachBy)}`);
+  const reachSheet = v.parse(v.boolean(), await page.evaluate('document.querySelector("[data-reach-continue]") !== null'));
+
+  // A genuine binding, as Kinu's page holds it: what keeps the app from using one is where its post comes from.
+  const opened = await fetch(`${at.visitor.origin}${LIVE_SHARE_OPEN_PATH}`, {
+    method: 'POST', headers: { ...webHeaders(at.visitor.identity), 'content-type': 'application/json' }, body: JSON.stringify({ workspace: at.workspace, share: at.share }),
+  });
+
+  const consent = v.parse(v.object({ consent: v.optional(v.nullable(v.object({ namespaces: v.array(v.string()), binding: v.string() }))) }), await opened.json()).consent ?? null;
+  const app = await appFrameNow(page);
+  const appPosted = consent === null ? 0 : v.parse(v.number(), await app.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ consent: ${JSON.stringify(consent.binding)} }) }).then((answer) => answer.status)`));
+
+  if (!reachSheet) return { calledBefore, reachSheet, namespaces: consent?.namespaces ?? [], appPosted, calledAfter: '' };
+  await shoot(page, 'reach-sheet');
+  await until(page, 'the reach sheet to take a press', 'document.querySelector("[data-reach-continue]:not([disabled])") !== null');
+  await page.click('[data-reach-continue]');
+  await until(page, 'the sheet to close', 'document.querySelector(\'[role="dialog"]\') === null');
+  const after = await appFrameNow(page);
+
+  await waitOn(page, 'the app back after its acceptance', after.waitForFunction('document.querySelector("[data-call]") !== null', { polling: 100 }));
+
+  return { calledBefore, reachSheet, namespaces: consent?.namespaces ?? [], appPosted, calledAfter: await callTheApp(page, after) };
 }
 
 /** One ask on the open page, and what it shows once its sheet, if any, is up. */
@@ -3220,7 +3274,7 @@ export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<A
     const own = await askTheApp(page, frame);
     const countedBefore = await callTheApp(page, frame, 'count');
 
-    await setFlowShareMode(target, workspace, share, 'owner');
+    await setFlowShareMode(target, { workspace: workspace, share: share }, 'owner');
     // The page stayed open across the change. A writing call sent as its process ended may be cut, and then fails as
     // it is, never made again; the page's next call reaches the process running now.
     const countedAcrossFlip = await callTheApp(page, frame, 'count');
@@ -3240,14 +3294,15 @@ export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<A
 
     const lent = await askAndRead(page, frame);
     const chatsAfterAccepting = (await ownerReadsChats(target, workspace, share)).chats;
+    const widened = await widenWithThePageOpen(target, page, { workspace, share, visitor });
 
-    await setFlowShareMode(target, workspace, share, 'own');
-    const backToOwn = await askAndRead(page, frame);
+    await setFlowShareMode(target, { workspace: workspace, share: share }, 'own');
+    const backToOwn = await askAndRead(page, await appFrameNow(page));
 
     await shoot(page, 'flip-to-own-sheet');
     await page.close();
 
-    return { workspace, own, counts: { before: countedBefore, acrossFlip: countedAcrossFlip, after: countedAfter }, calledAfterFlip, toLent, chatsBeforeAccepting, lent, chatsAfterAccepting, backToOwn };
+    return { workspace, own, counts: { before: countedBefore, acrossFlip: countedAcrossFlip, after: countedAfter }, calledAfterFlip, widened, toLent, chatsBeforeAccepting, lent, chatsAfterAccepting, backToOwn };
   } finally {
     if (share !== null) await revokeFlowShare(target, workspace, share);
     await removeFlowWorkspace(target, workspace);

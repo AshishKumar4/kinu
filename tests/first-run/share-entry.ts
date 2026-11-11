@@ -20,7 +20,12 @@ export async function openShare(input: {
   return opened.ok ? v.parse(LiveShareOpenSchema, await opened.json()) : null;
 }
 
-/** A public share's bare host, as its page is told it signed out; null for no share, or one that would not open. */
-export async function shareHost(origin: string, workspace: string, share: string | undefined): Promise<string | null> {
-  return share === undefined ? null : (await openShare({ origin, workspace, share }))?.url ?? null;
+/**
+ * A public share's bare host, as its page is told it signed out, and what Kinu's page would post into it to enter as a
+ * visitor with no account (`consentToShare`); null for no share, or one that would not open.
+ */
+export async function shareEntry(origin: string, workspace: string, share: string | undefined): Promise<{ readonly url: string; readonly origin: string; readonly binding: string | null } | null> {
+  const opened = share === undefined ? null : await openShare({ origin, workspace, share });
+
+  return opened === null ? null : { url: opened.url, origin, binding: opened.consent?.binding ?? null };
 }

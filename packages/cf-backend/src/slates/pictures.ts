@@ -1,7 +1,7 @@
 import { Effect, Cause } from 'effect';
 import type { Browser, BrowserWorker } from '@cloudflare/puppeteer';
 import * as v from 'valibot';
-import { DARK_PICTURE, isWorkspaceName, markStoreChanged, sha256Hex, VIEWER_EXCHANGE_PATH, type RawSqlExec, type SqlExec } from '@kinu.run/core';
+import { DARK_PICTURE, isWorkspaceName, markStoreChanged, sha256Hex, type RawSqlExec, type SqlExec } from '@kinu.run/core';
 import { SlateDirectoryName } from '@kinu.run/core/slates';
 import { diagnostics, KinuError, recording, toKinuError, settle } from '@kinu.run/core/obs';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from '../workspace-host';
@@ -309,7 +309,7 @@ export class SlatePictures {
     });
   }
 
-  /** A listed share's picture, taken through its own host past its consent page; listed no more, none is taken. */
+  /** A listed share's picture, taken through its own host as the workspace's own capture; listed no more, none is taken. */
   private shootShare(camera: Camera, capture: PictureCapture, picture: DuePicture, now: number): Effect.Effect<boolean> {
     return Effect.gen({ self: this }, function* () {
       const entry = yield* Effect.promise(async () => capture.share(picture.view));
@@ -321,7 +321,7 @@ export class SlatePictures {
       }
 
       // Kept only for the listing it was due for, under the share's authority as it stood as the shot began.
-      return yield* this.kept(camera, capture, picture, { url: entry.url, taken: entry.publication, holds: () => entry.held() && this.sameListing(picture), now });
+      return yield* this.kept(camera, capture, picture, { url: entry.url, cookie: entry.cookie, taken: entry.publication, holds: () => entry.held() && this.sameListing(picture), now });
     });
   }
 
@@ -334,10 +334,10 @@ export class SlatePictures {
    */
   private kept(
     camera: Camera, capture: PictureCapture, picture: DuePicture,
-    at: { readonly url: string; readonly taken: string | null; readonly holds: () => boolean; readonly now: number },
+    at: { readonly url: string; readonly cookie?: { readonly name: string; readonly value: string }; readonly taken: string | null; readonly holds: () => boolean; readonly now: number },
   ): Effect.Effect<boolean> {
     return Effect.gen({ self: this }, function* () {
-      const shots = yield* Effect.promise(async () => camera.shoot(at.url));
+      const shots = yield* Effect.promise(async () => camera.shoot(at.url, at.cookie));
       const dark = sha256Hex(shots.dark) === sha256Hex(shots.light) ? null : shots.dark;
       const digest = dark === null ? sha256Hex(shots.light) : sha256Hex(Buffer.concat([shots.light, dark]));
       const changed = digest !== picture.digest;
@@ -372,7 +372,8 @@ export interface Shots {
 }
 
 export interface Camera {
-  shoot(url: string): Promise<Shots>;
+  /** `cookie`: set on the browser for `url` before it loads, never put on a page. */
+  shoot(url: string, cookie?: { readonly name: string; readonly value: string }): Promise<Shots>;
   close(): Promise<void>;
 }
 
@@ -403,11 +404,11 @@ export interface PictureCapture {
   readonly bucket: PictureBucket;
   url(port: number, token: string): Promise<string | null>;
   /**
-   * A listed share's host entered past its consent page (`shareCaptureUrl`), the publication it serves now, and whether
-   * the authority the shot is taken under still holds where it would be kept (`SlateLiveShareStore.galleryCapture`);
-   * null once it is listed no more.
+   * A listed share's host, the cookie the workspace's own capture enters it with (`shareCapturePass`), the publication
+   * it serves now, and whether the authority the shot is taken under still holds where it would be kept
+   * (`SlateLiveShareStore.galleryCapture`); null once it is listed no more.
    */
-  share(share: string): Promise<{ readonly url: string; readonly publication: string; held(): boolean } | null>;
+  share(share: string): Promise<{ readonly url: string; readonly cookie: { readonly name: string; readonly value: string }; readonly publication: string; held(): boolean } | null>;
   /** With broken ones. */
   slates(): Promise<ReadonlySet<string>>;
   camera(): Promise<Camera>;
@@ -420,7 +421,7 @@ export async function browserCamera(binding: Pick<BrowserRun, 'fetch'>): Promise
   const worker: BrowserWorker = { fetch: Object.assign((input: RequestInfo | URL, init?: RequestInit) => binding.fetch(input, init), { preconnect: () => undefined }) };
   const browser = await puppeteer.launch(worker);
 
-  return { shoot: (url) => settle(photograph(browser, url)), close: () => browser.close() };
+  return { shoot: (url, cookie) => settle(photograph(browser, url, cookie)), close: () => browser.close() };
 }
 
 function captureToken(): string {
@@ -429,7 +430,7 @@ function captureToken(): string {
 
 /** Waits on load, not the network: a streaming slate never idles. Taken light, then dark with the page as it stands:
  *  `prefers-color-scheme` is what a slate's own CSS reads, so a slate that draws a dark of its own does so. */
-function photograph(browser: Browser, url: string): Effect.Effect<Shots, KinuError> {
+function photograph(browser: Browser, url: string, cookie: { readonly name: string; readonly value: string } | undefined): Effect.Effect<Shots, KinuError> {
   return Effect.flatMap(Effect.promise(() => browser.newPage()), (page) => Effect.ensuring(Effect.gen(function* () {
     if (new URL(url).hostname.endsWith(LOCAL_DEV_ZONE)) {
       yield* Effect.promise(async () => (await page.createCDPSession()).send('Security.setIgnoreCertificateErrors', { ignore: true }));
@@ -437,6 +438,8 @@ function photograph(browser: Browser, url: string): Effect.Effect<Shots, KinuErr
 
     yield* Effect.promise(async () => {
       await page.setViewport({ width: 1280, height: 800, deviceScaleFactor: 0.5 });
+
+      if (cookie !== undefined) await page.setCookie({ name: cookie.name, value: cookie.value, url, secure: true, httpOnly: true, sameSite: 'Lax' });
       await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
     });
 
@@ -513,11 +516,6 @@ function viewPictureKey(workspace: string, picture: Pick<DuePicture, 'slate' | '
 /** A version's two places: its light capture, and its dark one where the slate drew one. */
 function versionKeys(workspace: string, picture: Pick<DuePicture, 'slate' | 'view'>, digest: string): readonly [string, string] {
   return [viewPictureKey(workspace, picture, digest), viewPictureKey(workspace, picture, `${digest}${DARK_PICTURE}`)];
-}
-
-/** Where a share's host takes a visitor with no account past its consent page, on to its slate's own page. */
-export function shareCaptureUrl(host: string): string {
-  return new URL(`${VIEWER_EXCHANGE_PATH}?consent=1`, host).toString();
 }
 
 export function picturePrefix(workspace: string, slate?: string): string {

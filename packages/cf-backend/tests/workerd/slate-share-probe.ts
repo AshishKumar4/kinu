@@ -17,7 +17,7 @@ import { probeDurableApps, probeFacetManager } from './facet-manager';
 import {
   agentCred, approvalKindOf, initUserTables, bearWorkspaceIdentity, bindActorHandle, DeferredApprovalQueue, DeferredApprovalStore, initWorkspaceSchema, openWorkspaceMainActor, WORKSPACE_IDENTITY_DDL,
   type ActorHandle, MissionGovernor, provisionAgentHome, settleSharedRoots, SHARE_SPEND_CAP_USD_PER_DAY, SlateOperationSchema,
-  shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
+  shareGrantKey, shareSpendLabel, type JsonValue, type ShareViewerClaim, type SlateCallResult, type SlateSurfaceResult, type SqlExec, type SqlExecutor, type SqlValue, actorHomeName } from '@kinu.run/core';
 import { SlateId } from '@agent-core/core/slates';
 import { GalleryIndex, initGalleryTables, initSlateLiveShareTables, preapproveSlateEffect, slateDirectory, SlateLiveShareStore } from '@kinu.run/core/slates';
 import { SlateHost, type SlateDispatchContext, type SlateHostDeps } from '../../src/slates/host';
@@ -459,7 +459,7 @@ export class SlateShareProbeDO extends DurableObject<SlateHostDeps['env']> {
    * What the driver answers a viewer of its public share when its class connects `session`, the owner having run it
    * once and shared it granting `approved` beyond what observes.
    */
-  async driveShared(session: string, approved: readonly string[], claim: ShareViewerClaim): Promise<{ answer: string; dialed: number }> {
+  async driveShared(session: string, approved: readonly string[], claim: Omit<ShareViewerClaim, 'consented'>): Promise<{ answer: string; dialed: number }> {
     await this.drive('kitesurf');
     const before = browserRunDials;
 
@@ -469,7 +469,9 @@ export class SlateShareProbeDO extends DurableObject<SlateHostDeps['env']> {
 
     // The owner's approved reach, on "my access", at the revision the driver runs.
     await this.ownerMode(created.value.share.id, 'driver', approved.map((member) => ({ slate: 'driver', namespace: 'web', member })));
-    const visit = async () => (await this.host.routeShare(created.value.share.handle, claim, new Request(`https://share.invalid/?session=${encodeURIComponent(session)}`), '/')).text();
+    // The visitor accepted the grant as it was cut here, whatever the claim it came with said.
+    const accepted = { ...claim, ...await this.accepted(created.value.share.handle), source: claim.source };
+    const visit = async () => (await this.host.routeShare(created.value.share.handle, accepted, new Request(`https://share.invalid/?session=${encodeURIComponent(session)}`), '/')).text();
     const asked = await visit();
 
     // A connect acts with the owner's access, so it waits for them; on their word it runs, once.
@@ -909,6 +911,13 @@ export class SlateShareProbeDO extends DurableObject<SlateHostDeps['env']> {
     } finally {
       socket.close();
     }
+  }
+
+  async accepted(handle: string): Promise<{ userId: null; source: string; consented: string | null }> {
+    const share = this.host.controller.live.byHandle(handle);
+    const grant = share === undefined ? '' : await shareGrantKey(share.grant);
+
+    return { userId: null, source: 'vitest', consented: grant === '' ? null : grant };
   }
 
   async viewerFetch(handle: string, claim: ShareViewerClaim): Promise<{ status: number; body: string }> {

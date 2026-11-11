@@ -258,7 +258,7 @@ export async function handleNimbusPreviewHostRequest<Id>(
   // Read before the sanitizer strips the cookie. A consent cookie is a live share's, never a preview's, and another
   // site's request names no one, whatever cookie it carries.
   const cookie = await viewerCookie(env, workspace, key, request.headers.get('cookie'));
-  const signed = cookie === null || cookie.consented || !ownRequest(request, url.origin, cookie.subject === PREVIEW_SELF) ? null : cookie.subject;
+  const signed = cookie === null || cookie.consented !== null || !ownRequest(request, url.origin, cookie.subject === PREVIEW_SELF) ? null : cookie.subject;
   const viewer = localDevPreview(suffix) ? PREVIEW_SELF : signed;
   const headers = sanitizePreviewRequestHeaders(request.headers);
   headers.delete('x-nimbus-base');

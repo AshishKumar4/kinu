@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { sha256Hex } from '@kinu.run/core';
-import { initSlatePictureTable, pictureKey, readPictureInMode, shareCaptureUrl, sharePictureKey, SlatePictures, type Camera, type PictureCapture, type Shots } from '../src/slates/pictures';
+import { initSlatePictureTable, pictureKey, readPictureInMode, sharePictureKey, SlatePictures, type Camera, type PictureCapture, type Shots } from '../src/slates/pictures';
 import { durableSqlStorage } from './helpers/programmatic-host';
 import { memoryBucket, type MemoryBucket } from './helpers/r2';
 
@@ -323,18 +323,20 @@ describe("a removed slate's pictures", () => {
 
 describe("a listed share's view", () => {
   const HOST = 'https://s1handle-token-ledger.preview.test/';
+  /** The workspace's own capture pass, as `shareCapturePass` mints it: set on the browser, never in the address. */
+  const CAPTURE_COOKIE = { name: '__Host-kinu_viewer', value: 'capture.1.grant.sig' };
 
   /** Share s1 listed, serving `publication` now; listed no more once `listed` says so; its authority holding while `held`. */
   const s1 = (publication: () => string, listed: () => boolean = () => true, held: () => boolean = () => true): PictureCapture['share'] => async (share) =>
-    (share === 's1' && listed() ? { url: shareCaptureUrl(HOST), publication: publication(), held } : null);
+    (share === 's1' && listed() ? { url: HOST, cookie: CAPTURE_COOKIE, publication: publication(), held } : null);
 
   /** A camera whose shots are `frames` in turn, keeping each address it was pointed at in `seen`. */
   function aimed(seen: string[], ...frames: Array<Uint8Array | Shots>): Camera {
     const lens = shooting(...frames);
 
     return {
-      shoot: async (url) => {
-        seen.push(url);
+      shoot: async (url, cookie) => {
+        seen.push(cookie === undefined ? url : `${url} with ${cookie.value}`);
 
         return lens.shoot(url);
       },
@@ -342,7 +344,7 @@ describe("a listed share's view", () => {
     };
   }
 
-  test('is taken through its own host past its consent page, kept under the share, apart from the preview', async () => {
+  test('is taken through its own host with the workspace\'s capture pass, kept under the share, apart from the preview', async () => {
     const store = pictures();
     const bucket = memoryBucket();
     const seen: string[] = [];
@@ -352,8 +354,8 @@ describe("a listed share's view", () => {
     expect(store.shareDigest('board', 's1')).toBeNull();
     expect(await store.captureDue(capture(aimed(seen, A, B), bucket, ['board'], s1(() => 'rev-1')), T0 + 300_000)).toBe(true);
 
-    // The preview's shot by its port and handle, the share's past its host's consent page: each in its own place.
-    expect(seen.filter((url) => url.startsWith(HOST))).toEqual([`${HOST}__kinu/viewer?consent=1`]);
+    // The preview's shot by its port and handle, the share's at its bare host with the capture pass: each in its own place.
+    expect(seen.filter((url) => url.startsWith(HOST))).toEqual([`${HOST} with ${CAPTURE_COOKIE.value}`]);
     const preview = store.digests().get('board');
     const shared = store.shareDigest('board', 's1');
 
@@ -407,6 +409,8 @@ describe("a listed share's view", () => {
 
 describe("a share view's shot", () => {
   const HOST = 'https://s1handle-token-ledger.preview.test/';
+  /** The workspace's own capture pass, as `shareCapturePass` mints it: set on the browser, never in the address. */
+  const CAPTURE_COOKIE = { name: '__Host-kinu_viewer', value: 'capture.1.grant.sig' };
 
   /** A camera that, as it takes its one shot, runs `meanwhile` (what the owner does while the page loads). */
   function during(meanwhile: () => Promise<void>, frame: Uint8Array): Camera {
@@ -430,7 +434,7 @@ describe("a share view's shot", () => {
     const store = pictures();
     const bucket = memoryBucket();
     // Listed, public and its own again by the time the shot is in: only its listing tells the two apart.
-    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => true });
+    const share: PictureCapture['share'] = async () => ({ url: HOST, cookie: CAPTURE_COOKIE, publication: 'rev-1', held: () => true });
 
     store.listed('board', 's1', 'rev-1', T0);
     expect(await store.captureDue(capture(during(unlistedAndBack(store, bucket), A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
@@ -443,7 +447,7 @@ describe("a share view's shot", () => {
     const store = pictures();
     const bucket = memoryBucket();
     let held = true;
-    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => held });
+    const share: PictureCapture['share'] = async () => ({ url: HOST, cookie: CAPTURE_COOKIE, publication: 'rev-1', held: () => held });
 
     store.listed('board', 's1', 'rev-1', T0);
     expect(await store.captureDue(capture(during(async () => { held = false; }, A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
@@ -461,7 +465,7 @@ describe("a share view's shot", () => {
     let held = true;
     // R2 answering the put only once the owner changed the share meanwhile.
     const bucket: MemoryBucket = { ...stored, put: async (key, value, options) => { held = false; await stored.put(key, value, options); } };
-    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => held });
+    const share: PictureCapture['share'] = async () => ({ url: HOST, cookie: CAPTURE_COOKIE, publication: 'rev-1', held: () => held });
 
     store.listed('board', 's1', 'rev-1', T0);
     expect(await store.captureDue(capture(shooting(A), bucket, ['board'], share), T0 + 30_000)).toBe(false);
@@ -487,7 +491,7 @@ describe("a share view's shot", () => {
       },
     };
 
-    const share: PictureCapture['share'] = async () => ({ url: shareCaptureUrl(HOST), publication: 'rev-1', held: () => true });
+    const share: PictureCapture['share'] = async () => ({ url: HOST, cookie: CAPTURE_COOKIE, publication: 'rev-1', held: () => true });
 
     store.listed('board', 's1', 'rev-1', T0);
     expect(await store.captureDue(capture(during(unlistedAndBack(store, bucket), A), bucket, ['board'], share), T0 + 30_000)).toBe(false);

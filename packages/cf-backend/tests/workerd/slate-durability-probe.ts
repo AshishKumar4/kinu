@@ -12,11 +12,11 @@ import { ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { sealRpcSurface } from '@nimbus-sh/fabric/sealed.js';
 import { handleNimbusPreviewHostRequest, previewEntry, previewRefusalText } from '../../src/nimbus-route';
 import { previewViewerKey, selfPreviewPass, viewerCookieResponse } from '../../src/viewer-pass';
-import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH, sha256Hex, SharedSlateFilesSchema, type SlateFileChange } from '@kinu.run/core';
+import { escapeHtml, parseWorkspacePreviewLabel, PREVIEW_ENTRY_PATH, sha256Hex, SharedSlateFilesSchema, shareGrantKey, type ShareViewerClaim, type SlateFileChange } from '@kinu.run/core';
 import { WORKSPACE_TERMINAL_PATH, WorkspaceTerminalOutputSchema, buildBuiltinTools, codemodeSurface, toolsInWorkMode } from '@kinu.run/core';
 import { narrowToolSurface } from '@kinu.run/core';
 import { listPortReservations } from '@nimbus-sh/worker/port-capability';
-import { initSlateBuildTable, initSlateLiveShareTables, initSlateUsageTable, ROOT_SLATE_CALLER, serverAuthority, SlateBuilds, SlateController, SlateFiles, WorkspaceSlateContentStore } from '@kinu.run/core/slates';
+import { initSlateBuildTable, initSlateLiveShareTables, initSlateUsageTable, ROOT_SLATE_CALLER, serverAuthority, SIGNED_OUT_VIEWER, SlateBuilds, SlateController, SlateFiles, WorkspaceSlateContentStore } from '@kinu.run/core/slates';
 import { SlateId } from '@agent-core/core/slates';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -44,6 +44,16 @@ export * from '../../src/server';
 // A build-mode resident refuses to boot without a `globalOutbound`: `CodemodeEgress` is that
 // loopback.
 
+
+/** A visitor with no account who accepted `share`'s grant as it stands now, as Kinu's page's acceptance leaves them. */
+async function acceptedClaim(owned: ReturnType<typeof workspaceOwner>, share: string): Promise<ShareViewerClaim> {
+  const read = await owned.openLiveShare(share, null, SIGNED_OUT_VIEWER);
+
+  if (!read.ok) throw new Error(`reading the share refused: ${read.reason}: ${read.error}`);
+  const grant = await shareGrantKey(read.value.record.grant);
+
+  return { userId: null, source: 'probe-viewer', consented: grant === '' ? null : grant };
+}
 
 export class CodemodeEgress extends WorkerEntrypoint {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
@@ -457,7 +467,8 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const mode = await target.setLiveShareMode({ workspace: input.workspace, share: id, mode: 'owner', revision: reach.revision ?? '', approved: members });
 
     if (!mode.ok) throw new Error(`my access refused: ${mode.reason}: ${mode.error}`);
-    const page = async () => (await target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, new Request('https://share.invalid/'), '/')).text();
+    const claim = await acceptedClaim(owned, id);
+    const page = async () => (await target.routeSlateShare(handle, claim, new Request('https://share.invalid/'), '/')).text();
     // The viewer's run of the helper acts on the owner's access: it waits for the owner, who approves it on the stack.
     const waited = await page();
     const approved = await target.approveWaitingEffects();
@@ -525,11 +536,12 @@ export class SlateDurabilityProbeRoot extends Agent<ProbeRootEnv> {
     const mode = await target.setLiveShareMode({ workspace: input.workspace, share: id, mode: 'owner', revision, approved: write });
 
     if (!mode.ok) throw new Error(`my access refused: ${mode.reason}: ${mode.error}`);
+    const claim = await acceptedClaim(owned, id);
 
     // The visitor's page: a Cap'n Web batch to the share's host, admitted past its consent.
     const visit = async (): Promise<string> => {
       const stub = slateBatchStub<{ mark: () => Promise<JsonValue> }>(
-        { request: (request) => target.routeSlateShare(handle, { userId: null, source: 'probe-viewer', consented: true }, request, '/__rpc') }, 'ignored',
+        { request: (request) => target.routeSlateShare(handle, claim, request, '/__rpc') }, 'ignored',
       );
 
       try {

@@ -9,13 +9,13 @@ import {
   err, ERROR_STATUS, json, safeJson,
   formatBlueprintId, parseBlueprintId, PublishedBlueprintSchema, labelSigner,
   type BlueprintView, type SharedLibrary, type SharedRow, type OwnedSlate, type BlueprintFork, type UserCaller,
-  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, type LiveShareOpen,
+  LiveShareBodySchema, LiveShareCreatedSchema, LIVE_SHARE_MODE_PATH, LiveShareModeBodySchema, LIVE_SHARE_LISTING_PATH, LiveShareListingBodySchema, LIVE_SHARE_OPEN_PATH, shareGrantKey, shareGrantNamespaces, type LiveShareOpen,
   LIVE_SHARE_PREAPPROVALS_PATH, SlatePreapprovalsBodySchema, LIVE_SHARE_PREAPPROVAL_WITHDRAW_PATH, SlatePreapprovalWithdrawSchema, type LiveShareBody,
   LIVE_SHARE_CHATS_PATH, LiveShareChatsBodySchema, LIVE_SHARE_CHAT_PATH, LiveShareChatBodySchema, LIVE_SHARE_ACKNOWLEDGE_PATH, LiveShareAcknowledgeSchema,
   type OwnedLiveShare, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl } from '../slate-share-route';
-import { mintViewerTicket, shareViewerKey } from '../viewer-pass';
+import { mintConsentBinding, mintViewerTicket, shareViewerKey } from '../viewer-pass';
 import { crossSiteRejection, requestIdentity, type AuthIdentity } from '../auth/session';
 import { accountIdFor } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
@@ -420,8 +420,12 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity | nul
   // The ticket is posted into the frame by Kinu's page alone; the host takes it from no one else (slate-share-route.ts).
   const url = await slateShareUrl(env, body.workspace, handle);
   const ticket = identity === null ? null : await mintViewerTicket(env, body.workspace, handle, identity.userId);
+  // What its grant reaches of the owner's, which the page shows before its visitor accepts it, and what it posts then.
+  const grant = await shareGrantKey(reading.value.record.grant);
+  const binding = grant === '' ? null : await mintConsentBinding(env, body.workspace, handle, grant);
+  const consent = binding === null ? null : { namespaces: shareGrantNamespaces(reading.value.record.grant), binding };
 
   if (url === null || (identity !== null && ticket === null)) return err(503, 'This deployment cannot sign live-share links: CREDENTIAL_ENCRYPTION_KEY or the share suffix is not set.');
 
-  return json({ body: { url, slate, title: reading.value.title, mode, revision: reading.value.revision, signedIn: identity !== null, ticket, acknowledged: reading.value.acknowledged } satisfies LiveShareOpen });
+  return json({ body: { url, slate, title: reading.value.title, mode, revision: reading.value.revision, signedIn: identity !== null, ticket, acknowledged: reading.value.acknowledged, consent } satisfies LiveShareOpen });
 }

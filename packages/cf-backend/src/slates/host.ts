@@ -4,14 +4,14 @@ import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateController, type SlateControllerPorts, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateStorageCall,
-  ROOT_SLATE_CALLER, shareCaller, slateAnswer, AppAgentChats, ShareDisclosures, acknowledgedMode, appAgentAsk, asksAppAgent, lentConversation, ownConversation, ownerConversation, slateRevision, visitorLabel,
+  ROOT_SLATE_CALLER, SLATE_NEEDS_CONSENT_MESSAGE, shareCaller, slateAnswer, AppAgentChats, ShareDisclosures, acknowledgedMode, appAgentAsk, asksAppAgent, lentConversation, ownConversation, ownerConversation, slateRevision, visitorLabel,
   type AppAgentAbout, type AppAgentConversation, type LentChat, type ShareMode, type AppAgentPayer, type AppAgentSession, type ShareChat, type AppAgentEntry, type ServerSend, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateCallFrom, type SlateLaunch, type SlateLineage, type ToolContract,
 } from '@kinu.run/core/slates';
 import {
   ephemeralSlateAddress, onceMoreIfNotAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
   SlateCallRequestSchema, requireWorkModePermission, routeSlateCall, issuedSlateInvocation, SLATE_DRIVEN_MEMBERS,
   isJsonAnswer, JsonValueSchema, isSlateMethodName, answeredRefusal, reoriginateRequest,
-  escapeHtml, keptSlateContext, publicPage, sharedBuildRefusal, VIEWER_EXCHANGE_PATH,
+  escapeHtml, publicPage, sharedBuildRefusal,
   type JsonValue, type SlateRoute, type SlateCallRequest, type SlateCallResult, type SlateSurfaceResult, type SlateSurfaceValue, type SlateInvocation,
   type SlateSurfaceCatalog, type LiveShareRecord, type SlateViewer, type ShareViewerClaim, type MissionGovernor, type EphemeralSlateAddress,
   type SlateFileChange, type SlateOperation, type EgressPrincipal, type Usage,
@@ -275,13 +275,11 @@ export class SlateHost {
     });
   }
 
-  /** The core's admission, answered over HTTP: refusals as their statuses, the consent page, or the viewer let in. */
+  /** The core's admission, answered over HTTP: refusals as their statuses, the word to accept on Kinu's page, or the viewer let in. */
   async admitViewerRequest(input: {
     readonly handle: string;
     readonly claim: ShareViewerClaim;
     readonly pathname: string;
-    /** The host context its page was framed with, kept across the consent it may be asked first (`keptSlateContext`). */
-    readonly context: string;
   }): Promise<ViewerAdmitted | Response> {
     const admission = await this.controller.viewers.admit(input);
     const headers = { 'cache-control': 'no-store' };
@@ -290,7 +288,7 @@ export class SlateHost {
       case 'missing': return new Response('Not found', { status: 404, headers });
       case 'sign-in': return new Response(null, { status: 303, headers: { location: admission.entry, ...headers } });
       case 'too-many': return new Response('Too many requests', { status: 429, headers });
-      case 'consent': return await this.consentPage(admission.share, admission.namespaces, input.context);
+      case 'consent': return await this.needsConsentPage(admission.share);
       case 'admitted': {
         const { caller, share, viewer } = admission;
         const invocation = crypto.randomUUID();
@@ -303,24 +301,21 @@ export class SlateHost {
     }
   }
 
-  /** What the grant reaches of the owner's, disclosed before anything of theirs runs. */
-  private async consentPage(share: LiveShareRecord, namespaces: readonly string[], context: string): Promise<Response> {
+  /**
+   * The share's grant reaches what its visitor has not accepted: no app, and no page of this host's own an app could
+   * script, only a word to the page framing it, which is Kinu's (its share page shows what the grant reaches and takes
+   * the visitor's acceptance on Kinu's own origin, slate-share-route.ts). The message is a prompt alone: the framing page
+   * reads what to show from Kinu.
+   */
+  private async needsConsentPage(share: LiveShareRecord): Promise<Response> {
     const project = await this.controller.project(CRED_SESSION_USER, share.slate);
-    const named = await this.deps.ownerName?.() ?? null;
-    const owner = named ?? 'its owner';
     const title = slateTitle(project, share.slate);
-    const reached = namespaces.map((namespace) => `<li>${escapeHtml(namespace)}</li>`).join('');
-    const heading = named === null ? `${title} is shared with you` : `${named} shared ${title}`;
 
     const html = publicPage({
-      title: heading,
-      body: `<main><section class="section">
-<h1>${escapeHtml(heading)}</h1>
-<p class="dim">This app runs in ${escapeHtml(owner)}'s workspace and calls these connections with their credentials:</p>
-<ul>${reached}</ul>
-<p class="dim">What you do here runs as ${escapeHtml(owner)} and is logged for them.</p>
-<a class="btn solid" href="${escapeHtml(`${VIEWER_EXCHANGE_PATH}?consent=1${context === '' ? '' : `&${context}`}`)}">Continue</a>
-</section></main>`,
+      title,
+      body: `<main><section class="section"><h1>${escapeHtml(title)}</h1>
+<p class="dim">This app uses its owner's connections. Open it from its Kinu page to see what it reaches, and continue there.</p></section></main>`,
+      script: `if (window.parent !== window) window.parent.postMessage({ kinu: ${JSON.stringify(SLATE_NEEDS_CONSENT_MESSAGE)} }, "*");`,
     });
 
     return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' } });
@@ -332,7 +327,7 @@ export class SlateHost {
     request: Request,
     pathname: string,
   ): Promise<Response> {
-    const admission = await this.admitViewerRequest({ handle, claim, pathname, context: keptSlateContext(new URL(request.url)) });
+    const admission = await this.admitViewerRequest({ handle, claim, pathname });
 
     if (admission instanceof Response) return admission;
 
@@ -542,7 +537,8 @@ export class SlateHost {
    * the owner may read it, or the visitor's own. Its agent calls the app as the visitor's page does, each call under a
    * request of its own; each step is admitted by the share as it stands then.
    */
-  private async visitorAsk(payer: AppAgentPayer, share: LiveShareRecord, subject: string, args: readonly JsonValue[]): Promise<SlateSurfaceResult> {
+  private async visitorAsk(payer: AppAgentPayer, share: LiveShareRecord, asker: SlateViewer, args: readonly JsonValue[]): Promise<SlateSurfaceResult> {
+    const { subject, consented } = asker;
     const { live, viewers } = this.controller;
     const lent = payer.kind === 'lent';
     const conversation = lent ? lentConversation(payer.userId, { workspace: this.deps.workspace, slate: share.slate, share: share.id, subject }) : ownConversation(payer.userId, this.deps.workspace, share.slate);
@@ -566,7 +562,7 @@ export class SlateHost {
       about: async () => this.appAbout(shareCaller(share.id), share.slate, lent ? visitorLabel(subject) : 'a visitor of the app, on their own account'),
       call: async (method, called) => {
         admitted();
-        const viewer: SlateViewer = { share: share.id, subject, request: live.openRequest({ share: share.id, viewer: subject, path: 'app-agent' }) };
+        const viewer: SlateViewer = { share: share.id, subject, consented, request: live.openRequest({ share: share.id, viewer: subject, path: 'app-agent' }) };
 
         try {
           return await this.call({ caller: shareCaller(share.id), id: share.slate, method, args: called, viewer, agent: share.slate, admit: admitted });
@@ -805,7 +801,7 @@ export class SlateHost {
     if (viewer !== undefined) {
       const acknowledged = acknowledgedMode(viewer.subject, this.disclosures.of(viewer.share, viewer.subject));
 
-      return viewerWords(async () => this.controller.viewers.ask({ id, viewer, acknowledged, run: async (payer, share) => this.visitorAsk(payer, share, viewer.subject, args) }), refused);
+      return viewerWords(async () => this.controller.viewers.ask({ id, viewer, acknowledged, run: async (payer, share) => this.visitorAsk(payer, share, viewer, args) }), refused);
     }
 
     if (caller.share !== undefined) return Effect.succeed(refused({ cause: new KinuError('denied', `Slate ${id} runs for a share, and called out under no viewer's request`) }));

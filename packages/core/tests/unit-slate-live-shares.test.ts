@@ -511,7 +511,7 @@ test("a signed-in viewer's requests are kept under the share's key for them, nev
       },
     });
 
-    const admission = await viewers.admit({ handle: '0123456789', claim: { userId: 'u-priya', source: 'ip', consented: true }, pathname: '/' });
+    const admission = await viewers.admit({ handle: '0123456789', claim: { userId: 'u-priya', source: 'ip', consented: null }, pathname: '/' });
 
     expect(admission).toMatchObject({ kind: 'admitted', viewer: { subject: 'viewer:k-priya' } });
     expect(keys).toEqual(['s1:u-priya']);

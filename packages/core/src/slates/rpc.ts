@@ -26,7 +26,7 @@ export type SlateAnswer<Value> =
    * `needs`: a share's visitor must act before their app agent answers them (app-agent.ts): say who they are, sign in, or
    * allow it their models. The share's page reads which from Kinu, never from the app.
    */
-  | ({ readonly ok: false; readonly needs?: 'identity' } & Refusal);
+  | ({ readonly ok: false; readonly needs?: 'identity' | 'consent' } & Refusal);
 
 export type SlateCallResult = SlateAnswer<JsonValue>;
 

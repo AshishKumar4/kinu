@@ -12,7 +12,6 @@ const subject = (name: string): Probe =>
 
 const ShareCreated = v.object({ share: OwnedLiveShareSchema, url: v.nullable(v.string()) });
 
-const CLAIM = { userId: null, source: 'vitest', consented: true };
 
 // Review of c4015d141 (MechanicalToad, 2026-10-17): authority comes from a record this host issued, never from what a call
 // leaves out, and a viewer's request is held to every bound on the one server it shares.
@@ -26,7 +25,7 @@ it('R-P1 grant intersection. a viewer of the broader of two owner shares reaches
   await probe.share([]);
 
   // One server, one storage: the narrower share's bound holds for the broader share's viewers too. Not even asked.
-  expect((await probe.viewerBatch(broad.share.handle, CLAIM)).mutateError).toContain('does not reach workspace.fs.write');
+  expect((await probe.viewerBatch(broad.share.handle, await probe.accepted(broad.share.handle))).mutateError).toContain('does not reach workspace.fs.write');
   expect(await probe.ownerQueue()).toEqual([]);
 });
 
@@ -38,7 +37,7 @@ it('R-P1 owner lineage. a shared slate calling its binding under no request of t
     await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
   // Asked by a viewer, the slate skips its runner and calls with no invocation: no write, and nothing for the owner to approve.
-  expect(await probe.viewerCall(created.share.handle, CLAIM, 'raw')).toContain('called out under no request');
+  expect(await probe.viewerCall(created.share.handle, await probe.accepted(created.share.handle), 'raw')).toContain('called out under no request');
   expect(await probe.ownerQueue()).toEqual([]);
 });
 
@@ -47,7 +46,7 @@ it('R-P1 stale viewer. a request admitted before the last share was revoked is r
   await probe.start();
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
 
-  expect(await probe.viewerAfterLastRevoke(created.share.handle, CLAIM, created.share.id)).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await probe.viewerAfterLastRevoke(created.share.handle, await probe.accepted(created.share.handle), created.share.id)).toMatchObject({ ok: false, reason: 'denied' });
 });
 
 it("R-P1 in-flight launch. a launch that chose the owner's network before the slate was shared never runs with it", async () => {
@@ -84,7 +83,7 @@ it("R2-P1 hop lineage. a slate the shared one hops to is held to the shared serv
   // The hop is in the board's graph, so its share grants it; the digest's write under it the board's share does not.
   await probe.exerciseHop();
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
-  const seen = await probe.hopWrites(created.share.handle, CLAIM);
+  const seen = await probe.hopWrites(created.share.handle, await probe.accepted(created.share.handle));
 
   // The hop runs; its write, a leaf of the digest under the board's request, meets the board's bound and is refused.
   expect(seen.viewer).toContain('does not reach workspace.fs.write');
@@ -125,7 +124,7 @@ it('R3-P2 one environment. a call the shared server makes runs in its environmen
   const shared = (await probe.environments()).length;
 
   await probe.ownerCall('probe');
-  await probe.viewerCall(created.share.handle, CLAIM, 'probe');
+  await probe.viewerCall(created.share.handle, await probe.accepted(created.share.handle), 'probe');
   const environments = await probe.environments();
 
   expect(environments[0]).toBe('fs.text:owner');

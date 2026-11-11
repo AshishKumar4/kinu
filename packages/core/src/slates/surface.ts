@@ -90,6 +90,8 @@ export interface SlateViewer {
   readonly request: number;
   /** The visitor's account, signed in: who pays for their app agent on their own access (app-agent.ts). */
   readonly userId?: string;
+  /** The grant they accepted, by its key (`shareGrantKey`); '' for none, a grant reaching nothing of the owner's. */
+  readonly consented: string;
 }
 
 /** Resolved from the host's own record, never off the wire: retired or foreign ids are refused. */

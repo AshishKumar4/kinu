@@ -204,6 +204,12 @@ export const LiveShareOpenSchema = v.object({
   ticket: v.nullable(v.string()),
   /** What this signed-in person last acknowledged of how it lends (app-agent.ts `ShareDisclosures`); null for none. */
   acknowledged: v.nullable(ShareModeSchema),
+  /**
+   * What of its owner's its grant reaches, which Kinu's page shows its visitor before anything of theirs runs, and the
+   * binding it posts into the frame once they accept (the share host takes consent from Kinu's own page alone); null
+   * for a grant reaching nothing of the owner's.
+   */
+  consent: v.nullable(v.object({ namespaces: v.array(v.string()), binding: v.string() })),
 });
 
 export type LiveShareOpen = v.InferOutput<typeof LiveShareOpenSchema>;
@@ -295,14 +301,35 @@ export const ViewerRequestRecordSchema = v.object({
 
 export type ViewerRequestRecord = v.InferOutput<typeof ViewerRequestRecordSchema>;
 
-/** `consented` is true only for the consent-page cookie; a ticket-minted cookie has not seen the disclaimer. */
+/**
+ * `consented`: the grant the visitor accepted on Kinu's own page, by its key (`shareGrantKey`); null for none. A share
+ * whose grant reaches more of its owner's than that asks them again.
+ */
 export const ShareViewerClaimSchema = v.object({
   userId: v.nullable(v.string()),
   /** The random id a visitor who continued anonymously carries in the share's cookie; absent otherwise. */
   anonymous: v.optional(v.string()),
   source: v.string(),
-  consented: v.boolean(),
+  consented: v.nullable(v.string()),
 });
+
+/**
+ * What of its owner's a share's grant reaches, as its visitors accept it: a digest of the namespaces it names, so a grant
+ * that reaches more is another key; '' for one reaching nothing of theirs, which no one is asked about.
+ */
+export async function shareGrantKey(grant: { readonly members: readonly { readonly namespace: string }[] }): Promise<string> {
+  const namespaces = [...new Set(grant.members.map((member) => member.namespace))].sort();
+
+  if (namespaces.length === 0) return '';
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(namespaces.join('\n'))));
+
+  return btoa(String.fromCharCode(...digest.slice(0, 16))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+}
+
+/** The namespaces a share's grant reaches, as its visitors are shown them before they accept it. */
+export function shareGrantNamespaces(grant: { readonly members: readonly { readonly namespace: string }[] }): string[] {
+  return [...new Set(grant.members.map((member) => member.namespace))].sort();
+}
 
 export type ShareViewerClaim = v.InferOutput<typeof ShareViewerClaimSchema>;
 

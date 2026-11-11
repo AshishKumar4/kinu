@@ -40,7 +40,7 @@ import {
   type PlanReview, actorReadHandle, ownerLaneDeclarations, type IntentResult, type OwedIntent, type OwedOwnerIntent,
   createEmailThreadDispatcher,
 } from "@kinu.run/core";
-import { PROJECT_OWNER_CRED, blueprintOwnerName, blueprintSeed, kinuBlueprint, stableStringify, bookmarkNow, censusOf, missingBytes, requireOps, restartedForRestore, restoreArmed, type ArmedRestore, type MissingBytes, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
+import { PROJECT_OWNER_CRED, shareGrantKey, blueprintOwnerName, blueprintSeed, kinuBlueprint, stableStringify, bookmarkNow, censusOf, missingBytes, requireOps, restartedForRestore, restoreArmed, type ArmedRestore, type MissingBytes, type RestoreTarget, WorkspaceLayoutSchema, type BlueprintSchedule, type OpsCaller, type TablesAnswer, type WorkspaceLayout, type WorkspaceSeed } from '@kinu.run/core';
 import { createHostedWorkspace, type HostedBox, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import type { WorkspaceActorContext } from './workspace-actor/context';
 import { WorkspaceAccounting } from './workspace-actor/accounting';
@@ -87,14 +87,14 @@ import { controlPlaneStub, hasControlPlane } from './control-plane/stub';
 import { serialQueue } from '@kinu.run/agent-utils';
 import { internalCaller } from '@kinu.run/core/control-plane';
 import { isNavigation, nimbusPreviewUrl, previewEntryUrl, previewRefusalText, WORKSPACE_PREVIEW_PATH, type PreviewAccess, type PreviewVisit } from "./nimbus-route";
-import { PREVIEW_SELF, shareViewerKey } from "./viewer-pass";
+import { PREVIEW_SELF, shareCapturePass, shareViewerKey } from "./viewer-pass";
 import type { SlateHost } from "./slates/host";
 import type { UserDO } from "./user/user-do";
 import type { PartViewer } from "./slates/part-runs";
 import { WorkspaceSlates } from "./workspace-slates";
 import type { McpToolSurface } from "./user/mcp-servers";
 import { closeWorkspaceBrowserSessions, initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
-import { browserCamera, initSlatePictureTable, picturePrefix, shareCaptureUrl, SlatePictures, type PictureCapture } from "./slates/pictures";
+import { browserCamera, initSlatePictureTable, picturePrefix, SlatePictures, type PictureCapture } from "./slates/pictures";
 import { initSlateBuildTable } from "@kinu.run/core/slates";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import type { MessageBlock } from "./slates/sources";
@@ -3967,8 +3967,10 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         if (entry === null) return null;
         const publication = builtRevision(controller.builds, entry.slate) ?? '';
         const host = await slateShareUrl(this.env, this.name, entry.handle);
+        const share = controller.live.get(id);
+        const cookie = share === undefined ? null : await shareCapturePass(this.env, this.name, entry.handle, await shareGrantKey(share.grant));
 
-        return host === null ? null : { url: shareCaptureUrl(host), publication, held: entry.held };
+        return host === null || cookie === null ? null : { url: host, cookie, publication, held: entry.held };
       },
       camera: () => browserCamera(browser),
     };

@@ -16,7 +16,7 @@ import { Effect } from 'effect';
 import { settle } from '@kinu.run/core/obs';
 import { sanitizePreviewRequestHeaders } from './lib/preview-request';
 import { rawPath, routeError, type FamilyEnv } from './api/context';
-import { mintAnonymousSubject, ticketUser, viewerCookie, viewerCookieResponse, viewerSigner } from './viewer-pass';
+import { consentBindingGrant, mintAnonymousSubject, ticketUser, viewerCookie, viewerCookieResponse, viewerSigner } from './viewer-pass';
 
 const shareSigner = labelSigner('kinu.slate-share.salt', 'kinu.slate-share.v1');
 
@@ -86,10 +86,10 @@ const shareHostRoutes = new Hono<FamilyEnv<VerifiedShare, object>>({ getPath: ra
 
 const NOT_FOUND = { status: 404, headers: { 'cache-control': 'no-store' } } as const;
 
-/** Who the visitor becomes, and whether they saw the share's disclaimer: an exchange's answer, before its cookie. */
+/** Who the visitor becomes, and the grant they accepted by its key (null for none): an exchange's answer, before its cookie. */
 interface Exchanged {
   readonly subject: string;
-  readonly consent: boolean;
+  readonly consented: string | null;
   /** Whom its exchanges are counted against, where not the subject: where a new anonymous visitor comes from. */
   readonly admitAs?: string;
   /** A signed-out page saying so, at every load: no one new is named, so it spends no count. */
@@ -111,24 +111,19 @@ async function exchangedTo(c: { readonly env: VerifiedShare }, request: Request,
 
   const kept = keptSlateContext(new URL(request.url));
 
-  return await viewerCookieResponse(env, { workspace, handle, subject: exchanged.subject, consent: exchanged.consent }, kept === '' ? '/' : `/?${kept}`);
+  return await viewerCookieResponse(env, { workspace, handle, subject: exchanged.subject, consented: exchanged.consented }, kept === '' ? '/' : `/?${kept}`);
 }
 
-// The disclaimer's Continue, a link on this host's own page: consent over the subject the visitor already is, never a
-// new one.
-shareHostRoutes.get(VIEWER_EXCHANGE_PATH, async (c) => {
-  const { env, handle, workspace, viewerSecret } = c.env;
-  const request = c.req.raw;
+/** What `held` accepted, kept where the visitor stays who they were: a new subject has accepted nothing yet. */
+function keptConsent(held: { readonly subject: string; readonly consented: string | null } | null, subject: string): string | null {
+  return held !== null && held.subject === subject ? held.consented : null;
+}
 
-  if (!new URL(request.url).searchParams.has('consent')) return new Response('Not found', NOT_FOUND);
-  const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
-
-  return await exchangedTo(c, request, { subject: held?.subject ?? await viewerSource(viewerSecret, request), consent: true });
-});
-
-// Who the visitor is changes only here, on a POST Kinu's own share page sends into the frame at every load: a signed-in
-// person's ticket; the anonymous visitor its sheet's button made; or, signed out, that they are no account now. Any other origin, the app's page on this very host among
-// them, changes no one: a ticket a person minted for themself never becomes another browser's identity.
+// Who the visitor is, and what of the owner's they accepted, change only here, on a POST Kinu's own share page sends into
+// the frame: at every load a signed-in person's ticket, or, signed out, that they are no account now; the anonymous
+// visitor its sheet's button made; and the grant its consent sheet's visitor accepted. Any other origin, the app's page on
+// this very host among them, changes neither: a ticket a person minted for themself never becomes another browser's
+// identity, and no app accepts its own reach for its visitor. This host serves no consent page an app could script.
 shareHostRoutes.post(VIEWER_EXCHANGE_PATH, async (c) => {
   const { env, handle, workspace, viewerSecret } = c.env;
   const request = c.req.raw;
@@ -140,11 +135,22 @@ shareHostRoutes.post(VIEWER_EXCHANGE_PATH, async (c) => {
   if (!(request.headers.get('content-type') ?? '').startsWith('application/x-www-form-urlencoded')) return new Response('Not found', NOT_FOUND);
   const form = new URLSearchParams(await request.text());
   const ticketed = form.get('ticket');
+  const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
+  const source = await viewerSource(viewerSecret, request);
 
   if (ticketed !== null) {
     const ticket = await ticketUser(env, workspace, handle, ticketed);
 
-    return await exchangedTo(c, request, ticket === null ? null : { subject: ticket.userId, consent: false });
+    return await exchangedTo(c, request, ticket === null ? null : { subject: ticket.userId, consented: keptConsent(held, ticket.userId) });
+  }
+
+  const bound = form.get('consent');
+
+  // Accepted over whoever the visitor is now; its binding names the grant it was shown, which admission compares again.
+  if (bound !== null) {
+    const grant = await consentBindingGrant(env, workspace, handle, bound);
+
+    return await exchangedTo(c, request, grant === null ? null : { subject: held?.subject ?? source, consented: grant });
   }
 
   // No account now: an account this browser held before (a sign-out, a shared machine) is no one's to keep. An anonymous
@@ -152,13 +158,12 @@ shareHostRoutes.post(VIEWER_EXCHANGE_PATH, async (c) => {
   const anonymous = form.get('anonymous') !== null;
 
   if (!anonymous && form.get('out') === null) return new Response('Not found', NOT_FOUND);
-  const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
-  const source = await viewerSource(viewerSecret, request);
-  const consent = held?.consented === true && held.userId === null;
 
-  if (held?.anonymous !== null && held?.anonymous !== undefined) return await exchangedTo(c, request, { subject: held.subject, consent, ...(!anonymous && { uncounted: true }) });
+  if (held?.anonymous !== null && held?.anonymous !== undefined) return await exchangedTo(c, request, { subject: held.subject, consented: held.consented, ...(!anonymous && { uncounted: true }) });
 
-  return await exchangedTo(c, request, anonymous ? { subject: mintAnonymousSubject(), consent, admitAs: source } : { subject: source, consent, uncounted: true });
+  return anonymous
+    ? await exchangedTo(c, request, { subject: mintAnonymousSubject(), consented: null, admitAs: source })
+    : await exchangedTo(c, request, { subject: source, consented: keptConsent(held, source), uncounted: true });
 });
 
 /**
@@ -191,7 +196,7 @@ shareHostRoutes.all('*', async (c) => {
   }
 
   const claim: ShareViewerClaim = {
-    userId: cookie?.userId ?? null, source: await viewerSource(viewerSecret, request), consented: cookie?.consented === true,
+    userId: cookie?.userId ?? null, source: await viewerSource(viewerSecret, request), consented: cookie?.consented ?? null,
     ...(cookie !== null && cookie.anonymous !== null && { anonymous: cookie.anonymous }),
   };
 

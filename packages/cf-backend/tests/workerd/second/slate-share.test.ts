@@ -15,7 +15,8 @@ const ShareCreated = v.object({ share: OwnedLiveShareSchema, url: v.nullable(v.s
 
 const Requests = v.object({ ok: v.literal(true), value: v.array(ViewerRequestRecordSchema) });
 
-const CLAIM = { userId: null, source: 'vitest', consented: true };
+/** A visitor with no account, as the edge names it. */
+const CLAIM = { userId: null, source: 'vitest' };
 
 it('a public share serves the slate, admits the granted member, refuses the rest and audits all of it', async () => {
   const probe = subject('live-share');
@@ -28,16 +29,16 @@ it('a public share serves the slate, admits the granted member, refuses the rest
   // Its one link is the app's page for it, which frames its host: never the bare host.
   expect(created.url).toBe(`https://app.test/shared/live/probe/${created.share.id}`);
 
-  expect(await probe.viewerFetch(handle, CLAIM)).toEqual({ status: 200, body: 'share-ok' });
+  expect(await probe.viewerFetch(handle, await probe.accepted(handle))).toEqual({ status: 200, body: 'share-ok' });
 
   // probe() reads the granted member; mutate() is refused at the grant, before the member runs.
-  const batch = await probe.viewerBatch(handle, CLAIM);
+  const batch = await probe.viewerBatch(handle, await probe.accepted(handle));
   expect(batch.probe).toBe('fixture-bytes');
   // Refused at the slate's server-wide bound, which every share of it meets, before its own share's grant is read.
   expect(batch.mutateError).toContain('does not reach workspace.fs.write');
 
   // The invocation retires on socket close; a replay refuses 'not running'.
-  const socket = await probe.viewerSocket(handle, CLAIM);
+  const socket = await probe.viewerSocket(handle, await probe.accepted(handle));
   expect(socket.probe).toBe('fixture-bytes');
   expect(socket.mutateError).toContain('does not reach workspace.fs.write');
 
@@ -145,11 +146,11 @@ it('a revoked share refuses the route and stops the process it carried', async (
   await probe.start();
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
 
-  expect((await probe.viewerFetch(created.share.handle, CLAIM)).status).toBe(200);
+  expect((await probe.viewerFetch(created.share.handle, await probe.accepted(created.share.handle))).status).toBe(200);
 
   await probe.revoke(created.share.id);
 
-  expect((await probe.viewerFetch(created.share.handle, CLAIM)).status).toBe(404);
+  expect((await probe.viewerFetch(created.share.handle, await probe.accepted(created.share.handle))).status).toBe(404);
   expect(await probe.stopped()).toBe(true);
 });
 
@@ -160,11 +161,11 @@ it('a shared slate still serves after the object that ran it is evicted', async 
   await probe().start();
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe().share()).value);
 
-  expect(await probe().viewerFetch(created.share.handle, CLAIM)).toEqual({ status: 200, body: 'share-ok' });
+  expect(await probe().viewerFetch(created.share.handle, await probe().accepted(created.share.handle))).toEqual({ status: 200, body: 'share-ok' });
 
   await abortAllDurableObjects();
 
-  expect(await probe().viewerFetch(created.share.handle, CLAIM)).toEqual({ status: 200, body: 'share-ok' });
+  expect(await probe().viewerFetch(created.share.handle, await probe().accepted(created.share.handle))).toEqual({ status: 200, body: 'share-ok' });
 });
 
 it("a listed share is told to the Gallery when listed, when its slate builds anew, and at each start of the slates", async () => {
@@ -188,7 +189,7 @@ it("shared on each viewer's own access, the slate's server uses no one's connect
   const probe = subject('own-access-share');
   await probe.start();
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share([], 'own')).value);
-  const refused = await probe.viewerRefusals(created.share.handle, CLAIM);
+  const refused = await probe.viewerRefusals(created.share.handle, await probe.accepted(created.share.handle));
 
   // The owner's file is the owner's: the server refuses to read or write it for anyone.
   expect([refused.probe, refused.mutate]).not.toContain('mutate answered');
@@ -203,18 +204,18 @@ it("a mutating member is granted by approval only, and on its owner's access eac
 
   // The unapproved share above refuses the same call: the approval is the grant. Granted, it acts with the owner's
   // access, so it waits on them, with what it would write; the read beside it runs.
-  expect(await probe.viewerBatch(created.share.handle, CLAIM)).toEqual({ probe: 'fixture-bytes', mutateError: expect.stringContaining('waits for the owner to approve it: fs.write on workspace') });
+  expect(await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle))).toEqual({ probe: 'fixture-bytes', mutateError: expect.stringContaining('waits for the owner to approve it: fs.write on workspace') });
   expect(await probe.ownerQueue()).toEqual([{ tool: 'fs.write', server: 'workspace', viewer: 'source:vitest', payload: ['/x', 'y'], revision: expect.any(String) }]);
 
   // On their word it runs, once: the same call made again asks again.
   expect(await probe.ownerDecides(true)).toBe(1);
-  expect(await probe.viewerBatch(created.share.handle, CLAIM)).toEqual({ probe: 'fixture-bytes', mutateError: 'mutate answered' });
-  expect((await probe.viewerBatch(created.share.handle, CLAIM)).mutateError).toContain('waits for the owner to approve it');
+  expect(await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle))).toEqual({ probe: 'fixture-bytes', mutateError: 'mutate answered' });
+  expect((await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle))).mutateError).toContain('waits for the owner to approve it');
   expect(await probe.ownerQueue()).toHaveLength(1);
 
   // Declined, it is refused while the decline stands.
   expect(await probe.ownerDecides(false)).toBe(1);
-  expect((await probe.viewerBatch(created.share.handle, CLAIM)).mutateError).toContain('The owner declined this call');
+  expect((await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle))).mutateError).toContain('The owner declined this call');
 });
 
 it("a viewer's approved write held while its dispatch prepares is never made once its share is revoked or turned to each viewer's own access", async () => {
@@ -225,11 +226,11 @@ it("a viewer's approved write held while its dispatch prepares is never made onc
     const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
       await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
-    await probe.viewerBatch(created.share.handle, CLAIM);
+    await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle));
     expect(await probe.ownerDecides(true)).toBe(1);
 
     // Approved and dispatched; the share changes before the write is sent, so the write is never made.
-    const held = await probe.heldWrite(created.share.handle, CLAIM, created.share.id, change);
+    const held = await probe.heldWrite(created.share.handle, await probe.accepted(created.share.handle), created.share.id, change);
 
     expect({ change, written: held.written, answered: held.mutateError === 'mutate answered' }).toEqual({ change, written: false, answered: false });
   }
@@ -242,18 +243,18 @@ it("the owner's 'Always for this slate' on a viewer's write lets every such writ
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
     await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
-  await probe.viewerBatch(created.share.handle, CLAIM);
+  await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle));
   expect(await probe.ownerAlways()).toBe(1);
 
   // Every later write of that tool on that root runs with nothing asked.
-  expect([await probe.viewerBatch(created.share.handle, CLAIM), await probe.viewerBatch(created.share.handle, CLAIM)])
+  expect([await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle)), await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle))])
     .toEqual([{ probe: 'fixture-bytes', mutateError: 'mutate answered' }, { probe: 'fixture-bytes', mutateError: 'mutate answered' }]);
   expect(await probe.ownerQueue()).toEqual([]);
   expect((await probe.preapprovals()).members).toEqual(['fs.write']);
 
   // The owner's edit is new code: it asks again.
   await probe.editBoard();
-  expect((await probe.viewerBatch(created.share.handle, CLAIM)).mutateError).toContain('waits for the owner to approve it');
+  expect((await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle))).mutateError).toContain('waits for the owner to approve it');
 });
 
 it("an approval taken back on the sheet leaves no approved ask of its shape to run on: the same write asks again", async () => {
@@ -263,7 +264,7 @@ it("an approval taken back on the sheet leaves no approved ask of its shape to r
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }),
     await probe.share([{ namespace: 'workspace', member: 'fs.write' }])).value);
 
-  const write = async () => (await probe.viewerBatch(created.share.handle, CLAIM)).mutateError;
+  const write = async () => (await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle))).mutateError;
 
   // 'Always', the write runs on it, and it is taken back: the very write it was given on asks again.
   await write();
@@ -309,7 +310,7 @@ it("an owner share's approval moves with its owner's own edit, and a review read
   const before = (await shares()).find((row) => row.id === created.share.id);
 
   expect(before).toMatchObject({ mode: 'owner', grantRevision: expect.any(String), stale: false });
-  await probe.viewerBatch(created.share.handle, CLAIM);
+  await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle));
   expect(await probe.ownerQueue()).toHaveLength(1);
 
   // The owner's edit is a new revision their approval carries to; what was asked at the old one is retired.
@@ -318,7 +319,7 @@ it("an owner share's approval moves with its owner's own edit, and a review read
   expect(edited).not.toBe(before?.grantRevision);
   expect((await shares()).find((row) => row.id === created.share.id)).toMatchObject({ mode: 'owner', grantRevision: edited, stale: false });
   expect(await probe.ownerQueue()).toEqual([]);
-  expect((await probe.viewerBatch(created.share.handle, CLAIM)).probe).toBe('fixture-bytes');
+  expect((await probe.viewerBatch(created.share.handle, await probe.accepted(created.share.handle))).probe).toBe('fixture-bytes');
   expect(await probe.setMode(created.share.id, before?.grantRevision ?? '')).toMatchObject({ ok: false, reason: 'bad_input' });
 });
 
@@ -327,7 +328,7 @@ it("revoking a share refuses the next call of a session it admitted", async () =
   await probe.start();
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
 
-  const session = await probe.viewerSocketAcross(created.share.handle, CLAIM, created.share.id, 'revoke');
+  const session = await probe.viewerSocketAcross(created.share.handle, await probe.accepted(created.share.handle), created.share.id, 'revoke');
 
   expect(session.before).toBe('fixture-bytes');
   // The revoke stops the slate, so the session's own next call dies with it; one already in flight is refused.
@@ -340,7 +341,7 @@ it('a share past its daily spend refuses calls as budget and shows paused', asyn
   await probe.start();
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
 
-  const session = await probe.viewerSocketAcross(created.share.handle, CLAIM, created.share.id, 'spend');
+  const session = await probe.viewerSocketAcross(created.share.handle, await probe.accepted(created.share.handle), created.share.id, 'spend');
 
   expect(session.before).toBe('fixture-bytes');
   expect(JSON.parse(session.late)).toMatchObject({ ok: false, reason: 'budget' });
@@ -359,7 +360,7 @@ it('an app hop under a share runs the slate it names and is audited under its im
   const created = v.parse(ShareCreated, v.parse(v.object({ ok: v.literal(true), value: v.unknown() }), await probe.share()).value);
 
   expect(created.share.grant.slates).toContain('digest');
-  expect(await probe.viewerHop(created.share.handle, CLAIM)).toBe('"digest-ok"');
+  expect(await probe.viewerHop(created.share.handle, await probe.accepted(created.share.handle))).toBe('"digest-ok"');
   const rows = v.parse(Requests, await probe.requests(created.share.id)).value;
   expect(rows[0]?.calls).toEqual([{ slate: 'board', namespace: 'slates.digest', member: 'digest', impact: 'observe', ok: true }]);
 });

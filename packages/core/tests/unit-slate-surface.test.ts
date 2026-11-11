@@ -124,7 +124,7 @@ test('what only the agent does is refused before it is routed', () => {
   expect(call(['web', 'browsers'])).toMatchObject({ impact: 'observe' });
 });
 
-const viewer: SlateViewer = { share: 's1', subject: 'user:u7', request: 41 };
+const viewer: SlateViewer = { share: 's1', subject: 'user:u7', request: 41, consented: '' };
 
 const viewerGrant: ShareGrant = {
   slates: ['issues', 'digest'],

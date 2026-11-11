@@ -71,6 +71,28 @@ const ASSISTANT_CONSENT_TITLES = {
 } as const;
 
 /**
+ * What a share's grant reaches of its owner's, accepted on Kinu's own page before any of it runs for this visitor, and
+ * again once it reaches more (the share's host takes this acceptance from Kinu's origin alone, never the app's).
+ */
+export function ReachDecision({ slate, namespaces, onContinue, onClose }: {
+  slate: string;
+  namespaces: readonly string[];
+  onContinue: () => void;
+  onClose: () => void;
+}) {
+  const armed = useArmed();
+
+  return (
+    <Modal title={`${slate} uses its owner's connections`} icon={<PlugIcon size={18} className="p-accent-fg" />} onClose={onClose}
+      footer={<div className="flex justify-end gap-2"><Button size="sm" variant="ghost" onClick={onClose}>Not now</Button><Button variant="primary" size="sm" data-reach-continue disabled={!armed} onClick={onContinue}>Continue</Button></div>}>
+      <p className="t-body p-text-2">It runs in its owner&apos;s workspace and calls these with their credentials:</p>
+      <Lets yes={namespaces.map((namespace) => <span key={namespace}>{serverWords({ server: namespace })}</span>)} no={[]} />
+      <p className="t-meta p-text-3">What you do here runs as its owner and is logged for them.</p>
+    </Modal>
+  );
+}
+
+/**
  * Letting this app's assistant answer the visitor on their own models (core slates/app-agent.ts), at this revision of
  * its code; `reason` says why it is asked again, when it is.
  */

@@ -9,7 +9,7 @@ import { callSharedSlate, consentToShare, type EvalObservation, type EvalSubgoal
 import { JsonValueSchema, LiveShareCreatedSchema, type JsonValue } from '@kinu.run/core';
 import { firstRunCaseId, firstRunCasePlan, type FirstRunDefect, publishFirstRunRecord, runFirstRunCase } from './first-run';
 import { webHeaders } from '../../evals/src/workspace-roster';
-import { shareHost } from './share-entry';
+import { shareEntry } from './share-entry';
 import { executorWords } from '../../evals/src/session';
 
 const SUITE = 'First-run · start-empty';
@@ -73,9 +73,10 @@ END`));
 
         const created = made.ok ? v.safeParse(LiveShareCreatedSchema, await made.json()) : null;
         const copy = created?.success === true ? created.output.share.slate : null;
-        const url = await shareHost(plan.origin, session.workspace, created?.success === true ? created.output.share.id : undefined);
+        const entry = await shareEntry(plan.origin, session.workspace, created?.success === true ? created.output.share.id : undefined);
+        const url = entry?.url ?? null;
         const titled = (await session.listSlates()).slates.find((slate) => slate.id === copy)?.title ?? null;
-        const visitor: SlateViewerAnswer<JsonValue> | null = url === null ? null : await callSharedSlate(url, 'count', JsonValueSchema, await consentToShare(url));
+        const visitor: SlateViewerAnswer<JsonValue> | null = url === null ? null : await callSharedSlate(url, 'count', JsonValueSchema, await consentToShare({ url, origin: entry?.origin ?? '', binding: entry?.binding ?? null }));
         const own = v.safeParse(Answered, await session.slateOp({ op: 'call', id: SLATE, method: 'count', args: [] }));
 
         goals.push({ what: 'share-serves-a-copy', reached: copy !== null && copy !== SLATE && url !== null, detail: JSON.stringify({ status: made.status, copy }) });

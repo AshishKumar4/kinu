@@ -16,7 +16,7 @@ import type { OwnerEffects, ServerSend } from './shared-server';
 import { AGENT_ASK_MEMBER, slateAddressImpact } from './members';
 import { isJsonAnswer, type SlateCallResult, type SlateSurfaceResult } from './rpc';
 import {
-  SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareSpendLabel,
+  SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE, shareGrantKey, shareSpendLabel,
   type LiveShareRecord, type ShareViewerClaim, type ViewerCall,
 } from './sharing';
 import { admitNestedViewerCall, routeViewerCall, SLATE_DRIVEN_MEMBERS, slateCallAddress, type SlateCall, type SlateCallRequest, type SlateInvocation, type SlateRoute, type SlateViewer } from './surface';
@@ -51,8 +51,8 @@ export type ViewerAdmission =
   /** A visitor not yet known signs in at the app, whose ticket brings them back as themselves. */
   | { readonly kind: 'sign-in'; readonly entry: string }
   | { readonly kind: 'too-many' }
-  /** The connections the grant reaches, disclosed before the viewer goes on. */
-  | { readonly kind: 'consent'; readonly share: LiveShareRecord; readonly namespaces: readonly string[] }
+  /** The grant reaches what the viewer has not accepted on Kinu's page: nothing of the owner's runs for them yet. */
+  | { readonly kind: 'consent'; readonly share: LiveShareRecord }
   | { readonly kind: 'admitted'; readonly caller: SlateCaller; readonly share: LiveShareRecord; readonly viewer: SlateViewer };
 
 /**
@@ -119,14 +119,14 @@ export class SlateShareViewers {
 
     // S2: a viewer past the bound is refused; the share is never paused.
     if (this.deps.admitted !== undefined && !await this.deps.admitted(`${share.id}:${subject}`, SHARE_VIEWER_REQUESTS_PER_MINUTE)) return { kind: 'too-many' };
-    const namespaces = [...new Set(share.grant.members.map((member) => member.namespace))];
+    const grant = await shareGrantKey(share.grant);
 
-    // D3: the consent page precedes anything of the owner's running, for named viewers too; a grant reaching nothing
-    // of the owner's has nothing to disclose.
-    if (!input.claim.consented && namespaces.length > 0) return { kind: 'consent', share, namespaces };
+    // D3: what the grant reaches of the owner's is accepted on Kinu's page before anything of theirs runs, for named
+    // viewers too, and again once it reaches more; a grant reaching nothing of the owner's has nothing to accept.
+    if (grant !== '' && input.claim.consented !== grant) return { kind: 'consent', share };
     const request = this.deps.live.openRequest({ share: share.id, viewer: subject, path: input.pathname });
 
-    const viewer: SlateViewer = { share: share.id, subject, request, ...(input.claim.userId !== null && { userId: input.claim.userId }) };
+    const viewer: SlateViewer = { share: share.id, subject, request, consented: grant, ...(input.claim.userId !== null && { userId: input.claim.userId }) };
 
     return { kind: 'admitted', caller: shareCaller(share.id), share, viewer };
   }
@@ -187,6 +187,9 @@ export class SlateShareViewers {
       const share = this.deps.live.live(input.share);
 
       const answered = Effect.gen({ self: this }, function* () {
+        const unaccepted = yield* this.unaccepted(share, viewer);
+
+        if (unaccepted !== null) return unaccepted;
         yield* this.notPaused(share);
         const routed = yield* this.routed(input, share);
         const { call } = routed;
@@ -254,6 +257,9 @@ export class SlateShareViewers {
 
       const answered = Effect.gen({ self: this }, function* () {
         if (id !== share.slate) return yield* new KinuError('denied', `A share's assistant answers for its app, ${share.slate}, alone`);
+        const unaccepted = yield* this.unaccepted(share, viewer);
+
+        if (unaccepted !== null) return unaccepted;
         const owner = this.deps.ownerUserId?.() ?? null;
 
         if (owner === null) return yield* new KinuError('unavailable', 'This app has no owner to lend its assistant');
@@ -316,6 +322,16 @@ export class SlateShareViewers {
   /** What a step of an app agent the owner lends on `share` spent of their model, counted against the share's day. */
   lentSpent(share: string, usage: Usage): void {
     this.debit(this.deps.live.live(share), usage, 0);
+  }
+
+  /**
+   * A refusal the viewer's page acts on where the share's grant reaches more of its owner's than they accepted, the
+   * page open since: Kinu's page shows them what, and runs nothing until they accept it; null where it does not.
+   */
+  private unaccepted(share: LiveShareRecord, viewer: SlateViewer): Effect.Effect<SlateCallResult | null> {
+    return Effect.map(Effect.promise(async () => shareGrantKey(share.grant)), (grant) => (grant === '' || grant === viewer.consented
+      ? null
+      : { ok: false as const, ...refusalOf(new KinuError('denied', 'This app reaches more of its owner\'s than you accepted: see what first')), needs: 'consent' as const }));
   }
 
   /** S2: the per-day spend bound refuses as 'budget'. */

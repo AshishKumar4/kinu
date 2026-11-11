@@ -878,6 +878,16 @@ describe(productFlowTestName('app-agent-flip', 'a share that changes how it lend
     expect(flip.chatsAfterAccepting).toBe(1);
   });
 
+  test('widened with the page open, nothing runs until they accept it on Kinu\'s page, which the app\'s own script cannot do', () => {
+    const { widened } = verdictOf(observed, 'app-agent-flip');
+
+    expect(widened.calledBefore, JSON.stringify(widened)).toStartWith('refused:');
+    expect(widened.reachSheet, JSON.stringify(widened)).toBe(true);
+    expect(widened.namespaces).toContain('workspace');
+    expect(widened.appPosted, JSON.stringify(widened)).toBe(404);
+    expect(widened.calledAfter, JSON.stringify(widened)).toBe(APP_AGENT_SLATE.stop);
+  });
+
   test('switched back to their own access, the next ask asks for their consent again', () => {
     const { backToOwn } = verdictOf(observed, 'app-agent-flip');
 

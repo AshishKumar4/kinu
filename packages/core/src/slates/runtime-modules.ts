@@ -1,7 +1,7 @@
 /** Authored-facing `kinu:slate` modules: `server.js` under `/usr/lib/kinu/slate/`, `client.js` at `/__kinu/slate.js`. */
 
 import { PREFERS_LIGHT } from '../utils/color-mode';
-import { SLATE_BRIDGE_ATTRIBUTE, SLATE_HOST_CONTEXT_MESSAGE, SLATE_NEEDS_IDENTITY_MESSAGE, SLATE_QUERY_PARAM, SLATE_RESTARTED_REASON, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
+import { SLATE_BRIDGE_ATTRIBUTE, SLATE_HOST_CONTEXT_MESSAGE, SLATE_NEEDS_CONSENT_MESSAGE, SLATE_NEEDS_IDENTITY_MESSAGE, SLATE_QUERY_PARAM, SLATE_RESTARTED_REASON, SLATE_SIZE_CHANGED_MESSAGE } from './host-context';
 
 /** The prototype marker lets the runner verify the contract without importing this module twice. Client-only names throw on the server. */
 export const SLATE_SERVER_MODULE = `export class SlateObject {
@@ -145,8 +145,9 @@ async function asked(call) {
   try {
     return await call;
   } catch (cause) {
-    if (cause !== null && typeof cause === "object" && cause.needs === "identity" && window.parent !== window && hostOrigin !== null) {
-      window.parent.postMessage({ kinu: "${SLATE_NEEDS_IDENTITY_MESSAGE}" }, hostOrigin);
+    const need = cause !== null && typeof cause === "object" ? { identity: "${SLATE_NEEDS_IDENTITY_MESSAGE}", consent: "${SLATE_NEEDS_CONSENT_MESSAGE}" }[cause.needs] : undefined;
+    if (need !== undefined && window.parent !== window && hostOrigin !== null) {
+      window.parent.postMessage({ kinu: need }, hostOrigin);
     }
     throw cause;
   }

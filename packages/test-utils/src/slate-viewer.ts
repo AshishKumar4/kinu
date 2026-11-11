@@ -7,10 +7,19 @@ import { renderThrownChain, settle } from '@kinu.run/core/obs';
 
 export type SlateViewerAnswer<Value> = { readonly value: Value } | { readonly error: string };
 
-/** Presses a credentialed share's consent Continue (GET → 303 + cookie) and returns the viewer cookie. */
-export function consentToShare(url: string): Promise<string> {
+/**
+ * Enters a share as a visitor with no account, as Kinu's share page does (a post into its frame from Kinu's own origin):
+ * accepting what its grant reaches with the open answer's `binding`, or, reaching nothing, saying no account. The viewer
+ * cookie.
+ */
+export function consentToShare(entry: { readonly url: string; readonly origin: string; readonly binding: string | null }): Promise<string> {
   return settle(Effect.gen(function* () {
-    const response = yield* Effect.promise(async () => fetch(new URL(`${VIEWER_EXCHANGE_PATH}?consent=1`, url), { redirect: 'manual' }));
+    const { url, origin, binding } = entry;
+
+    const response = yield* Effect.promise(async () => fetch(new URL(VIEWER_EXCHANGE_PATH, url), {
+      method: 'POST', redirect: 'manual', body: new URLSearchParams(binding === null ? { out: '1' } : { consent: binding }),
+      headers: { origin: new URL(origin).origin, 'content-type': 'application/x-www-form-urlencoded' },
+    }));
 
     const cookie = response.headers.get('set-cookie')?.split(';')[0];
 

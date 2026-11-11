@@ -72,7 +72,7 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
     return viewers.call({
       share: 's1', id: slate, chain,
       request: { path: member.split('.'), args, invocation: null, ...(options.authorize && { authorize: options.authorize }) },
-      issued: { id: slate, chain, incarnation: 'p1', generations: {}, viewer: { share: 's1', subject, request: live.openRequest({ share: 's1', viewer: subject, path: '/' }) } },
+      issued: { id: slate, chain, incarnation: 'p1', generations: {}, viewer: { share: 's1', subject, consented: '', request: live.openRequest({ share: 's1', viewer: subject, path: '/' }) } },
       gate: (routed) => servers.gate({ slate, chain, address: routed.address, effect: routed.effect, args, on: subject }),
       bound: (address) => servers.bounded({ slate, chain, address }),
       run: async (_route, _nested, admit) => {
