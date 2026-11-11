@@ -9,7 +9,7 @@ import { Effect } from 'effect';
 import type { Frame, Page } from 'puppeteer';
 import * as v from 'valibot';
 import { detach } from '@kinu.run/core/obs';
-import { SLATE_QUERY_PARAM } from '@kinu.run/core';
+import { SLATE_QUERY_PARAM, VIEWER_EXCHANGE_PATH } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
@@ -64,6 +64,25 @@ const ONE_FRAME_THROUGHOUT = { lengths: [1], replaced: false };
 
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
   const page = await gallery.newPage();
+
+  // The share's host, answered as the real one answers Kinu's post into its frame: on to the slate's page, its context
+  // kept (slate-share-route.ts). The gallery's own server answers no post.
+  await page.setRequestInterception(true);
+  page.on('request', (request) => detach(Effect.promise(async () => {
+    const url = new URL(request.url());
+
+    if (request.method() !== 'POST' || url.pathname !== VIEWER_EXCHANGE_PATH) {
+      await request.continue();
+
+      return;
+    }
+
+    // The gallery's `SHARED_SLATE_PAGE` (gallery-parts.tsx): the slate's page as its host serves it.
+    const slate = new URL('/gallery.html?frame=shared-slate-page', url.origin);
+
+    for (const [key, value] of url.searchParams) slate.searchParams.set(key, value);
+    await request.respond({ status: 303, headers: { location: slate.toString() } });
+  })));
 
   await page.setViewport(VIEWPORTS[viewport]);
   await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
@@ -298,7 +317,11 @@ describe("a slate's personal parts", () => {
 
           // The slate's page is framed with its host context, as the owner's previews frame it: the app's origin its page
           // frames its parts from, and this page's theme.
-          const framed = new URL(await page.$eval('[data-shared-slate="team-board"]', (node) => node.getAttribute('src') ?? ''));
+          // Where the frame landed past the host's exchange, which keeps the context it was posted with.
+          const landed = 'document.querySelector(\'[data-shared-slate="team-board"]\')?.contentWindow?.location.href ?? ""';
+
+          await page.waitForFunction(`(${landed}).includes("frame=")`);
+          const framed = new URL(v.parse(v.string(), await page.evaluate(landed)));
           const context: unknown = JSON.parse(framed.searchParams.get(SLATE_QUERY_PARAM) ?? 'null');
 
           expect(context).toMatchObject({ origin: new URL(page.url()).origin, theme, display: 'pane' });
