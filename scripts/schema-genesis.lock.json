@@ -314,6 +314,13 @@
     "created_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "app_agent_chats@packages/core/src/slates/live-shares.ts": [
+    "slate TEXT NOT NULL",
+    "share_id TEXT NOT NULL",
+    "viewer_subject TEXT NOT NULL",
+    "created_at INTEGER NOT NULL",
+    "PRIMARY KEY (slate, share_id, viewer_subject)"
+  ],
   "artifact_versions@packages/core/src/evolution/artifact-schema.ts": [
     "actor_id TEXT NOT NULL",
     "artifact_id TEXT NOT NULL",
@@ -1394,12 +1401,6 @@
     "id TEXT PRIMARY KEY",
     "slate_id TEXT NOT NULL",
     "bytes BLOB NOT NULL"
-  ],
-  "slate_share_chats@packages/core/src/slates/live-shares.ts": [
-    "share_id TEXT NOT NULL",
-    "viewer_subject TEXT NOT NULL",
-    "created_at INTEGER NOT NULL",
-    "PRIMARY KEY (share_id, viewer_subject)"
   ],
   "slate_share_guests@packages/core/src/slates/live-shares.ts": [
     "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",

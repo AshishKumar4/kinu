@@ -4,8 +4,8 @@ import * as v from 'valibot';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   SlateController, type SlateControllerPorts, heldSlateKey, initEphemeralSlateTable, initSlateLiveShareTables, initSlateUsageTable, slateStorageCall,
-  ROOT_SLATE_CALLER, shareCaller, slateAnswer, SlateShareChats, appAgentAsk, asksAppAgent, lentConversation, ownConversation, ownerConversation, slateRevision, visitorLabel,
-  type AppAgentAbout, type AppAgentConversation, type AppAgentPayer, type AppAgentSession, type ShareChat, type AppAgentEntry, type ServerSend, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateCallFrom, type SlateLaunch, type SlateLineage, type ToolContract,
+  ROOT_SLATE_CALLER, shareCaller, slateAnswer, AppAgentChats, appAgentAsk, asksAppAgent, lentConversation, ownConversation, ownerConversation, slateRevision, visitorLabel,
+  type AppAgentAbout, type AppAgentConversation, type LentChat, type AppAgentPayer, type AppAgentSession, type ShareChat, type AppAgentEntry, type ServerSend, type SlateAppCall, type SlateApps, type SlateBuilds, type SlateCaller, type SlateCallFrom, type SlateLaunch, type SlateLineage, type ToolContract,
 } from '@kinu.run/core/slates';
 import {
   ephemeralSlateAddress, ingressAdmitted, onceMoreIfNotAdmitted, slateTitle, SLATE_STORAGE_BINDING, SLATE_HOST_BINDING,
@@ -193,7 +193,7 @@ export class SlateHost {
     initSlateLiveShareTables((ddl) => { sql.exec(ddl); });
     initEphemeralSlateTable((ddl) => { sql.exec(ddl); });
     initSlateUsageTable((ddl) => { sql.exec(ddl); });
-    this.chats = new SlateShareChats(sql);
+    this.chats = new AppAgentChats(sql);
     this.controller = new SlateController({
       workspace: deps.workspace, sql, builds: deps.builds, transaction: (body) => deps.ctx.storage.transactionSync(body),
       session: deps.session, apps: deps.apps,
@@ -461,7 +461,7 @@ export class SlateHost {
   }
 
   /** The workspace's My-access conversations, which their owner may read (core slates/app-agent.ts). */
-  private readonly chats: SlateShareChats;
+  private readonly chats: AppAgentChats;
 
   /** Each share's asks whose replies are being written now: what its end stops at once. */
   private readonly openAsks = new Map<string, Map<string, AppAgentConversation>>();
@@ -503,7 +503,8 @@ export class SlateHost {
     return this.appAgentReply(conversation, args, new AppAgentSessionTarget({
       about: async () => this.appAbout(callsAs, id, "the app's owner"),
       call: async (method, called) => this.call({ caller: callsAs, id, method, args: called, agent: id }),
-      admit: () => {},
+      // Listed once it is first asked, so what ends the slate or the workspace finds it.
+      admit: () => { this.chats.record({ slate: id, share: '', subject: '' }); },
       spent: () => {},
     }), this.revisionOf(id));
   }
@@ -543,7 +544,7 @@ export class SlateHost {
       sameCode();
 
       // Listed for the owner once the share first admits it: a refused ask leaves no chat.
-      if (lent) this.chats.record(share.id, subject);
+      if (lent) this.chats.record({ slate: share.slate, share: share.id, subject });
     };
 
     const session = new AppAgentSessionTarget({
@@ -584,28 +585,40 @@ export class SlateHost {
     this.openAsks.delete(share);
     await Promise.all(stopping.map(async (conversation) => settleLogged('app_agent.stop_failed', { doing: 'stopping an app agent\'s ask', otherwise: 'unavailable' },
       async () => { await this.deps.appAgentObject?.(conversation).stop(); }, { share })));
-    await this.endLentChats(share, this.chats.of(share).map((chat) => chat.subject));
+    const slate = this.controller.live.get(share)?.slate;
+
+    if (slate !== undefined) await this.endChats(this.chats.of(share).map(({ subject }) => ({ slate, share, subject })));
   }
 
-  /** The conversations the owner lent on `share` to `subjects`, ended, each forgotten once it has; one that fails stays listed. */
-  private async endLentChats(share: string, subjects: readonly string[]): Promise<void> {
+  /**
+   * Conversations the owner lent their model to, ended a few at a time (a popular share's are many objects, and one
+   * request reaches only so many), each forgotten once it has; one that fails stays listed, and readable.
+   */
+  private async endChats(chats: readonly LentChat[]): Promise<void> {
     const owner = this.deps.ownerUserId?.() ?? null;
-    const record = this.controller.live.get(share);
 
-    if (owner === null || record === undefined) return;
+    if (owner === null) return;
 
-    // A few at a time: a popular share's chats are many objects, and one request reaches only so many.
-    for (let at = 0; at < subjects.length; at += ENDS_AT_ONCE) {
-      await Promise.all(subjects.slice(at, at + ENDS_AT_ONCE).map(async (subject) => settleLogged('app_agent.end_failed', { doing: 'ending a conversation an app agent had', otherwise: 'unavailable' }, async () => {
-        await this.deps.appAgentObject?.(lentConversation(owner, { workspace: this.deps.workspace, slate: record.slate, share, subject })).end();
-        this.chats.forget(share, subject);
-      }, { share })));
+    for (let at = 0; at < chats.length; at += ENDS_AT_ONCE) {
+      await Promise.all(chats.slice(at, at + ENDS_AT_ONCE).map(async (chat) => settleLogged('app_agent.end_failed', { doing: 'ending a conversation an app agent had', otherwise: 'unavailable' }, async () => {
+        const conversation = chat.share === '' ? ownerConversation(owner, this.deps.workspace, chat.slate) : lentConversation(owner, { workspace: this.deps.workspace, ...chat });
+
+        await this.deps.appAgentObject?.(conversation).end();
+        this.chats.forget(chat);
+      }, { slate: chat.slate })));
     }
   }
 
   /** A deleted account's conversations the owner lent it here end: `viewers` names each share and its key for them. */
   private async forgetChatsOf(viewers: readonly { readonly share: string; readonly viewer: string }[]): Promise<void> {
-    await Promise.all(viewers.map(async ({ share, viewer }) => this.endLentChats(share, [`viewer:${viewer}`])));
+    const chats = viewers.flatMap(({ share, viewer }): LentChat[] => {
+      const slate = this.controller.live.get(share)?.slate;
+      const chat = { slate: slate ?? '', share, subject: `viewer:${viewer}` };
+
+      return slate !== undefined && this.chats.has(chat) ? [chat] : [];
+    });
+
+    await this.endChats(chats);
   }
 
   /** `slate`'s code's revision now, which a visitor's consent to its app agent names. */
@@ -615,16 +628,12 @@ export class SlateHost {
 
   /** The owner's own conversation with `slate`'s app agent ends with the slate. */
   private async forgetAppAgent(slate: string): Promise<void> {
-    const owner = this.deps.ownerUserId?.() ?? null;
-
-    if (owner !== null) await this.deps.appAgentObject?.(ownerConversation(owner, this.deps.workspace, slate)).end();
+    await this.endChats(this.chats.owners(slate));
   }
 
   /** The owner's own conversations with each app's agent end, as the workspace does; its shares' end with them. */
   async endOwnAppAgents(): Promise<void> {
-    const { slates } = await this.controller.list(ROOT_SLATE_CALLER);
-
-    await Promise.all(slates.map(async (slate) => this.forgetAppAgent(slate.id)));
+    await this.endChats(this.chats.owners());
   }
 
   /** `share`'s My-access conversations, newest first, for its owner's share sheet. */
@@ -637,7 +646,7 @@ export class SlateHost {
     const owner = this.deps.ownerUserId?.() ?? null;
     const record = this.controller.live.get(share);
 
-    if (owner === null || record === undefined || !this.chats.has(share, subject)) return [];
+    if (owner === null || record === undefined || !this.chats.has({ slate: record.slate, share, subject })) return [];
 
     return await this.deps.appAgentObject?.(lentConversation(owner, { workspace: this.deps.workspace, slate: record.slate, share, subject })).transcript() ?? [];
   }

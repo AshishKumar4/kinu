@@ -247,31 +247,49 @@ export interface ShareChat {
   readonly startedAt: number;
 }
 
+/** One conversation the owner lent their model to: the app, and the share and visitor ('' and '' for their own). */
+export interface LentChat {
+  readonly slate: string;
+  readonly share: string;
+  readonly subject: string;
+}
+
 /**
- * The My-access conversations of the workspace's shares (`slate_share_chats`), which their owner may read: written at
- * a visitor's first ask, read by the share sheet, and forgotten with the share. A visitor's own conversation is in none.
+ * The conversations an app's agent had on the workspace owner's model (`app_agent_chats`): the owner's own and each
+ * My-access visitor's, which the owner may read. What ends them finds their objects here; a visitor's own is in none.
  */
-export class SlateShareChats {
+export class AppAgentChats {
   constructor(private readonly db: SqlExec, private readonly now: () => number = () => Date.now()) {}
 
-  record(share: string, subject: string): void {
-    this.db.exec('INSERT INTO slate_share_chats (share_id, viewer_subject, created_at) VALUES (?, ?, ?) ON CONFLICT (share_id, viewer_subject) DO NOTHING', share, subject, this.now());
+  record(chat: LentChat): void {
+    this.db.exec('INSERT INTO app_agent_chats (slate, share_id, viewer_subject, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (slate, share_id, viewer_subject) DO NOTHING',
+      chat.slate, chat.share, chat.subject, this.now());
   }
 
-  has(share: string, subject: string): boolean {
-    return this.db.exec('SELECT 1 FROM slate_share_chats WHERE share_id = ? AND viewer_subject = ?', share, subject).toArray().length > 0;
+  has(chat: LentChat): boolean {
+    return this.db.exec('SELECT 1 FROM app_agent_chats WHERE slate = ? AND share_id = ? AND viewer_subject = ?', chat.slate, chat.share, chat.subject).toArray().length > 0;
   }
 
+  /** A share's visitors' chats, newest first, as its owner's share sheet lists them. */
   of(share: string): ShareChat[] {
-    return this.db.exec('SELECT viewer_subject AS subject, created_at FROM slate_share_chats WHERE share_id = ? ORDER BY created_at DESC', share).toArray().map((raw) => {
+    return this.db.exec('SELECT viewer_subject AS subject, created_at FROM app_agent_chats WHERE share_id = ? ORDER BY created_at DESC', share).toArray().map((raw) => {
       const row = v.parse(ChatRow, raw);
 
       return { subject: row.subject, label: visitorLabel(row.subject), startedAt: row.created_at };
     });
   }
 
+  /** The owner's own chats, `slate`'s alone where named. */
+  owners(slate?: string): LentChat[] {
+    const rows = slate === undefined
+      ? this.db.exec("SELECT slate FROM app_agent_chats WHERE share_id = ''")
+      : this.db.exec("SELECT slate FROM app_agent_chats WHERE share_id = '' AND slate = ?", slate);
+
+    return rows.toArray().map((raw) => ({ slate: v.parse(v.object({ slate: v.string() }), raw).slate, share: '', subject: '' }));
+  }
+
   /** One forgotten, once its conversation ended. */
-  forget(share: string, subject: string): void {
-    this.db.exec('DELETE FROM slate_share_chats WHERE share_id = ? AND viewer_subject = ?', share, subject);
+  forget(chat: LentChat): void {
+    this.db.exec('DELETE FROM app_agent_chats WHERE slate = ? AND share_id = ? AND viewer_subject = ?', chat.slate, chat.share, chat.subject);
   }
 }

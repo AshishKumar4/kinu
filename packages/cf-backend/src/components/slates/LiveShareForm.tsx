@@ -596,9 +596,9 @@ interface ShareChoicesState {
 }
 
 /** What one share asks of a person, by the slate's reach: requests a minute each, and model spend a day where it reaches. */
-/** A My-access share spends the owner's model, its assistant's at least; on their own access, each person spends theirs. */
-function limitsWords(lends: boolean): string {
-  return lends
+/** The share's model spend is bounded wherever it reaches a model: always on My access, whose assistant runs on the owner's. */
+function limitsWords(graph: SlateReach, lends: boolean): string {
+  return lends || graph.namespaces.length > 0
     ? `Each person gets ${String(SHARE_VIEWER_REQUESTS_PER_MINUTE)} requests a minute; the share gets $${String(SHARE_SPEND_CAP_USD_PER_DAY)} of model spend a day.`
     : `Each person gets ${String(SHARE_VIEWER_REQUESTS_PER_MINUTE)} requests a minute.`;
 }
@@ -634,7 +634,7 @@ function ShareChoices({ choices, set, first, reviewing, reach, busy }: {
           }} />}
           <ModeChoice value={mode} onChange={set.mode} disabled={busy || reviewing} unbuilt={graph !== null && graph.revision === null} emptyCopy={start === "empty"} />
           {mode === "owner" && <OwnerReach graph={graph} failed={reach.failed} visibility={reach.visibility} approved={reach.approved} onToggle={reach.onToggle} disabled={busy} />}
-          {graph !== null && <p className="t-meta p-text-3" data-share-limits>{limitsWords(mode === "owner")}</p>}
+          {graph !== null && <p className="t-meta p-text-3" data-share-limits>{limitsWords(graph, mode === "owner")}</p>}
         </div>
       )}
     </>
