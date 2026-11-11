@@ -2805,14 +2805,16 @@ async function askTheApp(page: Page, frame: Frame): Promise<AppAsked> {
 }
 
 /**
- * Presses one of the app's plain-call buttons (`data-call`, `data-count`) and reads its output (`data-called`,
- * `data-counted`) once it settles: what its server's method answered, or why it was refused.
+ * Presses one of the app's plain-call buttons (`data-call`, `data-count`, `data-note`) and reads its output
+ * (`data-called`, `data-counted`, `data-noted`) once it settles: what its server's method answered, or why it was
+ * refused. `by`: the person's pointer, or the app's own script, which a sheet over the frame does not stop (a pointer
+ * there presses the sheet's scrim, closing it).
  */
-async function callTheApp(page: Page, frame: Frame, which: 'call' | 'count' | 'note' = 'call'): Promise<string> {
+async function callTheApp(page: Page, frame: Frame, which: 'call' | 'count' | 'note' = 'call', by: 'pointer' | 'script' = 'pointer'): Promise<string> {
   const output = `[data-${{ call: 'called', count: 'counted', note: 'noted' }[which]}]`;
   const giveUpAt = v.parse(v.number(), await frame.evaluate('performance.now()')) + ASK_SETTLES_MS;
 
-  await frame.click(`[data-${which}]`);
+  await (by === 'pointer' ? frame.click(`[data-${which}]`) : frame.evaluate(`document.querySelector("[data-${which}]").click()`));
   await waitOn(page, 'the app\'s call to settle', frame.waitForFunction(`(document.querySelector(${JSON.stringify(output)})?.textContent ?? "") !== "" || performance.now() > ${String(giveUpAt)}`, { polling: 100 }));
   const shown = v.parse(v.string(), await frame.evaluate(`document.querySelector(${JSON.stringify(output)})?.textContent ?? ""`));
 
@@ -3218,7 +3220,8 @@ async function widenWithThePageOpen(target: FlowTarget, page: Page, at: { readon
   const binding = v.parse(v.object({ consent: v.optional(v.nullable(v.object({ binding: v.string() }))) }), await opened.json()).consent?.binding ?? null;
   const app = await appFrameNow(page);
   const appPosted = binding === null ? 0 : v.parse(v.number(), await app.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ consent: ${JSON.stringify(binding)} }) }).then((answer) => answer.status)`));
-  const notedAfterAppPosted = await callTheApp(page, app, 'note');
+  // The app's own script, the sheet up over its frame.
+  const notedAfterAppPosted = await callTheApp(page, app, 'note', 'script');
 
   if (!reachSheet) return { notedBefore, reachSheet, reachShown, appPosted, notedAfterAppPosted, notedAfter: '', calledAfter: '' };
   await shoot(page, 'reach-sheet');
