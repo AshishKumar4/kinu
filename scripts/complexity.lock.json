@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-11-11",
-  "files": 3982,
-  "functions": 105765,
+  "files": 3983,
+  "functions": 105830,
   "ceiling": 87,
   "line": 24,
   "inventory": [
@@ -406,10 +406,6 @@
       "complexity": 25
     },
     {
-      "key": "tests/first-run/users-share.first-run.ts#enteredAsNamed",
-      "complexity": 25
-    },
-    {
       "key": "tools/oxlint/anti-slop/rules/no-ambient-bun-in-tests.ts#importedSpawner",
       "complexity": 25
     },
@@ -611,6 +607,10 @@
     },
     {
       "key": "scripts/worker-heap/driver.ts#fetch",
+      "complexity": 24
+    },
+    {
+      "key": "tests/first-run/users-share.first-run.ts#enteredAsNamed",
       "complexity": 24
     },
     {
