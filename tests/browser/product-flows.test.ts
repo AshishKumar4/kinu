@@ -851,8 +851,8 @@ describe(productFlowTestName('app-agent-flip', 'a share that changes how it lend
   test('switched to My access with the page open, the next ask runs nothing and asks them to accept that the owner reads it', () => {
     const flip = verdictOf(observed, 'app-agent-flip');
 
-    expect(flip.own.reply).toContain(APP_AGENT_SLATE.stop);
-    expect(flip.toLent.asked.reply).toBe('');
+    expect(flip.own.reply, JSON.stringify(flip)).toContain(APP_AGENT_SLATE.stop);
+    expect(flip.toLent.asked.reply, JSON.stringify(flip.toLent)).toBe('');
     expect(flip.toLent.sheet).toMatchObject({ continue: true, allow: false });
     expect(flip.toLent.lentBar).toBe(true);
     expect(flip.chatsBeforeAccepting).toBe(0);
@@ -861,14 +861,14 @@ describe(productFlowTestName('app-agent-flip', 'a share that changes how it lend
   test('once they accept, the owner\'s model answers, into a chat the owner reads', () => {
     const flip = verdictOf(observed, 'app-agent-flip');
 
-    expect(flip.lent.asked.reply).toContain(APP_AGENT_SLATE.stop);
+    expect(flip.lent.asked.reply, JSON.stringify(flip.lent)).toContain(APP_AGENT_SLATE.stop);
     expect(flip.chatsAfterAccepting).toBe(1);
   });
 
   test('switched back to their own access, the next ask asks for their consent again', () => {
     const { backToOwn } = verdictOf(observed, 'app-agent-flip');
 
-    expect(backToOwn.asked.reply).toBe('');
+    expect(backToOwn.asked.reply, JSON.stringify(backToOwn)).toBe('');
     expect(backToOwn.sheet).toMatchObject({ allow: true });
     expect(backToOwn.lentBar).toBe(false);
   });
