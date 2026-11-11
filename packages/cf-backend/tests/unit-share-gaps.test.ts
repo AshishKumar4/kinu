@@ -245,6 +245,15 @@ async function consentOf(world: World, share: string): Promise<{ reach: { namesp
   return present(opened.consent, 'what the grant reaches');
 }
 
+/** Whether a visit was let in: its request is audited (no slate process boots here, so an admitted one answers no page). */
+async function letIn(world: World, share: string, visited: () => Promise<Response | null | undefined>): Promise<boolean> {
+  const audited = async () => answered(await world.owner.agent.slate({ op: 'viewerRequests', share }), v.array(v.looseObject({}))).length;
+  const before = await audited();
+  const status = (await visited())?.status;
+
+  return status !== 404 && status !== 303 && await audited() > before;
+}
+
 /** The viewer cookie Kinu's page's acceptance of `share`'s grant mints, from `ip`. */
 async function acceptedCookie(world: World, url: string, share: string, ip: string): Promise<string> {
   const accepted = await handleSlateShareHostRequest(exchangePost(`${url}${EXCHANGE_PATH}`, { consent: (await consentOf(world, share)).binding }, ip), world.env);
@@ -296,6 +305,39 @@ test('a share host takes who its visitor is from Kinu\'s own page alone: never a
 
   expect([out?.status, subjectOf(out) === VIEWER_ID, subjectOf(out).startsWith('anon:')]).toEqual([303, false, false]);
   expect([anonymousOver?.status, subjectOf(anonymousOver) === VIEWER_ID, subjectOf(anonymousOver).startsWith('anon:')]).toEqual([303, false, true]);
+});
+
+test('an acceptance posted beside a ticket is that person\'s, a bad one lands no one, and going on anonymously keeps it', async () => {
+  const world = await twoUserWorld();
+  cleanups.push(world.close);
+
+  const created = await sharedOnMyAccess(world);
+  const url = await hostOf(world, created.share.handle);
+  const exchange = `${url}${EXCHANGE_PATH}`;
+  const { binding } = await consentOf(world, created.share.id);
+  const opened = await jsonBody(present(await openShare(world, { workspace: 'issues-owner', share: created.share.id }, 'pat@example.test'), 'the open answer'), LiveShareOpenSchema);
+  const ticket = present(opened.ticket, 'the ticket');
+  // The cookie's value: who the host takes the browser to be, and what of the owner's they accepted.
+  const cookieOf = (answer: Response | null) => answer?.headers.get('set-cookie')?.split(';')[0] ?? '';
+  const partOf = (answer: Response | null, at: number) => cookieOf(answer).split('=')[1]?.split('.')[at] ?? '';
+  const subjectOf = (answer: Response | null) => partOf(answer, 0);
+  const acceptedOf = (answer: Response | null) => partOf(answer, 2);
+
+  const both = await handleSlateShareHostRequest(exchangePost(exchange, { ticket, consent: binding }, '203.0.113.30'), world.env);
+  const forged = await handleSlateShareHostRequest(exchangePost(exchange, { ticket, consent: binding.replace(/\.[^.]+$/u, '.forged') }, '203.0.113.30'), world.env);
+
+  expect([both?.status, subjectOf(both), acceptedOf(both) !== '']).toEqual([303, VIEWER_ID, true]);
+  expect([forged?.status, cookieOf(forged)]).toEqual([404, '']);
+
+  // Signed out, accepted, then on anonymously: a new subject, the same acceptance.
+  const accepted = await handleSlateShareHostRequest(exchangePost(exchange, { consent: binding }, '203.0.113.31'), world.env);
+
+  const onAnonymously = await handleSlateShareHostRequest(new Request(exchange, {
+    method: 'POST', body: new URLSearchParams({ anonymous: '1' }), headers: { origin: APP_ORIGIN, cookie: cookieOf(accepted), 'cf-connecting-ip': '203.0.113.31', 'content-type': 'application/x-www-form-urlencoded' },
+  }), world.env);
+
+  expect([onAnonymously?.status, subjectOf(onAnonymously).startsWith('anon:'), acceptedOf(onAnonymously)]).toEqual([303, true, acceptedOf(accepted)]);
+  expect(acceptedOf(accepted)).not.toBe('');
 });
 
 test('S2: the per-viewer request bound refuses past its limit, per viewer and on the exchange', async () => {
@@ -510,7 +552,7 @@ test('a users share link sends each visitor to sign in, then lets in its owner a
 
   // Each follows the link as a browser does: to the app's page for the share, whose open hands them a ticket and names
   // the slate it frames; to anyone else it says nothing of the share.
-  const openAs = async (identity: AuthIdentity, ip: string): Promise<readonly [number, number | undefined]> => {
+  const openAs = async (identity: AuthIdentity, ip: string): Promise<readonly [number, boolean | undefined]> => {
     const sent = present(await visit(world, url, ip), 'the first visit');
     const page = new URL(present(sent.headers.get('location'), 'where the first visit was sent'));
 
@@ -525,11 +567,11 @@ test('a users share link sends each visitor to sign in, then lets in its owner a
     const exchanged = await handleSlateShareHostRequest(exchangePost(`${entry.url}${EXCHANGE_PATH}`, { ticket: present(entry.ticket, 'the ticket') }, ip), world.env);
     const cookie = present(exchanged?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
 
-    return [opened.status, (await visit(world, url, ip, { cookie }))?.status];
+    return [opened.status, await letIn(world, created.share.id, async () => await visit(world, url, ip, { cookie }))];
   };
 
-  expect(await openAs(identityOf(OWNER_ID, 'owner@example.test'), '203.0.113.5')).toEqual([200, 200]);
-  expect(await openAs(identityOf(VIEWER_ID, 'pat@example.test'), '203.0.113.6')).toEqual([200, 200]);
+  expect(await openAs(identityOf(OWNER_ID, 'owner@example.test'), '203.0.113.5')).toEqual([200, true]);
+  expect(await openAs(identityOf(VIEWER_ID, 'pat@example.test'), '203.0.113.6')).toEqual([200, true]);
   expect(await openAs(identityOf('00112233445566778899aabbccddeeff', 'sam@example.test'), '203.0.113.7')).toEqual([404, undefined]);
 });
 
@@ -600,7 +642,7 @@ test('D2: one revoke route ends a public live share and a blueprint link', async
   const live = await jsonBody(liveResp, v.object({ share: v.object({ id: v.string(), handle: v.string() }), url: v.nullable(v.string()) }));
   const url = await hostOf(world, live.share.handle);
 
-  expect((await visit(world, url, '203.0.113.9'))?.status).toBe(200);
+  expect(await letIn(world, live.share.id, async () => await visit(world, url, '203.0.113.9'))).toBe(true);
   expect((await revoke(live.share.id))?.status).toBe(200);
   expect((await visit(world, url, '203.0.113.9'))?.status).toBe(404);
 
@@ -1131,7 +1173,10 @@ test("a viewer's cookie acts on its share only from the share's own origin: a si
     if (init.upgrade) headers.set('upgrade', 'websocket');
     const request = new Request(`${url}__rpc`, init.upgrade ? { headers } : { method: 'POST', headers, body: '[]' });
 
-    return present(await handleSlateShareHostRequest(request, world.env), 'the share host answer').status;
+    const answer = present(await handleSlateShareHostRequest(request, world.env), 'the share host answer');
+
+    // Refused for want of the visitor's acceptance, not for where it came from.
+    return answer.headers.get(SLATE_NEEDS_HEADER) === 'consent' ? 'needs consent' : answer.status;
   };
 
   // A hostile sibling preview is same-site, so the victim's cookie rides along; only the share's own origin acts with it.
@@ -1139,8 +1184,8 @@ test("a viewer's cookie acts on its share only from the share's own origin: a si
   expect(await send({ cookie, origin: 'https://hostile-preview.share.test', upgrade: true })).toBe(403);
   expect(await send({ cookie })).toBe(403);
   expect(await send({ cookie, origin: own })).not.toBe(403);
-  // With no cookie a request acts as no one in particular, from wherever it comes.
-  expect(await send({ origin: 'https://hostile-preview.share.test' })).not.toBe(403);
+  // With no cookie a request acts as no one in particular, from wherever it comes: one who has accepted nothing yet.
+  expect(await send({ origin: 'https://hostile-preview.share.test' })).toBe('needs consent');
 });
 
 test("a share's one link is the app's page for it: a public share opens there signed out, a named one asks to sign in", async () => {
