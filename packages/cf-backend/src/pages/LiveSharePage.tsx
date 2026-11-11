@@ -73,6 +73,28 @@ async function assistantState(workspace: string, share: string): Promise<Assista
 const SHARED_FRAME = "kinu-shared-slate";
 
 /**
+ * One field posted into the frame named `frame`, as a form of this page submits it: a navigation whose Origin is this
+ * page's, the one the share's host takes who its visitor is from (slate-share-route.ts). Built and gone at once, it is
+ * no element of the page's own.
+ */
+function postIntoFrame(action: string, frame: string, field: { readonly name: string; readonly value: string }): void {
+  const form = document.createElement("form");
+  const input = document.createElement("input");
+
+  form.method = "post";
+  form.action = action;
+  form.target = frame;
+  form.hidden = true;
+  input.type = "hidden";
+  input.name = field.name;
+  input.value = field.value;
+  form.append(input);
+  document.body.append(form);
+  form.submit();
+  form.remove();
+}
+
+/**
  * The share's slate, framed with its host context as the owner's previews frame it, so its page knows the app it answers
  * to and frames its parts from; and the parts it hosts, a decision opening over it.
  */
@@ -85,14 +107,13 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
   // the form below names its visitor to the share's host first, which then sends it on to the slate.
   const src = useMemo(() => (opened.ticket === null ? slateFrameSrc(opened.url, contextRef.current) : "about:blank"), [opened.url, opened.ticket]);
   const exchange = useMemo(() => slateFrameSrc(new URL(VIEWER_EXCHANGE_PATH, opened.url).toString(), contextRef.current), [opened.url]);
-  const exchangeForm = useRef<HTMLFormElement | null>(null);
   // What the form posts into the frame: who the visitor is, said by this page alone (the host takes it from no other
   // origin, slate-share-route.ts), as a signed-in person's ticket or the anonymous visitor its sheet's button made.
   const [said, setSaid] = useState<{ readonly name: "ticket" | "anonymous"; readonly value: string } | null>(opened.ticket === null ? null : { name: "ticket", value: opened.ticket });
 
   useEffect(() => {
-    if (said !== null) exchangeForm.current?.submit();
-  }, [said]);
+    if (said !== null) postIntoFrame(exchange, SHARED_FRAME, said);
+  }, [said, exchange]);
   const [asking, setAsking] = useState<AssistantAsk | null>(null);
 
   // The share as it stands now: the bar says how it lends, and the sheet asks what is needed for that.
@@ -130,9 +151,6 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
   return (
     <>
       <iframe ref={frame} name={SHARED_FRAME} src={src} title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
-      <form ref={exchangeForm} method="post" action={exchange} target={SHARED_FRAME} hidden data-shared-exchange>
-        {said !== null && <input type="hidden" name={said.name} value={said.value} />}
-      </form>
       {decision}
       {asking?.kind === "identity" && <IdentitySheet onClose={() => setAsking(null)} onAnonymous={continueAnonymously} />}
       {asking?.kind === "lent" && <LentSheet onClose={() => setAsking(null)} onContinue={() => accept("owner")} />}

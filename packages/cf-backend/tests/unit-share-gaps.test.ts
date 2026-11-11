@@ -141,6 +141,8 @@ async function twoUserWorld(): Promise<World> {
   Object.assign(partialEnv, {
     ...TEST_USER_ENV,
     PREVIEW_HOST_SUFFIX: 'share.test',
+    // Kinu's own origin: the one a share host takes who its visitor is from.
+    CLI_PUBLIC_ORIGIN: APP_ORIGIN,
     AUTH_KV: kv,
     OrchestratorAgent: {
       idFromName: (name: string) => name,
@@ -157,8 +159,8 @@ async function twoUserWorld(): Promise<World> {
   });
 
   // SAFETY: constructed above is every member the shared routes and the
-  // share rail read — the host suffix, the signing secret, the request
-  // bound's KV, and the two object namespaces. Nothing unassigned is
+  // share rail read — the host suffix, Kinu's origin, the signing secret, the
+  // request bound's KV, and the two object namespaces. Nothing unassigned is
   // reachable from the dispatch the suite drives.
   const env = partialEnv as Env;
 
