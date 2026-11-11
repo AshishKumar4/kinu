@@ -2782,7 +2782,6 @@ const ASK_SETTLES_MS = 90_000;
 /** Presses the app's Ask in `frame`, the app's page, and reads what it shows once its ask settles. */
 async function askTheApp(page: Page, frame: Frame): Promise<AppAsked> {
   await waitOn(page, 'the app\'s page to draw', frame.waitForFunction('document.querySelector("[data-ask]") !== null', { polling: 100 }));
-  await frame.evaluate('document.querySelector("[data-reply]").textContent = ""; document.querySelector("[data-refused]").textContent = ""');
   const giveUpAt = v.parse(v.number(), await frame.evaluate('performance.now()')) + ASK_SETTLES_MS;
 
   await frame.click('[data-ask]');
