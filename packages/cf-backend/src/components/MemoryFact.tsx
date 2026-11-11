@@ -2,6 +2,7 @@ import type { JsonValue } from "@kinu.run/core";
 import { workspaceDisplayTitle } from "@kinu.run/core";
 import { useWorkspaceRosterIfAny } from "@/hooks/use-workspace-roster";
 import type { MemoryOrigin } from "@/lib/user-api";
+import { ClampedText } from "@/components/ui/ClampedText";
 
 function words(key: string): string {
   const text = key.replace(/([a-z0-9])([A-Z])/gu, '$1 $2').replace(/[_-]+/gu, ' ').trim();
@@ -23,7 +24,7 @@ export function MemoryValue({ value }: { value: JsonValue }) {
   if (typeof value === 'string') {
     return value === ''
       ? <span className="t-meta p-text-3">Empty text</span>
-      : <span className="whitespace-pre-wrap wrap-anywhere">{value}</span>;
+      : <ClampedText text={value} quiet={false} />;
   }
 
   if (typeof value === 'boolean') return <span>{value ? 'Yes' : 'No'}</span>;

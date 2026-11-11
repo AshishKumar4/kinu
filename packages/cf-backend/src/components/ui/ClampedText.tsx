@@ -3,7 +3,8 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
 import { Button } from "./Button";
 
-export function ClampedText({ text }: { text: string }) {
+/** `quiet`: in the secondary tone, as a task beside its run; otherwise in the tone around it, as a fact's own value. */
+export function ClampedText({ text, quiet = true }: { text: string; quiet?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [long, setLong] = useState(false);
@@ -24,7 +25,7 @@ export function ClampedText({ text }: { text: string }) {
 
   return (
     <>
-      <div ref={box} className={`t-body p-text-2 whitespace-pre-wrap break-words${expanded ? "" : " line-clamp-2"}`}>{text}</div>
+      <div ref={box} className={`t-body${quiet ? " p-text-2" : ""} whitespace-pre-wrap break-words${expanded ? "" : " line-clamp-2"}`}>{text}</div>
       {long && (
         <Button variant="ghost" size="sm" className="mt-px" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
           icon={expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}>
