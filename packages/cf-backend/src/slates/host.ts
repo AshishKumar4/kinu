@@ -142,6 +142,9 @@ function refusalFromThrown(input: { cause: unknown }): Refusal | null {
 /** The surface namespace an answer's page's own server's methods are asked under: `[OWN_SERVER, method]`. */
 const OWN_SERVER = '$server';
 
+/** How many conversations' objects are ended at once. */
+const ENDS_AT_ONCE = 8;
+
 /** A viewer's answer: a refusal decided on the way is the visitor's to read as written; only a failure keeps where it happened. */
 async function viewerWords(asking: () => Promise<SlateCallResult>, refused: (failure: { readonly cause: unknown }) => SlateSurfaceResult): Promise<SlateSurfaceResult> {
   return settle(Effect.catch(attemptInItsWords('io', asking),
@@ -530,27 +533,32 @@ export class SlateHost {
       }
     };
 
-    if (lent) this.chats.record(share.id, subject);
     open.set(key, conversation);
     this.openAsks.set(share.id, open);
+
+    // The share's word, and the code's: read before each step, and again where each call is sent, past its build.
+    const admitted = (): void => {
+      if (lent) viewers.admitLent(share);
+      else viewers.stillLends(share);
+      sameCode();
+
+      // Listed for the owner once the share first admits it: a refused ask leaves no chat.
+      if (lent) this.chats.record(share.id, subject);
+    };
 
     const session = new AppAgentSessionTarget({
       about: async () => this.appAbout(shareCaller(share.id), share.slate, lent ? visitorLabel(subject) : 'a visitor of the app, on their own account'),
       call: async (method, called) => {
-        sameCode();
+        admitted();
         const viewer: SlateViewer = { share: share.id, subject, request: live.openRequest({ share: share.id, viewer: subject, path: 'app-agent' }) };
 
         try {
-          return await this.call({ caller: shareCaller(share.id), id: share.slate, method, args: called, viewer, agent: share.slate });
+          return await this.call({ caller: shareCaller(share.id), id: share.slate, method, args: called, viewer, agent: share.slate, admit: admitted });
         } finally {
           live.settleRequest(viewer.request, 'closed');
         }
       },
-      admit: () => {
-        if (lent) viewers.admitLent(share);
-        else viewers.stillLends(share);
-        sameCode();
-      },
+      admit: admitted,
       spent: (usage) => { if (lent) viewers.lentSpent(share.id, usage); },
     });
 
@@ -586,10 +594,13 @@ export class SlateHost {
 
     if (owner === null || record === undefined) return;
 
-    await Promise.all(subjects.map(async (subject) => settleLogged('app_agent.end_failed', { doing: 'ending a conversation an app agent had', otherwise: 'unavailable' }, async () => {
-      await this.deps.appAgentObject?.(lentConversation(owner, { workspace: this.deps.workspace, slate: record.slate, share, subject })).end();
-      this.chats.forget(share, subject);
-    }, { share })));
+    // A few at a time: a popular share's chats are many objects, and one request reaches only so many.
+    for (let at = 0; at < subjects.length; at += ENDS_AT_ONCE) {
+      await Promise.all(subjects.slice(at, at + ENDS_AT_ONCE).map(async (subject) => settleLogged('app_agent.end_failed', { doing: 'ending a conversation an app agent had', otherwise: 'unavailable' }, async () => {
+        await this.deps.appAgentObject?.(lentConversation(owner, { workspace: this.deps.workspace, slate: record.slate, share, subject })).end();
+        this.chats.forget(share, subject);
+      }, { share })));
+    }
   }
 
   /** A deleted account's conversations the owner lent it here end: `viewers` names each share and its key for them. */
@@ -648,11 +659,7 @@ export class SlateHost {
       if (stale !== null) return { ok: false, ...refusalOf(stale) };
 
       // Answered here, not dispatched: it carries no actor capability.
-      if (name === SLATE_STORAGE_BINDING) {
-        if (ephemeralSlateAddress(id) !== null) return { ok: false, ...refusalOf(new KinuError('denied', PAGE_KEEPS_NO_DATA)) };
-
-        return slateStorageCall(this.controller.state, caller, id, { member: parsed.output.path.join('.'), args: parsed.output.args });
-      }
+      if (name === SLATE_STORAGE_BINDING) return this.storageCall(caller, id, parsed.output);
 
       // The shared slates this process runs under (`SlateCaller.via`, minted into its bindings) bound it whatever request it
       // names, or none: a callee cannot drop the authority it inherited by dropping the record that names it.
@@ -720,6 +727,13 @@ export class SlateHost {
     });
 
     return settle(Effect.catchCause(answering, (failed) => Effect.succeed(refused({ cause: Cause.squash(failed) }))));
+  }
+
+  /** A slate's own storage call: an answer's page keeps no data. */
+  private storageCall(caller: SlateCaller, id: string, request: SlateCallRequest): SlateSurfaceResult {
+    if (ephemeralSlateAddress(id) !== null) return { ok: false, ...refusalOf(new KinuError('denied', PAGE_KEEPS_NO_DATA)) };
+
+    return slateStorageCall(this.controller.state, caller, id, { member: request.path.join('.'), args: request.args });
   }
 
   /**

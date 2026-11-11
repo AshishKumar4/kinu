@@ -474,10 +474,6 @@
       "complexity": 24
     },
     {
-      "key": "packages/cf-backend/src/slates/host.ts#SlateHost.surfaceCall>promise",
-      "complexity": 24
-    },
-    {
       "key": "packages/cf-backend/src/user/devices.ts#UserDevices.deviceRpc>gen",
       "complexity": 24
     },

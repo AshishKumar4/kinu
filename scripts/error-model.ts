@@ -363,7 +363,7 @@ export const DECLARED = byFile([
       'the saveNoteFromMcp RPC answer the MCP save_note tool returns'],
     ['packages/cf-backend/src/orchestrator.ts', ['installWorkspaceCapability', 'onModelSettingsChanged', 'cancelCurrentWork', 'resolveHostedActorRoute', 'announceDeviceUnavailable', 'announceDeviceAvailable', 'setTurnFeedback', 'restoreWorkspaceBaseline', 'recordHeadStep', 'destroyAgent', 'saveNoteFromMcp', 'liveShareBundle', 'renameSubagentAgent', 'dismissSubagent', 'prepareTerminal', 'setCurriculumTaskStatus', 'rawCopyFromFork', 'shareChats', 'shareChatTranscript'],
       'workspace DO RPC answers (callable methods and DO-to-DO calls) read by the UI, the CLI and other objects'],
-    ['packages/cf-backend/src/slates/host.ts', ['blueprintAnswer', 'readLiveShareRecord', 'unshare', 'operation', 'sharing', 'savePage', 'answerServed', 'releaseInvocation', 'hostCall', 'drawnPageCall', 'drawnPageAnswer', 'surfaceCall', 'run', 'call', 'remove', 'appAgentReply', 'ownerAsk', 'visitorAsk', 'viewerWords'],
+    ['packages/cf-backend/src/slates/host.ts', ['blueprintAnswer', 'readLiveShareRecord', 'unshare', 'operation', 'sharing', 'savePage', 'answerServed', 'releaseInvocation', 'hostCall', 'drawnPageCall', 'drawnPageAnswer', 'surfaceCall', 'run', 'call', 'remove', 'appAgentReply', 'ownerAsk', 'visitorAsk', 'viewerWords', 'storageCall'],
       '`SlateAnswer`, the slate host\'s refusal-as-value over DO RPC'],
     ['packages/core/src/slates/controller.ts', ['answer', 'answered', 'operation'],
       '`SlateAnswer`, the slate controller\'s refusal-as-value over DO RPC'],

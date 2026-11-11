@@ -259,10 +259,11 @@ export class AppAgentDO extends DurableObject<Env> {
     const { payer, workspace, slate } = conversation;
     const stop = new AbortController();
 
-    // Held from the ask's first wait: an end while its payer's account weighs it, or while it waits its turn, stops it.
-    this.running.add(stop);
     const caller = await ownerCaller(this.env);
     const account = accountNamed(this.env.UserDO, payer.userId);
+
+    // Held from here: an end while its payer's account weighs it, or while it waits its turn, stops it.
+    this.running.add(stop);
 
     const grant = await account.appAgentGrant(caller, { workspace, slate, revision: request.revision, visitor: payer.kind === 'own' })
       .finally(() => { this.running.delete(stop); });
@@ -279,12 +280,14 @@ export class AppAgentDO extends DurableObject<Env> {
 
     const reply = new ReadableStream<Uint8Array>({
       start: (stream) => {
-        // Never fails: a turn's failure errors its reply, and the next ask's turn starts after it all the same.
+        // Never fails: a turn's failure errors its reply (a no-op once its reader let it go, where closing would throw),
+        // and the next ask's turn starts after it all the same.
         const turn = async (): Promise<void> => settle(Effect.ensuring(
           Effect.match(attemptInItsWords('io', async () => {
             stop.signal.throwIfAborted();
             await turnOf(this.env, this.ctx.storage, { conversation, caller, grant, request, session: held.session, signal: stop.signal, write: (text) => { stream.enqueue(encoder.encode(text)); } });
-          }), { onFailure: (failure) => { stream.error(failure); }, onSuccess: () => { stream.close(); } }),
+            stream.close();
+          }), { onFailure: (failure) => { stream.error(failure); }, onSuccess: () => {} }),
           Effect.sync(() => {
             this.running.delete(stop);
             held.release();

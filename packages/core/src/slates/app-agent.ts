@@ -155,6 +155,19 @@ export const APP_AGENT_TOOL = 'app';
 
 const AppCallSchema = v.strictObject({ method: v.pipe(v.string(), v.minLength(1)), args: v.optional(v.array(JsonValueSchema)) });
 
+/** `work`, or its signal's reason once the signal is aborted first. */
+function abortable<A>(work: Promise<A>, signal: AbortSignal | undefined): Promise<A> {
+  if (signal === undefined) return work;
+  const { promise, reject } = Promise.withResolvers<never>();
+  const stop = (): void => { reject(signal.reason); };
+
+  signal.addEventListener('abort', stop, { once: true });
+
+  if (signal.aborted) stop();
+
+  return Promise.race([work, promise]).finally(() => { signal.removeEventListener('abort', stop); });
+}
+
 /** The app's functions as its agent calls them: a refusal is an answer it reads and tells the person, not a failure. */
 export function appAgentTool(session: Pick<AppAgentSession, 'call'>): Tool {
   return tool({
@@ -168,9 +181,10 @@ export function appAgentTool(session: Pick<AppAgentSession, 'call'>): Tool {
       required: ['method'],
       additionalProperties: false,
     }),
-    execute: async (input) => {
+    execute: async (input, { abortSignal }) => {
       const asked = v.parse(AppCallSchema, input);
-      const answered = await session.call(asked.method, asked.args ?? []);
+      // A stopped turn waits for no method still running: what it answers after is no one's.
+      const answered = await abortable(session.call(asked.method, asked.args ?? []), abortSignal);
 
       return answered.ok ? answered.value : { refused: answered.reason, why: answered.error };
     },
