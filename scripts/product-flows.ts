@@ -22,7 +22,7 @@
  */
 import type { Frame, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { AccountMemoryProposalSchema, APP_ROUTES, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, LIVE_SHARE_CHAT_PATH, LIVE_SHARE_CHATS_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, LiveShareOpenSchema, VIEWER_EXCHANGE_PATH, PERSONAL_ASSISTANT_ID, ShareChatsSchema, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, APP_ROUTES, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, LIVE_SHARE_CHAT_PATH, LIVE_SHARE_CHATS_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, VIEWER_EXCHANGE_PATH, PERSONAL_ASSISTANT_ID, ShareChatsSchema, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
@@ -3098,7 +3098,8 @@ async function setFlowShareMode(target: FlowTarget, workspace: string, share: st
   const opened = await fetch(`${target.origin}${LIVE_SHARE_OPEN_PATH}`, { method: 'POST', headers, body: JSON.stringify({ workspace, share }) });
 
   if (!opened.ok) throw new Error(`reading the share answered ${String(opened.status)}`);
-  const { revision } = v.parse(LiveShareOpenSchema, await opened.json());
+  // Only the revision is read: the owner's reading of their own share, at whatever build the deployment serves.
+  const { revision } = v.parse(v.object({ revision: v.string() }), await opened.json());
   const body = mode === 'own' ? { workspace, share, mode } : { workspace, share, mode, revision, approved: [] };
   const set = await fetch(`${target.origin}${LIVE_SHARE_MODE_PATH}`, { method: 'POST', headers, body: JSON.stringify(body) });
 
