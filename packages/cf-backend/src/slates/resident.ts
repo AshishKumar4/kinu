@@ -23,22 +23,32 @@ import { closeAs } from '../egress/send-out';
  * 2026-11-11: a share's mode change killed its app, and its open page's next call never settled). Closed, the page's
  * runtime opens a new session, to the process running now.
  */
-function heldSocket(answer: Response, held: Set<WebSocket>): Response {
+function heldSocket(answer: Response, held: { readonly sockets: Set<WebSocket>; readonly ended: () => boolean }): Response {
   const upstream = answer.webSocket;
 
   if (upstream === null) return answer;
+
+  // The process ended while its handshake was answered: its end would never close, so the page is refused at once, and
+  // opens its next session to the process running then.
+  if (held.ended()) {
+    upstream.accept();
+    closeAs(upstream, 1000, 'The app restarted');
+
+    return new Response('The app restarted', { status: 503, headers: { 'cache-control': 'no-store', 'retry-after': '1' } });
+  }
+
   const pair = new WebSocketPair();
   const page = pair[0];
   const relay = pair[1];
 
   upstream.accept();
   relay.accept();
-  held.add(relay);
+  held.sockets.add(relay);
   upstream.addEventListener('message', (event) => { relay.send(event.data); });
   relay.addEventListener('message', (event) => { upstream.send(event.data); });
   upstream.addEventListener('close', (event) => { closeAs(relay, event.code, event.reason); });
   relay.addEventListener('close', (event) => {
-    held.delete(relay);
+    held.sockets.delete(relay);
     closeAs(upstream, event.code, event.reason);
   });
   upstream.addEventListener('error', () => { closeAs(relay, 1011, 'the app\'s socket failed'); });
@@ -835,8 +845,11 @@ export class ResidentSlateProcesses {
       const methods = surface.output.methods;
       // Every page's socket to this process: each closed as it ends, however it ends.
       const sockets = new Set<WebSocket>();
+      let ended = false;
 
       session.processes.setTerminator(pid, () => {
+        ended = true;
+
         for (const socket of sockets) closeAs(socket, 1000, 'The app restarted');
         sockets.clear();
         // Every resident exit passes here; the stack records who ended the pid.
@@ -854,7 +867,7 @@ export class ResidentSlateProcesses {
       return {
         id: String(pid), port: input.app?.port ?? null, methods,
         request: (request) => spawned.facet.fetch(request),
-        connect: async (request) => heldSocket(await spawned.facet.connect(request), sockets),
+        connect: async (request) => heldSocket(await spawned.facet.connect(request), { sockets, ended: () => ended }),
         isRunning: async () => session.processes.get(pid)?.state === 'running',
         stop: async () => { manager.kill(pid); },
       };
