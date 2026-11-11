@@ -2991,18 +2991,21 @@ export async function appAgentAnswersALentVisitor(target: FlowTarget): Promise<A
 
     await shoot(page, 'lent-identity-sheet');
     await until(page, 'the sheet to take a press', 'document.querySelector(\'[role="dialog"] [data-assistant-anonymous]:not([disabled])\') !== null');
+    // Marked, so the app's page after the exchange is told from the one before it: a navigation drops the mark.
+    await frame.evaluate('window.__beforeExchange = true');
     await page.click('[role="dialog"] [data-assistant-anonymous]');
     await until(page, 'the sheet to close', 'document.querySelector(\'[role="dialog"]\') === null');
     // The frame goes through the share host's exchange, which names this browser, and back to the app.
     await until(page, 'the app to open anonymously', 'document.querySelector("[data-shared-slate]")?.getAttribute("src")?.includes("anonymous=") === true');
     frame = await appFrameNow(page);
-    await waitOn(page, 'the app back after the exchange', frame.waitForFunction('!location.pathname.startsWith("/__kinu/") && document.querySelector("[data-ask]") !== null', { polling: 100 }));
+    await waitOn(page, 'the app back after the exchange', frame.waitForFunction('window.__beforeExchange !== true && !location.pathname.startsWith("/__kinu/") && document.querySelector("[data-ask]") !== null', { polling: 100 }));
     const anonymous = await askTheApp(page, frame);
 
     await shoot(page, 'lent-visitor-answered');
     await context.close();
     const owner = await ownerReadsChats(target, workspace, share);
-    const ownerView = await ownerOpensTheChat(target, workspace);
+    // The share sheet lists chats only where there are some: with none, there is nothing to open.
+    const ownerView = owner.chats > 0 ? await ownerOpensTheChat(target, workspace) : '';
     const kinu = await appInKinu(target, workspace);
     const heard = await mainHeard(kinu.page);
 
