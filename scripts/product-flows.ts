@@ -3177,9 +3177,13 @@ export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<A
     await shoot(page, 'flip-to-lent-sheet');
     const chatsBeforeAccepting = (await ownerReadsChats(target, workspace, share)).chats;
 
-    await until(page, 'the sheet to take a press', 'document.querySelector(\'[role="dialog"] [data-assistant-continue]:not([disabled])\') !== null');
-    await page.click('[role="dialog"] [data-assistant-continue]');
-    await until(page, 'the sheet to close', 'document.querySelector(\'[role="dialog"]\') === null');
+    // A share that asked nothing of its visitor (the leak this row guards) has no sheet to accept: its verdict says so.
+    if (toLent.sheet?.continue === true) {
+      await until(page, 'the sheet to take a press', 'document.querySelector(\'[role="dialog"] [data-assistant-continue]:not([disabled])\') !== null');
+      await page.click('[role="dialog"] [data-assistant-continue]');
+      await until(page, 'the sheet to close', 'document.querySelector(\'[role="dialog"]\') === null');
+    }
+
     const lent = await askAndRead(page, frame);
     const chatsAfterAccepting = (await ownerReadsChats(target, workspace, share)).chats;
 
