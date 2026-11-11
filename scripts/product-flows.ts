@@ -23,6 +23,7 @@
 import type { Frame, Page } from 'puppeteer';
 import * as v from 'valibot';
 import { AccountMemoryProposalSchema, APP_ROUTES, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, LIVE_SHARE_CHAT_PATH, LIVE_SHARE_CHATS_PATH, LIVE_SHARE_MODE_PATH, LIVE_SHARE_OPEN_PATH, MODE_KEY, VIEWER_EXCHANGE_PATH, PERSONAL_ASSISTANT_ID, ShareChatsSchema, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
+import { SLATE_RESTARTED_REASON } from '@kinu.run/core/slates';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
@@ -3181,6 +3182,8 @@ export interface AppAgentFlipVerdict {
   readonly chatsAfterAccepting: number;
   /** Switched back to their own access: the next ask. */
   readonly backToOwn: FlipAsked;
+  /** The first ask after the switch back met the app's restart, and the person asked again. */
+  readonly cutByRestart: boolean;
 }
 
 /** What widening a share's grant with its page open came to: before the visitor accepted, the app's try, and after. */
@@ -3308,12 +3311,17 @@ export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<A
     const widened = await widenWithThePageOpen(target, page, { workspace, share, visitor });
 
     await setFlowShareMode(target, { workspace: workspace, share: share }, 'own');
-    const backToOwn = await askAndRead(page, await appFrameNow(page));
+    // The switch ends the app's process: an ask still in flight as it ends is cut, and fails as it is, never made
+    // again (a call in flight there may have begun). The person asks once more, as they would.
+    let backToOwn = await askAndRead(page, await appFrameNow(page));
+    const cutByRestart = backToOwn.asked.refused.includes(SLATE_RESTARTED_REASON);
+
+    if (cutByRestart) backToOwn = await askAndRead(page, await appFrameNow(page));
 
     await shoot(page, 'flip-to-own-sheet');
     await page.close();
 
-    return { workspace, own, counts: { before: countedBefore, acrossFlip: countedAcrossFlip, after: countedAfter }, calledAfterFlip, widened, toLent, chatsBeforeAccepting, lent, chatsAfterAccepting, backToOwn };
+    return { workspace, own, counts: { before: countedBefore, acrossFlip: countedAcrossFlip, after: countedAfter }, calledAfterFlip, widened, toLent, chatsBeforeAccepting, lent, chatsAfterAccepting, backToOwn, cutByRestart };
   } finally {
     if (share !== null) await revokeFlowShare(target, workspace, share);
     await removeFlowWorkspace(target, workspace);

@@ -894,10 +894,11 @@ describe(productFlowTestName('app-agent-flip', 'a share that changes how it lend
 
   test('switched back to their own access, the next ask asks for their consent again', () => {
     const { backToOwn } = verdictOf(observed, 'app-agent-flip');
+    const shown = JSON.stringify(backToOwn);
 
-    expect(backToOwn.asked.reply, JSON.stringify(backToOwn)).toBe('');
-    expect(backToOwn.sheet).toMatchObject({ allow: true });
-    expect(backToOwn.lentBar).toBe(false);
+    expect(backToOwn.asked.reply, shown).toBe('');
+    expect(backToOwn.sheet ?? {}, shown).toMatchObject({ allow: true });
+    expect(backToOwn.lentBar, shown).toBe(false);
   });
 });
 
