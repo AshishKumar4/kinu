@@ -421,7 +421,7 @@ async function openLive(request: Request, env: Env, identity: AuthIdentity | nul
   const url = await slateShareUrl(env, body.workspace, handle);
   const ticket = identity === null ? null : await mintViewerTicket(env, body.workspace, handle, identity.userId);
   // What its grant reaches of the owner's, which the page shows before its visitor accepts it, and what it posts then.
-  const grant = await shareGrantKey(reading.value.record.grant);
+  const grant = shareGrantKey(reading.value.record.grant);
   const binding = grant === '' ? null : await mintConsentBinding(env, body.workspace, handle, grant);
   const consent = binding === null ? null : { namespaces: shareGrantNamespaces(reading.value.record.grant), binding };
 

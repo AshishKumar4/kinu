@@ -552,7 +552,7 @@ export class SlateHost {
 
     // The share's word, and the code's: read before each step, and again where each call is sent, past its build.
     const admitted = (): void => {
-      viewers.admitAgentStep(share, { lent, revision: this.revisionOf(share.slate), consented: revision });
+      viewers.admitAgentStep(share, { lent, revision: this.revisionOf(share.slate), consented: revision, accepted: consented });
 
       // Listed for the owner once the share first admits it: a refused ask leaves no chat.
       if (lent) this.chats.record({ slate: share.slate, share: share.id, subject });

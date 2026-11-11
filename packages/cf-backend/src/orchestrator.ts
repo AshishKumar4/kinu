@@ -3968,7 +3968,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
         const publication = builtRevision(controller.builds, entry.slate) ?? '';
         const host = await slateShareUrl(this.env, this.name, entry.handle);
         const share = controller.live.get(id);
-        const cookie = share === undefined ? null : await shareCapturePass(this.env, this.name, entry.handle, await shareGrantKey(share.grant));
+        const cookie = share === undefined ? null : await shareCapturePass(this.env, this.name, entry.handle, shareGrantKey(share.grant));
 
         return host === null || cookie === null ? null : { url: host, cookie, publication, held: entry.held };
       },

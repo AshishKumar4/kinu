@@ -175,16 +175,25 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
     setAsking(null);
   };
 
-  // Accepted on this page: its binding, posted into a new frame, which loads the app.
-  const acceptReach = (binding: string): void => {
-    setSaid(framePost({ name: "consent", value: binding }));
+  // Accepted on this page: a binding read afresh (one shown long ago has lapsed), posted into a new frame, which loads
+  // the app; a grant that changed meanwhile is shown again instead.
+  const acceptReach = (shown: NonNullable<LiveShareOpen["consent"]>): void => detachPromise(async () => {
+    const now = (await openLiveShare({ workspace, share }))?.consent ?? null;
+
+    if (now !== null && now.namespaces.join("\n") !== shown.namespaces.join("\n")) {
+      setReach(now);
+
+      return;
+    }
+
+    if (now !== null) setSaid(framePost({ name: "consent", value: now.binding }));
     setReach(null);
-  };
+  });
 
   return (
     <>
       <iframe key={said.frame} ref={frame} name={said.frame} src="about:blank" title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
-      {reach !== null && <ReachDecision slate={opened.title} namespaces={reach.namespaces} onClose={() => setReach(null)} onContinue={() => acceptReach(reach.binding)} />}
+      {reach !== null && <ReachDecision slate={opened.title} namespaces={reach.namespaces} onClose={() => setReach(null)} onContinue={() => acceptReach(reach)} />}
       {decision}
       {asking?.kind === "identity" && <IdentitySheet onClose={() => setAsking(null)} onAnonymous={continueAnonymously} />}
       {asking?.kind === "lent" && <LentSheet onClose={() => setAsking(null)} onContinue={() => accept("owner")} />}

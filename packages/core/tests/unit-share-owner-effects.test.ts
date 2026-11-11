@@ -70,7 +70,9 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
     const args = options.args ?? [{ path: 'notes.md', text: 'hello' }];
 
     // A visitor who accepted the grant as it stands when they call: what the grant reaches is not this file's question.
-    return shareGrantKey(live.get('s1')?.grant ?? { members: [] }).then(async (consented) => viewers.call({
+    const consented = shareGrantKey(live.get('s1')?.grant ?? { members: [] });
+
+    return viewers.call({
       share: 's1', id: slate, chain,
       request: { path: member.split('.'), args, invocation: null, ...(options.authorize && { authorize: options.authorize }) },
       issued: { id: slate, chain, incarnation: 'p1', generations: {}, viewer: { share: 's1', subject, consented, request: live.openRequest({ share: 's1', viewer: subject, path: '/' }) } },
@@ -85,7 +87,7 @@ function world(mode: 'own' | 'owner', revisions: Readonly<Record<string, string>
 
         return { ok: true, value: { done: true } };
       },
-    }));
+    });
   };
 
   /** The owner's own request to their shared slate: the server's like any other. */

@@ -314,16 +314,17 @@ export const ShareViewerClaimSchema = v.object({
 });
 
 /**
- * What of its owner's a share's grant reaches, as its visitors accept it: a digest of the namespaces it names, so a grant
- * that reaches more is another key; '' for one reaching nothing of theirs, which no one is asked about.
+ * What of its owner's a share's grant reaches, as its visitors accept it: the namespaces it names, written out (base64url,
+ * so a cookie carries it whole), so a grant that reaches more is another key; '' for one reaching nothing of theirs,
+ * which no one is asked about. Read synchronously, where a call is sent.
  */
-export async function shareGrantKey(grant: { readonly members: readonly { readonly namespace: string }[] }): Promise<string> {
-  const namespaces = [...new Set(grant.members.map((member) => member.namespace))].sort();
+export function shareGrantKey(grant: { readonly members: readonly { readonly namespace: string }[] }): string {
+  const namespaces = shareGrantNamespaces(grant);
 
   if (namespaces.length === 0) return '';
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(namespaces.join('\n'))));
+  const bytes = new TextEncoder().encode(namespaces.join('\n'));
 
-  return btoa(String.fromCharCode(...digest.slice(0, 16))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
+  return btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '');
 }
 
 /** The namespaces a share's grant reaches, as its visitors are shown them before they accept it. */
@@ -334,6 +335,9 @@ export function shareGrantNamespaces(grant: { readonly members: readonly { reado
 export type ShareViewerClaim = v.InferOutput<typeof ShareViewerClaimSchema>;
 
 export const VIEWER_EXCHANGE_PATH = '/__kinu/viewer';
+
+/** Where a slate's page opens its session to its process (runtime-modules.ts). */
+export const SLATE_RPC_PATH = '/__rpc';
 
 /**
  * The app's entry to a workspace preview, `?to=<the preview's URL>`: it knows its visitor, and sends the workspace's

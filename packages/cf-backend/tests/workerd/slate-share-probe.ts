@@ -470,7 +470,7 @@ export class SlateShareProbeDO extends DurableObject<SlateHostDeps['env']> {
     // The owner's approved reach, on "my access", at the revision the driver runs.
     await this.ownerMode(created.value.share.id, 'driver', approved.map((member) => ({ slate: 'driver', namespace: 'web', member })));
     // The visitor accepted the grant as it was cut here, whatever the claim it came with said.
-    const accepted = { ...claim, ...await this.accepted(created.value.share.handle), source: claim.source };
+    const accepted = { ...claim, ...this.accepted(created.value.share.handle), source: claim.source };
     const visit = async () => (await this.host.routeShare(created.value.share.handle, accepted, new Request(`https://share.invalid/?session=${encodeURIComponent(session)}`), '/')).text();
     const asked = await visit();
 
@@ -913,9 +913,9 @@ export class SlateShareProbeDO extends DurableObject<SlateHostDeps['env']> {
     }
   }
 
-  async accepted(handle: string): Promise<{ userId: null; source: string; consented: string | null }> {
+  accepted(handle: string): ShareViewerClaim {
     const share = this.host.controller.live.byHandle(handle);
-    const grant = share === undefined ? '' : await shareGrantKey(share.grant);
+    const grant = share === undefined ? '' : shareGrantKey(share.grant);
 
     return { userId: null, source: 'vitest', consented: grant === '' ? null : grant };
   }
