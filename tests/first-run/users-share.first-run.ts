@@ -41,6 +41,16 @@ const SLATE = 'usershare';
 
 const BODY = 'users-share-probe-ok';
 
+/** The share's ticket, posted as Kinu's share page posts it into the share's frame: the one way its host takes who the visitor is. */
+async function postedTicket(origin: string, host: string | null, ticket: string | null): Promise<Response | null> {
+  if (host === null || ticket === null) return null;
+
+  return fetch(`${host}${VIEWER_EXCHANGE_PATH.slice(1)}`, {
+    method: 'POST', redirect: 'manual', body: new URLSearchParams({ ticket }),
+    headers: { origin: new URL(origin).origin, 'content-type': 'application/x-www-form-urlencoded' },
+  });
+}
+
 /**
  * The named account on the app's page for the share: the page's open hands it a ticket the page posts to the share for its
  * cookie, and it comes back to the share as itself. A visitor reaching the bare host with no cookie is sent to the page.
@@ -51,11 +61,7 @@ async function enteredAsNamed(input: { origin: string; workspace: string; share:
   const host = ticket === null ? null : `${new URL(ticket.url).origin}/`;
   const first = host === null ? null : await fetch(host, { redirect: 'manual' });
 
-  // Posted as Kinu's share page posts it into the share's frame: the one way its host takes who the visitor is.
-  const exchanged = ticket?.ticket === null || ticket?.ticket === undefined || host === null ? null : await fetch(`${host}${VIEWER_EXCHANGE_PATH.slice(1)}`, {
-    method: 'POST', redirect: 'manual', body: new URLSearchParams({ ticket: ticket.ticket }),
-    headers: { origin: new URL(input.origin).origin, 'content-type': 'application/x-www-form-urlencoded' },
-  });
+  const exchanged = await postedTicket(input.origin, host, ticket?.ticket ?? null);
 
   const cookie = exchanged?.headers.get('set-cookie')?.split(';')[0] ?? null;
   const served = cookie === null || host === null ? null : await fetch(host, { headers: { cookie }, redirect: 'manual' });
