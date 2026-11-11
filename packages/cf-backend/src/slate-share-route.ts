@@ -122,8 +122,8 @@ shareHostRoutes.get(VIEWER_EXCHANGE_PATH, async (c) => {
   return await exchangedTo(c, request, { subject: held?.subject ?? await viewerSource(viewerSecret, request), consent: true });
 });
 
-// Who the visitor is changes only here, on a POST Kinu's own share page sends into the frame: a signed-in person's
-// ticket, or the anonymous visitor its sheet's button made. Any other origin, the app's page on this very host among
+// Who the visitor is changes only here, on a POST Kinu's own share page sends into the frame at every load: a signed-in
+// person's ticket; the anonymous visitor its sheet's button made; or, signed out, that they are no account now. Any other origin, the app's page on this very host among
 // them, changes no one: a ticket a person minted for themself never becomes another browser's identity.
 shareHostRoutes.post(VIEWER_EXCHANGE_PATH, async (c) => {
   const { env, handle, workspace, viewerSecret } = c.env;
@@ -131,24 +131,30 @@ shareHostRoutes.post(VIEWER_EXCHANGE_PATH, async (c) => {
   const origin = kinuOrigin(env);
 
   if (origin === null || request.headers.get('origin') !== origin) return new Response('Not found', NOT_FOUND);
-  const form = await request.formData();
+
+  // Only a form is anyone's word: a post of any other type is refused before its body is read.
+  if (!(request.headers.get('content-type') ?? '').startsWith('application/x-www-form-urlencoded')) return new Response('Not found', NOT_FOUND);
+  const form = new URLSearchParams(await request.text());
   const ticketed = form.get('ticket');
 
-  if (typeof ticketed === 'string') {
+  if (ticketed !== null) {
     const ticket = await ticketUser(env, workspace, handle, ticketed);
 
     return await exchangedTo(c, request, ticket === null ? null : { subject: ticket.userId, consent: false });
   }
 
-  if (form.get('anonymous') === null) return new Response('Not found', NOT_FOUND);
-  // Continuing anonymously keeps who the visitor already is, signed in or anonymous, and their consent; only a visitor
-  // known by nothing yet is given an id, which is bounded by where they come from, as every exchange of theirs is.
-  const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
-  const known = held !== null && (held.userId !== null || held.anonymous !== null) ? held.subject : null;
+  // No account now: an account this browser held before (a sign-out, a shared machine) is no one's to keep. An anonymous
+  // id it held stays, and continuing anonymously makes one where it has none; anything else is who it comes from.
+  const anonymous = form.get('anonymous') !== null;
 
-  return await exchangedTo(c, request, known === null
-    ? { subject: mintAnonymousSubject(), consent: held?.consented === true, admitAs: await viewerSource(viewerSecret, request) }
-    : { subject: known, consent: held?.consented === true });
+  if (!anonymous && form.get('out') === null) return new Response('Not found', NOT_FOUND);
+  const held = await viewerCookie(env, workspace, handle, request.headers.get('cookie'));
+  const source = await viewerSource(viewerSecret, request);
+  const consent = held?.consented === true && held.userId === null;
+
+  if (held?.anonymous !== null && held?.anonymous !== undefined) return await exchangedTo(c, request, { subject: held.subject, consent });
+
+  return await exchangedTo(c, request, anonymous ? { subject: mintAnonymousSubject(), consent, admitAs: source } : { subject: source, consent });
 });
 
 /**
@@ -162,7 +168,14 @@ function actsFromElsewhere(request: Request, url: URL): boolean {
   return acting && request.headers.get('origin') !== url.origin;
 }
 
+// The exchange's path is the host's own: no other method of it reaches the app.
+shareHostRoutes.all(VIEWER_EXCHANGE_PATH, () => new Response('Not found', NOT_FOUND));
+
 shareHostRoutes.all('*', async (c) => {
+  // An app's script registers no service worker on its share host: one would see Kinu's posts into the frame, a
+  // visitor's ticket among them, before the host does.
+  if (c.req.raw.headers.get('service-worker') === 'script') return new Response('Not found', NOT_FOUND);
+
   const { env, handle, workspace, viewerSecret } = c.env;
   const request = c.req.raw;
   const url = new URL(request.url);

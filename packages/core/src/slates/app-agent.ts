@@ -77,8 +77,8 @@ export function appAgentKey(conversation: AppAgentConversation): string {
 
 /**
  * How a share lends that its visitor was told and accepted, as their asks are held to it: an anonymous visitor accepted
- * the owner's model when they continued anonymously, the one way to become one (the share host's exchange takes only
- * Kinu's own page's ticket for it); a signed-in one by what they acknowledged last (`ShareDisclosures`). Null for none.
+ * the owner's model when they continued anonymously, the one way to become one (the share host's exchange takes it from a
+ * post of Kinu's own page alone); a signed-in one by what they acknowledged last (`ShareDisclosures`). Null for none.
  */
 export function acknowledgedMode(subject: string, recorded: ShareMode | null): ShareMode | null {
   return subject.startsWith(ANONYMOUS_SUBJECT_PREFIX) ? 'owner' : recorded;

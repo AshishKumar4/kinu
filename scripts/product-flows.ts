@@ -3008,7 +3008,7 @@ export async function appAgentAnswersALentVisitor(target: FlowTarget): Promise<A
     const page = await context.newPage();
     let frame = await appOnItsLink(page, made.link);
     // The app's own page tries to name its visitor anonymous, on its own origin, without Kinu's sheet: refused.
-    const forged = v.parse(v.number(), await frame.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)} + '?anonymous=1', { credentials: 'include', redirect: 'manual' }).then((answer) => answer.status)`));
+    const forged = v.parse(v.number(), await frame.evaluate(`fetch(${JSON.stringify(VIEWER_EXCHANGE_PATH)}, { method: 'POST', credentials: 'include', redirect: 'manual', body: new URLSearchParams({ anonymous: '1' }) }).then((answer) => answer.status)`));
     const first = await askTheApp(page, frame);
 
     await until(page, 'the share page\'s sheet', 'document.querySelector(\'[role="dialog"]\') !== null');

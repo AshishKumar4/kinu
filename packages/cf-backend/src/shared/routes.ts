@@ -15,8 +15,7 @@ import {
   type OwnedLiveShare, type SlateAnswer,
 } from '@kinu.run/core';
 import { slateShareUrl } from '../slate-share-route';
-import { mintViewerTicket } from '../viewer-pass';
-import { shareViewerKey } from '../viewer-pass';
+import { mintViewerTicket, shareViewerKey } from '../viewer-pass';
 import { crossSiteRejection, requestIdentity, type AuthIdentity } from '../auth/session';
 import { accountIdFor } from '../auth/store';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';

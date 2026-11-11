@@ -103,16 +103,23 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
   const decision = usePartHost({ workspace, slate: opened.slate, title: opened.title, slateFrame: frame });
   const context = useSlateHostContext("pane", "window" in globalThis ? window.innerWidth : 0);
   const contextRef = useRef(context);
-  // A snapshot, as the previews' is: a theme flip after it never reloads the slate. Signed in, the frame starts blank:
-  // the form below names its visitor to the share's host first, which then sends it on to the slate.
-  const src = useMemo(() => (opened.ticket === null ? slateFrameSrc(opened.url, contextRef.current) : "about:blank"), [opened.url, opened.ticket]);
+  // The frame starts blank: this page's post names its visitor to the share's host first, at every load, which then
+  // sends it on to the slate; a theme flip after it never reloads the slate, as the previews' never does.
   const exchange = useMemo(() => slateFrameSrc(new URL(VIEWER_EXCHANGE_PATH, opened.url).toString(), contextRef.current), [opened.url]);
   // What the form posts into the frame: who the visitor is, said by this page alone (the host takes it from no other
   // origin, slate-share-route.ts), as a signed-in person's ticket or the anonymous visitor its sheet's button made.
-  const [said, setSaid] = useState<{ readonly name: "ticket" | "anonymous"; readonly value: string } | null>(opened.ticket === null ? null : { name: "ticket", value: opened.ticket });
+  // Signed out, it says so: an account this browser held there before is no one's now.
+  const [said, setSaid] = useState<{ readonly name: "ticket" | "anonymous" | "out"; readonly value: string }>(opened.ticket === null ? { name: "out", value: "1" } : { name: "ticket", value: opened.ticket });
 
   useEffect(() => {
-    if (said !== null) postIntoFrame(exchange, SHARED_FRAME, said);
+    postIntoFrame(exchange, SHARED_FRAME, said);
+
+    // Restored from the back-forward cache, the frame keeps whatever it held: said again.
+    const restored = (event: PageTransitionEvent): void => { if (event.persisted) postIntoFrame(exchange, SHARED_FRAME, said); };
+
+    window.addEventListener("pageshow", restored);
+
+    return () => window.removeEventListener("pageshow", restored);
   }, [said, exchange]);
   const [asking, setAsking] = useState<AssistantAsk | null>(null);
 
@@ -150,7 +157,7 @@ function SharedSlate({ workspace, share, opened, onMode }: { workspace: string; 
 
   return (
     <>
-      <iframe ref={frame} name={SHARED_FRAME} src={src} title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
+      <iframe ref={frame} name={SHARED_FRAME} src="about:blank" title={opened.title} data-shared-slate={opened.slate} className="block min-h-0 w-full flex-1 border-0" />
       {decision}
       {asking?.kind === "identity" && <IdentitySheet onClose={() => setAsking(null)} onAnonymous={continueAnonymously} />}
       {asking?.kind === "lent" && <LentSheet onClose={() => setAsking(null)} onContinue={() => accept("owner")} />}
@@ -245,7 +252,7 @@ export default function LiveSharePage() {
         <span className="t-item min-w-0 flex-1 truncate" data-shared-title>{opened?.title ?? "Shared slate"}</span>
         {lends === "owner" && <span className="t-meta min-w-0 p-text-3" data-shared-lent>Its assistant runs on its owner&apos;s model, and they can read your chat with it.</span>}
       </header>
-      {opened !== null && <SharedSlate workspace={workspace} share={share} opened={opened} onMode={setMode} />}
+      {opened !== null && <SharedSlate key={opened.url} workspace={workspace} share={share} opened={opened} onMode={setMode} />}
       {signedOut && <SignInToOpen />}
       {opened === null && !signedOut && err === null && <div className="flex flex-1 items-center justify-center"><Loader size="base" /></div>}
       {err !== null && <main className="mx-auto w-full max-w-3xl px-6 py-8"><Notice tone="danger">{err}</Notice></main>}

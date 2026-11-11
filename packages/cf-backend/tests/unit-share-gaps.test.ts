@@ -245,7 +245,26 @@ test('a share host takes who its visitor is from Kinu\'s own page alone: never a
     fromTheApp: await statusOf(exchangePost(exchange, { ticket }, '203.0.113.20', new URL(opened.url).origin)),
     anonymousFromTheApp: await statusOf(exchangePost(exchange, { anonymous: '1' }, '203.0.113.20', new URL(opened.url).origin)),
     fromKinu: await statusOf(exchangePost(exchange, { ticket }, '203.0.113.20')),
-  }).toEqual({ get: 404, fromTheApp: 404, anonymousFromTheApp: 404, fromKinu: 303 });
+    noOrigin: await statusOf(new Request(exchange, { method: 'POST', body: new URLSearchParams({ ticket }), headers: { 'cf-connecting-ip': '203.0.113.20' } })),
+    nullOrigin: await statusOf(exchangePost(exchange, { ticket }, '203.0.113.20', 'null')),
+    notAForm: await statusOf(new Request(exchange, { method: 'POST', body: '{', headers: { origin: APP_ORIGIN, 'content-type': 'application/json' } })),
+    expired: await statusOf(exchangePost(exchange, { ticket: ticket.replace(/^([^.]+)\.(\d+)\./u, '$1.1.') }, '203.0.113.20')),
+    serviceWorker: await statusOf(new Request(`${opened.url}sw.js`, { headers: { 'service-worker': 'script' } })),
+  }).toEqual({ get: 404, fromTheApp: 404, anonymousFromTheApp: 404, fromKinu: 303, noOrigin: 404, nullOrigin: 404, notAForm: 404, expired: 404, serviceWorker: 404 });
+
+  // Signed out on a browser that held this person: the page's post says no account, and the account is no one's now.
+  const signedIn = present((await handleSlateShareHostRequest(exchangePost(exchange, { ticket }, '203.0.113.21'), world.env))?.headers.get('set-cookie')?.split(';')[0], 'the viewer cookie');
+
+  const out = await handleSlateShareHostRequest(new Request(exchange, {
+    method: 'POST', body: new URLSearchParams({ out: '1' }), headers: { origin: APP_ORIGIN, cookie: signedIn, 'cf-connecting-ip': '203.0.113.21', 'content-type': 'application/x-www-form-urlencoded' },
+  }), world.env);
+
+  const anonymousOver = await handleSlateShareHostRequest(new Request(exchange, {
+    method: 'POST', body: new URLSearchParams({ anonymous: '1' }), headers: { origin: APP_ORIGIN, cookie: signedIn, 'cf-connecting-ip': '203.0.113.21', 'content-type': 'application/x-www-form-urlencoded' },
+  }), world.env);
+
+  expect([out?.status, out?.headers.get('set-cookie') === null, out?.headers.get('set-cookie')?.split(';')[0] === signedIn]).toEqual([303, false, false]);
+  expect([anonymousOver?.status, anonymousOver?.headers.get('set-cookie')?.split(';')[0] === signedIn]).toEqual([303, false]);
 });
 
 test('S2: the per-viewer request bound refuses past its limit, per viewer and on the exchange', async () => {
