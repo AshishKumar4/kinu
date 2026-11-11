@@ -42,7 +42,7 @@ export function initSlateLiveShareTables(execRaw: RawSqlExec): void {
   // Each conversation an app's agent had on its owner's model (app-agent.ts): the owner's own (share ''), and each
   // My-access visitor's, which the owner may read. Written at its first admitted ask, forgotten once its object ended,
   // and what finds that object then. A conversation on a visitor's own models is never listed here.
-  execRaw(`CREATE TABLE IF NOT EXISTS app_agent_chats (
+  execRaw(`CREATE TABLE IF NOT EXISTS slate_agent_chats (
     slate TEXT NOT NULL,
     share_id TEXT NOT NULL,
     viewer_subject TEXT NOT NULL,

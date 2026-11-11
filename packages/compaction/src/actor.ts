@@ -8,7 +8,8 @@ import { createCompactionStateStore, createVfsTranscriptStore, type CompactionSt
 import { createModelSummarizer } from './summarizer';
 
 export interface ActorCompactionDeps {
-  readonly files: AttachmentDeps['files'];
+  /** An actor's files, where its transcripts and moved attachments are kept. */
+  readonly files: () => NonNullable<ReturnType<AttachmentDeps['files']>>;
   readonly state: Pick<CompactionStateStore, 'plans' | 'archive'>;
   readonly ledger: EphemeralContextPlane & { reset(): void };
   readonly logger: EnginePorts['logger'];
