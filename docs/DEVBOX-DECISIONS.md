@@ -5524,6 +5524,21 @@ index, the list, ripgrep's .deb and xdotool's unchanged one), apt set up 2 packa
 tools ran after (armada, kinu-devbox-contracts-lanes, 2026-11-04T22:48:44Z; red before the list came back: apt read no
 `wanted` and installed nothing).
 
+D121. A process census is not a stop acknowledgement (2026-11-11; amends D69's implementation, keeps its contract).
+On a real golden container, ten concurrent loops of ten kills left a TERM trap's late child alive in 19/100 exec kills
+and 12/100 supervised kills. The initial tree and process group were present. The first `ps` census after TERM missed
+both the exiting parent and the child it had just started, so END_TREE returned before KILL. Holding the real `ps` just
+after its procfs directory read reproduced it 10/10 times; the same hole at entry returned status 3 (nothing running)
+over 10/10 live children. Now an empty census answers only once the kernel reports every captured group gone
+(`kill -0 -- -PGID`), at entry and during the wait. TERM and KILL reach the groups as well as the listed PIDs. KILL stays
+at the TERM grace, after which an empty census of non-zombies is final: a group killed whole can fork no more. The
+change left 0/100 survivors in each lane and 0/10 in the forced entry race (armada 20261111093544-c05464be). Paired,
+same container, N=50 each: normal kill median 33 ms before, 31 after; p90 140 and 139 (20261111095118-01858234). A
+group of zombies whose parent holds their reaping, N=5, now waits the grace: 14 to 5525 ms. An exited supervised process
+answers before END_TREE, 25 ms both ways, N=20 (20261111094326-e5b00600). The public paths failed 4/100 exec and 10/100
+supervised kills at base; the container contract now runs 20 late cases a lane in two ten-way waves (about 94.6% chance
+of catching a recurrence, assuming independent trials; about 13 s added).
+
 ## Open
 
 O1. Closed by D18 on 2026-09-15: settlement `20260915065241` on clean

@@ -281,14 +281,17 @@ async function processes(box: Devbox<unknown>, container: Container): Promise<vo
 }
 
 async function kill(box: Devbox<unknown>, container: Container): Promise<void> {
+  // Golden-container measurement 2026-11-11, armada 20261111092642-9d5a36a3: a single late case missed survivors
+  // in 4/100 exec kills and 10/100 supervised kills. Twenty per lane, in ten-way waves, gives an estimated 94.6%
+  // chance of detecting a recurrence (assuming independent trials), for about 13 s more than one case per lane.
   for (const lane of ['supervised', 'exec'] as const) {
-    for (const response of ['ignore', 'late'] as const) {
-      const id = `${lane}-${response}`;
-      const sleeper = `sleep ${String(7200 + (lane === 'supervised' ? 0 : 10) + (response === 'ignore' ? 1 : 2))}`;
+    const run = async (response: 'ignore' | 'late', trial: number) => {
+      const id = `${lane}-${response}-${String(trial)}`;
+      const sleeper = `sleep ${String((lane === 'supervised' ? 7200 : 7300) + trial + (response === 'ignore' ? 0 : 1))}`;
 
       const command = response === 'ignore'
         ? `trap '' TERM; ${sleeper} & touch ${SCRATCH}/${id}; wait`
-        : `trap '(trap "" TERM; exec ${sleeper}) & exit 0' TERM; sleep 7300 & touch ${SCRATCH}/${id}; wait`;
+        : `trap '(trap "" TERM; exec ${sleeper}) & exit 0' TERM; sleep 7400 & touch ${SCRATCH}/${id}; wait`;
 
       const process = new Processes(container);
       const ran = lane === 'exec' ? box.exec(command, { cwd: '/', execId: id }) : process.start(command, { cwd: '/', processId: id });
@@ -299,6 +302,15 @@ async function kill(box: Devbox<unknown>, container: Container): Promise<void> {
       else await process.kill(id);
       await outcome;
       equal(await native(container, `ps -eo args=,stat= | awk '$1 == "sleep" && $2 == "${sleeper.slice(6)}" && $3 !~ /^Z/ {print}'`), '');
+    };
+
+    await run('ignore', 0);
+
+    for (let wave = 0; wave < 2; wave++) {
+      const ended = await Promise.allSettled(Array.from({ length: 10 }, (_, trial) => run('late', wave * 10 + trial)));
+      const failed = ended.find((outcome) => outcome.status === 'rejected');
+
+      if (failed?.status === 'rejected') throw failed.reason;
     }
   }
 }

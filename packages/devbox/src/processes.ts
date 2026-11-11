@@ -465,12 +465,23 @@ export const END_TREE = `end_tree() {
     ps -eo pid=,pgid=,stat= | awk -v pids=" $(echo $first $(tree "$1")) " -v groups=" $(echo $groups) " \\
       '$3 !~ /^Z/ && (index(pids, " " $1 " ") || index(groups, " " $2 " ")) { print $1 }'
   }
+  group_alive() {
+    for group in $groups; do
+      kill -s 0 -- "-$group" 2>/dev/null && return 0
+    done
+    return 1
+  }
   left=$(standing "$1")
-  [ -n "$left" ] || return 3
+  [ -n "$left" ] || group_alive || return 3
   kill -s TERM $left 2>/dev/null
-  waited=0
-  while left=$(standing "$1"); [ -n "$left" ]; do
-    [ "$waited" -ge ${TERM_GRACE_MS / 100} ] && kill -s KILL $left 2>/dev/null
+  for group in $groups; do kill -s TERM -- "-$group" 2>/dev/null; done
+  waited=0; killed=0
+  while left=$(standing "$1"); [ -n "$left" ] || { [ "$killed" -eq 0 ] && group_alive; }; do
+    [ "$waited" -ge ${TERM_GRACE_MS / 100} ] && {
+      for group in $groups; do kill -s KILL -- "-$group" 2>/dev/null; done
+      [ -z "$left" ] || kill -s KILL $left 2>/dev/null
+      killed=1
+    }
     sleep 0.1; waited=$((waited + 1))
   done
 }`;
