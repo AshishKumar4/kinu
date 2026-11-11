@@ -194,7 +194,7 @@ export const LiveShareListingBodySchema = v.variant('listed', [
 export type LiveShareListingBody = v.InferOutput<typeof LiveShareListingBodySchema>;
 
 /** What a share lends of its owner's in one namespace, as its visitor is shown it: whether anything there acts. */
-export const ShareReachSchema = v.object({ namespace: v.string(), acts: v.boolean() });
+const ShareReachSchema = v.object({ namespace: v.string(), acts: v.boolean() });
 
 export type ShareReach = v.InferOutput<typeof ShareReachSchema>;
 

@@ -381,7 +381,7 @@ test("R3-P1 pending edit. while an editor's change awaits review, the owner shar
 // The grant a visitor accepted on Kinu's page is the one their calls run under: a wider one asks them first.
 test('a viewer whose acceptance does not cover the grant is told what to accept, and nothing of the owner\'s runs', async () => {
   const { call, ran, asked } = world('owner');
-  const readsOnly = shareGrantKey({ mode: 'owner', grant: { slates: ['board'], members: [{ slate: 'board', namespace: 'workspace', member: 'fs.text', impact: 'observe' }] } });
+  const readsOnly = shareGrantKey({ mode: 'owner', grant: { members: [{ namespace: 'workspace', impact: 'observe' }] } });
 
   await expect(call('fs.text', { consented: readsOnly })).resolves.toMatchObject({ ok: false, needs: 'consent' });
   await expect(call('fs.write', { consented: '' })).resolves.toMatchObject({ ok: false, needs: 'consent' });
