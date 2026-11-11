@@ -848,6 +848,10 @@ describe(productFlowTestName('app-agent-flip', 'a share that changes how it lend
     observed = await flowRow('app-agent-flip', appAgentFollowsTheShareMode);
   });
 
+  test('switched to My access with the page open, a plain call of the app\'s method from it still answers', () => {
+    expect(verdictOf(observed, 'app-agent-flip').calledAfterFlip).toBe(APP_AGENT_SLATE.stop);
+  });
+
   test('switched to My access with the page open, the next ask runs nothing and asks them to accept that the owner reads it', () => {
     const flip = verdictOf(observed, 'app-agent-flip');
 

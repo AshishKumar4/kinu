@@ -188,7 +188,7 @@ function forwardUpstream(
 }
 
 /** Close `socket` as its peer closed: a code that names no frame sent (1005) or a lost connection (1006, 1015) cannot be sent. */
-function closeAs(socket: WebSocket, code: number, reason: string): void {
+export function closeAs(socket: WebSocket, code: number, reason: string): void {
   if (socket.readyState === WebSocket.CLOSED || socket.readyState === WebSocket.CLOSING) return;
 
   if (code === 1005) socket.close();

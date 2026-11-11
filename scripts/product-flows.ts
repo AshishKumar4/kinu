@@ -2796,6 +2796,18 @@ async function askTheApp(page: Page, frame: Frame): Promise<AppAsked> {
   return shown.reply === '' && shown.refused === '' ? { reply: '', refused: `no answer in ${String(ASK_SETTLES_MS / 1000)} s` } : shown;
 }
 
+/** Presses the app's Call, a plain call of its server's method from its page: what it shows once it settles. */
+async function callTheApp(page: Page, frame: Frame): Promise<string> {
+  await frame.evaluate('document.querySelector("[data-called]").textContent = ""');
+  const giveUpAt = v.parse(v.number(), await frame.evaluate('performance.now()')) + ASK_SETTLES_MS;
+
+  await frame.click('[data-call]');
+  await waitOn(page, 'the app\'s call to settle', frame.waitForFunction(`(document.querySelector("[data-called]")?.textContent ?? "") !== "" || performance.now() > ${String(giveUpAt)}`, { polling: 100 }));
+  const shown = v.parse(v.string(), await frame.evaluate('document.querySelector("[data-called]")?.textContent ?? ""'));
+
+  return shown === '' ? `no answer in ${String(ASK_SETTLES_MS / 1000)} s` : shown;
+}
+
 /** The app's page as the workspace shows it in Kinu, its tab opened from the Drive's tile. */
 async function appInKinu(target: FlowTarget, workspace: string): Promise<{ readonly page: Page; readonly frame: Frame }> {
   const page = await signedInPage(target.browser, target);
@@ -3133,6 +3145,8 @@ export interface AppAgentFlipVerdict {
   readonly workspace: string;
   /** On the visitor's own access, consented: their answer. */
   readonly own: AppAsked;
+  /** The owner switched to My access with the page open: a plain call of the app's method from it, then. */
+  readonly calledAfterFlip: string;
   /** The owner switched to My access with the page open: the next ask, and the owner's chats then. */
   readonly toLent: FlipAsked;
   readonly chatsBeforeAccepting: number;
@@ -3191,6 +3205,8 @@ export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<A
     const own = await askTheApp(page, frame);
 
     await setFlowShareMode(target, workspace, share, 'owner');
+    // The page stayed open across the change: a plain call of the app's own method still answers.
+    const calledAfterFlip = await callTheApp(page, frame);
     const toLent = await askAndRead(page, frame);
 
     await shoot(page, 'flip-to-lent-sheet');
@@ -3212,7 +3228,7 @@ export async function appAgentFollowsTheShareMode(target: FlowTarget): Promise<A
     await shoot(page, 'flip-to-own-sheet');
     await page.close();
 
-    return { workspace, own, toLent, chatsBeforeAccepting, lent, chatsAfterAccepting, backToOwn };
+    return { workspace, own, calledAfterFlip, toLent, chatsBeforeAccepting, lent, chatsAfterAccepting, backToOwn };
   } finally {
     if (share !== null) await revokeFlowShare(target, workspace, share);
     await removeFlowWorkspace(target, workspace);

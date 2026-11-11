@@ -15,6 +15,37 @@ import { attempt, diagnostics, KinuError, renderCauseChain, settle } from '@kinu
 import { confinedTo, SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE, type SlateBuildFailure, type SlateBuildRead, type SlateImage } from '@kinu.run/core/slates';
 import { BROWSER_CLIENT_MODULE, BROWSER_PRELUDE, browserClientSource } from '../browser-prelude';
 import { slateVendorModule } from './vendor';
+import { closeAs } from '../egress/send-out';
+
+/**
+ * A page's socket to a process, relayed here so it closes when the process ends: a process killed or lost to a reset
+ * says nothing on its own end, and a page writing into it would wait for an answer forever (staging c49ddd944,
+ * 2026-11-11: a share's mode change killed its app, and its open page's next call never settled). Closed, the page's
+ * runtime opens a new session, to the process running now.
+ */
+function heldSocket(answer: Response, held: Set<WebSocket>): Response {
+  const upstream = answer.webSocket;
+
+  if (upstream === null) return answer;
+  const pair = new WebSocketPair();
+  const page = pair[0];
+  const relay = pair[1];
+
+  upstream.accept();
+  relay.accept();
+  held.add(relay);
+  upstream.addEventListener('message', (event) => { relay.send(event.data); });
+  relay.addEventListener('message', (event) => { upstream.send(event.data); });
+  upstream.addEventListener('close', (event) => { closeAs(relay, event.code, event.reason); });
+  relay.addEventListener('close', (event) => {
+    held.delete(relay);
+    closeAs(upstream, event.code, event.reason);
+  });
+  upstream.addEventListener('error', () => { closeAs(relay, 1011, 'the app\'s socket failed'); });
+  relay.addEventListener('error', () => { closeAs(upstream, 1011, 'the page\'s socket failed'); });
+
+  return new Response(null, { status: 101, webSocket: page });
+}
 
 export interface ResidentSlateProcess extends SlateProcess {
   /** The port the durable application listens on; null for a caller's private process, which is reached by RPC alone. */
@@ -802,8 +833,12 @@ export class ResidentSlateProcesses {
       }
 
       const methods = surface.output.methods;
+      // Every page's socket to this process: each closed as it ends, however it ends.
+      const sockets = new Set<WebSocket>();
 
       session.processes.setTerminator(pid, () => {
+        for (const socket of sockets) closeAs(socket, 1000, 'The app restarted');
+        sockets.clear();
         // Every resident exit passes here; the stack records who ended the pid.
         diagnostics.event('slate.resident.terminated', {
           pid, owner: input.owner, port: input.app?.port ?? 0,
@@ -819,7 +854,7 @@ export class ResidentSlateProcesses {
       return {
         id: String(pid), port: input.app?.port ?? null, methods,
         request: (request) => spawned.facet.fetch(request),
-        connect: (request) => spawned.facet.connect(request),
+        connect: async (request) => heldSocket(await spawned.facet.connect(request), sockets),
         isRunning: async () => session.processes.get(pid)?.state === 'running',
         stop: async () => { manager.kill(pid); },
       };
