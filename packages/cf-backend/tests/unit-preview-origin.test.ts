@@ -20,7 +20,7 @@ import {
   APP_ROUTES, CLIENT_ERROR_ENDPOINT, CLIENT_RENDER_FAILED,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
-import { LIVE_SHARE_OPEN_PATH, PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
+import { LIVE_SHARE_ANONYMOUS_PATH, LIVE_SHARE_OPEN_PATH, PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH, USER_WEB_SEARCH_PATH } from '@kinu.run/core';
 import { DEPLOY_API } from '@kinu.run/core/deploy';
 import { crossSiteRejection } from '../src/auth/session';
 import { CLI_APPROVAL_CSRF_COOKIE_NAME, oauthStateCookieName, SESSION_COOKIE_NAME } from '../src/auth/cookies';
@@ -1210,6 +1210,7 @@ const PUBLIC_API = [
   '/api/health', // the build stamp
   '/api/shared/blueprint/', // a signed blueprint id
   LIVE_SHARE_OPEN_PATH, // a public share opens signed out; a named one reads its session itself, the cross-site rule with it
+  LIVE_SHARE_ANONYMOUS_PATH, // continuing anonymously, signed out by its nature: Kinu's own Origin alone, session or not
   '/api/workspaces/:name/webhook/', // a signed delivery URL
   '/api/gallery', // read by anyone; a star or report reads its session itself
   '/api/explore', // read by anyone, as the Gallery is
