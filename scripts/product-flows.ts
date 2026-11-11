@@ -20,9 +20,9 @@
  * Waits are conditions, never clocks: the page's own socket frames (read over
  * CDP) and its own controls say when it has settled.
  */
-import type { Page } from 'puppeteer';
+import type { Frame, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { AccountMemoryProposalSchema, APP_ROUTES, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, PERSONAL_ASSISTANT_ID, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
+import { AccountMemoryProposalSchema, APP_ROUTES, CHANGES_MOVED_EVENT, DRIVE_SKILLS_DIR, executorLabel, LIVE_SHARE_CHAT_PATH, LIVE_SHARE_CHATS_PATH, PERSONAL_ASSISTANT_ID, ShareChatsSchema, SLATES_ROOT, type AccountMemoryProposal } from '@kinu.run/core';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { evalWorkspaceName, scratchDir } from '@kinu.run/test-utils';
@@ -36,6 +36,7 @@ import {
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
   SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
   ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD, ACTIVITY_ASK, ACTIVITY_WORKSPACE, MODE_SLATE, MODE_SLATE_ASK,
+  APP_AGENT_ASK, APP_AGENT_FILES, APP_AGENT_SLATE,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
 import { ACTIVE_TAB_INDEX, AGENT_TAB, AGENTS_COUNTER, agentTab, ATTENTION_BEHIND, ATTENTION_CARD, attentionBehind, attentionCard, CHAT_COMPOSER_LIVE, CHAT_IDLE, CHATS, CHECKBOX, countRpc, createFlowWorkspace, DESKTOP_RETURN, DRIVE_DIALOG_COMMIT, DRIVE_NEW, DRIVE_PLACE, drivePlace, FILES_FAILURE, frameLedger, INSPECTOR_WIDTH, MARK_REVIEWED, named, NEW_SESSION, openInspector, openInspectorPage, openSlateShareDialog, openWaits, openWorkspacePage, PAGE_TABS, pagesTraffic, painted, PARKED_COMMAND, parkedCommand, pressMenu, pressRowMenu, recordRenderTasks, removeFlowWorkspace, RENAME_BUTTON, rendered, sendAndSettle, sendInChat, sessionLine, settled, settledAfter, startNewChat, submitPublicSlateShare, typeIntoComposer, until, waitOn, type FlowTarget, type FrameLedger, type RpcCounts, type SendSite } from './browser-page';
@@ -2726,6 +2727,296 @@ export async function reopenedWorkspaceRunsTheDeployedBuild(target: FlowTarget):
 
     return { workspace, restored: reopened.restored, navigation: reopened.type, transferBytes: reopened.transferSize };
   } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+/** Where the app-agent rows' app lives: its files, written into a fresh workspace of the row's. */
+async function appAgentWorkspace(target: FlowTarget, subject: string): Promise<string> {
+  const workspace = await createFlowWorkspace(target, subject);
+
+  for (const [name, text] of Object.entries(APP_AGENT_FILES)) await writeWorkspaceFile(target, workspace, `${SLATES_ROOT}/${APP_AGENT_SLATE.id}/${name}`, text);
+
+  return workspace;
+}
+
+/** The app's tile in the Drive's Slates. */
+function appAgentTile(workspace: string): string {
+  return `[data-drive-slate="${APP_AGENT_SLATE.id}"][data-drive-workspace="${workspace}"]`;
+}
+
+/** What the app's page showed after one press of Ask: its assistant's reply, or why the ask was refused. */
+export interface AppAsked {
+  readonly reply: string;
+  readonly refused: string;
+}
+
+/** Presses the app's Ask in `frame`, the app's page, and reads what it shows once its ask settles. */
+async function askTheApp(page: Page, frame: Frame): Promise<AppAsked> {
+  await waitOn(page, 'the app\'s page to draw', frame.waitForFunction('document.querySelector("[data-ask]") !== null', { polling: 100 }));
+  await frame.evaluate('document.querySelector("[data-reply]").textContent = ""; document.querySelector("[data-refused]").textContent = ""');
+  await frame.click('[data-ask]');
+  await waitOn(page, 'the app\'s ask to settle', frame.waitForFunction('(document.querySelector("[data-reply]")?.textContent ?? "") !== "" || (document.querySelector("[data-refused]")?.textContent ?? "") !== ""', { polling: 100 }));
+
+  return v.parse(v.object({ reply: v.string(), refused: v.string() }), await frame.evaluate('({ reply: document.querySelector("[data-reply]")?.textContent ?? "", refused: document.querySelector("[data-refused]")?.textContent ?? "" })'));
+}
+
+/** The app's page as the workspace shows it in Kinu, its tab opened from the Drive's tile. */
+async function appInKinu(target: FlowTarget, workspace: string): Promise<{ readonly page: Page; readonly frame: Frame }> {
+  const page = await signedInPage(target.browser, target);
+
+  await page.goto(`${target.origin}/slates`, { waitUntil: 'load' });
+  await until(page, 'the app\'s tile in Slates', `document.querySelector(${JSON.stringify(appAgentTile(workspace))}) !== null`);
+  await page.click(`${appAgentTile(workspace)} a`);
+  await until(page, 'the workspace page', CHAT_COMPOSER_LIVE);
+  await openInspector(page);
+  const selector = `#inspector iframe[title="${APP_AGENT_SLATE.id}"]`;
+
+  await until(page, 'the app\'s preview frame', `document.querySelector(${JSON.stringify(selector)}) !== null`);
+  const frame = await (await page.$(selector))?.contentFrame();
+
+  if (frame === null || frame === undefined) throw new Error('the app\'s preview frame has no document');
+  await waitOn(page, 'the app\'s preview to load', frame.waitForFunction('location.href !== "about:blank" && document.readyState === "complete"', { polling: 100 }));
+
+  return { page, frame };
+}
+
+/** Whether the owner's own agent heard the app's ask: its words anywhere in the workspace's main chat. */
+async function mainHeard(page: Page): Promise<boolean> {
+  return v.parse(v.boolean(), await page.evaluate(`(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(APP_AGENT_ASK)})`));
+}
+
+/** Shares the app from its tile, with anyone who has the link, on `mode`: its link, which names its share last. */
+async function shareTheApp(target: FlowTarget, workspace: string, mode: 'own' | 'owner'): Promise<{ readonly link: string; readonly share: string }> {
+  const page = await signedInPage(target.browser, target);
+
+  await page.goto(`${target.origin}/slates`, { waitUntil: 'load' });
+  await until(page, 'the app\'s tile in Slates', `document.querySelector(${JSON.stringify(appAgentTile(workspace))}) !== null`);
+  await openSlateShareDialog(page, appAgentTile(workspace));
+
+  if (mode === 'owner') {
+    await until(page, 'My access to be offered', `document.querySelector('[role="dialog"] [data-share-mode="owner"]:not([disabled])') !== null`);
+    await page.click('[role="dialog"] [data-share-mode="owner"]');
+  }
+
+  const link = await submitPublicSlateShare(page);
+
+  await page.close();
+
+  if (link === null) throw new Error('the share dialog gave no link');
+
+  return { link, share: new URL(link).pathname.split('/').at(-1) ?? '' };
+}
+
+/** The share's app's frame on its page now. */
+async function appFrameNow(page: Page): Promise<Frame> {
+  const frame = await (await page.$('[data-shared-slate]'))?.contentFrame();
+
+  if (frame === null || frame === undefined) throw new Error('the shared app\'s frame has no document');
+
+  return frame;
+}
+
+/** The share's page in `page`, and its app's frame there. */
+async function appOnItsLink(page: Page, link: string): Promise<Frame> {
+  await page.goto(link, { waitUntil: 'load' });
+  await until(page, 'the shared app\'s frame', 'document.querySelector("[data-shared-slate]") !== null');
+
+  return appFrameNow(page);
+}
+
+/** The modal the share's page opened over its app, by its title and buttons; null when none is open. */
+async function openSheet(page: Page): Promise<{ readonly title: string; readonly buttons: readonly string[] } | null> {
+  return v.parse(v.nullable(v.object({ title: v.string(), buttons: v.array(v.string()) })), await page.evaluate(`(() => {
+    const dialog = document.querySelector('[role="dialog"]');
+    if (dialog === null) return null;
+    return { title: dialog.getAttribute('aria-label') ?? '', buttons: [...dialog.querySelectorAll('button')].map((button) => (button.textContent ?? '').trim()).filter((text) => text !== '') };
+  })()`));
+}
+
+/** The owner's own read of a share's chats with its assistant, as its share sheet reads them. */
+async function ownerReadsChats(target: FlowTarget, workspace: string, share: string): Promise<{ readonly chats: number; readonly said: string }> {
+  const headers = { ...webHeaders(target.identity), 'content-type': 'application/json' };
+  const listed = await fetch(`${target.origin}${LIVE_SHARE_CHATS_PATH}`, { method: 'POST', headers, body: JSON.stringify({ workspace, share }) });
+
+  if (!listed.ok) return { chats: -1, said: `listing answered ${String(listed.status)}` };
+  const { chats } = v.parse(ShareChatsSchema, await listed.json());
+  const [first] = chats;
+
+  if (first === undefined) return { chats: 0, said: '' };
+  const read = await fetch(`${target.origin}${LIVE_SHARE_CHAT_PATH}`, { method: 'POST', headers, body: JSON.stringify({ workspace, share, subject: first.subject }) });
+
+  return { chats: chats.length, said: read.ok ? JSON.stringify(await read.json()) : `reading answered ${String(read.status)}` };
+}
+
+/** Ends a share the row made, through the route its owner's sheet stops one with. */
+async function revokeFlowShare(target: FlowTarget, workspace: string, share: string): Promise<void> {
+  const left = await fetch(`${target.origin}/api/shared/revoke`, {
+    method: 'POST', headers: { ...webHeaders(target.identity), 'content-type': 'application/json' }, body: JSON.stringify({ workspace, share }),
+  });
+
+  if (!left.ok) console.warn(`product-flows: revoking ${share} answered ${String(left.status)}`);
+}
+
+export interface AppAgentOwnerVerdict {
+  readonly workspace: string;
+  /** The owner's ask in Kinu, the app unshared, then shared. */
+  readonly unshared: AppAsked;
+  readonly shared: AppAsked;
+  /** Whether the owner's main chat showed the app's ask. */
+  readonly mainHeard: boolean;
+}
+
+/**
+ * Row: the owner asks an app's assistant inside Kinu, unshared and then shared, and its app agent answers each from the
+ * app's own function; the owner's main agent hears neither. Red before the app agent: the main agent answered an
+ * unshared app's ask, and a shared one's was refused.
+ */
+export async function appAgentAnswersItsOwner(target: FlowTarget): Promise<AppAgentOwnerVerdict> {
+  const workspace = await appAgentWorkspace(target, 'app-agent-owner');
+  let share: string | null = null;
+
+  try {
+    const first = await appInKinu(target, workspace);
+    const unshared = await askTheApp(first.page, first.frame);
+
+    await first.page.close();
+    share = (await shareTheApp(target, workspace, 'own')).share;
+    const second = await appInKinu(target, workspace);
+    const shared = await askTheApp(second.page, second.frame);
+    const heard = await mainHeard(second.page);
+
+    await second.page.close();
+
+    return { workspace, unshared, shared, mainHeard: heard };
+  } finally {
+    if (share !== null) await revokeFlowShare(target, workspace, share);
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface AppAgentLentVerdict {
+  readonly workspace: string;
+  /** A signed-out visitor's first ask, refused until they say who they are, and the sheet the share's page opened. */
+  readonly first: AppAsked;
+  readonly sheet: { readonly title: string; readonly buttons: readonly string[] } | null;
+  /** Their ask once they continued anonymously. */
+  readonly anonymous: AppAsked;
+  /** What the owner's share sheet reads of it. */
+  readonly owner: { readonly chats: number; readonly said: string };
+  readonly mainHeard: boolean;
+}
+
+/**
+ * Row: an anonymous visitor on a My-access link asks the app's assistant and is answered on the owner's model; the
+ * owner can read that chat in the share sheet, and their main agent hears nothing. Red before the app agent: the
+ * visitor's guest was a hire of the owner's agent, whose one tool took no app method.
+ */
+export async function appAgentAnswersALentVisitor(target: FlowTarget): Promise<AppAgentLentVerdict> {
+  const workspace = await appAgentWorkspace(target, 'app-agent-lent');
+  let share: string | null = null;
+
+  try {
+    // Opened once in Kinu first: My access is approved over a built version of the app.
+    const opened = await appInKinu(target, workspace);
+
+    await waitOn(opened.page, 'the app\'s page to draw', opened.frame.waitForFunction('document.querySelector("[data-ask]") !== null', { polling: 100 }));
+    await opened.page.close();
+    const made = await shareTheApp(target, workspace, 'owner');
+
+    share = made.share;
+    const context = await target.browser.createBrowserContext();
+    const page = await context.newPage();
+    let frame = await appOnItsLink(page, made.link);
+    const first = await askTheApp(page, frame);
+
+    await until(page, 'the share page\'s sheet', 'document.querySelector(\'[role="dialog"]\') !== null');
+    const sheet = await openSheet(page);
+
+    await page.evaluate(`[...document.querySelectorAll('[role="dialog"] button')].find((button) => (button.textContent ?? '').trim() === 'Continue anonymously')?.click()`);
+    await until(page, 'the sheet to close', 'document.querySelector(\'[role="dialog"]\') === null');
+    // The frame goes through the share host's exchange, which names this browser, and back to the app.
+    await until(page, 'the app to open anonymously', 'document.querySelector("[data-shared-slate]")?.getAttribute("src")?.includes("anonymous=1") === true');
+    frame = await appFrameNow(page);
+    await waitOn(page, 'the app back after the exchange', frame.waitForFunction('!location.pathname.startsWith("/__kinu/") && document.querySelector("[data-ask]") !== null', { polling: 100 }));
+    const anonymous = await askTheApp(page, frame);
+
+    await context.close();
+    const owner = await ownerReadsChats(target, workspace, share);
+    const kinu = await appInKinu(target, workspace);
+    const heard = await mainHeard(kinu.page);
+
+    await kinu.page.close();
+
+    return { workspace, first, sheet, anonymous, owner, mainHeard: heard };
+  } finally {
+    if (share !== null) await revokeFlowShare(target, workspace, share);
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface AppAgentOwnVerdict {
+  readonly workspace: string;
+  /** A signed-out visitor's ask, and the sheet the share's page opened for it. */
+  readonly signedOut: AppAsked;
+  readonly signInSheet: { readonly title: string; readonly buttons: readonly string[] } | null;
+  /** A signed-in visitor's first ask, refused until they consent, the sheet that asked it, and their ask after. */
+  readonly beforeConsent: AppAsked;
+  readonly consentSheet: { readonly title: string; readonly buttons: readonly string[] } | null;
+  readonly visitor: AppAsked;
+  /** What the owner's share sheet reads of the share's chats: none, the visitor's being theirs. */
+  readonly owner: { readonly chats: number; readonly said: string };
+  readonly mainHeard: boolean;
+}
+
+/**
+ * Row: on a default link the app's assistant runs on each visitor's own model: a signed-out visitor is asked to sign in,
+ * and a signed-in one, once they consent, is answered on their own model; the owner reads none of it, and their main
+ * agent hears nothing. Red before the app agent: the share lent nothing, so the ask was refused.
+ */
+export async function appAgentAnswersAVisitorOnTheirOwn(target: FlowTarget): Promise<AppAgentOwnVerdict> {
+  const workspace = await appAgentWorkspace(target, 'app-agent-own');
+  let share: string | null = null;
+  const visitor = { origin: target.origin, identity: { ...target.identity, account: 'visitor' as const } };
+
+  try {
+    const made = await shareTheApp(target, workspace, 'own');
+
+    share = made.share;
+    const context = await target.browser.createBrowserContext();
+    const away = await context.newPage();
+    const signedOut = await askTheApp(away, await appOnItsLink(away, made.link));
+
+    await until(away, 'the share page\'s sheet', 'document.querySelector(\'[role="dialog"]\') !== null');
+    const signInSheet = await openSheet(away);
+
+    await context.close();
+    const page = await signedInPage(target.browser, visitor);
+    const frame = await appOnItsLink(page, made.link);
+    const beforeConsent = await askTheApp(page, frame);
+
+    await until(page, 'the consent sheet', 'document.querySelector("[data-consent-allow]") !== null');
+    const consentSheet = await openSheet(page);
+
+    await page.click('[data-consent-allow]');
+    await until(page, 'the consent to be kept', 'document.querySelector(\'[role="dialog"]\') === null');
+    const asked = await askTheApp(page, frame);
+
+    await page.close();
+    // The visitor takes their consent back, which ends their own conversation with it.
+    const root = encodeURIComponent('{}');
+    const withdrawn = await fetch(`${target.origin}/api/slates/${encodeURIComponent(workspace)}/${APP_AGENT_SLATE.id}/consents?server=agent&root=${root}`, { method: 'DELETE', headers: webHeaders(visitor.identity) });
+
+    if (!withdrawn.ok) console.warn(`product-flows: withdrawing the visitor's consent answered ${String(withdrawn.status)}`);
+    const owner = await ownerReadsChats(target, workspace, share);
+    const kinu = await appInKinu(target, workspace);
+    const heard = await mainHeard(kinu.page);
+
+    await kinu.page.close();
+
+    return { workspace, signedOut, signInSheet, beforeConsent, consentSheet, visitor: asked, owner, mainHeard: heard };
+  } finally {
+    if (share !== null) await revokeFlowShare(target, workspace, share);
     await removeFlowWorkspace(target, workspace);
   }
 }

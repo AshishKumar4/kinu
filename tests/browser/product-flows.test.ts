@@ -23,6 +23,7 @@ import {
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
   computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindReturnsTheAsk, activityIsShown, slatePicturesFollowMode, claudeCodePageExchanges, type AgentPlanVerdict, type AgentReturnVerdict,
+  appAgentAnswersItsOwner, appAgentAnswersALentVisitor, appAgentAnswersAVisitorOnTheirOwn, type AppAgentOwnerVerdict, type AppAgentLentVerdict, type AppAgentOwnVerdict,
   type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
   type FirstAnswerVerdict, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
@@ -33,7 +34,7 @@ import { INSPECTOR_SHUT_PX, type FlowTarget } from '../../scripts/browser-page';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
   INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, AGENT_WORKSPACE, REACH_REPLY, REACH_STREAM, STACK_FACT, STACK_RECALL_REPLY, STORM_FILES,
-  THREAD_REPLY, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_WORD, ACTIVITY_REFUSAL,
+  THREAD_REPLY, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_WORD, ACTIVITY_REFUSAL, APP_AGENT_REPLY, APP_AGENT_SLATE,
 } from '../../scripts/flows-script';
 import {
   chatTitledFromItsBrief, hireLivesUnderItsName, pinKeepsAnInChatPage, planCommentReachesTheAgent, slateStreamsAndHires,
@@ -738,6 +739,97 @@ describe(productFlowTestName('slate-share', 'a slate that reaches nothing of its
 
   test('Stop sharing takes it off the Drive', () => {
     expect(verdictOf(observed, 'slate-share').afterStop).not.toContain(DRIVE_SLATE.title);
+  });
+});
+
+// The app agent (core slates/app-agent.ts, owner decision 2026-11-10 "App agent for all"): one assistant per app, for its
+// owner in Kinu and every visitor of its shares, answering from the app's own function, never through the owner's agent.
+describe(productFlowTestName('app-agent-owner', 'the owner asks an app\'s assistant in Kinu, shared or not, and its app agent answers'), () => {
+  let observed: AppAgentOwnerVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('app-agent-owner', appAgentAnswersItsOwner);
+  });
+
+  test('unshared, the app agent answers from the app\'s own function', () => {
+    const asked = verdictOf(observed, 'app-agent-owner').unshared;
+
+    expect(asked.refused).toBe('');
+    expect(asked.reply).toContain(`${APP_AGENT_REPLY}:`);
+    expect(asked.reply).toContain(APP_AGENT_SLATE.stop);
+  });
+
+  test('shared, it still answers its owner in Kinu', () => {
+    const asked = verdictOf(observed, 'app-agent-owner').shared;
+
+    expect(asked.refused).toBe('');
+    expect(asked.reply).toContain(APP_AGENT_SLATE.stop);
+  });
+
+  test('the owner\'s main agent hears neither ask', () => {
+    expect(verdictOf(observed, 'app-agent-owner').mainHeard).toBe(false);
+  });
+});
+
+describe(productFlowTestName('app-agent-lent', 'an anonymous visitor on a My-access link is answered on the owner\'s model, and the owner can read it'), () => {
+  let observed: AppAgentLentVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('app-agent-lent', appAgentAnswersALentVisitor);
+  });
+
+  test('a visitor known by nothing yet is asked who they are, and may go on anonymously', () => {
+    const lent = verdictOf(observed, 'app-agent-lent');
+
+    expect(lent.first.reply).toBe('');
+    expect(lent.sheet?.buttons).toContain('Continue anonymously');
+  });
+
+  test('anonymous, the visitor is answered from the app\'s own function', () => {
+    const asked = verdictOf(observed, 'app-agent-lent').anonymous;
+
+    expect(asked.refused).toBe('');
+    expect(asked.reply).toContain(APP_AGENT_SLATE.stop);
+  });
+
+  test('the owner reads that chat in the share sheet, and their main agent hears nothing', () => {
+    const lent = verdictOf(observed, 'app-agent-lent');
+
+    expect(lent.owner.chats).toBe(1);
+    expect(lent.owner.said).toContain(APP_AGENT_SLATE.stop);
+    expect(lent.mainHeard).toBe(false);
+  });
+});
+
+describe(productFlowTestName('app-agent-own', 'on a default link a visitor signs in, consents, and is answered on their own model, privately'), () => {
+  let observed: AppAgentOwnVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('app-agent-own', appAgentAnswersAVisitorOnTheirOwn);
+  });
+
+  test('signed out, the visitor is asked to sign in, with no anonymous way on', () => {
+    const own = verdictOf(observed, 'app-agent-own');
+
+    expect(own.signedOut.reply).toBe('');
+    expect(own.signInSheet?.buttons).toContain('Sign in');
+    expect(own.signInSheet?.buttons).not.toContain('Continue anonymously');
+  });
+
+  test('signed in, they are asked to let it use their models, then answered from the app\'s own function', () => {
+    const own = verdictOf(observed, 'app-agent-own');
+
+    expect(own.beforeConsent.reply).toBe('');
+    expect(own.consentSheet?.buttons).toContain('Allow');
+    expect(own.visitor.refused).toBe('');
+    expect(own.visitor.reply).toContain(APP_AGENT_SLATE.stop);
+  });
+
+  test('the owner reads none of it, and their main agent hears nothing', () => {
+    const own = verdictOf(observed, 'app-agent-own');
+
+    expect(own.owner.chats).toBe(0);
+    expect(own.mainHeard).toBe(false);
   });
 });
 

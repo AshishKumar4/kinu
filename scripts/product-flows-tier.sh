@@ -14,6 +14,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 source scripts/repo-runtime.sh
 
+FLOW="${1:-}"
 if [[ "${1:-}" == --flow=* ]]; then
   pattern="$(bun scripts/product-flow-rows.ts "$1")"
   shift
@@ -51,6 +52,18 @@ fi
 # What the flows (tests/browser/product-flows.test.ts) and the CLI read: the origin eval-credentials resolved.
 export KINU_ORIGIN="${RESOLVED[0]}"
 KINU_EVAL_BACKEND=cloud KINU_TOKEN="${RESOLVED[1]}" bun scripts/scripted-tier.ts "$KINU_ORIGIN" "$KINU_EVAL_ACCOUNT" || exit 1
+
+# The app agent's own-access row is answered on its visitor's own model: a second eval account, also on the scripted
+# model, set up the same way (product-flows.ts `appAgentAnswersAVisitorOnTheirOwn`).
+if [[ "$FLOW" == "--flow=app-agent-own" ]]; then
+  KINU_EVAL_ACCOUNT=visitor bun scripts/eval-session-mint.ts || exit 1
+  mapfile -t VISITING <<< "$(KINU_EVAL_ACCOUNT=visitor bun scripts/eval-credentials.ts)"
+  if [[ ${#VISITING[@]} -ne 2 || "${VISITING[0]}" != "$KINU_EVAL_ORIGIN" ]]; then
+    echo "product-flows: no CLI bearer for the visitor eval account at $KINU_EVAL_ORIGIN." >&2
+    exit 1
+  fi
+  KINU_EVAL_ACCOUNT=visitor KINU_EVAL_BACKEND=cloud KINU_TOKEN="${VISITING[1]}" bun scripts/scripted-tier.ts "$KINU_ORIGIN" visitor || exit 1
+fi
 
 echo "── product flows ─────────────────────────────────────────"
 echo "target:   $KINU_ORIGIN as $KINU_EVAL_ACCOUNT"

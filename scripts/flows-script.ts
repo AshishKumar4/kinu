@@ -207,6 +207,67 @@ const FLOW_SLATE_CLIENT = [
   '',
 ].join('\n');
 
+/**
+ * The app-agent rows' app (core slates/app-agent.ts): one server method its assistant calls, and a page whose button
+ * asks the assistant and shows its reply, or why it was refused.
+ */
+export const APP_AGENT_SLATE = { id: 'trip-helper', title: 'Flow trip helper', stop: 'Belem Tower' } as const;
+
+/** What the app's page asks its assistant, and the words its reply opens with. */
+export const APP_AGENT_ASK = 'Flow app agent: what is our next stop?';
+
+export const APP_AGENT_REPLY = 'NEXT STOP';
+
+export const APP_AGENT_FILES = {
+  'package.json': JSON.stringify({ name: APP_AGENT_SLATE.id, description: 'Plans the stops of a trip.', main: 'server.ts', browser: 'client.tsx', slate: { title: APP_AGENT_SLATE.title } }),
+  'server.ts': [
+    'import { SlateObject } from "kinu:slate";',
+    '',
+    'export class Slate extends SlateObject {',
+    '  async nextStop() {',
+    `    return ${JSON.stringify(APP_AGENT_SLATE.stop)};`,
+    '  }',
+    '}',
+    '',
+  ].join('\n'),
+  'client.tsx': [
+    'import { useState } from "react";',
+    'import { workspace } from "kinu:slate";',
+    '',
+    'export default function App() {',
+    '  const [reply, setReply] = useState("");',
+    '  const [refused, setRefused] = useState("");',
+    '',
+    '  const ask = async () => {',
+    '    setRefused("");',
+    '    try {',
+    `      const answer = await workspace.agent.ask({ text: ${JSON.stringify(APP_AGENT_ASK)} });`,
+    '      setReply(await new Response(answer.reply).text());',
+    '    } catch (cause) {',
+    '      setRefused(cause instanceof Error ? cause.message : String(cause));',
+    '    }',
+    '  };',
+    '',
+    '  return (',
+    '    <main>',
+    '      <button type="button" data-ask onClick={() => { void ask(); }}>Ask</button>',
+    '      <output data-reply>{reply}</output>',
+    '      <p data-refused>{refused}</p>',
+    '    </main>',
+    '  );',
+    '}',
+    '',
+  ].join('\n'),
+} as const satisfies Readonly<Record<string, string>>;
+
+/** The app's assistant, offered its one tool: it asks the app for the next stop as the person, then says it. */
+function appAgentAnswer(request: ScriptedRequest): ScriptedAnswer | undefined {
+  if (!request.ask.includes(APP_AGENT_ASK) || !request.available.includes('app')) return undefined;
+  const called = request.askTurn.find((call) => call.name === 'app');
+
+  return called === undefined ? { toolCall: { name: 'app', arguments: { method: 'nextStop' } } } : { text: `${APP_AGENT_REPLY}: ${called.result}` };
+}
+
 /** The slate turn's calls, in the order the scripted model plays them: the two files the ask names, then its preview. */
 const FLOW_SLATE_CALLS: readonly ScriptedAnswer[] = [
   {
@@ -656,7 +717,7 @@ function writeFileAnswer(request: ScriptedRequest, asked: (ask: string) => boole
 
 export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
   const asked = (ask: string): boolean => request.userTexts.some((text) => text.includes(ask));
-  const first = jobAnswer(request) ?? writeFileAnswer(request, asked);
+  const first = appAgentAnswer(request) ?? jobAnswer(request) ?? writeFileAnswer(request, asked);
 
   if (first !== undefined) return first;
 
