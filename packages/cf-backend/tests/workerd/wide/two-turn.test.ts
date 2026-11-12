@@ -425,35 +425,6 @@ describe('two real turns over the HTTP model seam', () => {
     expect(carried.conversation.some((m) => m.role === 'user' && m.content.includes('QUEUE-B'))).toBe(true);
   });
 
-  it('re-delivers a buffered event after eviction when its drain lease is stale', async () => {
-    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('evt-redelivery-driver'));
-
-    // The state a dead activation leaves: an event bound to a never-closed drain lease, aged past the stale grace.
-    const { workspace } = await root.claimEventWorkspace();
-    await root.seedStaleDrainEventFor(workspace, 'BUFFERED-EVENT');
-    await abortAllDurableObjects();
-
-    const coldRoot = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('evt-redelivery-driver'));
-
-    const seeded = (await coldRoot.agentLogEventsFor(workspace)).find((row) => row.id === 'ev-seeded-BUFFERED-EVENT');
-    expect(seeded?.turnId).toBe('evt-seeded-dead');
-    expect(seeded?.consumedAt).toBe(0);
-
-    // The wake joins on the marker in the wire log, so a return means the drain's model call carried the event.
-    await coldRoot.runEventWakeFor(workspace, 'BUFFERED-EVENT');
-
-    const calls = v.parse(HttpSchema, await coldRoot.httpCalls());
-
-    const redelivered = calls.find((call) =>
-      call.conversation.some((m) => m.content.includes('BUFFERED-EVENT')));
-
-    expect(redelivered).toBeDefined();
-
-    const rebound = (await coldRoot.agentLogEventsFor(workspace)).find((row) => row.id === 'ev-seeded-BUFFERED-EVENT');
-    expect(rebound?.turnId).toMatch(/^evt-/);
-    expect(rebound?.turnId).not.toBe('evt-seeded-dead');
-  });
-
   it('drains an external event that reached an idle object, on the wake its arrival armed', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('reactor-wake-driver'));
 

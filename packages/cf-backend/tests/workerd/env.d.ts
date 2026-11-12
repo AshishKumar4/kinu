@@ -94,8 +94,6 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   pendingSteersFor(workspace: string): Promise<PendingSteer[]>;
   claimEventWorkspace(): Promise<{ workspace: string; owner: string }>;
   agentLogEventsFor(workspace: string): Promise<AgentLogEvent[]>;
-  seedStaleDrainEventFor(workspace: string, marker: string): Promise<void>;
-  runEventWakeFor(workspace: string, marker: string): Promise<void>;
   claimReactorWakeWorkspace(): Promise<{ workspace: string; owner: string }>;
   reactorWake(workspace: string, owner: string, body: string): Promise<ReactorWake>;
   firstChat(): Promise<{ http: HttpCall[]; steers: PendingSteer[]; transcript: Array<{ id: string; role: string }>; sleepTimeSettled: number }>;

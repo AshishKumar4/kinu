@@ -526,8 +526,6 @@ function mcpMissing(offered: McpToolSurface, server: string, tool: string): stri
 /** Where an actor's provider words (`provider_wait`, `model_attempt`) are recorded: its log, and the run they belong to. */
 const READS_BY_STATEMENT = new WeakMap<TemplateStringsArray, readonly LiveRead[]>();
 
-const STALE_EVENT_DELIVERY_MS = 10 * 60 * 1000;
-
 /**
  * Row budget per sweep activation: each item is a full inference turn. A full pass
  * answers truncated and the wake drains the rest on the next frame.
@@ -5544,7 +5542,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    * the rest ask all of them). Each names its table's writers; their statements pass `sql` or `watchedExec`, which drop it.
    */
   private readonly owedProbes = {
-    // EventLog's lease writes (markConsumed, releaseLease, unbindStale), every one over `watchedExec`.
+    // EventLog's lease writes (markConsumed, releaseLease), every one over `watchedExec`.
     openDrainLease: this.held.hold(['agent_log'], () => this.eventLog.hasOpenDrainLease()),
     // LiveHeadJournal over `sql`.
     unfinishedHeads: this.held.hold(['head_journal'], () => this.headJournal.hasUnfinishedHeads()),
@@ -5760,25 +5758,12 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
   /**
    * Resend the reply an answered event batch never dispatched; the outbox key makes a resend idempotent.
-   * Must run before the unbind sweep so an answered batch is finished rather than re-asked.
    */
   protected async owedDeliveryWork(): Promise<void> {
-    // Order: sweep with the answered set excluded, then replies, then the terminal replay
-    // (which closes the same leases when it finishes a transition).
     let owed: ReadonlyMap<string, string> = new Map<string, string>();
 
-    await settleLogged('event.stale_delivery_unbind_failed', { doing: 'unbinding event deliveries a dead activation left leased', otherwise: 'io' }, async () => {
+    await settleLogged('event.drain_replies_read_failed', { doing: 'reading the replies event deliveries are owed', otherwise: 'io' }, async () => {
       owed = await this.owedDrainReplies();
-
-      const reconciledEventIds = this.eventLog.unbindStale(
-        STALE_EVENT_DELIVERY_MS, Date.now(), new Set(owed.keys()),
-      );
-
-      if (reconciledEventIds.length > 0) {
-        diagnostics.event('event.deliveries_repended', { workspace: this.name, events: reconciledEventIds.length });
-        // Owed again now: delivered to main as any due reaction is, not left to the next alarm.
-        await this.drainAgent(actorReferenceOf(this.actingAgentOf(this.actorHandle().actorId)));
-      }
     }, { workspace: this.name });
 
     // One reply's failure leaves only its lease open (keeping the wake armed for it);

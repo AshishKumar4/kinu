@@ -207,8 +207,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'pendingSteerFileRows');
     Reflect.deleteProperty(this, 'agentLogEvents');
     Reflect.deleteProperty(this, 'runEnds');
-    Reflect.deleteProperty(this, 'seedStaleDrainEvent');
-    Reflect.deleteProperty(this, 'runEventWake');
     Reflect.deleteProperty(this, 'parityRows');
     Reflect.deleteProperty(this, 'wakeRows');
     Reflect.deleteProperty(this, 'receivePeerThenEvict');
@@ -237,7 +235,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'mainQuiet');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'probeFile', 'sleepTimeNow', 'chatHistoryPage', 'seedScreenshotChat', 'chatPagesWalk', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'seedStaleDrainEvent', 'runEventWake', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'answerPageServer', 'answerPageData', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'probeFile', 'sleepTimeNow', 'chatHistoryPage', 'seedScreenshotChat', 'chatPagesWalk', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'answerPageServer', 'answerPageData', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
   }
 
   /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
@@ -842,33 +840,6 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
         .map((row) => ({ messageId: textColumn(row.message_id), partNo: Number(row.part_no), value: textColumn(row.value) })),
     });
   }
-  /** `consumed_at = 0` is older than any grace, so the next wake's unbindStale must re-pend it. */
-  async seedStaleDrainEvent(marker: string): Promise<void> {
-    this.actorState.storage.sql.exec(
-      `INSERT INTO agent_log
-         (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant,
-          trust, priority, payload_visibility, payload, received_at,
-          dedupe_key, consumed_at)
-       VALUES (?, ?, 'event', 'evt-seeded-dead', 0, NULL, 'tr-seeded', 'webhook_bearer', 'webhook',
-               'authenticated', 'normal', 'full', ?, 1, NULL, 0)`,
-      this.actorHandle().actorId,
-      `ev-seeded-${marker}`,
-      JSON.stringify({
-        webhook_id: 'w-buffered', http_method: 'POST', http_headers: {},
-        body: { mark: marker }, delivery_id: `d-${marker}`,
-      }),
-    );
-  }
-
-  /** unbindStale then drain, as the platform alarm runs them; joins on the marker reaching
-   *  the wire log, so a wake that never re-delivers hangs until the row's deadline. */
-  async runEventWake(marker: string): Promise<void> {
-    await this.owedDeliveryWork();
-    // Every agent's due reactions, as the timer drains them.
-    await this._kinuTimerTick();
-    await fetch(`http://probe-control.invalid/log/until?marker=${encodeURIComponent(marker)}`);
-  }
-
   /**
    * The shipped receiver, then this activation's eviction, as one critical section. The row an arrival
    * arms comes due at the next whole second, when the platform delivers it; blocking concurrency keeps
@@ -1045,7 +1016,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   & Pick<ObservedOrchestrator, 'probeFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'answerPageServer' | 'answerPageData' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'seedScreenshotChat' | 'chatPagesWalk' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'seedStaleDrainEvent' | 'runEventWake' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'answerPageServer' | 'answerPageData' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'seedScreenshotChat' | 'chatPagesWalk' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'parityRows' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'plantCrossings' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -2374,23 +2345,6 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const target: QueueTarget = await this.queueTarget(workspace);
 
     return await target.agentLogEvents();
-  }
-
-  async seedStaleDrainEventFor(workspace: string, marker: string): Promise<void> {
-    const target: QueueTarget = await this.queueTarget(workspace);
-
-    await target.seedStaleDrainEvent(marker);
-    // The claim's settings reach main's isolate detached; the eviction under test comes after that, not inside its first
-    // load, which local workerd would keep failing under the abort's reason for the rest of the process.
-    await awaitSettled(target);
-  }
-
-  /** Ends on the woken drain run's close, so its turn leaves nothing for the next test to count. */
-  async runEventWakeFor(workspace: string, marker: string): Promise<void> {
-    const target: QueueTarget = await this.queueTarget(workspace);
-
-    await target.runEventWake(marker);
-    await target.drainRunClosed();
   }
 
   /** Claimed and left idle: no genesis turn, no due trigger, nothing owed. */

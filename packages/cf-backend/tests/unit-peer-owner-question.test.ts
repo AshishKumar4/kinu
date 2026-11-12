@@ -20,8 +20,9 @@ for (const restart of [false, true]) {
     const gateway = stubAiBinding((run) => {
       const { messages } = requestOf(run);
 
-      const at = messages.findLastIndex((message) => message.role === 'user'
-        && typeof message.content === 'string' && !isRuntimeContext(message.content));
+      let at = messages.length - 1;
+
+      while (at >= 0 && !(messages[at]?.role === 'user' && typeof messages[at]?.content === 'string' && !isRuntimeContext(String(messages[at]?.content)))) at -= 1;
 
       const content = messages[at]?.content;
       const text = typeof content === 'string' ? content : '';
@@ -38,7 +39,7 @@ for (const restart of [false, true]) {
       return chatCompletion(run, 'Noted.');
     });
 
-    const recipient = orchestratorHarness({ workspaces: [{ name: 'sender', displayName: 'Sender' }] }, { workspace: 'recipient', aiGateway: gateway, workspaces: peers });
+    const recipient = orchestratorHarness({ titles: [], workspaces: [{ name: 'sender', displayName: 'Sender' }] }, { workspace: 'recipient', aiGateway: gateway, workspaces: peers });
 
     recipient.agent.harnessInstallCatalog(GATEWAY_CATALOG);
 

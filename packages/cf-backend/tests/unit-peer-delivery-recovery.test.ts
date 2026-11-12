@@ -20,9 +20,9 @@ for (const cut of ['before-admit', 'after-admit'] as const) {
 
     await workspace.agent.drainAgent(main);
     expect(workspace.db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM agent_deliveries').get()?.n).toBe(1);
-    const bound = workspace.db.query<{ turn_id: string }, [string]>('SELECT turn_id FROM agent_log WHERE id = ?').get(received.event_id ?? '');
+    const boundTurn = workspace.db.query<{ turn_id: string }, [string]>('SELECT turn_id FROM agent_log WHERE id = ?').get(received.event_id ?? '')?.turn_id;
 
-    expect(bound?.turn_id).toBeDefined();
+    if (boundTurn === undefined) throw new Error('the peer event was not bound to a delivery');
 
     const next = await reactivateOrchestratorHarness(workspace.db, undefined, {
       world: { aiGateway: gateway },
@@ -43,7 +43,7 @@ for (const cut of ['before-admit', 'after-admit'] as const) {
       expect(turns()).toBe(1);
       expect(workspace.db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM agent_deliveries').get()?.n).toBe(0);
       expect(workspace.db.query<{ turn_id: string; consumed_at: number | null }, [string]>('SELECT turn_id, consumed_at FROM agent_log WHERE id = ?').get(received.event_id ?? ''))
-        .toEqual({ turn_id: bound?.turn_id, consumed_at: null });
+        .toEqual({ turn_id: boundTurn, consumed_at: null });
     } finally {
       setSystemTime();
     }
