@@ -123,7 +123,7 @@ describe('a message typed while the agent is working', () => {
        VALUES (?, 'steer-dead-file', 'turn-dead', 'build', 'attach this too')`,
     ).run(actorId);
     mainDatabase(h).query(
-      `INSERT INTO pending_steer_uploads (actor_id, steer_id, filename, media_type, path)
+      `INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
        VALUES (?, 'steer-dead-file', 'chart.png', 'image/png', '/uploads/chart.png')`,
     ).run(actorId);
 

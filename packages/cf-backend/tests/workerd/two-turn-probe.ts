@@ -779,13 +779,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   async pendingSteerFileRows(): Promise<PendingSteerFile[]> {
-    return (await this.mainRows('SELECT actor_id, steer_id, filename, media_type, path FROM pending_steer_uploads ORDER BY actor_id, steer_id, seq'))
+    return (await this.mainRows('SELECT actor_id, steer_id, filename, media_type, url FROM pending_steer_files ORDER BY actor_id, steer_id, seq'))
       .map((row) => ({
         actorId: textColumn(row.actor_id),
         steerId: textColumn(row.steer_id),
         filename: textColumn(row.filename),
         mediaType: textColumn(row.media_type),
-        path: textColumn(row.path),
+        path: textColumn(row.url),
       }));
   }
 

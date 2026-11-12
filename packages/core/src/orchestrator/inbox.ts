@@ -166,15 +166,15 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     metadata_json TEXT,
     UNIQUE (actor_id, id)
   )`);
-  // A row per file a send names, each by its upload's path (`PromptFile`), in send order. Retired `pending_steer_files`
-  // held each file's bytes as a data URL, from before an attachment was an upload.
-  execRaw(`CREATE TABLE IF NOT EXISTS pending_steer_uploads (
+  // A row per file a send names, in send order. `url` holds its upload's path (`PromptFile.path`); a row written before
+  // an attachment was an upload holds a data URL there, read back as a path that names no upload.
+  execRaw(`CREATE TABLE IF NOT EXISTS pending_steer_files (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id   TEXT NOT NULL,
     steer_id   TEXT NOT NULL,
     filename   TEXT NOT NULL,
     media_type TEXT NOT NULL,
-    path       TEXT NOT NULL
+    url        TEXT NOT NULL
   )`);
   // Per producer, the newest delivery it took and the newest a Stop cut off (design v3 C): deliveries cross in their
   // producer's order, so one at or below either mark was answered before, or was cancelled.
@@ -221,7 +221,7 @@ export class PendingSendStore {
       VALUES (${this.actorId}, ${steer.id}, ${steer.turnId}, ${steer.mode}, ${steer.text}, ${metadata})`;
 
     for (const file of steer.files ?? []) {
-      void this.sql`INSERT INTO pending_steer_uploads (actor_id, steer_id, filename, media_type, path)
+      void this.sql`INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
         VALUES (${this.actorId}, ${steer.id}, ${file.filename}, ${file.mediaType}, ${file.path})`;
     }
   }
@@ -243,7 +243,7 @@ export class PendingSendStore {
   /** Files are deleted first: a crash in between must not re-deliver the reservation. */
   retire(ids: readonly string[]): void {
     for (const id of ids) {
-      void this.sql`DELETE FROM pending_steer_uploads
+      void this.sql`DELETE FROM pending_steer_files
         WHERE actor_id = ${this.actorId} AND steer_id = ${id}`;
       void this.sql`DELETE FROM pending_steers
         WHERE actor_id = ${this.actorId} AND id = ${id}`;
@@ -264,11 +264,11 @@ export class PendingSendStore {
 
   /** Attachments in send order, restored so a restart keeps acknowledged files. */
   files(steerId: string): PromptFile[] {
-    return this.sql<{ filename: string; media_type: string; path: string }>`
-      SELECT filename, media_type, path FROM pending_steer_uploads
+    return this.sql<{ filename: string; media_type: string; url: string }>`
+      SELECT filename, media_type, url FROM pending_steer_files
       WHERE actor_id = ${this.actorId} AND steer_id = ${steerId}
       ORDER BY seq ASC`
-      .map((row) => ({ filename: row.filename, mediaType: row.media_type, path: row.path }));
+      .map((row) => ({ filename: row.filename, mediaType: row.media_type, path: row.url }));
   }
 
   metadata(steerId: string): JsonObject | undefined {

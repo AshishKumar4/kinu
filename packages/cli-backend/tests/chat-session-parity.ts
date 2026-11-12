@@ -278,9 +278,9 @@ async function durableRows(db: Database, norm: ParityNormalizer, transcript: Ses
     id: norm.text(row.id), turnId: row.turn_id === null ? null : norm.text(row.turn_id), mode: row.mode, text: row.text,
   }));
 
-  const pendingSteerFiles = db.query<{ steer_id: string; filename: string; media_type: string; path: string }, []>(
-    `SELECT steer_id, filename, media_type, path FROM pending_steer_uploads ORDER BY seq`,
-  ).all().map((row) => ({ steerId: norm.text(row.steer_id), filename: row.filename, mediaType: row.media_type, path: row.path }));
+  const pendingSteerFiles = db.query<{ steer_id: string; filename: string; media_type: string; url: string }, []>(
+    `SELECT steer_id, filename, media_type, url FROM pending_steer_files ORDER BY seq`,
+  ).all().map((row) => ({ steerId: norm.text(row.steer_id), filename: row.filename, mediaType: row.media_type, path: row.url }));
 
   const agentLog = db.query<{
     id: string; kind: string; turn_id: string | null; step_idx: number | null; parent_id: string | null;
