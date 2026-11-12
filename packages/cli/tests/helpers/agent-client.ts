@@ -40,7 +40,7 @@ export function fakeAgentClient(overrides: Partial<AgentClient> = {}): AgentClie
     mode: 'local',
     agentName: name,
     cliSession: createCliSession(name, { noTranscript: true }),
-    uploadAttachment: async (file) => `/uploads/${file.filename}`,
+    uploadAttachment: async (file) => ({ path: `/uploads/${file.filename}`, digest: '0'.repeat(64) }),
     planes: null,
     fileLinks: { roots: [], href: () => null },
     consents: null,

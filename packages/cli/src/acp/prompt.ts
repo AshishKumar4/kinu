@@ -1,7 +1,7 @@
 /** ACP ContentBlock[] -> AgentPrompt. Editor buffers (`resource`) and screenshots (`image`) must survive. */
 
 import type { ContentBlock } from '@agentclientprotocol/sdk';
-import { base64ToBytes, type PromptFile } from '@kinu.run/core';
+import { base64ToBytes, type KeptUpload, type PromptFile } from '@kinu.run/core';
 import type { AgentPrompt } from '../agent-client';
 
 function blockText(block: ContentBlock): string | null {
@@ -40,7 +40,7 @@ function blockFile(block: ContentBlock): BlockFile | null {
 }
 
 /** An ACP prompt as the agent's: each inline file uploaded first (`upload`, the client's), and named by its path. */
-export async function toAgentPrompt(blocks: readonly ContentBlock[], upload: (file: BlockFile) => Promise<string>): Promise<AgentPrompt> {
+export async function toAgentPrompt(blocks: readonly ContentBlock[], upload: (file: BlockFile) => Promise<KeptUpload>): Promise<AgentPrompt> {
   const text: string[] = [];
   const files: PromptFile[] = [];
 
@@ -48,7 +48,7 @@ export async function toAgentPrompt(blocks: readonly ContentBlock[], upload: (fi
     const file = blockFile(block);
 
     if (file) {
-      files.push({ filename: file.filename, mediaType: file.mediaType, path: await upload(file) });
+      files.push({ filename: file.filename, mediaType: file.mediaType, ...await upload(file) });
       continue;
     }
 

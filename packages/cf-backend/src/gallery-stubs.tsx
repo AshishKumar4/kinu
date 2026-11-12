@@ -1124,7 +1124,7 @@ function galleryUploadFixture(path: string, method: string): Response | null {
   const attachment = query.get("uploads");
 
   // A chat attachment is kept under /uploads by its name, as the route answers.
-  if (attachment !== null) return new Response(`{"ok":true,"path":${JSON.stringify(`/uploads/${attachment}`)}}`, { headers: { "content-type": "application/json" } });
+  if (attachment !== null) return new Response(`{"ok":true,"path":${JSON.stringify(`/uploads/${attachment}`)},"digest":"${"0".repeat(64)}"}`, { headers: { "content-type": "application/json" } });
   const target = query.get("path") ?? "";
 
   if (target.endsWith("/AGENTS.md") && !uploadsAsked.has(target)) {

@@ -12,6 +12,7 @@ import type {
   SendMetadata, WorkMode, FileCheckpointSurface, OwnerQuestionSurface, PlanReviewSurface, WaitingApprovalSurface,
   SubagentInspectionRequest, SubagentInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
   ModelTestResult, ContextFill, PendingDeviceConsent,
+  KeptUpload,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
@@ -261,7 +262,7 @@ export interface AgentClient {
   /** Per-message cap on inlined raw bytes. Cloud and local limits differ by 8x, so surfaces ask. */
   /** A file the person names, uploaded as a chat attachment is (the files route's `uploads=` form): the path it was kept
    *  at under /uploads, which the message names. */
-  uploadAttachment(file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<string>;
+  uploadAttachment(file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<KeptUpload>;
   /** Where a local workspace's references are on this machine; a cloud workspace's are not here. */
   readonly planes: PathPlanes | null;
   /** Where a file the agent names opens. */
@@ -326,7 +327,7 @@ interface AgentUiMessage {
 
 type AgentUiMessagePart =
   /** A sent file names its upload (`kinu.upload`), the path the workspace answered; `url` is the same path. */
-  | { type: 'file'; mediaType: string; filename: string; url: string; providerMetadata: { kinu: { upload: string } } }
+  | { type: 'file'; mediaType: string; filename: string; url: string; providerMetadata: { kinu: { upload: string; digest?: string } } }
   | { type: 'text'; text: string };
 
 export function createUserUiMessage(
@@ -336,7 +337,8 @@ export function createUserUiMessage(
   metadata: SendMetadata = {},
 ): AgentUiMessage {
   const parts: AgentUiMessagePart[] = files.map((file) => ({
-    type: 'file', mediaType: file.mediaType, filename: file.filename, url: file.path, providerMetadata: { kinu: { upload: file.path } },
+    type: 'file', mediaType: file.mediaType, filename: file.filename, url: file.path,
+    providerMetadata: { kinu: { upload: file.path, ...(file.digest !== undefined && { digest: file.digest }) } },
   }));
 
   if (text || files.length === 0) parts.push({ type: 'text', text });

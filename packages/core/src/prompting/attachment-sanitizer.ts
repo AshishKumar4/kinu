@@ -176,7 +176,10 @@ async function sanitizeUserMessage(
 async function uploadedFile(part: FilePart, upload: string, policy: AttachmentPolicy): Promise<FilePart | TextPart> {
   if (untagged(part.data) !== upload) return part;
   const here = onThisMachine(upload, policy.planes);
-  const stat = await tolerateAsync(async () => await policy.vfs.stat(here), 'enoent') ?? null;
+  const digest = digestOf(part);
+  // The bytes it was attached with, pinned; a part from before pinning reads the file at its path.
+  const source = digest === null ? here : onThisMachine(pinnedUpload(digest, part.mediaType), policy.planes);
+  const stat = await tolerateAsync(async () => await policy.vfs.stat(source), 'enoent') ?? null;
   const gone: TextPart = { type: 'text', text: `[Attachment ${part.filename ?? upload} (${part.mediaType}) was saved to ${here}; it is no longer there]` };
 
   if (stat === null) return gone;
@@ -185,7 +188,7 @@ async function uploadedFile(part: FilePart, upload: string, policy: AttachmentPo
 
   // Not shown inline: named by its path and size, its bytes never read.
   if (!shown) return referenceTo({ mediaType: part.mediaType, filename: part.filename, upload }, stat.size, here, policy);
-  const bytes = await readUpload(policy.vfs, here, stat);
+  const bytes = await readUpload(policy.vfs, source, stat);
 
   return bytes === undefined ? gone : { ...part, data: bytes };
 }
@@ -359,12 +362,19 @@ function onThisMachine(path: string, planes: PathPlanes | undefined): string {
 }
 
 /** Where a file part says its upload is ({@link uploadPart}); a key no provider reads. */
-const UploadedSchema = v.object({ kinu: v.object({ upload: v.string() }) });
+const UploadedSchema = v.object({ kinu: v.object({ upload: v.string(), digest: v.optional(v.string()) }) });
 
 function uploadOf(part: FilePart): string | null {
   const read = v.safeParse(UploadedSchema, part.providerOptions);
 
   return read.success ? read.output.kinu.upload : null;
+}
+
+/** The digest of the bytes a part's upload held when it was attached (`placeUpload`); null for a part from before. */
+function digestOf(part: FilePart): string | null {
+  const read = v.safeParse(UploadedSchema, part.providerOptions);
+
+  return read.success ? read.output.kinu.digest ?? null : null;
 }
 
 /** Uploads read lately, per file plane: every turn's history names the same files again. */
@@ -406,6 +416,13 @@ async function readUpload(vfs: VFS, path: string, stat: { readonly mtimeMs: numb
  * The upload a chat's file part names: its `kinu.upload`, or, for a part that kept only its address (a carried opening,
  * a reverted message), the path that address is or reads from the files route. Null for a part naming no upload.
  */
+/** The digest a chat's file part names (`kinu.digest`): the bytes it was attached with; null where it names none. */
+export function digestOfUiPart(part: { readonly providerMetadata?: unknown }): string | null {
+  const tagged = v.safeParse(UploadedSchema, part.providerMetadata);
+
+  return tagged.success ? tagged.output.kinu.digest ?? null : null;
+}
+
 export function uploadOfUiPart(part: { readonly url: string; readonly providerMetadata?: unknown }): string | null {
   const tagged = v.safeParse(UploadedSchema, part.providerMetadata);
 
@@ -417,7 +434,29 @@ export function uploadOfUiPart(part: { readonly url: string; readonly providerMe
 
 /** A sent file as its message holds it: named by its upload's path, which also stands in its bytes' place. */
 export function uploadPart(file: PromptFile): FilePart {
-  return { type: 'file', data: file.path, mediaType: file.mediaType, filename: file.filename, providerOptions: { kinu: { upload: file.path } } };
+  return {
+    type: 'file', data: file.path, mediaType: file.mediaType, filename: file.filename,
+    providerOptions: { kinu: { upload: file.path, ...(file.digest !== undefined && { digest: file.digest }) } },
+  };
+}
+
+/** An upload as it was kept: its path, the file to work on, and the digest of the bytes it held then. */
+export interface KeptUpload {
+  readonly path: string;
+  readonly digest: string;
+}
+
+/** The offloaded store beside the uploads: under their root, so it resolves on every runtime as an upload does. */
+const PINNED_DIR = `${UPLOADS_ROOT}/${OFFLOADED_DIR}`;
+
+/**
+ * Where the bytes an upload held when it was attached are pinned: the offloaded store's content-addressed copy
+ * (`storeAttachment`, kept by digest, hidden in the Files tab), which nothing rewrites. Every later turn shows a
+ * message's file from here, whatever becomes of the file at its path, so history and the cached prefix never move. A
+ * workspace path; `onThisMachine` places it.
+ */
+export function pinnedUpload(digest: string, mediaType: string): string {
+  return `${PINNED_DIR}/${digest}.${extensionFor(mediaType)}`;
 }
 
 /** Copies of one name an upload may take before it is refused: `name (2).ext` up to this. */
@@ -431,7 +470,7 @@ const UPLOAD_NAME_BYTES = 248;
  * it came with ({@link uploadName}), as `name (2).ext` when that name holds other bytes, and the same file when it holds
  * these. Answers the workspace path its message then names.
  */
-export function placeUpload(files: Pick<AttachmentPolicy, 'vfs' | 'planes'>, filename: string, mediaType: string, bytes: Uint8Array): Promise<string> {
+export function placeUpload(files: Pick<AttachmentPolicy, 'vfs' | 'planes'>, filename: string, mediaType: string, bytes: Uint8Array): Promise<KeptUpload> {
   const bound = PLATFORM_LIMITS['upload.file_bytes'].value;
 
   // One bound for every upload, wherever it lands: the files route's, the CLI's, an ACP client's.
@@ -439,7 +478,14 @@ export function placeUpload(files: Pick<AttachmentPolicy, 'vfs' | 'planes'>, fil
     return settle(Effect.fail(new KinuError('bad_input', `${filename} is ${String(bytes.byteLength)} bytes; one upload carries at most ${String(bound)} (upload.file_bytes).`)));
   }
 
-  return settle(saveUpload(files, uploadName(filename, mediaType), bytes));
+  // Kept at its name to work on, and pinned by its digest for every message that names it.
+  return settle(Effect.gen(function* () {
+    const path = yield* saveUpload(files, uploadName(filename, mediaType), bytes);
+
+    yield* Effect.promise(async () => await storeAttachment(files.vfs, onThisMachine(PINNED_DIR, files.planes), bytes, mediaType));
+
+    return { path, digest: sha256Hex(bytes) };
+  }));
 }
 
 /**

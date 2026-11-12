@@ -14,7 +14,7 @@ import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import { UPLOADS_ROOT } from '../vfs/workspace-path';
-import { attachmentBytes, placeUpload, uploadPart } from '../prompting/attachment-sanitizer';
+import { attachmentBytes, pinnedUpload, placeUpload, uploadPart } from '../prompting/attachment-sanitizer';
 import type { PrepareStepContext } from '../extension';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn, PromptFile } from '../types/backend-host';
 import type {
@@ -45,7 +45,19 @@ export const PromptFileSchema: v.GenericSchema<PromptFile> = v.object({
   filename: v.string(),
   mediaType: v.string(),
   path: v.pipe(v.string(), v.check((path) => uploadPath(path) !== null, `an attachment is a file uploaded under ${UPLOADS_ROOT}`)),
+  digest: v.optional(v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/u, 'a digest is 64 hexadecimal characters'))),
 });
+
+/** A queued file's row: its upload's path, and the digest it was attached with after a `#sha256=` (`pending_steer_files.url`). */
+function steerFileUrl(file: PromptFile): string {
+  return file.digest === undefined ? file.path : `${file.path}#sha256=${file.digest}`;
+}
+
+function steerFileOf(url: string): { readonly path: string; readonly digest?: string } {
+  const at = url.lastIndexOf('#sha256=');
+
+  return at < 0 ? { path: url } : { path: url.slice(0, at), digest: url.slice(at + '#sha256='.length) };
+}
 
 /** `path` as the upload it names, normalized: a file directly or deeper under /uploads; null for any other. */
 function uploadPath(path: string): string | null {
@@ -69,7 +81,9 @@ function admitUploads(files: ReadonlyArray<PromptFile>, plane: { readonly vfs: P
     const path = uploadPath(file.path);
 
     if (path === null) return yield* new KinuError('bad_input', `${file.filename} is not an upload: send a file by the path its upload answered, under ${UPLOADS_ROOT}`);
-    const here = plane.planes === undefined ? path : resolvePath(vfsReference(path), plane.planes).absolute;
+    // The bytes it was attached with, where it names them: the file at its path may have changed or gone since.
+    const kept = file.digest === undefined ? path : pinnedUpload(file.digest, file.mediaType);
+    const here = plane.planes === undefined ? kept : resolvePath(vfsReference(kept), plane.planes).absolute;
     const stat = yield* Effect.promise(async () => await tolerateAsync(async () => await plane.vfs.stat(here), 'enoent') ?? null);
 
     if (stat === null || stat.type !== 'file') return yield* new KinuError('bad_input', `${file.filename} is not uploaded at ${path}: upload it again`);
@@ -235,7 +249,7 @@ export function convertQueuedDataUrlFiles(sql: SqlExecutor, files: { readonly vf
         continue;
       }
 
-      void sql`UPDATE pending_steer_files SET url = ${kept.success} WHERE seq = ${row.seq} AND url = ${row.url}`;
+      void sql`UPDATE pending_steer_files SET url = ${steerFileUrl({ filename: row.filename, mediaType: row.media_type, ...kept.success })} WHERE seq = ${row.seq} AND url = ${row.url}`;
       moved += 1;
     }
 
@@ -262,7 +276,7 @@ export class PendingSendStore {
 
     for (const file of steer.files ?? []) {
       void this.sql`INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
-        VALUES (${this.actorId}, ${steer.id}, ${file.filename}, ${file.mediaType}, ${file.path})`;
+        VALUES (${this.actorId}, ${steer.id}, ${file.filename}, ${file.mediaType}, ${steerFileUrl(file)})`;
     }
   }
 
@@ -308,7 +322,7 @@ export class PendingSendStore {
       SELECT filename, media_type, url FROM pending_steer_files
       WHERE actor_id = ${this.actorId} AND steer_id = ${steerId}
       ORDER BY seq ASC`
-      .map((row) => ({ filename: row.filename, mediaType: row.media_type, path: row.url }));
+      .map((row) => ({ filename: row.filename, mediaType: row.media_type, ...steerFileOf(row.url) }));
   }
 
   metadata(steerId: string): JsonObject | undefined {

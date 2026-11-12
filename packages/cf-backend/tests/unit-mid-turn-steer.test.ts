@@ -172,7 +172,11 @@ describe('a message typed while the agent is working', () => {
     expect((await rerun).messages.at(-1)).toEqual({
       role: 'user',
       content: [
-        { type: 'file', data: '/uploads/chart.png', mediaType: 'image/png', filename: 'chart.png', providerOptions: { kinu: { upload: '/uploads/chart.png' } } },
+        // Pinned as it was kept, by the digest of the bytes the data URL carried.
+        {
+          type: 'file', data: '/uploads/chart.png', mediaType: 'image/png', filename: 'chart.png',
+          providerOptions: { kinu: { upload: '/uploads/chart.png', digest: expect.stringMatching(/^[0-9a-f]{64}$/) } },
+        },
         { type: 'text', text: 'attach this too' },
       ],
     });

@@ -11,9 +11,9 @@ import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
-import { DYNAMIC_CONTEXT_OPEN_TAG, type MailListing, type MailThreadSummary } from '@kinu.run/core';
+import { DYNAMIC_CONTEXT_OPEN_TAG, type MailListing, type MailThreadSummary, type PromptFile } from '@kinu.run/core';
 import {
-  orchestratorHarness, reactivateOrchestratorHarness, type HarnessOrchestratorAgent,
+  orchestratorHarness, reactivateOrchestratorHarness, uploadedFile, workspaceFiles, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { socketConnection } from './helpers/bindings';
@@ -27,7 +27,13 @@ const MINUTE_MS = 60_000;
 const NOON = Date.parse('2026-10-07T12:00:00.000Z');
 
 /** One root turn through the chat gate; returns the request its model received. */
-async function turn(agent: HarnessOrchestratorAgent, id: string, text: string, calls: readonly { tool: string; args: object }[] = []): Promise<Prompt> {
+/** What a turn's ask carries besides its words: the tool calls its model makes first, and the files sent with it. */
+interface Asked {
+  readonly calls?: readonly { tool: string; args: object }[];
+  readonly files?: readonly PromptFile[];
+}
+
+async function turn(agent: HarnessOrchestratorAgent, id: string, text: string, { calls = [], files = [] }: Asked = {}): Promise<Prompt> {
   const received: Prompt[] = [];
 
   agent.harnessSupplyTurnModel(scriptedTurnModel({ doGenerate: (options) => {
@@ -57,7 +63,13 @@ async function turn(agent: HarnessOrchestratorAgent, id: string, text: string, c
     },
   });
 
-  await agent.harnessChatGate()(socketConnection({ id: `conn-${id}`, send: () => {} }), chatRequest(id, text));
+  // Each file as the composer sends one: named by its upload and the digest it was pinned as.
+  const before = files.map((file) => ({
+    type: 'file', mediaType: file.mediaType, filename: file.filename, url: file.path,
+    providerMetadata: { kinu: { upload: file.path, ...(file.digest !== undefined && { digest: file.digest }) } },
+  }));
+
+  await agent.harnessChatGate()(socketConnection({ id: `conn-${id}`, send: () => {} }), chatRequest(id, text, { before }));
   await settled.promise;
   const request = received.at(-1);
 
@@ -128,11 +140,11 @@ describe('what a turn reads that is no agent event', () => {
 
     // Between the two asks: the agent keeps a fact over one of the account's, a note and a task, as its own tools write
     // them; the owner changes an account fact; mail arrives.
-    await turn(agent, 'keep', 'Keep what you need for the trip.', [
+    await turn(agent, 'keep', 'Keep what you need for the trip.', { calls: [
       { tool: 'memory', args: { op: 'remember', key: 'reply.language', value: 'Portuguese for this client' } },
       { tool: 'memory', args: { op: 'note', content: 'Thanksgiving flights: the owner flies Delta, aisle seat.' } },
       { tool: 'tasks', args: { op: 'add', titles: ['Compare Thanksgiving fares'] } },
-    ]);
+    ] });
     await user.userDO.accountMemory_put(owner, 'home.city', 'Austin');
     threads.push(THREAD);
     setSystemTime(new Date(NOON + MINUTE_MS));
@@ -149,6 +161,26 @@ describe('what a turn reads that is no agent event', () => {
 
     await user.joinFibers();
     user.close();
+  });
+});
+
+describe('a file attached to an earlier message', () => {
+  afterEach(() => { setSystemTime(); });
+
+  test('is shown from the bytes it was attached with: editing the file between turns leaves every earlier byte as it was', async () => {
+    setSystemTime(new Date(NOON));
+    const { agent } = orchestratorHarness();
+
+    await agent.activateActor();
+    const chart = await uploadedFile(agent, 'chart.png', 'image/png', Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    const before = await turn(agent, 'first', 'What does this chart show?', { files: [chart] });
+
+    // The file it names is changed afterwards, by an agent's tools or the Files tab: other bytes, another size.
+    await workspaceFiles(agent).writeFile(chart.path, new TextEncoder().encode('a different chart, written later'));
+    setSystemTime(new Date(NOON + MINUTE_MS));
+    const after = await turn(agent, 'second', 'And the trend?');
+
+    expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
   });
 });
 

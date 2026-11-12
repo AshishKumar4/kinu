@@ -69,6 +69,8 @@ export interface PromptFile {
   readonly filename: string;
   readonly mediaType: string;
   readonly path: string;
+  /** The digest of the bytes it was attached with (`placeUpload`), pinned for every turn that shows it. */
+  readonly digest?: string;
 }
 
 export interface EnqueueTurnResult {

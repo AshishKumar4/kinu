@@ -509,7 +509,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const { model, prompts, release } = toolThenAnswerModel('done');
     const { session, events, rt } = setup('unused', model);
     // Uploaded before it was sent, as every attachment is.
-    const shot = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'shot.png', 'image/png', new Uint8Array([0]));
+    const { path: shot } = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'shot.png', 'image/png', new Uint8Array([0]));
 
     const turn = session.send('main question', { id: crypto.randomUUID() });
     await events.until((frames) => frames.some((e) => e.type === 'tool-call'));

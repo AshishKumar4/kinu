@@ -306,7 +306,7 @@ describe('kinu acp — prompt content', () => {
     expect(sent.text).toContain('const a = 1;');
     expect(sent.text).toContain('file:///a.ts');
     // The image is uploaded first, as every attachment is, and the prompt names where it was kept.
-    expect(sent.files).toEqual([expect.objectContaining({ mediaType: 'image/png', path: '/uploads/image' })]);
+    expect(sent.files).toEqual([expect.objectContaining({ mediaType: 'image/png', path: '/uploads/image', digest: '0'.repeat(64) })]);
   });
 });
 

@@ -385,7 +385,7 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
   /** A file uploaded as a chat attachment is, and the message that names it. */
   const upload = async (vfs: VFS, filename: string, bytes: Uint8Array, mediaType = 'application/pdf'): Promise<ModelMessage> => ({
     role: 'user',
-    content: [uploadPart({ filename, mediaType, path: await placeUpload({ vfs }, filename, mediaType, bytes) }), { type: 'text', text: 'here' }],
+    content: [uploadPart({ filename, mediaType, ...await placeUpload({ vfs }, filename, mediaType, bytes) }), { type: 'text', text: 'here' }],
   });
 
   /** Where the message's file part says its upload is. */

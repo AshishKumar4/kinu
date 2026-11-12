@@ -847,9 +847,12 @@ export {
 
 export {
   attachmentBytes,
+  digestOfUiPart,
+  pinnedUpload,
   placeUpload,
   storeAttachment,
   uploadOfUiPart,
+  type KeptUpload,
 } from './prompting/attachment-sanitizer';
 
 export { ASKED, HeldReads, type Holds } from './utils/held-reads';

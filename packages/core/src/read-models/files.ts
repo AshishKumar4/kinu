@@ -16,6 +16,7 @@ import { move } from '@nimbus-sh/core/vfs/move.js';
 import { inlineFileType } from './file-types';
 import type { DirectoryPages } from '../vfs/dirent';
 import { isHiddenEntry, isSystemManaged } from '../vfs/workspace-path';
+import type { KeptUpload } from '../prompting/attachment-sanitizer';
 
 import { Effect } from 'effect';
 import * as v from 'valibot';
@@ -74,8 +75,8 @@ export interface DirEntry {
 }
 
 export type ExecutorWriteResult =
-  /** `path`: where an upload placed by name (`place`) was kept. */
-  | { ok: true; revision?: VfsRevision; path?: string }
+  /** `path` and `digest`: where an upload placed by name (`place`) was kept, and the bytes it was pinned as. */
+  | { ok: true; revision?: VfsRevision; path?: string; digest?: string }
   | { conflict: true; revision: VfsRevision }
   | { unsupported: true; error: string }
   | { error: string }
@@ -118,7 +119,7 @@ export class ExecutorFileUpload {
     private readonly write: {
       readonly expectedRevision?: VfsRevision | undefined;
       /** Keeps the assembled file where its own rule says (a chat attachment under /uploads), in place of `path`. */
-      readonly place?: ((bytes: Uint8Array) => Promise<string>) | undefined;
+      readonly place?: ((bytes: Uint8Array) => Promise<KeptUpload>) | undefined;
     } = {},
   ) {}
 
@@ -136,7 +137,7 @@ export class ExecutorFileUpload {
         ? Effect.succeed<ExecutorWriteResult>({ ok: true })
         : orError(step(async (): Promise<ExecutorWriteResult> => (this.write.place === undefined
           ? writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembled, expectedRevision })
-          : { ok: true, path: await this.write.place(assembled) })))),
+          : { ok: true, ...await this.write.place(assembled) })))),
     }));
   }
 

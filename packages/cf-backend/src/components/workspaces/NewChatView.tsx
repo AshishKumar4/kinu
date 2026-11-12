@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import * as v from "valibot";
 import { detachPromise } from "@kinu.run/core/obs";
 import type { FileUIPart } from "ai";
-import { agentRoute } from "@kinu.run/core";
+import { agentRoute, digestOfUiPart } from "@kinu.run/core";
 import { uploadOfPart } from "@/lib/attachments-api";
 import { useHeldSubmit, usePendingAttachments, uploadsOf } from "@/hooks/use-pending-attachments";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
@@ -13,7 +13,7 @@ import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 /** A sent file as a part carries it: named by its upload (`kinu.upload`), which the opening's send names. */
 const FilePartSchema = v.object({
   type: v.literal("file"), mediaType: v.string(), url: v.string(), filename: v.optional(v.string()),
-  providerMetadata: v.optional(v.object({ kinu: v.object({ upload: v.string() }) })),
+  providerMetadata: v.optional(v.object({ kinu: v.object({ upload: v.string(), digest: v.optional(v.string()) }) })),
 });
 
 /** Files chosen where there was no workspace yet (Home): carried as they are, to upload into the one just made. */
@@ -48,10 +48,11 @@ export function useCarriedAttachments(add: (files: readonly File[]) => void): vo
 /** A sent file as the opening carries it: each field the schema keeps, its upload named. */
 function carriedPart(part: FileUIPart): v.InferInput<typeof FilePartSchema> {
   const upload = uploadOfPart(part);
+  const digest = digestOfUiPart(part);
 
   return {
-    type: "file", mediaType: part.mediaType, url: part.url,
-    ...(part.filename !== undefined && { filename: part.filename }), ...(upload !== null && { providerMetadata: { kinu: { upload } } }),
+    type: "file", mediaType: part.mediaType, url: part.url, ...(part.filename !== undefined && { filename: part.filename }),
+    ...(upload !== null && { providerMetadata: { kinu: { upload, ...(digest !== null && { digest }) } } }),
   };
 }
 

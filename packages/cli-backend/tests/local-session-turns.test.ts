@@ -404,7 +404,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const { rt, session } = setup('a red square', historyCapturingModel('a red square', (messages) => { observed = messages; }));
 
     // Uploaded first, as every attachment is; the message names its path.
-    const path = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'square.png', 'image/png', base64ToBytes('iVBORw0KGgo='));
+    const { path } = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'square.png', 'image/png', base64ToBytes('iVBORw0KGgo='));
 
     await session.send({ text: 'what is in this image?', files: [{ filename: 'square.png', mediaType: 'image/png', path }] }, { id: crypto.randomUUID() });
 
@@ -433,7 +433,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const captures: PromptMessage[][] = [];
     const { rt, session } = setup('reading it', historyCapturingModel('reading it', (messages) => { captures.push(messages); }));
 
-    const kept = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'resume.pdf', 'application/pdf', pdfBytes);
+    const { path: kept } = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'resume.pdf', 'application/pdf', pdfBytes);
 
     await session.send({ text: 'here is my resume', files: [{ filename: 'resume.pdf', mediaType: 'application/pdf', path: kept }] }, { id: crypto.randomUUID() });
 
