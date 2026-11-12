@@ -4673,7 +4673,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
         if (own) {
           // Retired: what it was owed and had not taken is cancelled with its wake.
-          this.deliveries.cancel(record.actorId);
+          this.ctx.storage.transactionSync(() => this.coordinator.cancel(record.actorId));
           await this.agentWakes.owes(record.actorId, null);
 
           if (new AgentReports(this.boundSql).release(record.actorId)) this.agentReportMoved(record.actorId);
@@ -5725,7 +5725,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
   private async wakeAgent(actorId: string, opts: { readonly recover: boolean } = { recover: false }): Promise<void> {
     if (!this.liveActor(actorId)) {
       // Retired: what it was owed is cancelled with its wake.
-      this.deliveries.cancel(actorId);
+      this.ctx.storage.transactionSync(() => this.coordinator.cancel(actorId));
 
       return await this.agentWakes.owes(actorId, null);
     }

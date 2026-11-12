@@ -179,20 +179,24 @@ export class DeliveryCoordinator {
   /** A Stop's or a retirement's cutoff, inside the caller's commit: what the agent is owed is cancelled, and the newest
    *  cancelled sequence is the cutoff its isolate refuses anything at or below. What the rows carried is the caller's. */
   cancel(actorId: string): StopCutoff {
-    const cancelled = this.rows.stop(actorId, this.host.eventLog(actorId));
+    const cancelled = this.rows.cancel(actorId);
 
     return { cancelled, cutoff: cancelled.reduce<number | null>((newest, delivery) => Math.max(newest ?? 0, delivery.seq), null) };
   }
 
-  private async cross(actorId: string, delivery: OwedDelivery): Promise<CrossedDelivery> {
-    if (!this.host.live(actorId)) {
-      this.host.transaction(() => this.cancel(actorId));
+  private retired(actorId: string): CrossedDelivery {
+    this.host.transaction(() => this.cancel(actorId));
 
-      return { failure: new KinuError('missing', `${actorId} was retired; what it was owed is cancelled.`) };
-    }
+    return { failure: new KinuError('missing', `${actorId} was retired; what it was owed is cancelled.`) };
+  }
+
+  private async cross(actorId: string, delivery: OwedDelivery): Promise<CrossedDelivery> {
+    if (!this.host.live(actorId)) return this.retired(actorId);
 
     // In the agent's own words: its refusal reaches the sender as it said it.
     const crossed = await hold(attemptInItsWords('unavailable', () => this.host.admit(actorId, delivery)));
+
+    if (!this.host.live(actorId)) return this.retired(actorId);
 
     if (Exit.isFailure(crossed)) {
       const failure = toKinuError({ doing: 'handing the agent what it is owed', cause: Cause.squash(crossed.cause), otherwise: 'unavailable' });
@@ -218,9 +222,11 @@ export class DeliveryCoordinator {
     this.rows.paid(actorId, delivery.id);
     diagnostics.failure('agent.delivery_refused', failure, { actorId, deliveryId: delivery.id });
 
-    if (await this.host.refused?.(actorId, delivery, failure) !== true) {
-      handBackCarried(this.host.eventLog(actorId), delivery, { refused: { code: failure.code, message: failure.message } });
-    }
+    const told = await this.host.refused?.(actorId, delivery, failure);
+
+    if (!this.host.live(actorId)) return this.retired(actorId);
+
+    if (told !== true) handBackCarried(this.host.eventLog(actorId), delivery, { refused: { code: failure.code, message: failure.message } });
 
     return { failure };
   }

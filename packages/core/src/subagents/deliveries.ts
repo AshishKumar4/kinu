@@ -303,20 +303,16 @@ export class AgentDeliveries {
     void this.sql`DELETE FROM agent_deliveries WHERE actor_id = ${actorId} AND id = ${id}`;
   }
 
-  /** A Stop cancels both unpaid deliveries and events already admitted to the agent's queue. In the caller's commit. */
-  stop(actorId: string, log: EventLog): OwedDelivery[] {
-    const cancelled = this.cancel(actorId);
-
-    log.dismissOpenLeases();
-
-    return cancelled;
-  }
-
-  /** A Stop's or a retirement's cutoff: every delivery unpaid at that moment is cancelled, and answered as such. */
+  /** The workspace cancels unpaid and admitted inputs on Stop or retirement, in the caller's commit.
+   *  The producer owns these rows even after the recipient's acting identity has ended. */
   cancel(actorId: string): OwedDelivery[] {
     const cancelled = this.unpaid(actorId);
+    const dismissed = JSON.stringify({ reason: 'agent stopped or retired', by: 'system', at: Date.now() });
 
     void this.sql`DELETE FROM agent_deliveries WHERE actor_id = ${actorId}`;
+    void this.sql`UPDATE agent_log
+      SET payload = json_set(payload, '$.__dismissed', json(${dismissed})), step_idx = -2, turn_id = NULL, consumed_at = NULL
+      WHERE actor_id = ${actorId} AND kind = 'event' AND turn_id IS NOT NULL AND consumed_at IS NOT NULL`;
 
     return cancelled;
   }

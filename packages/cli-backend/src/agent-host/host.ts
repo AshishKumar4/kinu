@@ -1343,11 +1343,10 @@ export class LocalAgentHost {
 
   /** What a stopped agent was owed and had not taken: cancelled, and the work it carried dismissed with it. */
   private cancelOwed(tree: HostTree, actor: WorkspaceActor): void {
-    const log = new EventLog(sqlStorageOver(tree.db), tree.host.bindStores(actorReferenceOf(actor)).handle);
     const deliveries = new AgentDeliveries(wrapDatabase(tree.db).sql);
 
     writeTransaction(tree.db, () => {
-      deliveries.stop(actor.actorId, log);
+      deliveries.cancel(actor.actorId);
     });
   }
 
