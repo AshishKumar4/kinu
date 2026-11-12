@@ -433,9 +433,9 @@ describe('LocalAgentSession.send — a user turn', () => {
     const captures: PromptMessage[][] = [];
     const { rt, session } = setup('reading it', historyCapturingModel('reading it', (messages) => { captures.push(messages); }));
 
-    const { path: kept } = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'resume.pdf', 'application/pdf', pdfBytes);
+    const kept = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'resume.pdf', 'application/pdf', pdfBytes);
 
-    await session.send({ text: 'here is my resume', files: [{ filename: 'resume.pdf', mediaType: 'application/pdf', path: kept }] }, { id: crypto.randomUUID() });
+    await session.send({ text: 'here is my resume', files: [{ filename: 'resume.pdf', mediaType: 'application/pdf', ...kept }] }, { id: crypto.randomUUID() });
 
     const observed = captures[0];
 
