@@ -25,7 +25,6 @@ import {
   type InProcessDeliveries,
   MAIN_AGENT,
   actorReferenceOf,
-  deliveryMetadata,
   childContextResolver, hostedChildTree,
   createLocalPeerEndpoint,
   defaultLoopOrigin,
@@ -1348,13 +1347,7 @@ export class LocalAgentHost {
     const deliveries = new AgentDeliveries(wrapDatabase(tree.db).sql);
 
     writeTransaction(tree.db, () => {
-      for (const delivery of deliveries.cancel(actor.actorId)) {
-        const drained = deliveryMetadata(delivery)?.drainTurnId;
-
-        if (typeof drained !== 'string') continue;
-
-        for (const event of log.query({ turn_id: drained })) log.dismiss(event.id, 'stopped by the owner', 'system');
-      }
+      deliveries.stop(actor.actorId, log);
     });
   }
 

@@ -303,6 +303,15 @@ export class AgentDeliveries {
     void this.sql`DELETE FROM agent_deliveries WHERE actor_id = ${actorId} AND id = ${id}`;
   }
 
+  /** A Stop cancels both unpaid deliveries and events already admitted to the agent's queue. In the caller's commit. */
+  stop(actorId: string, log: EventLog): OwedDelivery[] {
+    const cancelled = this.cancel(actorId);
+
+    log.dismissOpenLeases();
+
+    return cancelled;
+  }
+
   /** A Stop's or a retirement's cutoff: every delivery unpaid at that moment is cancelled, and answered as such. */
   cancel(actorId: string): OwedDelivery[] {
     const cancelled = this.unpaid(actorId);

@@ -342,23 +342,44 @@ describe('two real turns over the HTTP model seam', () => {
     expect(brief(work.after)).toEqual(left);
   });
 
-  // A dead activation left two replies owed. After a real eviction, the alarm's recovery dispatches the answer that
-  // reached the transcript and closes its lease and the reply's open transition; the event that was never answered is
-  // freed to be asked again, and the answered one is never asked again.
-  it('after an eviction, recovery sends the reply that was answered and re-asks only the one that was not', async () => {
+  it('a real peer drain killed mid-step resumes its owned run and closes the original lease', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('real-drain-driver'));
+    const prepared = await root.prepareRealDrain();
+    const before = prepared.before.agentLog.find((row) => row.variant === 'peer_agent');
+    const started = prepared.before.runEvents.filter((row) => row.type === 'run_start');
+
+    expect(before?.turnId).toMatch(/^evt-/u);
+    expect(before?.consumed).toBe(true);
+    expect(started).toHaveLength(1);
+    expect(prepared.before.runEvents.some((row) => row.type === 'step_finish')).toBe(true);
+    expect(prepared.before.runEvents.some((row) => row.type === 'run_end')).toBe(false);
+    expect(prepared.inputs.canonical, JSON.stringify(prepared.inputs)).toBeGreaterThan(0);
+    await abortAllDurableObjects();
+    const cold = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('real-drain-driver'));
+    const after = await cold.recoverRealDrain(prepared.workspace);
+    const closed = after.agentLog.find((row) => row.id === before?.id);
+
+    expect(closed?.turnId).toBe(before?.turnId);
+    expect(closed?.consumed).toBe(false);
+    expect(after.runEvents.filter((row) => row.type === 'run_start')).toHaveLength(1);
+    expect(after.runEvents.filter((row) => row.type === 'run_end')).toHaveLength(1);
+    const calls = v.parse(HttpSchema, await cold.httpCalls()).filter((call) => call.model === 'probe-steer' && call.stream);
+
+    expect(calls).toHaveLength(3);
+    console.log('real drain recovery', { canonicalInputs: prepared.inputs.canonical, beforeTurn: before?.turnId, afterTurn: closed?.turnId, streamCalls: calls.length });
+  });
+
+  // The answer reached the transcript before eviction; recovery dispatches it and closes its lease and transition.
+  // Unanswered work is covered above through real ingress, a committed step, and a killed activation.
+  it('after an eviction, recovery sends the reply that was answered without asking it again', async () => {
     const workspace = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).seedOwedReplyWorkspace();
 
     await abortAllDurableObjects();
     const done = await env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('replies-driver')).recoverOwedReplies(workspace);
 
-    // The answered reply's lease closes on its own turn. The unanswered event is drained again by a turn of its own,
-    // the one request the model is asked, and that turn's close releases it.
     expect(done.leases['ev-answered'], JSON.stringify(done)).toEqual({ turnId: 'evt-answered', consumedAt: null });
-    expect(done.leases['ev-unanswered']?.consumedAt).toBeNull();
-    expect(done.leases['ev-unanswered']?.turnId).toMatch(/^evt-/u);
-    expect(done.leases['ev-unanswered']?.turnId).not.toBe('evt-unanswered');
     expect(done.transition).toBe('done');
-    expect(done.asked.filter((words) => words.includes('event arrived while you were idle'))).toHaveLength(1);
+    expect(done.asked.filter((words) => words.includes('event arrived while you were idle'))).toHaveLength(0);
   });
 
   it('an eviction while a settled turn closes leaves the close to recovery, which finishes it once', async () => {

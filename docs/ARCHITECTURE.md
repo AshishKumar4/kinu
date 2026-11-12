@@ -372,10 +372,10 @@ its gate order. The CLI drives the same `ChatSession` through `LocalAgentSession
 
 Wake-ups beyond chat publish through a durable `EventLog`
 (`packages/core/src/events/hub/log.ts`, schema in `hub/schema.ts`). The
-`consumed_at` column on `agent_log` leases delivery four ways: it is set when an
-event binds to a turn (`markConsumed`), cleared on completion
-(`markTurnCompleted`), released on abort or replan (`unbind`), and re-pended for
-stranded leases by a stale sweep (`unbindStale`). The log is a record, never a
+`consumed_at` column records an event's open lease: binding sets it, completion
+clears it, and Stop dismisses the event. Binding, delivery and wake commit
+together. After a death, unpaid deliveries cross again under the same ID;
+admitted inputs resume from the agent's queued turns or run journal. The log is a record, never a
 queue: an ingress arms the workspace's durable wake, whose timer phase drains
 every agent's due events (`drainDueReactions`), each batch bound to its turn in
 the commit that owes it to the agent as a delivery; the turn's end closes the

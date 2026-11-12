@@ -959,6 +959,7 @@ export function facetCallsThrough(isolate: AgentFacetCalls, through: <A>(call: (
     forkStage: (snapshot, artifactDirectory, kind, rows) => settle(through(() => isolate.forkStage(snapshot, artifactDirectory, kind, rows))),
     forkPublish: (...args) => settle(through(() => isolate.forkPublish(...args))),
     drainAnswers: (...args) => settle(through(() => isolate.drainAnswers(...args))),
+    heldDrainTurns: (...args) => settle(through(() => isolate.heldDrainTurns(...args))),
     lastUserMetadata: (...args) => settle(through(() => isolate.lastUserMetadata(...args))),
     turnPair: (...args) => settle(through(() => isolate.turnPair(...args))),
     standing: (...args) => settle(through(() => isolate.standing(...args))),

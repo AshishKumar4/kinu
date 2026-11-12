@@ -1024,8 +1024,10 @@ sealing every pre-cutoff steer branch first, and every maintenance pass joins
 it; the open turn the wake re-opens counts as a live run, so the start does
 not re-open it. A fork-interrupted notice is a `fork_notices` row until the
 inbox takes it; a refusal makes it due again at the shared capped backoff, and
-the wake fold reads that instant. Dead-activation leases re-pend 256 a pass,
-the rest under the wake (f2619ff00).
+the wake fold reads that instant. Superseded by D13: event bindings commit with
+their delivery and wake; unpaid deliveries replay under the same ID, while
+admitted inputs resume from the agent's queued turns or run journal. Stop
+dismisses both unpaid and admitted event inputs.
 
 D12. A turn a reset cuts is settled only on evidence the cut is its own.
 Replaces "a turn cut at the same step in two activations is settled". Decided

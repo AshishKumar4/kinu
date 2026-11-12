@@ -114,6 +114,7 @@ export interface AgentFacetCalls {
   lastUserMetadata(snapshot: AgentSnapshot): Promise<JsonObject | null>;
   /** The answer each drain turn gave, by drain turn id, for the replies its workspace owes. */
   drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>>;
+  heldDrainTurns(snapshot: AgentSnapshot, ids: readonly string[]): Promise<readonly string[]>;
   /** A retirement waits on it. */
   idle(): Promise<void>;
   frozen(snapshot: AgentSnapshot, key: FactsKey): Promise<FrozenAuthority | null>;
@@ -458,6 +459,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async lastUserMetadata(snapshot: AgentSnapshot): Promise<JsonObject | null> {
     return await this.open(snapshot).lastUserMetadata();
+  }
+
+  async heldDrainTurns(snapshot: AgentSnapshot, ids: readonly string[]): Promise<readonly string[]> {
+    return this.open(snapshot).heldDrainTurns(ids);
   }
 
   async drainAnswers(snapshot: AgentSnapshot, drainTurnIds: readonly string[]): Promise<Readonly<Record<string, string>>> {

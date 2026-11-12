@@ -167,7 +167,7 @@ const FACET_CALLS = Object.keys({
   interruptChat: true, wake: true, modelSettingsChanged: true, revertTo: true, clearConversation: true, compact: true, owed: true,
   owedWork: true, answerTexts: true, answer: true, newestFirst: true, namePhases: true, armCompaction: true, forkHas: true,
   forkPlan: true, forkCount: true, forkRows: true, forkClear: true, forkStage: true, forkPublish: true,
-  drainAnswers: true, lastUserMetadata: true, turnPair: true, standing: true, steps: true, runSteps: true,
+  drainAnswers: true, heldDrainTurns: true, lastUserMetadata: true, turnPair: true, standing: true, steps: true, runSteps: true,
   listRuns: true, runSummaries: true, runEvents: true, runEventText: true, idle: true,
   step: true, frozen: true, seed: true, media: true, historyPage: true, messageCount: true, inspect: true,
   inheritedContext: true, workingContext: true, turnRequests: true, turnRequest: true, recordedTurns: true, spend: true, context: true,
@@ -208,6 +208,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'agentLogEvents');
     Reflect.deleteProperty(this, 'runEnds');
     Reflect.deleteProperty(this, 'parityRows');
+    Reflect.deleteProperty(this, 'realDrainInputs');
     Reflect.deleteProperty(this, 'wakeRows');
     Reflect.deleteProperty(this, 'receivePeerThenEvict');
     Reflect.deleteProperty(this, 'timerTickFinished');
@@ -235,7 +236,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     Reflect.deleteProperty(this, 'mainQuiet');
     Reflect.deleteProperty(this, 'terminalState');
     Reflect.deleteProperty(this, 'alienEffect');
-    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'probeFile', 'sleepTimeNow', 'chatHistoryPage', 'seedScreenshotChat', 'chatPagesWalk', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'parityRows', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'answerPageServer', 'answerPageData', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, 'meterBegin', 'meterEnd', 'plantCrossings', 'settleState', 'probeFile', 'sleepTimeNow', 'chatHistoryPage', 'seedScreenshotChat', 'chatPagesWalk', 'pendingSteers', 'pendingSteerFileRows', 'agentLogEvents', 'runEnds', 'parityRows', 'realDrainInputs', 'wakeRows', 'receivePeerThenEvict', 'timerTickFinished', 'runCauses', 'drainRunClosed', 'refuseReservations', 'owedSends', 'latestClaimOutcome', 'recoveryPass', 'seedOwedReplies', 'replyLeases', 'transitionState', 'strandedWork', 'answerSlates', 'answerPageModes', 'answerPageServer', 'answerPageData', 'cutTerminal', 'liveTerminal', 'mainQuiet', 'terminalState', 'alienEffect']);
   }
 
   /** `query` over main's own isolate, where its conversation, sends, claims and runs are kept (D9). */
@@ -271,29 +272,16 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     await this.terminalRetryPass();
   }
 
-  /**
-   * What a dead activation left owed: two events bound to drain turns whose leases it took long ago, one turn whose
-   * answer reached the transcript and one that never answered, and the open transition of the answered reply.
-   */
+  /** A completed answer whose workspace reply transition did not finish before eviction. */
   async seedOwedReplies(): Promise<void> {
-    const actorId = this.actorHandle().actorId;
-    const chat: SeededEntry[] = [];
-
-    for (const turn of ['answered', 'unanswered']) {
-      this.unmetered(`INSERT INTO agent_log
-          (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at, dedupe_key, consumed_at)
-        VALUES (?, ?, 'event', ?, 0, NULL, 'tr-1', 'webhook_bearer', 'webhook', 'authenticated', 'normal', 'full',
-          '{"webhook_id":"w1","http_method":"POST","http_headers":{},"body":{"x":1},"delivery_id":"d1"}', 1, NULL, 5)`, actorId, `ev-${turn}`, `evt-${turn}`);
-      chat.push({
-        id: `u-evt-${turn}`, origin: 'input', role: 'user', content: `The ${turn} event arrived while you were idle.`,
-        metadata: { kinuEvent: 'event_drain', drainTurnId: `evt-${turn}` },
-      });
-
-      // Each answer follows its own drain turn, as the loop writes them.
-      if (turn === 'answered') chat.push({ id: 'a-evt-answered', origin: 'output', role: 'assistant', content: 'the build passed' });
-    }
-
-    await this.seedMainChat(chat);
+    this.unmetered(`INSERT INTO agent_log
+        (actor_id, id, kind, turn_id, step_idx, parent_id, trace_id, ingress, variant, trust, priority, payload_visibility, payload, received_at, dedupe_key, consumed_at)
+      VALUES (?, 'ev-answered', 'event', 'evt-answered', 0, NULL, 'tr-1', 'webhook_bearer', 'webhook', 'authenticated', 'normal', 'full',
+        '{"webhook_id":"w1","http_method":"POST","http_headers":{},"body":{"x":1},"delivery_id":"d1"}', 1, NULL, 5)`, this.actorHandle().actorId);
+    await this.seedMainChat([
+      { id: 'u-evt-answered', origin: 'input', role: 'user', content: 'The answered event arrived while you were idle.', metadata: { kinuEvent: 'event_drain', drainTurnId: 'evt-answered' } },
+      { id: 'a-evt-answered', origin: 'output', role: 'assistant', content: 'the build passed' },
+    ]);
     this.terminal.begin({ turnId: 'u-owed', messageId: 'a-1' });
   }
 
@@ -305,7 +293,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
 
   /** Each seeded event's lease: the drain turn it is bound to and when that took it. */
   async replyLeases(): Promise<Record<string, { readonly turnId: string | null; readonly consumedAt: number | null }>> {
-    const rows = this.unmetered("SELECT id, turn_id, consumed_at FROM agent_log WHERE id IN ('ev-answered', 'ev-unanswered')").toArray();
+    const rows = this.unmetered("SELECT id, turn_id, consumed_at FROM agent_log WHERE id = 'ev-answered'").toArray();
 
     return Object.fromEntries(rows.map((row) => [textColumn(row.id), {
       turnId: row.turn_id === null ? null : textColumn(row.turn_id), consumedAt: row.consumed_at === null ? null : Number(row.consumed_at),
@@ -811,6 +799,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   /** Read raw in table order, so the test's normalizer alone decides what "the same" means. */
+  async realDrainInputs(): Promise<{ transcript: number; canonical: number }> {
+    return {
+      transcript: (await this.mainRows("SELECT id FROM conversation_entries WHERE role = 'user'")).length,
+      canonical: (await this.mainRows("SELECT message_id FROM session_messages WHERE origin = 'input'")).length,
+    };
+  }
+
   async parityRows(): Promise<ParityRows> {
     const sql = this.actorState.storage.sql;
 
@@ -1016,7 +1011,7 @@ type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   & Pick<ObservedOrchestrator, 'probeFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
-  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'answerPageServer' | 'answerPageData' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'seedScreenshotChat' | 'chatPagesWalk' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'parityRows' | 'wakeRows'
+  | 'seedOwedReplies' | 'replyLeases' | 'transitionState' | 'strandedWork' | 'answerSlates' | 'answerPageModes' | 'answerPageServer' | 'answerPageData' | 'cutTerminal' | 'liveTerminal' | 'mainQuiet' | 'terminalState' | 'alienEffect' | 'inspectWork' | 'chatHistoryPage' | 'seedScreenshotChat' | 'chatPagesWalk' | 'pendingSteers' | 'pendingSteerFileRows' | 'agentLogEvents' | 'runEnds' | 'parityRows' | 'realDrainInputs' | 'wakeRows'
   | 'receivePeerThenEvict' | 'timerTickFinished' | 'runCauses' | 'drainRunClosed' | 'meterBegin' | 'meterEnd' | 'plantCrossings' | 'settleState'>;
 
 /** Sleeps past the interactive detach window, so the call detaches and settles out of turn. */
@@ -1913,6 +1908,33 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     } finally {
       socket.close(1000, 'agent slate probe complete');
     }
+  }
+
+  async prepareRealDrain(): Promise<{ workspace: string; before: ParityRows; inputs: { transcript: number; canonical: number } }> {
+    const { target, workspace, owner } = await this.claimQueueWorkspace('evt');
+
+    await target.setModel('openai-compat/probe-steer');
+    await fetch('http://probe-control.invalid/queue/hold', { method: 'POST', body: JSON.stringify({ from: 2 }) });
+
+    const admitted = await target.receivePeerMessage({
+      sender_event_id: 'real-mid-step', sender_agent_name: 'real-peer', sender_user_id: owner,
+      topic: 'real-recovery', body: 'REAL-DRAIN-RECOVERY', mode: 'build',
+    });
+
+    if (!admitted.admitted) throw new Error('the real peer event was refused');
+    await fetch('http://probe-control.invalid/queue/arrived');
+
+    return { workspace, before: await target.parityRows(), inputs: await target.realDrainInputs() };
+  }
+
+  async recoverRealDrain(workspace: string): Promise<ParityRows> {
+    await fetch('http://probe-control.invalid/queue/release', { method: 'POST' });
+    const target: QueueTarget = await this.queueTarget(workspace);
+
+    await target.recoveryPass();
+    await awaitSettled(target);
+
+    return await target.parityRows();
   }
 
   /** Owed replies seeded in a workspace whose activation then dies; returns the workspace to read after the eviction. */

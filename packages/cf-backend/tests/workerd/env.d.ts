@@ -32,7 +32,7 @@ import type { CodemodeLauncher } from '../../src/codemode-sandbox';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type { PartBinding } from '../../src/slates/part-binding';
 import type {
-  AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
+  AgentLogEvent, ParityRows, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
   ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, ChangeNotesCompleted, ChangeNotesPrepared, OwedRepliesRecovered, ClaimUnderRecovery, StrandedWork, AgentHeldWork, AgentSlateUi, AnswerPageModes, AnswerPageServer, ScreenshotChat, TerminalState, AlienEffect,
   HeldClose, HeldCloseRecovered, KillJourney,
@@ -112,6 +112,8 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   cutRecordingWorkspace(phase: 'before' | 'after'): Promise<{ readonly workspace: string; readonly cut: TerminalState }>;
   recoverRecording(workspace: string, cut?: { readonly name: 'turn_record'; readonly phase: 'before' | 'after' }): Promise<TerminalState>;
   alienEffectIn(): Promise<AlienEffect>;
+  prepareRealDrain(): Promise<{ workspace: string; before: ParityRows; inputs: { transcript: number; canonical: number } }>;
+  recoverRealDrain(workspace: string): Promise<ParityRows>;
   seedOwedReplyWorkspace(): Promise<string>;
   recoverOwedReplies(workspace: string): Promise<OwedRepliesRecovered>;
   heldCloseWorkspace(): Promise<HeldClose>;

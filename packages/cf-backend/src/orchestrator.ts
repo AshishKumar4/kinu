@@ -1,4 +1,5 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
+import { reconcileStoppedEventLeases } from './reconcile-stopped-event-leases';
 import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, missingUpload, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type AccountRead, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf,
 } from '@kinu.run/core';
 import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateRevision as builtRevision, type AppAgentEntry, type ShareChat, type ShareMode, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
@@ -5609,12 +5610,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
       directory,
       roster: (hirer) => seams.roster(this.actorHost().bindStores(hirer)),
       retire: (owner, retirement) => attemptInItsWords('io', () => this.actorHost().retire(owner, retirement)),
-      // What it was owed and had not taken is cancelled, and the work it carried dismissed.
-      cancelOwed: (actor) => {
-        for (const cancelled of this.deliveries.cancel(actor.actorId)) {
-          for (const event of this.carried(actor.actorId, cancelled)?.events ?? []) event.log.dismiss(event.id, 'stopped by the owner', 'system');
-        }
-      },
+      cancelOwed: (actor) => { this.ctx.storage.transactionSync(() => this.coordinator.cancel(actor.actorId)); },
       stopTurn: async (actor) => {
         if (await this.agentTurns.holdsTurn(actor.actorId)) {
           await this.agentTurns.beforeRetirement(actor.actorId, true);
@@ -5686,7 +5682,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
   /**
    * The turns an earlier activation handed to agents' own isolates and never heard end. Each such agent recovers
-   * its own claims and its stalled turns retire; the rest re-pend by their leases.
+   * its own claims and its stalled turns retire. Unpaid inputs replay through agent_deliveries; admitted inputs
+   * resume from the agent's queued turns and run journal.
    */
   private fencedTurnsRecovered = false;
 
@@ -6358,16 +6355,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     };
   }
 
-  /** The events a delivery carries, bound to it in the agent's log; null for one that carries none. */
-  private carried(actorId: string, delivery: Delivery): { readonly events: readonly { readonly id: string; readonly log: EventLog }[] } | null {
-    const drained = v.safeParse(v.string(), deliveryMetadata(delivery)?.drainTurnId);
-
-    if (!drained.success) return null;
-    const log = new EventLog(this.watchedExec, this.agentBound(actorId).handle);
-
-    return { events: log.query({ turn_id: drained.output }).map((event) => ({ id: event.id, log })) };
-  }
-
   private async hireCouldNotRun(actorId: string, task: { readonly sequenceId: string; readonly mode: WorkMode }, reason: string): Promise<void> {
     const record = this.actingAgentOf(actorId);
 
@@ -6562,7 +6549,7 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    * its queued turns, telling their callers, and the turn is aborted. Nothing queued before the Stop runs.
    */
   protected async stopAgent(actorId: string): Promise<void> {
-    const { cancelled, cutoff } = this.ctx.storage.transactionSync(() => {
+    const { cutoff } = this.ctx.storage.transactionSync(() => {
       new TurnFences(this.boundSql).cancel(actorId, Date.now());
       const stopped = this.coordinator.cancel(actorId);
 
@@ -6571,11 +6558,6 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
       return stopped;
     });
-
-    // The work its cancelled deliveries carried is dismissed with them.
-    for (const delivery of cancelled) {
-      for (const event of this.carried(actorId, delivery)?.events ?? []) event.log.dismiss(event.id, 'stopped by the owner', 'system');
-    }
 
     await this.agentTurns.interrupt(actorId, cutoff);
 
@@ -8042,6 +8024,15 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
 
   protected async maintenanceWork(): Promise<boolean> {
     await this.activationRecovery;
+    await reconcileStoppedEventLeases({
+      sql: this.boundSql,
+      done: () => this.ctx.storage.kv.get<boolean>('stopped-event-leases-2026-11-12') === true,
+      finish: () => { this.ctx.storage.kv.put('stopped-event-leases-2026-11-12', true); },
+      actors: () => this.actorDirectoryStore().list().map((actor) => actor.actorId),
+      log: (actorId) => new EventLog(this.watchedExec, this.agentBound(actorId).handle),
+      held: (actorId, ids) => this.agentCall(actorId, (isolate, snapshot) => isolate.heldDrainTurns(snapshot, ids)),
+      transaction: (body) => this.ctx.storage.transactionSync(body),
+    });
     // Main's chat resumes in its own isolate before anything else the wake finishes on its behalf; detached, as its wake is.
     const main = this.actorHandle().actorId;
 

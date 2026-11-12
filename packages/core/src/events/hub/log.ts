@@ -382,6 +382,18 @@ export class EventLog {
     this.sql.exec(`UPDATE agent_log SET ${assignments} WHERE actor_id = ? AND id = ? AND kind = 'event'`, this.actorId, eventId);
   }
 
+  /** A Stop cancels every bound input, whether still in transit, queued, or already running. */
+  dismissOpenLeases(): void {
+    this.actor.assertCurrent();
+
+    const ids = this.sql.exec(
+      `SELECT id FROM agent_log WHERE actor_id = ? AND kind = 'event' AND turn_id IS NOT NULL AND consumed_at IS NOT NULL`,
+      this.actorId,
+    ).toArray().map((row) => v.parse(IdRowSchema, row).id);
+
+    for (const id of ids) this.dismiss(id, 'stopped by the owner', 'system');
+  }
+
   /** Reports open leases; only the caller can tell re-pend from finish-the-reply. */
   openDrainLeases(): TurnId[] {
     this.actor.assertCurrent();

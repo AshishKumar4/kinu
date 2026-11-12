@@ -15,7 +15,7 @@ import type { LanguageModel } from 'ai';
 import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import {
-  AgentDeliveries,
+  AgentDeliveries, EventLog,
   BackgroundJobStore,
   backgroundJobWakeTrigger,
   MAX_CONCURRENT_DETACHED_JOBS,
@@ -664,11 +664,15 @@ function eventCount(dbPath: string, kind: 'peer' | 'pending'): number {
   const db = new Database(dbPath, { readonly: true });
 
   try {
-    const rows = kind === 'peer'
-      ? db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND variant = 'peer_agent'`)
-      : db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND turn_id IS NULL`);
+    if (kind === 'pending') {
+      const { sql } = wrapDatabase(db);
 
-    return rows.get()?.n ?? 0;
+      const actors = sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors`;
+
+      return actors.reduce((count, actor) => count + new EventLog(sqlStorageOver(db), readHandle(sql, actor.actor_id)).pending({ limit: Number.MAX_SAFE_INTEGER }).length, 0);
+    }
+
+    return db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND variant = 'peer_agent'`).get()?.n ?? 0;
   } finally {
     db.close();
   }

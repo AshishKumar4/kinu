@@ -179,7 +179,7 @@ export class DeliveryCoordinator {
   /** A Stop's or a retirement's cutoff, inside the caller's commit: what the agent is owed is cancelled, and the newest
    *  cancelled sequence is the cutoff its isolate refuses anything at or below. What the rows carried is the caller's. */
   cancel(actorId: string): StopCutoff {
-    const cancelled = this.rows.cancel(actorId);
+    const cancelled = this.rows.stop(actorId, this.host.eventLog(actorId));
 
     return { cancelled, cutoff: cancelled.reduce<number | null>((newest, delivery) => Math.max(newest ?? 0, delivery.seq), null) };
   }
@@ -292,14 +292,9 @@ export class InProcessDeliveries implements DeliveryPort {
     return this.coordinator.record(this.deps.actorId, admit);
   }
 
-  /** A Stop's cutoff (design v3 C): what the agent was owed and had not taken is cancelled, and the work it carried
-   *  parked; answers the newest cancelled sequence, at or below which its chat takes nothing after. */
+  /** A Stop cancels unpaid and admitted event inputs; its cutoff refuses older crossings. */
   cancel(): number | null {
-    const { cancelled, cutoff } = this.deps.transaction(() => this.coordinator.cancel(this.deps.actorId));
-
-    for (const delivery of cancelled) handBackCarried(this.deps.eventLog, delivery, 'cancelled');
-
-    return cutoff;
+    return this.deps.transaction(() => this.coordinator.cancel(this.deps.actorId)).cutoff;
   }
 
   /** What the agent was owed and a death kept from it, in commit order, up to a crossing that fails; answers what its chat
