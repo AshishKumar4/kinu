@@ -88,13 +88,50 @@ function documentFits(spent: { tokens: number }, mediaType: string, bytes: Uint8
 const OFFLOADED_DIR = SPILL_DIRS.offloaded;
 
 /** Copy-on-write per message, and of the list from its first changed message: untouched messages keep referential
- *  identity, and an untouched history is returned as given. Every step sanitizes the whole history. */
-export async function sanitizeAttachmentsForModel(
-  messages: readonly ModelMessage[],
-  policy: AttachmentPolicy,
-): Promise<readonly ModelMessage[]> {
+ *  identity, and an untouched history is returned as given. The turn's history as it opens: its files shown, and words
+ *  past the inline limit (a pasted document) spilled to a file. */
+export function sanitizeAttachmentsForModel(messages: readonly ModelMessage[], policy: AttachmentPolicy): Promise<readonly ModelMessage[]> {
+  return showModel(messages, { policy, spent: { tokens: 0 }, spills: true });
+}
+
+/**
+ * A step's request with each file it names shown, and every word as it is: a step also carries the runtime's own
+ * user-role blocks (the skills a mid-turn message activates, the turn's state), which are instructions the model
+ * reads, never a person's pasted document to spill.
+ */
+export function showFilesForModel(messages: readonly ModelMessage[], policy: AttachmentPolicy): Promise<readonly ModelMessage[]> {
+  return showModel(messages, { policy, spent: { tokens: 0 }, spills: false });
+}
+
+/**
+ * A person's words as the model is shown them, each past the inline limit spilled to a file exactly as the history pass
+ * spills it when the turn after opens, so words typed mid-turn read the same in the step they land at and in every
+ * later request. Their files are left to the step's own pass.
+ */
+export async function spillPastedWords(message: ModelMessage, policy: Pick<AttachmentPolicy, 'vfs' | 'budget'>): Promise<ModelMessage> {
+  if (message.role !== 'user') return message;
+
+  if (!Array.isArray(message.content)) {
+    const replacement = await sanitizeUserText(message.content, policy);
+
+    return replacement === null ? message : { ...message, content: replacement };
+  }
+
+  let changed = false;
+  const parts: UserPart[] = [];
+
+  for (const part of message.content) {
+    const replacement = part.type === 'text' ? await sanitizeTextPart(part, policy) : null;
+
+    if (replacement !== null) changed = true;
+    parts.push(replacement ?? part);
+  }
+
+  return changed ? { ...message, content: parts } : message;
+}
+
+async function showModel(messages: readonly ModelMessage[], shown: Shown): Promise<readonly ModelMessage[]> {
   let out: ModelMessage[] | undefined;
-  const shown: Shown = { policy, spent: { tokens: 0 } };
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
@@ -112,10 +149,11 @@ function mayCarryAttachments(message: ModelMessage): boolean {
   return message.role === 'user' || (message.role === 'assistant' && Array.isArray(message.content) && message.content.some((part) => part.type === 'file'));
 }
 
-/** A request's policy, and the documents it has shown inline so far, oldest first. */
+/** A request's policy, the documents it has shown inline so far, oldest first, and whether long words spill. */
 interface Shown {
   readonly policy: AttachmentPolicy;
   readonly spent: { tokens: number };
+  readonly spills: boolean;
 }
 
 async function sanitizeMessage(message: ModelMessage, shown: Shown): Promise<ModelMessage> {
@@ -126,6 +164,8 @@ async function sanitizeMessage(message: ModelMessage, shown: Shown): Promise<Mod
   if (message.role !== 'user') return message;
 
   if (Array.isArray(message.content)) return sanitizeUserMessage(message, message.content, shown);
+
+  if (!shown.spills) return message;
   const replacement = await sanitizeUserText(message.content, policy);
 
   return replacement === null ? message : { ...message, content: replacement };
@@ -176,7 +216,10 @@ async function sanitizeUserMessage(
 async function uploadedFile(part: FilePart, upload: string, policy: AttachmentPolicy): Promise<FilePart | TextPart> {
   if (untagged(part.data) !== upload) return part;
   const here = onThisMachine(upload, policy.planes);
-  const stat = await tolerateAsync(async () => await policy.vfs.stat(here), 'enoent') ?? null;
+  const digest = digestOf(part);
+  // The bytes it was attached with, pinned; a part from before pinning reads the file at its path.
+  const source = digest === null ? here : onThisMachine(pinnedUpload(digest, part.mediaType), policy.planes);
+  const stat = await tolerateAsync(async () => await policy.vfs.stat(source), 'enoent') ?? null;
   const gone: TextPart = { type: 'text', text: `[Attachment ${part.filename ?? upload} (${part.mediaType}) was saved to ${here}; it is no longer there]` };
 
   if (stat === null) return gone;
@@ -184,8 +227,8 @@ async function uploadedFile(part: FilePart, upload: string, policy: AttachmentPo
   const shown = (modality !== null && policy.accepts.has(modality)) || (isTextMediaType(part.mediaType) && stat.size < INLINE_TEXT_MAX_BYTES);
 
   // Not shown inline: named by its path and size, its bytes never read.
-  if (!shown) return referenceTo({ mediaType: part.mediaType, filename: part.filename, upload }, stat.size, here, policy);
-  const bytes = await readUpload(policy.vfs, here, stat);
+  if (!shown) return referenceTo({ mediaType: part.mediaType, filename: part.filename, upload, digest }, stat.size, here, policy);
+  const bytes = await readUpload(policy.vfs, source, stat);
 
   return bytes === undefined ? gone : { ...part, data: bytes };
 }
@@ -214,7 +257,7 @@ async function sanitizePart(part: UserPart, shown: Shown): Promise<TextPart | nu
 
   if (part.type === 'file') return await sanitizeFilePart(part, shown);
 
-  if (part.type === 'text') return await sanitizeTextPart(part, shown.policy);
+  if (part.type === 'text') return shown.spills ? await sanitizeTextPart(part, shown.policy) : null;
 
   return null;
 }
@@ -230,7 +273,7 @@ async function sanitizeImagePart(part: ImagePart, shown: Shown): Promise<TextPar
 
   if (data === null || policy.accepts.has('image')) return null;
 
-  return replaceMedia(data, { mediaType: part.mediaType ?? 'image', filename: undefined, upload: null }, policy);
+  return replaceMedia(data, { mediaType: part.mediaType ?? 'image', filename: undefined, upload: null, digest: null }, policy);
 }
 
 async function sanitizeFilePart(part: FilePart, shown: Shown): Promise<TextPart | null> {
@@ -246,23 +289,23 @@ async function sanitizeFilePart(part: FilePart, shown: Shown): Promise<TextPart 
     const payload = modality === 'image' ? null : decodePayload(data);
 
     return payload?.kind === 'bytes' && !documentFits(shown.spent, part.mediaType, payload.bytes, policy)
-      ? storeAndReference(payload.bytes, { mediaType: part.mediaType, filename: part.filename, upload }, policy)
+      ? storeAndReference(payload.bytes, { mediaType: part.mediaType, filename: part.filename, upload, digest: digestOf(part) }, policy)
       : null;
   }
 
   if (isTextMediaType(part.mediaType)) return inlineOrStoreText(data, part, policy);
 
-  return replaceMedia(data, { mediaType: part.mediaType, filename: part.filename, upload }, policy);
+  return replaceMedia(data, { mediaType: part.mediaType, filename: part.filename, upload, digest: digestOf(part) }, policy);
 }
 
-async function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Promise<TextPart | null> {
+async function sanitizeTextPart(part: TextPart, policy: Pick<AttachmentPolicy, 'vfs' | 'budget'>): Promise<TextPart | null> {
   const replacement = await sanitizeUserText(part.text, policy);
 
   return replacement === null ? null : { ...part, text: replacement };
 }
 
 /** Byte-stable, so a pasted document does not move the prompt-cache prefix. Null within budget. */
-async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise<string | null> {
+async function sanitizeUserText(text: string, policy: Pick<AttachmentPolicy, 'vfs' | 'budget'>): Promise<string | null> {
   const bytes = new TextEncoder().encode(text);
 
   if (bytes.length <= INLINE_TEXT_MAX_BYTES) return null;
@@ -313,14 +356,16 @@ async function inlineOrStoreText(data: DataContent | URL, file: FilePart, policy
     };
   }
 
-  return storeAndReference(payload.bytes, { mediaType: file.mediaType, filename: file.filename, upload }, policy);
+  return storeAndReference(payload.bytes, { mediaType: file.mediaType, filename: file.filename, upload, digest: digestOf(file) }, policy);
 }
 
-/** What a part's bytes are: their type, the name they came with, and the upload they were saved as, if any. */
+/** What a part's bytes are: their type, the name they came with, the upload they were saved as, if any, and the digest
+ *  they were pinned as when attached (`placeUpload`), if they were. */
 interface Carried {
   readonly mediaType: string;
   readonly filename: string | undefined;
   readonly upload: string | null;
+  readonly digest: string | null;
 }
 
 async function replaceMedia(data: DataContent | URL, carried: Carried, policy: AttachmentPolicy): Promise<TextPart> {
@@ -344,8 +389,17 @@ async function storeAndReference(bytes: Uint8Array, carried: Carried, policy: At
 function referenceTo(carried: Carried, size: number, path: string, policy: AttachmentPolicy): TextPart {
   policy.budget?.recordSpill({ producer: 'attachment', omitted: size, referenced: true });
   const name = carried.filename ?? path.slice(path.lastIndexOf('/') + 1);
+  const said = `[Attachment ${name} (${carried.mediaType}, ${String(size)} bytes)`;
 
-  return { type: 'text', text: `[Attachment ${name} (${carried.mediaType}, ${String(size)} bytes) saved to ${path} (read it with your file tools)]` };
+  // A pinned upload is two files: the attachment as it was sent, which nothing rewrites, and the file anyone may edit
+  // since. Both paths and the size follow from the part and its digest alone, so the note never changes.
+  if (carried.upload !== null && carried.digest !== null) {
+    const sent = onThisMachine(pinnedUpload(carried.digest, carried.mediaType), policy.planes);
+
+    return { type: 'text', text: `${said} as sent is at ${sent}; the editable file is ${path}, which may have changed since (read either with your file tools)]` };
+  }
+
+  return { type: 'text', text: `${said} saved to ${path} (read it with your file tools)]` };
 }
 
 /** An upload the model takes inline, named where it was saved. */
@@ -359,12 +413,17 @@ function onThisMachine(path: string, planes: PathPlanes | undefined): string {
 }
 
 /** Where a file part says its upload is ({@link uploadPart}); a key no provider reads. */
-const UploadedSchema = v.object({ kinu: v.object({ upload: v.string() }) });
+const UploadedSchema = v.object({ kinu: v.object({ upload: v.string(), digest: v.optional(v.string()) }) });
 
 function uploadOf(part: FilePart): string | null {
   const read = v.safeParse(UploadedSchema, part.providerOptions);
 
   return read.success ? read.output.kinu.upload : null;
+}
+
+/** The digest of the bytes a part's upload held when it was attached (`placeUpload`); null for a part from before. */
+function digestOf(part: FilePart): string | null {
+  return digestOfUiPart({ providerMetadata: part.providerOptions });
 }
 
 /** Uploads read lately, per file plane: every turn's history names the same files again. */
@@ -402,10 +461,18 @@ async function readUpload(vfs: VFS, path: string, stat: { readonly mtimeMs: numb
   return bytes;
 }
 
+/** The digest a chat's file part names (`kinu.digest`): the bytes it was attached with; null where it names none. */
+export function digestOfUiPart(part: { readonly providerMetadata?: unknown }): string | null {
+  const tagged = v.safeParse(UploadedSchema, part.providerMetadata);
+
+  return tagged.success ? tagged.output.kinu.digest ?? null : null;
+}
+
 /**
  * The upload a chat's file part names: its `kinu.upload`, or, for a part that kept only its address (a carried opening,
  * a reverted message), the path that address is or reads from the files route. Null for a part naming no upload.
  */
+
 export function uploadOfUiPart(part: { readonly url: string; readonly providerMetadata?: unknown }): string | null {
   const tagged = v.safeParse(UploadedSchema, part.providerMetadata);
 
@@ -417,7 +484,29 @@ export function uploadOfUiPart(part: { readonly url: string; readonly providerMe
 
 /** A sent file as its message holds it: named by its upload's path, which also stands in its bytes' place. */
 export function uploadPart(file: PromptFile): FilePart {
-  return { type: 'file', data: file.path, mediaType: file.mediaType, filename: file.filename, providerOptions: { kinu: { upload: file.path } } };
+  return {
+    type: 'file', data: file.path, mediaType: file.mediaType, filename: file.filename,
+    providerOptions: { kinu: { upload: file.path, ...(file.digest !== undefined && { digest: file.digest }) } },
+  };
+}
+
+/** An upload as it was kept: its path, the file to work on, and the digest of the bytes it held then. */
+export interface KeptUpload {
+  readonly path: string;
+  readonly digest: string;
+}
+
+/** The offloaded store beside the uploads: under their root, so it resolves on every runtime as an upload does. */
+const PINNED_DIR = `${UPLOADS_ROOT}/${OFFLOADED_DIR}`;
+
+/**
+ * Where the bytes an upload held when it was attached are pinned: the offloaded store's content-addressed copy
+ * (`storeAttachment`, kept by digest, hidden in the Files tab), which nothing rewrites. Every later turn shows a
+ * message's file from here, whatever becomes of the file at its path, so history and the cached prefix never move. A
+ * workspace path; `onThisMachine` places it.
+ */
+export function pinnedUpload(digest: string, mediaType: string): string {
+  return `${PINNED_DIR}/${digest}.${extensionFor(mediaType)}`;
 }
 
 /** Copies of one name an upload may take before it is refused: `name (2).ext` up to this. */
@@ -431,7 +520,7 @@ const UPLOAD_NAME_BYTES = 248;
  * it came with ({@link uploadName}), as `name (2).ext` when that name holds other bytes, and the same file when it holds
  * these. Answers the workspace path its message then names.
  */
-export function placeUpload(files: Pick<AttachmentPolicy, 'vfs' | 'planes'>, filename: string, mediaType: string, bytes: Uint8Array): Promise<string> {
+export function placeUpload(files: Pick<AttachmentPolicy, 'vfs' | 'planes'>, filename: string, mediaType: string, bytes: Uint8Array): Promise<KeptUpload> {
   const bound = PLATFORM_LIMITS['upload.file_bytes'].value;
 
   // One bound for every upload, wherever it lands: the files route's, the CLI's, an ACP client's.
@@ -439,7 +528,14 @@ export function placeUpload(files: Pick<AttachmentPolicy, 'vfs' | 'planes'>, fil
     return settle(Effect.fail(new KinuError('bad_input', `${filename} is ${String(bytes.byteLength)} bytes; one upload carries at most ${String(bound)} (upload.file_bytes).`)));
   }
 
-  return settle(saveUpload(files, uploadName(filename, mediaType), bytes));
+  // Kept at its name to work on, and pinned by its digest for every message that names it.
+  return settle(Effect.gen(function* () {
+    const path = yield* saveUpload(files, uploadName(filename, mediaType), bytes);
+
+    yield* Effect.promise(async () => await storeAttachment(files.vfs, onThisMachine(PINNED_DIR, files.planes), bytes, mediaType));
+
+    return { path, digest: sha256Hex(bytes) };
+  }));
 }
 
 /**

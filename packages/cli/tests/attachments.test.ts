@@ -16,10 +16,10 @@ function uploads() {
 
   return {
     kept,
-    upload: async (file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<string> => {
+    upload: async (file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }) => {
       kept.push({ filename: file.filename, mediaType: file.mediaType, bytes: file.bytes.length });
 
-      return `/uploads/${file.filename}`;
+      return { path: `/uploads/${file.filename}`, digest: '0'.repeat(64) };
     },
   };
 }
@@ -81,7 +81,7 @@ describe('resolvePromptAttachments', () => {
     const result = await resolvePromptAttachments(`describe @${img} please`, { upload: kept.upload, cwd: dir });
     expect(result.text).toBe(`describe ${img} please`);
     expect(result.errors).toEqual([]);
-    expect(result.files).toEqual([{ filename: 'shot.png', mediaType: 'image/png', path: '/uploads/shot.png' }]);
+    expect(result.files).toEqual([{ filename: 'shot.png', mediaType: 'image/png', path: '/uploads/shot.png', digest: '0'.repeat(64) }]);
     expect(kept.kept).toEqual([{ filename: 'shot.png', mediaType: 'image/png', bytes: PNG_BYTES.length }]);
     expect(result.attached).toEqual([
       { path: img, filename: 'shot.png', mediaType: 'image/png', size: PNG_BYTES.length },

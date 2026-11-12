@@ -11,6 +11,7 @@ import { createTestActor, createTestWorkspace, type TestWorkspace } from './help
 import { claimFences } from '../src/orchestrator/actor-claims';
 import { chatSeed } from '../src/read-models/status';
 import { keptMediaName } from '../src/session/chat-media';
+import { digestOfUiPart, uploadPart } from '../src/prompting/attachment-sanitizer';
 
 let restore: (() => void) | null = null;
 
@@ -31,7 +32,8 @@ async function seeded(): Promise<Fixture> {
 
   const history = new SessionHistory({
     sql: ws.sql, actor, transactionSync: write => ws.db.transaction(write)(),
-    files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
+    // A home the workspace's file plane lets a session write its payloads under (a file part's bytes).
+    files: async () => ({ vfs: ws.vfs, artifactDirectory: '/home/main/.kinu/context' }),
     claims: claimFences(ws.sql, actor),
   });
 
@@ -59,6 +61,20 @@ describe('a rewind', () => {
     const rewound = logger.emitted.filter((line: RecordedLog) => line.event === 'session.transcript_rewound');
     expect(rewound).toHaveLength(1);
     expect(present(rewound[0], 'the recorded rewind').fields).toMatchObject({ session: CHAT_SESSION_ID, from: 'u2', position: 2 });
+  });
+
+  test('a message it hands back keeps each file as it was pinned, so it is sent again with the same bytes', async () => {
+    const fixture = await seeded();
+    const digest = 'cd'.repeat(32);
+
+    await seedTranscriptEntry(fixture.history, CHAT_SESSION_ID, { id: 'u3', origin: 'input', message: {
+      role: 'user',
+      content: [uploadPart({ filename: 'chart.png', mediaType: 'image/png', path: '/uploads/chart.png', digest }), { type: 'text', text: 'what does it show?' }],
+    } });
+    const handed = (await chatSeed(fixture.transcript, keptMediaName)).messages.find((message) => message.id === 'u3');
+    const file = handed?.parts.find((part) => part.type === 'file');
+
+    expect(file === undefined ? null : digestOfUiPart(file)).toBe(digest);
   });
 
   test('rewinding the first turn empties the thread and records where it cut', async () => {

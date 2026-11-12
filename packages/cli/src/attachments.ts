@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
-import { FILE_TRANSFER_MAX_BYTES, readShellWord, referencePrefixes, resolvePath, type PathPlanes, type PromptFile } from '@kinu.run/core';
+import { FILE_TRANSFER_MAX_BYTES, readShellWord, referencePrefixes, resolvePath, type KeptUpload, type PathPlanes, type PromptFile } from '@kinu.run/core';
 import { attempt, renderThrownChain, settle, tolerateAsync } from '@kinu.run/core/obs';
 import { formatBytes } from '@kinu.run/core';
 import { Effect, Result } from 'effect';
@@ -143,7 +143,7 @@ async function statCandidate(token: string, cwd: string, planes: PathPlanes | un
 
 interface PromptAttachmentOptions {
   /** Keeps a file as a chat attachment (`AgentClient.uploadAttachment`): the path the message names. */
-  upload: (file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }) => Promise<string>;
+  upload: (file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }) => Promise<KeptUpload>;
   cwd?: string;
   /** A local workspace's planes, where its references are on this machine. */
   planes?: PathPlanes;
@@ -202,7 +202,7 @@ export function resolvePromptAttachments(
       continue;
     }
 
-    files.push({ filename, mediaType, path: kept.success });
+    files.push({ filename, mediaType, ...kept.success });
     attached.push({ path: found.path, filename, mediaType, size: found.size });
   }
 

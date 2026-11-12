@@ -15,7 +15,7 @@ import {
 import * as v from 'valibot';
 import { StepPacer } from './step-pacer';
 import { openAgentDatabase, repairAgentDatabase, type AgentDatabase } from './agent-database';
-import { censusOf, type ChatWindow, type CompactOutcome, type MediaRef, type Repair, type RewindTold, type StoreCensus, type StoredImage } from '@kinu.run/core';
+import { censusOf, convertQueuedDataUrlFiles, type ChatWindow, type CompactOutcome, type MediaRef, type Repair, type RewindTold, type StoreCensus, type StoredImage } from '@kinu.run/core';
 import { createAgentProviderRegistry, type AgentProviderDeps, type AgentProviderRegistry } from '../providers/agent-registry';
 import { FacetChat } from './agent-chat';
 import { workspaceClient, type AgentWorkspaceCalls } from './workspace-rpc';
@@ -256,6 +256,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     // brought newer ones (the owner's model pin), and re-adopting older rows would put the old ones back.
     database.adopt({ ...database.current(), scaffold: [scaffold] });
     const actor = await database.acquire();
+    const { storage, planes } = actor.session.runtime;
+
+    // Before its chat restores a queued steer: files an earlier build queued by their bytes, kept as uploads (one-time).
+    await convertQueuedDataUrlFiles(storage.sql, { vfs: storage.vfs, planes });
     const chat = new FacetChat({ actor, database, workspace: this.workspaceCalls, models: (deps) => this.models(deps), storage: this.ctx.storage, pacer: this.pacer });
 
     chat.session.measureSessionStart({ restored: chat.session.restoreWorkingHistory() });

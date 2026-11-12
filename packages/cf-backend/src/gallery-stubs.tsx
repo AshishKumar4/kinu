@@ -1113,13 +1113,18 @@ const uploadsAsked = new Set<string>();
  * The files frame's raw upload route: an upload over `AGENTS.md`, which the listing holds, answers as the route does for
  * a create over a file already there (412, naming its revision); the owner's replace that follows lands.
  */
+/** Released by the page's `__releaseUploads` (`&uploadHold=1`). */
+const heldUploads = Promise.withResolvers<void>();
+
+Object.defineProperty(window, "__releaseUploads", { value: () => { heldUploads.resolve(); }, configurable: true });
+
 function galleryUploadFixture(path: string, method: string): Response | null {
   if (method !== "PUT" || !/^\/api\/workspaces\/[^/]+\/files\?/.test(path)) return null;
   const query = new URLSearchParams(path.slice(path.indexOf("?") + 1));
   const attachment = query.get("uploads");
 
   // A chat attachment is kept under /uploads by its name, as the route answers.
-  if (attachment !== null) return new Response(`{"ok":true,"path":${JSON.stringify(`/uploads/${attachment}`)}}`, { headers: { "content-type": "application/json" } });
+  if (attachment !== null) return new Response(`{"ok":true,"path":${JSON.stringify(`/uploads/${attachment}`)},"digest":"${"0".repeat(64)}"}`, { headers: { "content-type": "application/json" } });
   const target = query.get("path") ?? "";
 
   if (target.endsWith("/AGENTS.md") && !uploadsAsked.has(target)) {
@@ -1180,7 +1185,8 @@ function userFixture(path: string, method: string, body: BodyInit | null | undef
   if (machines !== null) return Promise.resolve(machines);
   const upload = galleryUploadFixture(path, method);
 
-  if (upload !== null) return Promise.resolve(upload);
+  // `&uploadHold=1`: a chat attachment's upload answers only once `__releaseUploads` is called, as a slow link's does.
+  if (upload !== null) return path.includes("uploads=") && galleryQuery.get("uploadHold") === "1" ? heldUploads.promise.then(() => upload) : Promise.resolve(upload);
   const decided = galleryMemoryDecision(path, method, body) ?? galleryMemoryImport(path, method, body);
 
   if (decided !== null) return Promise.resolve(decided);

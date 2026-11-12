@@ -3,10 +3,10 @@
  * (`lib/attachments-api.ts`), with its progress on its chip; the message carries the paths those uploads answered, never
  * the bytes. Before a workspace exists (Home) a file is held as it is, and uploads once the workspace does.
  */
-import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type { FileUIPart } from "ai";
 import { Effect } from "effect";
-import { FILE_TRANSFER_MAX_BYTES } from "@kinu.run/core";
+import { digestOfUiPart, FILE_TRANSFER_MAX_BYTES } from "@kinu.run/core";
 import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
 import { uploadAttachment, uploadHref, uploadOfPart } from "@/lib/attachments-api";
 
@@ -14,7 +14,8 @@ import { uploadAttachment, uploadHref, uploadOfPart } from "@/lib/attachments-ap
 export type AttachmentState =
   | { readonly kind: "held" }
   | { readonly kind: "uploading"; readonly share: number }
-  | { readonly kind: "uploaded"; readonly path: string }
+  /** `digest`: the bytes it was pinned as; absent for a part from before pinning, which names the file alone. */
+  | { readonly kind: "uploaded"; readonly path: string; readonly digest?: string }
   | { readonly kind: "failed"; readonly error: string };
 
 interface PendingAttachment {
@@ -78,11 +79,54 @@ function uploadFor(workspace: string, item: PendingAttachment, watch: UploadWatc
     Effect.map(attempt({ doing: `uploading ${file.name}`, otherwise: "io" }, async () => await uploadAttachment(workspace, file, {
       signal: stop.signal,
       sent: (share) => { told({ kind: "uploading", share }); },
-    })), (path) => { told({ kind: "uploaded", path }); }),
+    })), (kept) => { told({ kind: "uploaded", ...kept }); }),
     (failed) => Effect.sync(() => {
       if (!stop.signal.aborted) told({ kind: "failed", error: `${file.name}: ${renderThrownChain({ cause: failed })}` });
     }),
   ), Effect.sync(done));
+}
+
+/**
+ * A press made while files are still uploading, held and carried out once they have all landed: Send never drops a
+ * press. One that a refused file ends is let go (`refused`), the draft and its files left as they were.
+ */
+function useSendWhenUploaded(uploading: boolean, refused: boolean, run: () => void) {
+  const [waiting, setWaiting] = useState(false);
+  const latest = useRef(run);
+
+  latest.current = run;
+  useEffect(() => {
+    if (!waiting || uploading) return;
+    setWaiting(false);
+
+    if (!refused) latest.current();
+  }, [waiting, uploading, refused]);
+
+  const request = useCallback((): void => {
+    if (uploading) setWaiting(true);
+    else latest.current();
+  }, [uploading]);
+
+  return { waiting, request };
+}
+
+/** Whether a composer's files are still on their way, or one will not land. */
+export function uploadsOf(attachments: Pick<PendingAttachments, 'uploading' | 'refusal'> | undefined) {
+  return { uploading: attachments?.uploading === true, refused: attachments?.refusal != null };
+}
+
+/**
+ * A composer's submission held while its files upload (`useSendWhenUploaded`), and the notice it shows meanwhile. Held
+ * twice: before `guard`, and before `submit`, which a guard may run later on its own (a secret offer's Send anyway), so
+ * nothing is sent without its files. The composer holds its draft while either waits (`waiting`): the words a guard
+ * approved are the words sent.
+ */
+export function useHeldSubmit(uploads: { readonly uploading: boolean; readonly refused: boolean }, guard: (act: () => void) => () => void, submit: () => void) {
+  const inner = useSendWhenUploaded(uploads.uploading, uploads.refused, submit);
+  const outer = useSendWhenUploaded(uploads.uploading, uploads.refused, guard(inner.request));
+  const notices = outer.waiting || inner.waiting ? [{ id: "attach-wait", tone: "info" as const, text: "Sending once your files have uploaded." }] : [];
+
+  return { request: outer.request, waiting: outer.waiting || inner.waiting, notices };
 }
 
 export interface PendingAttachments {
@@ -138,12 +182,14 @@ export function usePendingAttachments(workspace: string | null): PendingAttachme
   const offer = useCallback((parts: readonly FileUIPart[]): void => {
     const kept = parts.flatMap((part) => {
       const path = uploadOfPart(part);
+      const digest = digestOfUiPart(part);
 
       keys += 1;
 
+      // The same upload, pinned as it was: a reverted message's files come back as they were sent.
       return path === null ? [] : [{
         key: `attachment-${String(keys)}`, file: null, name: part.filename ?? path.slice(path.lastIndexOf("/") + 1), mediaType: part.mediaType,
-        state: { kind: "uploaded", path } as const,
+        state: { kind: "uploaded", path, ...(digest !== null && { digest }) } as const,
       }];
     });
 
@@ -182,7 +228,7 @@ export function usePendingAttachments(workspace: string | null): PendingAttachme
 
   const parts = useMemo(() => items.flatMap((item): FileUIPart[] => (item.state.kind === "uploaded" && workspace !== null ? [{
     type: "file", filename: item.name, mediaType: item.mediaType, url: uploadHref(workspace, item.state.path),
-    providerMetadata: { kinu: { upload: item.state.path } },
+    providerMetadata: { kinu: { upload: item.state.path, ...(item.state.digest !== undefined && { digest: item.state.digest }) } },
   }] : [])), [items, workspace]);
 
   const failures = items.flatMap((item) => (item.state.kind === "failed" ? [item.state.error] : []));

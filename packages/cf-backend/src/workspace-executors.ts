@@ -7,7 +7,7 @@ import { Cause, Effect } from 'effect';
 import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import {
   asOwnerCommand, connectedDevices, deleteExecutorPathOp, ExecutorFileDownload, ExecutorFileUpload, getExecutorFiles, readExecutorFile, renameExecutorPathOp,
-  placeUpload, runOnExecutor,
+  placeUpload, runOnExecutor, type KeptUpload,
   type ExecutorTextFile, type ExecutorWriteResult, type ExposedPortList, type FilesPage, type FilesRequest, type RewindComputer,
 } from '@kinu.run/core';
 import type { HeldSlatePorts } from '@kinu.run/core/slates';
@@ -244,7 +244,7 @@ export class WorkspaceExecutors {
   }
 
   /** A chat attachment, kept under /uploads as it lands: its path. */
-  private async placeUpload(name: string, mediaType: string, bytes: Uint8Array): Promise<string> {
+  private async placeUpload(name: string, mediaType: string, bytes: Uint8Array): Promise<KeptUpload> {
     const { storage, planes } = this.host.runtime();
 
     return await placeUpload({ vfs: storage.vfs, planes }, name, mediaType, bytes);

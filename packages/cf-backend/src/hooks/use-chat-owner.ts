@@ -3,7 +3,7 @@ import { useState, useCallback, useEffect, useRef, useMemo, type RefObject } fro
 import { useAgent } from "agents/react";
 import { Cause, Effect } from "effect";
 import {
-  ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE, hostedActorSocketPath, type ActorSnapshot, type InlineSteer, type PlanReview,
+  digestOfUiPart, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE, hostedActorSocketPath, type ActorSnapshot, type InlineSteer, type PlanReview,
   type ReasoningEffort,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
@@ -669,7 +669,11 @@ export function useChatOwner(target: KinuActorAddress, extension: RefObject<Work
 
     // A Plan-locked message that misses its turn must still run as a Plan turn.
     // Each by the path its upload answered: the message carries no bytes. A part naming none is refused at admission.
-    const attachments = files.map((file) => ({ filename: file.filename ?? "attachment", mediaType: file.mediaType, path: uploadOfPart(file) ?? "" }));
+    const attachments = files.map((file) => {
+      const digest = digestOfUiPart(file);
+
+      return { filename: file.filename ?? "attachment", mediaType: file.mediaType, path: uploadOfPart(file) ?? "", ...(digest !== null && { digest }) };
+    });
 
     return sendLanding(record, rpc("send", [content, id, attachments, mode]), id);
   }, [startTurn, sendMessage, setMessages, isStreaming, rpc, agent]);

@@ -1,5 +1,5 @@
 import { statSync } from 'node:fs';
-import { localFileLinks, placeUpload, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
+import { localFileLinks, placeUpload, type BranchStatusEvent, type FileLinks, type KeptUpload, type PathPlanes, type SessionEvent } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementListing, RefinementRequestView, SubagentInspectionRequest, SubagentInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import { getChatHistoryPage, keptMediaName, getToolList, CHAT_SESSION_ID, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, usageReported } from '@kinu.run/core';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
@@ -124,7 +124,7 @@ export class LocalAgentClient implements AgentClient {
   readonly rename = async (displayName: string) => renameLocalAgent(this.agentName, displayName);
 
   /** A file kept in this space's /uploads as a chat attachment is in a workspace (`placeUpload`): its path. */
-  uploadAttachment(file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<string> {
+  uploadAttachment(file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<KeptUpload> {
     return placeUpload({ vfs: this.deps.rt.storage.vfs, planes: this.deps.rt.planes }, file.filename, file.mediaType, file.bytes);
   }
 

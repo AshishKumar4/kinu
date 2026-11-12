@@ -10,6 +10,7 @@ import { pendingEventsDelivery } from '../src/subagents/deliveries';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { chatSeed } from '../src/read-models/status';
 import { keptMediaName } from '../src/session/chat-media';
+import { STEER_SKILLS_HEADING } from '../src/utils/prompt-sections';
 import { sessionFixture } from './helpers-session';
 
 const USAGE: ScriptedTurnResult['usage'] = {
@@ -50,7 +51,7 @@ test('an ACTIVE turn absorbs the batch mid-turn — no new turn is enqueued', as
 });
 
 /** A turn the model asks to `watch`, whose tool holds until released: the window a delivery lands in mid-turn. */
-async function watchedTurn(answer = 'Done.') {
+async function watchedTurn(answer = 'Done.', ports: Parameters<typeof sessionFixture>[0]['ports'] = {}) {
   const watching = Promise.withResolvers<void>();
   const released = Promise.withResolvers<void>();
   const prompts: string[] = [];
@@ -73,7 +74,7 @@ async function watchedTurn(answer = 'Done.') {
     },
   });
 
-  const fixture = await sessionFixture({ model, tools: { watch } });
+  const fixture = await sessionFixture({ model, tools: { watch }, ports });
   const sent = fixture.chat.send('Watch.', { id: 'owner-1' });
 
   await watching.promise;
@@ -137,6 +138,53 @@ test('a delivery that arrives after the Stop that cut it off, and after new inpu
 
     expect(prompts.some((prompt) => prompt.includes('AFTER_STOP_MARKER'))).toBe(true);
     expect(prompts.some((prompt) => prompt.includes('BEFORE_STOP_MARKER'))).toBe(false);
+  } finally {
+    released.resolve();
+    fixture.close();
+  }
+});
+
+test('a skill the words typed mid-turn activate reaches the next step whole: the runtime\'s instructions, never a pasted document', async () => {
+  // A skill's body as long as a real one (the slates skill is 8 KiB), its last line the proof the model read all of it.
+  const skill = `${STEER_SKILLS_HEADING}\n\n## Active skills\n\n### slates\n\n${'A slate is a page the person sees. '.repeat(300)}\nSKILL_BODY_END`;
+  const { fixture, sent, released, prompts } = await watchedTurn('Done.', { steerSkills: async () => skill });
+
+  try {
+    const steered = fixture.chat.send('/slates build me a page', { id: 'owner-2' });
+
+    released.resolve();
+    await sent;
+    await steered;
+    await fixture.chat.awaitSend('owner-1');
+
+    expect(prompts.at(-1)).toContain(JSON.stringify(skill).slice(1, -1));
+  } finally {
+    released.resolve();
+    fixture.close();
+  }
+});
+
+test('a document pasted mid-turn is spilled where it lands, exactly as every later request reads it', async () => {
+  const pasted = `${'A line of the pasted report. '.repeat(400)}\nPASTED_TAIL`;
+  const { fixture, sent, released, prompts } = await watchedTurn();
+
+  try {
+    const steered = fixture.chat.send(pasted, { id: 'owner-2' });
+
+    released.resolve();
+    await sent;
+    await steered;
+    await fixture.chat.awaitSend('owner-1');
+    await fixture.chat.send('And the summary?', { id: 'owner-3' });
+    await fixture.chat.awaitSend('owner-3');
+
+    const spill = (prompt: string | undefined) => prompt?.match(/\[Pasted text \(\d+ bytes\) saved to [^\]]+\]/u)?.[0];
+    const [landed, later] = [prompts[1], prompts.at(-1)];
+
+    expect(prompts.length).toBeGreaterThan(2);
+    expect(spill(landed)).toBeDefined();
+    expect(spill(later)).toBe(spill(landed));
+    expect(landed).not.toContain('PASTED_TAIL');
   } finally {
     released.resolve();
     fixture.close();

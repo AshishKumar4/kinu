@@ -61,7 +61,7 @@ export interface StepPipeline {
   readonly context?: StepContextPlane | undefined;
   /** The input's index in the step's messages when no context plane re-reads them. */
   readonly turnStart?: number | undefined;
-  /** Shows the model each file the step's messages name (`sanitizeAttachmentsForModel`), words that landed this step
+  /** Shows the model each file the step's messages name (`showFilesForModel`), words that landed this step
    *  included, before the request is pruned, marked and measured. A message already shaped passes through unchanged. */
   readonly attachments?: ((messages: ModelMessage[]) => Promise<readonly ModelMessage[]>) | undefined;
   readonly abortSignal?: AbortSignal | undefined;

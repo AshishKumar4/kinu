@@ -19,6 +19,7 @@ import {
   RefinementListingSchema, RefinementRequestViewSchema, TakePickOutcomeSchema,
   type RefinementRequestView,
   type ModelTestResult,
+  type KeptUpload,
 } from '@kinu.run/core';
 import { attemptInItsWords, detach, diagnostics, flight, inItsWords, KinuError, renderThrownChain, settle, settleSync, tolerate } from '@kinu.run/core/obs';
 import { Effect, Result } from 'effect';
@@ -409,7 +410,7 @@ export class CloudAgentClient implements AgentClient {
     return Effect.flatMap(this.rpc(method, args), (answer) => inItsWords('unavailable', Effect.sync(() => v.parse(schema, answer))));
   }
 
-  uploadAttachment(file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<string> {
+  uploadAttachment(file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<KeptUpload> {
     return uploadCloudAttachment(this.origin, this.token, this.cloudName, file);
   }
 

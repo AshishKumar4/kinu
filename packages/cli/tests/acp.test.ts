@@ -299,14 +299,14 @@ describe('kinu acp — prompt content', () => {
 
     const sent = v.parse(v.object({
       text: v.string(),
-      files: v.array(v.object({ path: v.string(), mediaType: v.string() })),
+      files: v.array(v.object({ path: v.string(), mediaType: v.string(), digest: v.string() })),
     }), fake.sent[0].prompt);
 
     expect(sent.text).toContain('explain this');
     expect(sent.text).toContain('const a = 1;');
     expect(sent.text).toContain('file:///a.ts');
     // The image is uploaded first, as every attachment is, and the prompt names where it was kept.
-    expect(sent.files).toEqual([expect.objectContaining({ mediaType: 'image/png', path: '/uploads/image' })]);
+    expect(sent.files).toEqual([expect.objectContaining({ mediaType: 'image/png', path: '/uploads/image', digest: '0'.repeat(64) })]);
   });
 });
 

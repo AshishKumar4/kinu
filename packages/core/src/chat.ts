@@ -35,7 +35,7 @@ import { composePrepareStep, type StepContextPlane, type StepDynamicContext } fr
 import { ReplayProgress } from './prompting/replay-normalization';
 import { modelStepMessages } from './prompting/tool-error-feedback';
 import type { SpendGate } from './mission-budget';
-import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality } from './prompting/attachment-sanitizer';
+import { showFilesForModel, type AttachmentPolicy, type MediaModality } from './prompting/attachment-sanitizer';
 import { messageTokens } from './prompting/media-tokens';
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls, trailingUnpairedCalls } from './prompting/interrupted-tool-calls';
@@ -981,7 +981,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
     if (policy === undefined || current.accepts === undefined || current.accepts.size === policy.accepts.size) return [...request];
 
-    return [...await sanitizeAttachmentsForModel(request, { ...policy, accepts: current.accepts })];
+    return [...await showFilesForModel(request, { ...policy, accepts: current.accepts })];
   };
 
   const callModel = async function* (
@@ -1060,7 +1060,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           attachments: async (stepMessages: ModelMessage[]) => {
             const policy = assembly.attachments;
 
-            return policy === undefined ? stepMessages : await sanitizeAttachmentsForModel(stepMessages, { ...policy, accepts: current.accepts ?? policy.accepts });
+            return policy === undefined ? stepMessages : await showFilesForModel(stepMessages, { ...policy, accepts: current.accepts ?? policy.accepts });
           },
         }),
       }, { stepNumber: stepOffset + stepNumber, messages, steps });

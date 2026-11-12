@@ -69,7 +69,7 @@ import {
   type WorkspaceActorDirectory,
   readWorkspaceWork, type WorkspaceWork,
   isSubagentOrigin,
-  CHAT_SESSION_ID,
+  CHAT_SESSION_ID, convertQueuedDataUrlFiles,
 } from '@kinu.run/core';
 import { Deferred, Effect, Result } from 'effect';
 import { KinuError, attempt, attemptInItsWords, diagnostics, hold, inItsWords, logged, refusalOf, settle, settleSync, settleLogged, detach } from '@kinu.run/core/obs';
@@ -613,7 +613,11 @@ export class LocalAgentHost {
 
     return orchestration === undefined
       ? Effect.fail(new KinuError('missing', 'The hosted actor was acquired without an orchestration.'))
-      : Effect.suspend(() => this.hostEntry(input, orchestration));
+      // Before its session restores a queued steer: files an earlier build queued by their bytes, kept as uploads (one-time).
+      : Effect.andThen(
+        Effect.promise(async () => await convertQueuedDataUrlFiles(input.ws.rt.storage.sql, { vfs: input.ws.rt.storage.vfs, planes: input.ws.rt.planes })),
+        () => this.hostEntry(input, orchestration),
+      );
   }
 
   private hostEntry(input: Parameters<LocalAgentHost['buildEntry']>[0], orchestration: LocalOrchestration): Effect.Effect<HostEntry, KinuError> {

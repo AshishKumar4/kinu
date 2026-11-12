@@ -9,11 +9,13 @@ import * as v from 'valibot';
 import {
   acceptedMediaForModel,
   sanitizeAttachmentsForModel,
+  pinnedUpload,
   placeUpload,
   uploadPart,
   type MediaModality,
 } from '../src/prompting/attachment-sanitizer';
 import { PLATFORM_LIMITS } from '../src/platform-limits';
+import { sha256Hex } from '../src/safety/argument-digest';
 
 import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
 import { shownEntries } from '../src/read-models/files';
@@ -385,7 +387,7 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
   /** A file uploaded as a chat attachment is, and the message that names it. */
   const upload = async (vfs: VFS, filename: string, bytes: Uint8Array, mediaType = 'application/pdf'): Promise<ModelMessage> => ({
     role: 'user',
-    content: [uploadPart({ filename, mediaType, path: await placeUpload({ vfs }, filename, mediaType, bytes) }), { type: 'text', text: 'here' }],
+    content: [uploadPart({ filename, mediaType, ...await placeUpload({ vfs }, filename, mediaType, bytes) }), { type: 'text', text: 'here' }],
   });
 
   /** Where the message's file part says its upload is. */
@@ -397,6 +399,7 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
   test('kept once under its name, which the sanitizer names in place of the part, storing nothing again', async () => {
     const { vfs, writes } = countingVfs();
     const admitted = await upload(vfs, 'resume.pdf', PDF_BYTES);
+    const kept = writes();
 
     expect(savedAs(admitted)).toBe('/uploads/resume.pdf');
     const stored = await vfs.readFile('/uploads/resume.pdf');
@@ -405,9 +408,11 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
     const first = await sanitizeAttachmentsForModel([admitted], { accepts: accepts(), vfs });
     const again = await sanitizeAttachmentsForModel([admitted], { accepts: accepts(), vfs });
 
-    expect(textParts(first[0])[0]?.text).toBe(`[Attachment resume.pdf (application/pdf, ${PDF_BYTES.length} bytes) saved to /uploads/resume.pdf (read it with your file tools)]`);
+    // Named twice: as it was sent, pinned by its digest, and the editable file under its name.
+    expect(textParts(first[0])[0]?.text).toContain(pinnedUpload(sha256Hex(PDF_BYTES), 'application/pdf'));
+    expect(textParts(first[0])[0]?.text).toContain('/uploads/resume.pdf');
     expect(JSON.stringify(again)).toBe(JSON.stringify(first));
-    expect(writes()).toBe(1);
+    expect(writes()).toBe(kept);
   });
 
   test('a name holding other bytes takes the next copy; the same bytes are the same file', async () => {
@@ -455,7 +460,8 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
     const [out] = await sanitizeAttachmentsForModel([admitted], { accepts: accepts('image', 'pdf'), vfs, window: { contextWindow: 200_000, modelOutputLimit: 32_000 } });
 
     expect(JSON.stringify(admitted).length).toBeLessThan(1_000);
-    expect(textParts(out)[0]?.text).toBe(`[Attachment catalog.pdf (application/pdf, ${String(big.length)} bytes) saved to /uploads/catalog.pdf (read it with your file tools)]`);
+    expect(textParts(out)[0]?.text).toContain(pinnedUpload(sha256Hex(big), 'application/pdf'));
+    expect(textParts(out)[0]?.text).toContain(`${String(big.length)} bytes`);
   });
 
   test("a step's second pass over a shaped history changes nothing, and a file the model is not shown is never read", async () => {
@@ -478,7 +484,8 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
     const twice = await sanitizeAttachmentsForModel(once, policy);
 
     expect(twice).toEqual(once);
-    expect(read).toEqual(['/uploads/screen.png']);
+    // Once, and the bytes it was attached with: the pinned copy, never the file the name now holds.
+    expect(read).toEqual([pinnedUpload(sha256Hex(new TextEncoder().encode('fake-png-bytes')), 'image/png')]);
   });
 
   test('one upload is bounded wherever it lands', async () => {
@@ -488,12 +495,24 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
     await expect(placeUpload({ vfs }, 'huge.bin', 'application/octet-stream', new Uint8Array(bound + 1))).rejects.toMatchObject({ code: 'bad_input' });
   });
 
-  test('an upload deleted since it was sent is named as gone, not read', async () => {
+  test('an upload deleted since it was sent is still shown as it was attached', async () => {
     const { vfs } = countingVfs();
     const admitted = await upload(vfs, 'gone.pdf', PDF_BYTES);
+    const before = await sanitizeAttachmentsForModel([admitted], { accepts: accepts('pdf'), vfs });
 
     await vfs.unlink('/uploads/gone.pdf');
-    const [out] = await sanitizeAttachmentsForModel([admitted], { accepts: accepts('pdf'), vfs });
+    const after = await sanitizeAttachmentsForModel([admitted], { accepts: accepts('pdf'), vfs });
+
+    expect(after).toEqual(before);
+  });
+
+  test('a part from before attachments were pinned names a file deleted since as gone, not read', async () => {
+    const { vfs } = countingVfs();
+    const { path } = await placeUpload({ vfs }, 'gone.pdf', 'application/pdf', PDF_BYTES);
+    const unpinned: ModelMessage = { role: 'user', content: [uploadPart({ filename: 'gone.pdf', mediaType: 'application/pdf', path })] };
+
+    await vfs.unlink(path);
+    const [out] = await sanitizeAttachmentsForModel([unpinned], { accepts: accepts('pdf'), vfs });
 
     expect(textParts(out)[0]?.text).toBe('[Attachment gone.pdf (application/pdf) was saved to /uploads/gone.pdf; it is no longer there]');
   });

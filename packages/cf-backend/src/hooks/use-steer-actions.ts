@@ -21,8 +21,8 @@ export interface SteerActionsDeps {
   abortChat: () => Promise<void>;
   draft: string;
   setDraft: (update: (current: string) => string) => void;
-  /** `uploading`: a file still on its way, which the message waits for. */
-  attachments?: { readonly parts: readonly FileUIPart[]; readonly uploading: boolean; readonly clear: () => void };
+  /** The files the message names, by their uploads' paths; a press is held upstream until each has landed. */
+  attachments?: { readonly parts: readonly FileUIPart[]; readonly clear: () => void };
   steerRuns: readonly InlineSteer[];
 }
 
@@ -69,13 +69,14 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
     const text = draft.trim();
     const files = attachments?.parts ?? [];
 
-    if ((!text && files.length === 0) || attachments?.uploading === true) return;
+    if (!text && files.length === 0) return;
 
     // The draft clears only for a press that was taken.
     if (!sendWords(text, files)) return;
     setDraft(() => "");
     attachments?.clear();
   }, [draft, setDraft, attachments, sendWords]);
+
 
   const stop = useCallback(() => {
     setSettled(null);

@@ -183,7 +183,13 @@ function drawnAttachment(part: JsonObject, name: ((index: number) => string) | u
   else if (string.success) url = string.output.startsWith('data:') ? string.output : `data:${mediaType};base64,${string.output}`;
   else return new KinuError('io', 'stored attachment has no native data carrier');
 
-  return { type: 'file', mediaType, url, ...(part.filename !== undefined && { filename: part.filename }) };
+  // Its provider options as the chat part's metadata, as a sent part carried them: an upload's path and the digest of the
+  // bytes it was pinned as, which a reverted message is sent again with.
+  const metadata = v.safeParse(JsonObjectSchema, part.providerOptions);
+
+  return {
+    type: 'file', mediaType, url, ...(part.filename !== undefined && { filename: part.filename }), ...(metadata.success && { providerMetadata: metadata.output }),
+  };
 }
 
 /** A tool result settles the call it answers, which its entry drew before it; an error where it drew none. */

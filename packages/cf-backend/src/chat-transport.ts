@@ -85,7 +85,7 @@ const ChatInputSchema = v.object({
     type: v.string(), text: v.optional(v.string()), url: v.optional(v.string()),
     mediaType: v.optional(v.string()), filename: v.optional(v.string()),
     // A sent file names its upload (the files route's `uploads=` form); a part with no upload is refused at admission.
-    providerMetadata: v.optional(v.looseObject({ kinu: v.optional(v.looseObject({ upload: v.optional(v.string()) })) })),
+    providerMetadata: v.optional(v.looseObject({ kinu: v.optional(v.looseObject({ upload: v.optional(v.string()), digest: v.optional(v.string()) })) })),
   })),
   metadata: v.optional(v.unknown()),
 });
@@ -817,6 +817,7 @@ function chatInput(message: UIMessage): SentWords {
     ? [{
       filename: part.filename ?? 'attachment', mediaType: part.mediaType ?? 'application/octet-stream',
       path: uploadOfUiPart({ url: part.url ?? '', providerMetadata: part.providerMetadata }) ?? '',
+      ...(part.providerMetadata?.kinu?.digest !== undefined && { digest: part.providerMetadata.kinu.digest }),
     }]
     : []);
 

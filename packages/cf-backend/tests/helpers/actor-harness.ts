@@ -985,9 +985,9 @@ export async function uploadedFile(agent: HarnessOrchestratorAgent, filename: st
     executorId: PLANE, path: filename, transferId: crypto.randomUUID(), offset: 0, chunk: bytes, final: true, upload: { mediaType },
   });
 
-  if (!('ok' in written) || written.path === undefined) throw new Error(`the upload of ${filename} answered ${JSON.stringify(written)}`);
+  if (!('ok' in written) || written.path === undefined || written.digest === undefined) throw new Error(`the upload of ${filename} answered ${JSON.stringify(written)}`);
 
-  return { filename, mediaType, path: written.path };
+  return { filename, mediaType, path: written.path, digest: written.digest };
 }
 
 /** One owner message to the main actor, its turn run to the end on the models the workspace catalog routes to. */

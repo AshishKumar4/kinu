@@ -24,7 +24,7 @@ export async function sessionFixture(input: {
   readonly actorId?: ReturnType<typeof crypto.randomUUID>;
   readonly main?: boolean;
   /** Ports a case answers itself, in place of the fixture's. */
-  readonly ports?: Partial<Pick<ChatSessionPorts, 'prepareTurn' | 'owedTerminalEffects' | 'armTurnWake' | 'runs'>>;
+  readonly ports?: Partial<Pick<ChatSessionPorts, 'prepareTurn' | 'owedTerminalEffects' | 'armTurnWake' | 'runs' | 'steerSkills'>>;
   /** Wraps the fixture's own preparation, for a case that fails or holds some turns' and prepares the rest. */
   readonly aroundPrepare?: (prepare: ChatSessionPorts['prepareTurn']) => ChatSessionPorts['prepareTurn'];
   /** The models and catalog a case's turns are assembled from, in place of the fixture's one model. */

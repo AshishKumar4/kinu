@@ -10,7 +10,7 @@ import type { ModelMessage, UIMessage } from 'ai';
 import * as v from 'valibot';
 import {
   driveUntil, gatewayWorkspace, mainDatabase, orchestratorHarness, reactivateOrchestratorHarness, chatSessionTurns, storedChat,
-  type HarnessOrchestratorAgent, workspaceMainActor,
+  type HarnessOrchestratorAgent, workspaceFiles, workspaceMainActor,
 } from './helpers/actor-harness';
 import { asPane, joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
@@ -145,6 +145,45 @@ describe('a message typed while the agent is working', () => {
     await turns.settle({ messageId: 'a-rerun-file', text: 'attached' });
     await live;
     expect(present(mainDatabase(restarted).query<{ c: number }, []>('SELECT count(*) AS c FROM pending_steers').get(), 'the pending_steers count row').c).toBe(0);
+  });
+
+  test('a steer an earlier build queued with its file as a data URL reruns naming that file, kept as an upload', async () => {
+    const h = steerHarness();
+    const actorId = workspaceMainActor(h.db).actorId;
+
+    await h.startTurn('u-live');
+    // As a build before 7eb0fd75f left them: the file's bytes in the row, as a data URL.
+    mainDatabase(h).query(
+      `INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
+       VALUES (?, 'steer-old-file', 'turn-dead', 'build', 'attach this too')`,
+    ).run(actorId);
+    mainDatabase(h).query(
+      `INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
+       VALUES (?, 'steer-old-file', 'chart.png', 'image/png', 'data:image/png;base64,AAAA')`,
+    ).run(actorId);
+
+    const restarted = await reactivateOrchestratorHarness(h.db);
+    const turns = chatSessionTurns(restarted.agent);
+
+    await turns.resume();
+    const rerun = turns.park();
+    const live = turns.settle({ messageId: 'a-live-again', text: 'kept' });
+
+    expect((await rerun).messages.at(-1)).toEqual({
+      role: 'user',
+      content: [
+        // Pinned as it was kept, by the digest of the bytes the data URL carried.
+        {
+          type: 'file', data: '/uploads/chart.png', mediaType: 'image/png', filename: 'chart.png',
+          providerOptions: { kinu: { upload: '/uploads/chart.png', digest: expect.stringMatching(/^[0-9a-f]{64}$/) } },
+        },
+        { type: 'text', text: 'attach this too' },
+      ],
+    });
+    // The upload it names holds the bytes the data URL carried, where the model is shown them from.
+    expect(Array.from(new Uint8Array(v.parse(v.instance(Uint8Array), await workspaceFiles(restarted.agent).readFile('/uploads/chart.png'))))).toEqual([0, 0, 0]);
+    await turns.settle({ messageId: 'a-rerun-file', text: 'attached' });
+    await live;
   });
 });
 

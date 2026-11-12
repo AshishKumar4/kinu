@@ -47,6 +47,7 @@ import { resolveModelRoute } from '../profiles/model-route';
 import { SessionHistory, type MaterializedHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
+import { spillPastedWords } from '../prompting/attachment-sanitizer';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
 import { decideInterruptedTurn, type InterruptedTurnVerdict } from './turn-recovery';
 import { scaffoldSource } from '../scaffold/versions';
@@ -255,6 +256,7 @@ export class ActorSession {
       onDrain: (steers, atStep) => this.landSteers(steers, atStep),
       onEvents: (events) => this.landEvents(events),
       turnId: () => this.active?.lease.turnId ?? null,
+      words: (message) => this.pastedWords(message),
     });
 
     const { advisor: context } = options;
@@ -298,8 +300,14 @@ export class ActorSession {
       onEvents: (events) => this.landEvents(events, deps.prepareEvents),
       turnId: () => deps.turnId?.() ?? this.active?.lease.turnId ?? null,
       skills: deps.skills,
+      words: (message) => this.pastedWords(message),
       ...(releaseForeground !== undefined && { release: async () => await this.releaseStep(releaseForeground) }),
     });
+  }
+
+  /** Words landing mid-turn as the model reads them (`spillPastedWords`); stored as they were said. */
+  private pastedWords(message: ModelMessage): Promise<ModelMessage> {
+    return spillPastedWords(message, { vfs: this.runtime.storage.vfs });
   }
 
   /** Whether the running step's tool calls all moved to the background, so a person's words land as they return. */

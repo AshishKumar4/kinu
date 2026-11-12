@@ -4,7 +4,7 @@
  */
 import * as v from "valibot";
 import { Effect } from "effect";
-import { PLANE, uploadOfUiPart } from "@kinu.run/core";
+import { PLANE, uploadOfUiPart, type KeptUpload } from "@kinu.run/core";
 import { settle } from "@kinu.run/core/obs";
 import { request } from "./http";
 
@@ -18,12 +18,13 @@ export function uploadHref(workspace: string, path: string): string {
 /** The upload a part names (`uploadOfUiPart`): the same rule the workspace reads a sent part by. */
 export const uploadOfPart = uploadOfUiPart;
 
-/** `file` uploaded to `workspace`'s /uploads, telling `sent` how much of it has gone (0 to 1): the path it was kept at. */
-export function uploadAttachment(workspace: string, file: File, watch: { readonly signal: AbortSignal; readonly sent: (share: number) => void }): Promise<string> {
-  return settle(Effect.map(request(v.object({ ok: v.literal(true), path: v.string() }), `${FILES(workspace)}&uploads=${encodeURIComponent(file.name)}`, {
+/** `file` uploaded to `workspace`'s /uploads, telling `sent` how much of it has gone (0 to 1): the path it was kept at,
+ *  and the digest its bytes were pinned as. */
+export function uploadAttachment(workspace: string, file: File, watch: { readonly signal: AbortSignal; readonly sent: (share: number) => void }): Promise<KeptUpload> {
+  return settle(Effect.map(request(v.object({ ok: v.literal(true), path: v.string(), digest: v.string() }), `${FILES(workspace)}&uploads=${encodeURIComponent(file.name)}`, {
     method: "PUT",
     body: file,
     signal: watch.signal,
     sent: (bytes) => { watch.sent(file.size === 0 ? 1 : Math.min(1, bytes / file.size)); },
-  }), (kept) => kept.path));
+  }), ({ path, digest }) => ({ path, digest })));
 }

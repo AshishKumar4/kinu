@@ -112,7 +112,8 @@ function largeAttachmentAnswer(latest: string, request: ScriptedRequest): Script
     return { text: `${LARGE_ATTACHMENT_REPLY} ${searched.result.includes(LARGE_ATTACHMENT_MARKER) ? LARGE_ATTACHMENT_MARKER : LARGE_ATTACHMENT_UNREAD}` };
   }
 
-  const path = new RegExp(`saved to (\\S*/uploads/${LARGE_ATTACHMENT_FILE.replace('.', '\\.')})`, 'u').exec(request.userTexts.join('\n'))?.[1];
+  // The PDF as it was sent, which the note names beside the editable upload.
+  const path = request.userTexts.some((text) => text.includes(LARGE_ATTACHMENT_FILE)) ? /as sent is at (\S+);/u.exec(request.userTexts.join('\n'))?.[1] : undefined;
 
   if (path === undefined) return { text: `${LARGE_ATTACHMENT_REPLY} ${LARGE_ATTACHMENT_UNREAD}` };
 

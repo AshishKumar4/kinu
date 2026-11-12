@@ -32,6 +32,7 @@ import {
   type ModelTestResult,
   type ArchiveCursor,
   type ArchivePage,
+  type KeptUpload,
 } from '@kinu.run/core';
 import { tolerateAsync, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -502,7 +503,7 @@ export function listCloudDevices(origin: string, token: string): Promise<CloudDe
 
 /** `file` uploaded to workspace `workspace`'s /uploads through its files route, as a chat attachment is: the path it was
  *  kept at, which a message then names. */
-export async function uploadCloudAttachment(origin: string, token: string, workspace: string, file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<string> {
+export async function uploadCloudAttachment(origin: string, token: string, workspace: string, file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<KeptUpload> {
   const query = `executor=${encodeURIComponent(PLANE)}&uploads=${encodeURIComponent(file.filename)}`;
   const owned = new Uint8Array(new ArrayBuffer(file.bytes.byteLength));
 
@@ -516,9 +517,9 @@ export async function uploadCloudAttachment(origin: string, token: string, works
 
   return settle(Effect.gen(function* () {
     yield* assertCloudOk(res.status, body);
-    const kept = v.safeParse(v.object({ path: v.string() }), body);
+    const kept = v.safeParse(v.object({ path: v.string(), digest: v.string() }), body);
 
-    return kept.success ? kept.output.path : yield* Effect.die(new Error(`uploading ${file.filename}: the workspace named no path`));
+    return kept.success ? { path: kept.output.path, digest: kept.output.digest } : yield* Effect.die(new Error(`uploading ${file.filename}: the workspace named no path`));
   }));
 }
 
