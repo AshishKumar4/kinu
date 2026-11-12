@@ -5,7 +5,7 @@ import { detachPromise } from "@kinu.run/core/obs";
 import type { FileUIPart } from "ai";
 import { agentRoute } from "@kinu.run/core";
 import { uploadOfPart } from "@/lib/attachments-api";
-import { usePendingAttachments } from "@/hooks/use-pending-attachments";
+import { useHeldSubmit, usePendingAttachments, uploadsOf } from "@/hooks/use-pending-attachments";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { PromptCard } from "./PromptCard";
 import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
@@ -72,10 +72,10 @@ export function NewChatView({ workspace, title, createChat }: {
   const [text, setText] = useState("");
   const { busy, error, run } = useLabelledStep();
 
-  const start = (): void => {
+  const startNow = (): void => {
     const opening = text.trim();
 
-    if ((opening === "" && files.parts.length === 0) || files.uploading) return;
+    if (opening === "" && files.parts.length === 0) return;
     run("start", async () => {
       const created = await createChat(opening);
       const state: Opening = { opening, attachments: files.parts.map(carriedPart) };
@@ -84,8 +84,12 @@ export function NewChatView({ workspace, title, createChat }: {
     });
   };
 
+
   // The opening is the chat's first message: a pasted secret is offered to Secrets before the chat is made with it.
   const secretGuard = usePastedSecretGuard({ draft: text, setDraft: setText, workspace });
+  // A press while a file uploads is held; the guard and the start then run, on the opening as it stands, once every
+  // file has landed.
+  const held = useHeldSubmit(uploadsOf(files), (act) => secretGuard.guarded("start", act), startNow);
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto" data-new-chat>
@@ -94,8 +98,8 @@ export function NewChatView({ workspace, title, createChat }: {
           What do you want to work on in <span className="p-accent-fg">{title}</span>?
         </h1>
         <PromptCard id="new-chat-opening" label="New chat" placeholder="Ask a question, plan a change, or hand over a task…"
-          action="Start chat" value={text} onChange={setText} onSubmit={secretGuard.guarded("start", start)} notice={secretGuard.offer}
-          busy={busy !== null || files.uploading} error={error ?? files.refusal}
+          action="Start chat" value={text} onChange={setText} onSubmit={held.request} notice={secretGuard.offer}
+          busy={busy !== null || held.waiting} error={error ?? files.refusal}
           attachments={{ items: files.items, onAdd: files.add, onRemove: files.remove }} />
       </div>
     </div>

@@ -2207,11 +2207,12 @@ describe('Now lists what is still owed, by the phase its store records', () => {
 /** Two files dropped one after the other, each under the cap but over it together: the one dropped first is kept,
  *  the other is refused by name, and only what was kept goes out with the words. */
 describe('attachments upload before the message', () => {
-  test('each dropped file uploads to the workspace, Send waits for them, and the message names both', async () => {
+  test('each dropped file uploads to the workspace, a Send pressed meanwhile waits for them, and the message names both', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
-      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      // Uploads held until released, so Send is pressed while both are still on their way.
+      await page.goto(`${origin}/gallery.html?frame=workspacepage&uploadHold=1`, { waitUntil: 'networkidle0' });
       const pane = '[data-agent-pane="api-worker/main"]';
       await page.waitForSelector(`${pane} textarea:not([disabled])`);
 
@@ -2229,12 +2230,18 @@ describe('attachments upload before the message', () => {
       });
 
       const composer = `${pane} [data-composer-root]`;
-      await page.waitForFunction((at) => document.querySelectorAll(`${at} [data-attachment="uploaded"]`).length === 2, {}, composer);
       expect(await page.$$eval(`${composer} button[aria-label^="Remove "]`, (buttons) => buttons.map((button) => button.getAttribute('aria-label'))))
         .toEqual(['Remove first.bin', 'Remove second.bin']);
 
+      // Pressed at once, while the files are still on their way: the press is held, and the message sent once they land.
       await page.type(`${pane} textarea`, 'Here are the files');
       await page.click(`${pane} button[aria-label="Send"]`);
+      await page.waitForFunction((at) => document.querySelectorAll(`${at} [data-attachment="uploading"]`).length === 2, {}, composer);
+      expect(await page.evaluate(() => document.documentElement.dataset.galleryChatSent)).toBeUndefined();
+
+      // The draft is held while it waits: the words checked at the press are the words sent.
+      expect(await page.$eval(`${pane} textarea`, (box) => box instanceof HTMLTextAreaElement && box.disabled)).toBe(true);
+      await page.evaluate('window.__releaseUploads()');
       await page.waitForFunction(() => document.documentElement.dataset.galleryChatSent !== undefined);
       expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:first.bin', 'file:second.bin', 'text:Here are the files']);
       await page.close();

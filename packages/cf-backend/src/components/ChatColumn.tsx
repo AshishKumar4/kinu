@@ -27,6 +27,7 @@ import type { ConversationUiState } from "@/hooks/use-conversation-ui-state";
 import type { useFileDrop } from "@/hooks/use-file-drop";
 import type { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useSteerActions } from "@/hooks/use-steer-actions";
+import { useHeldSubmit, uploadsOf } from "@/hooks/use-pending-attachments";
 import { useQueuedSends } from "@/hooks/use-queued-sends";
 import { useOpeningMessage } from "@/components/workspaces/NewChatView";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -215,6 +216,12 @@ function DropOverlay() {
   );
 }
 
+/** The composer takes no words while its chat is not connected, or while a press waits for its files: what the guard
+ *  saw is what is sent. */
+function composerHeld(status: string, waiting: boolean): boolean {
+  return status !== "connected" || waiting;
+}
+
 /**
  * One chat's column. `pane` names it as its UI state does; `retryOwed` is the caller's, which knows whose retries the
  * owed intents hold; `input` false shows the view-only bar in place of the composer.
@@ -268,7 +275,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
     abortChat: state.abortChat,
     draft: ui.draft,
     setDraft: ui.updateDraft,
-    ...(attachments !== undefined && { attachments: { parts: attachments.parts, uploading: attachments.uploading, clear: attachments.clear } }),
+    ...(attachments !== undefined && { attachments: { parts: attachments.parts, clear: attachments.clear } }),
     steerRuns: state.steerRuns,
   });
 
@@ -304,6 +311,8 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
       send: (words, mode) => sendWords(words, [], mode), queue: queued.queue, live, branchBeside: branch,
     },
   });
+
+  const heldSend = useHeldSubmit(uploadsOf(attachments), (act) => secretGuard.guarded("send", act), commands.submit);
 
   const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detachPromise(() => state.setReasoningEffort(effort)), [state]);
 
@@ -345,10 +354,11 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
           textareaRef={inputRef}
           value={ui.draft}
           onValueChange={ui.setDraft}
-          // A draft naming a command runs it, once the guard has seen its words, as a message would be.
-          onSend={secretGuard.guarded("send", commands.submit)}
+          // A draft naming a command runs it, once the guard has seen its words, as a message would be; a press while a
+          // file uploads is held, and the whole of this runs, on the draft as it then stands, once every file has landed.
+          onSend={heldSend.request}
           placeholder={placeholder}
-          disabled={state.connectionStatus !== "connected"}
+          disabled={composerHeld(state.connectionStatus, heldSend.waiting)}
           liveness={state.liveness}
           onRecover={state.recoverTurn}
           onStop={halt}
@@ -373,6 +383,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
             ...searchCredits,
             ...providerWait,
             ...(steerNotice ? [steerNotice] : []),
+            ...heldSend.notices,
             ...queued.notices,
           ]}
         />

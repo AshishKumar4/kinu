@@ -69,12 +69,9 @@ export function pasteAttachments(e: ClipboardEvent, attachments: AttachmentsCont
   insert(text);
 }
 
-/** How many files a composer holds, and whether one is still on its way: the message waits for it, as it is sent by
- *  the path its upload answers. */
-export function trayOf(attachments: AttachmentsControl | undefined) {
-  const items = attachments?.items ?? [];
-
-  return { held: items.length, uploading: items.some((item) => item.state.kind === "held" || item.state.kind === "uploading") };
+/** How many files a composer holds: a message of files alone is still a message. */
+export function heldFiles(attachments: AttachmentsControl | undefined): number {
+  return attachments?.items.length ?? 0;
 }
 
 export function AttachmentTray({ attachments }: { attachments: AttachmentsControl }) {
