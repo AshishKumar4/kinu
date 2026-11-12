@@ -25,8 +25,27 @@ import {
   parseJsonValue,
 } from '../../utils/json';
 import { boundedInt, boundPageQuery } from '../../utils/bounds';
+import { statementText } from '../../utils/sql';
 import { Effect } from 'effect';
 import { diagnostics, settleSync, toKinuError, type KinuError } from '../../obs/index';
+
+type EventWrite = (statement: TemplateStringsArray, ...values: SqlValue[]) => void;
+
+type DismissedBy = 'reactor' | 'tool' | 'system';
+
+type DismissalScope = { readonly kind: 'event'; readonly eventId: EventId } | { readonly kind: 'open_bound' };
+
+/** The workspace owns event state after an actor retires; live tools check identity before calling this write. */
+export function dismissEvents(write: EventWrite, actorId: string, scope: DismissalScope, audit: { readonly reason: string; readonly by: DismissedBy }): void {
+  const id = scope.kind === 'event' ? scope.eventId : null;
+  const bound = scope.kind === 'open_bound' ? 1 : 0;
+  const dismissed = JSON.stringify({ reason: audit.reason, by: audit.by, at: Date.now() });
+
+  return write`UPDATE agent_log
+    SET payload = json_set(payload, '$.__dismissed', json(${dismissed})), step_idx = -2, turn_id = NULL, consumed_at = NULL
+    WHERE actor_id = ${actorId} AND kind = 'event'
+      AND (id = ${id} OR (${bound} = 1 AND turn_id IS NOT NULL AND consumed_at IS NOT NULL))`;
+}
 
 export interface PublishResult {
   /** The existing id when deduped. */
@@ -465,22 +484,11 @@ export class EventLog {
   }
 
   /** `step_idx = -2` so it is never re-dispatched. */
-  dismiss(eventId: EventId, reason: string, by: 'reactor' | 'tool' | 'system'): void {
+  dismiss(eventId: EventId, reason: string, by: DismissedBy): void {
     this.actor.assertCurrent();
-
-    const row = this.sql.exec(
-      `SELECT payload FROM agent_log WHERE actor_id = ? AND id = ? AND kind = 'event'`,
-      this.actorId, eventId,
-    ).toArray().map((entry) => v.parse(PayloadRowSchema, entry));
-
-    if (row.length === 0) return;
-    const payload = parseJsonObject(row[0].payload);
-    payload.__dismissed = { reason, by, at: Date.now() };
-    this.sql.exec(
-      `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL, consumed_at = NULL
-       WHERE actor_id = ? AND id = ?`,
-      JSON.stringify(payload), this.actorId, eventId,
-    );
+    dismissEvents((statement, ...values) => {
+      return this.sql.exec(statementText(statement), ...values);
+    }, this.actorId, { kind: 'event', eventId }, { reason, by });
   }
 
   /** Only a finite positive limit reaches SQL: SQLite treats a negative LIMIT as unbounded and

@@ -70,14 +70,14 @@ const MODELS_DEV_CATALOG = {
   },
 };
 
-interface HeldGate {
-  readonly arrived: ReturnType<typeof Promise.withResolvers<void>>;
+interface HeldGate<T = void> {
+  readonly arrived: ReturnType<typeof Promise.withResolvers<T>>;
   readonly release: ReturnType<typeof Promise.withResolvers<void>>;
 }
 
-/** Armed by `/queue/hold`: the first `probe-queue` call, or every call numbered `from` onward, or (`logo`) only a
- *  workspace logo's drawing, until `/queue/release`. `arrived` resolves on the first call actually held. */
-let heldRequest: { readonly gate: HeldGate; readonly from: number; readonly logo: boolean } | null = null;
+/** Armed by `/queue/hold`: streamed model calls numbered `from` onward, or (`logo`) only the workspace logo's drawing,
+ *  until `/queue/release`. `arrived` identifies the first call actually held. */
+let heldRequest: { readonly gate: HeldGate<{ readonly model: string; readonly stream: boolean }>; readonly from: number; readonly logo: boolean } | null = null;
 
 /** The parity hold (`/parity/hold`): `first` parks the opening call; `partial` streams one text delta
  *  of the tool-answering step then parks with the body open. Released by `/parity/release`. */
@@ -225,14 +225,19 @@ async function killBody(body: OutboundBody): Promise<Response> {
   }), { headers: { 'content-type': 'text/event-stream' } });
 }
 
-/** Park a scripted call numbered `from` onward (counted per model) until `/queue/release`. */
+/** Park the selected model's streamed calls from `from` onward, or only its logo calls in logo mode. */
 async function holdQueuedCall(model: string): Promise<void> {
   const hold = heldRequest;
 
-  if (hold === null || log.filter((call) => call.model === model).length < hold.from) return;
+  if (hold === null) return;
 
-  if (hold.logo && log.at(-1)?.users.some((message) => message.startsWith('Design the logo')) !== true) return;
-  hold.gate.arrived.resolve();
+  const qualifies = (call: CapturedHttpCall) => call.model === model
+    && (hold.logo ? call.users.some((message) => message.startsWith('Design the logo')) : call.stream);
+
+  const current = log.at(-1);
+
+  if (current === undefined || !qualifies(current) || log.filter(qualifies).length < hold.from) return;
+  hold.gate.arrived.resolve({ model, stream: current.stream });
   await hold.gate.release.promise;
 }
 
@@ -755,16 +760,16 @@ async function probeControl(url: URL, request: Request): Promise<Response> {
   if (url.pathname === '/queue/hold' && request.method === 'POST') {
     const raw = await request.text();
     const spec = v.parse(v.looseObject({ from: v.optional(v.number()), logo: v.optional(v.boolean()) }), raw === '' ? {} : JSON.parse(raw));
-    heldRequest = { gate: { arrived: Promise.withResolvers<void>(), release: Promise.withResolvers<void>() }, from: spec.from ?? 1, logo: spec.logo === true };
+    heldRequest = { gate: { arrived: Promise.withResolvers<{ model: string; stream: boolean }>(), release: Promise.withResolvers<void>() }, from: spec.from ?? 1, logo: spec.logo === true };
 
     return Response.json({ ok: true });
   }
 
   if (url.pathname === '/queue/arrived' && request.method === 'GET') {
     if (heldRequest === null) throw new Error('queue model hold was not armed');
-    await heldRequest.gate.arrived.promise;
+    const arrived = await heldRequest.gate.arrived.promise;
 
-    return Response.json({ ok: true });
+    return Response.json({ ok: true, ...arrived });
   }
 
   if (url.pathname === '/queue/release' && request.method === 'POST') {

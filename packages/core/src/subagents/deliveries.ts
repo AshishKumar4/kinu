@@ -10,7 +10,7 @@ import { JsonObjectSchema, type JsonObject } from '../utils/json';
 import { PromptFileSchema, signalCardId, turnMetadata } from '../orchestrator/inbox';
 import type { PromptFile } from '../types/backend-host';
 import { buildDrainBatch } from '../events/hub/drain';
-import type { EventLog } from '../events/hub/log';
+import { dismissEvents, type EventLog } from '../events/hub/log';
 import { delegatedTaskMetadata, metadataBroadcastEvent } from '../read-models/background-event';
 import type { BroadcastEvent } from '../types/backend-host';
 import { SIGNAL_ID_METADATA_KEY, type AgentInbox, type AgentSignal, type SendOutcome } from '../types/signals';
@@ -307,12 +307,9 @@ export class AgentDeliveries {
    *  The producer owns these rows even after the recipient's acting identity has ended. */
   cancel(actorId: string): OwedDelivery[] {
     const cancelled = this.unpaid(actorId);
-    const dismissed = JSON.stringify({ reason: 'agent stopped or retired', by: 'system', at: Date.now() });
 
     void this.sql`DELETE FROM agent_deliveries WHERE actor_id = ${actorId}`;
-    void this.sql`UPDATE agent_log
-      SET payload = json_set(payload, '$.__dismissed', json(${dismissed})), step_idx = -2, turn_id = NULL, consumed_at = NULL
-      WHERE actor_id = ${actorId} AND kind = 'event' AND turn_id IS NOT NULL AND consumed_at IS NOT NULL`;
+    dismissEvents(this.sql, actorId, { kind: 'open_bound' }, { reason: 'agent stopped or retired', by: 'system' });
 
     return cancelled;
   }
