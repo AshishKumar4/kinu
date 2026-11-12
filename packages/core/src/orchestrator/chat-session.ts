@@ -8,7 +8,7 @@ import { answeredSummary, resumeMetadata, type OwnerAnswer } from '../plans/owne
 import { OWNER_ANSWER_SIGNAL } from '../types/owner-questions';
 import type { RewindTold } from './rewind-notice';
 import {
-  deliveredSignal, IntentResultSchema, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type IntentInput, type IntentResult, type OwedDelivery,
+  AgentDeliveries, deliveryMetadata, deliveredSignal, IntentResultSchema, MessageIdSchema, type Delivery, type DeliveryAnswer, type DeliveryInput, type IntentInput, type IntentResult, type OwedDelivery,
   type TurnDeliveryInput,
 } from '../subagents/deliveries';
 import type { PlanDecisionOutcome } from '../types/plans';
@@ -1502,7 +1502,22 @@ export class ChatSession {
    * question, or the one the last process left open. Re-pending theirs would deliver them again with the next drain.
    */
   reclaimStrandedEventDeliveries(): void {
-    const restored = new Set(this.queue.flatMap((item) => (item.idempotencyKey === undefined ? [] : [item.idempotencyKey])));
+    const restored = new Set(this.pendingSends.restoreTurns().map((item) => item.id));
+
+    for (const item of this.queue) if (item.idempotencyKey !== undefined) restored.add(item.idempotencyKey);
+
+    if (this.runningAnnouncement !== null) restored.add(this.runningAnnouncement);
+
+    if (this.actorSession.inFlight) {
+      for (const id of this.actorSession.orchestrator.inbox.answeredDeliveries) restored.add(id);
+    }
+
+    for (const delivery of new AgentDeliveries(this.actorSession.runtime.storage.sql).unpaid(this.actorSession.runtime.actor.actorId)) {
+      const id = deliveryMetadata(delivery)?.drainTurnId;
+
+      if (typeof id === 'string') restored.add(id);
+    }
+
     const reclaimed = this.eventLog.unbindStale(NO_STRANDED_DELIVERY_GRACE, Date.now(), restored);
 
     if (reclaimed.length === 0) return;

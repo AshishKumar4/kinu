@@ -15,7 +15,7 @@ import type { LanguageModel } from 'ai';
 import type { LanguageModelV2CallOptions, LanguageModelV2StreamPart, LanguageModelV2Usage } from '@ai-sdk/provider';
 import * as v from 'valibot';
 import {
-  AgentDeliveries, EventLog,
+  AgentDeliveries, EventLog, pendingEventsDelivery,
   BackgroundJobStore,
   backgroundJobWakeTrigger,
   MAX_CONCURRENT_DETACHED_JOBS,
@@ -3086,51 +3086,73 @@ describe('LocalAgentHost — the driver lease', () => {
     }
   });
 
-  test('opening a workspace reclaims and delivers an event a dead process left bound to a turn it never ran', async () => {
-    // KINU-020: a row bound to a synthetic drain turn by a dead process is invisible to `pending()`;
-    // opening under the driver lease hands it back.
-    const { state, project } = makeRoots();
-    const dbPath = await seedAgent(state, 'root');
-    const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
-    const before = makeHost(state, streamingModel('handled'), refs, { driverKind: 'daemon' });
+  for (const input of ['stopped', 'owed'] as const) {
+    test(`opening a workspace ${input === 'stopped' ? 'dismisses a historical Stop orphan' : 'delivers an owed event once under its original binding'}`, async () => {
+      const { state, project } = makeRoots();
+      const dbPath = await seedAgent(state, 'root');
+      const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
+      const before = makeHost(state, streamingModel('ready'), refs, { driverKind: 'daemon' });
 
-    try {
-      const fireAt = Date.now() + 60_000;
-      await scheduleTimer(dbPath, 'a build finished', fireAt);
-      // The drain is a debounced timer; closing first leaves what a process killed in that window leaves.
-      const session = await before.host.acquire('root');
-      expect((await session.fireDueTriggers(fireAt)).fired).toBe(1);
-    } finally {
+      await before.host.acquire('root');
       await before.host.close();
-    }
+      const db = workspaceDatabase(dbPath);
+      let eventId = '';
+      let binding = '';
 
-    const db = workspaceDatabase(dbPath);
+      try {
+        const { sql } = wrapDatabase(db);
+        const actor = openWorkspaceMainActor(sql);
+        const log = new EventLog(sqlStorageOver(db), actor);
 
-    try {
-      db.query(`UPDATE agent_log SET turn_id = 'evt-dead', step_idx = 0, consumed_at = 5 WHERE kind = 'event'`).run();
-    } finally {
-      db.close();
-    }
+        actor.config.delete('stopped-event-leases-2026-11-12');
+        db.transaction(() => {
+          const published = log.publish({ descriptor: {
+            ingress: 'peer_async', variant: 'peer_agent', same_owner: true,
+            payload: { from_agent_name: 'sender', from_user_id: '', topic: 'Release', body: 'REPAIR-CLI-EVENT', sender_event_id: input, kinu_mode: 'build', reply_expected: false },
+          }, now: Date.now() });
 
-    expect(eventCount(dbPath, 'pending')).toBe(0);
+          const delivery = present(pendingEventsDelivery(log, Date.now()), 'the event delivery');
 
-    const after = makeHost(state, streamingModel('handled after recovery'), refs, { driverKind: 'daemon' });
-    let turns = 0;
+          new AgentDeliveries(sql).add(actor.actorId, delivery);
+          eventId = published.id;
+          binding = delivery.id;
 
-    const unsubscribe = after.host.subscribe((_agent, event) => {
-      if (event.type === 'turn-start') turns += 1;
+          // The former Stop dropped its admitted reservation without closing this binding.
+          // The owed control is the real commit-before-crossing crash boundary.
+          if (input === 'stopped') db.query('DELETE FROM agent_deliveries WHERE actor_id = ? AND id = ?').run(actor.actorId, delivery.id);
+        })();
+      } finally {
+        db.close();
+      }
+
+      const after = makeHost(state, streamingModel('handled after recovery'), refs, { driverKind: 'daemon' });
+      let turns = 0;
+
+      const unsubscribe = after.host.subscribe((_agent, event) => {
+        if (event.type === 'turn-start') turns += 1;
+      });
+
+      try {
+        await after.host.acquire('root');
+        expect(turns).toBe(input === 'owed' ? 1 : 0);
+        expect(eventCount(dbPath, 'pending')).toBe(0);
+        const check = workspaceDatabase(dbPath);
+
+        try {
+          const row = check.query<{ turn_id: string | null; consumed_at: number | null; step_idx: number }, [string]>(
+            'SELECT turn_id, consumed_at, step_idx FROM agent_log WHERE id = ?',
+          ).get(eventId);
+
+          expect(row).toEqual({ turn_id: input === 'owed' ? binding : null, consumed_at: null, step_idx: input === 'owed' ? 0 : -2 });
+        } finally {
+          check.close();
+        }
+      } finally {
+        unsubscribe();
+        await after.host.close();
+      }
     });
-
-    try {
-      await after.host.acquire('root');
-      expect(turns).toBe(1);
-      expect(eventCount(dbPath, 'pending')).toBe(0);
-      expect((await userMessages(dbPath)).join('\n')).toContain('a build finished');
-    } finally {
-      unsubscribe();
-      await after.host.close();
-    }
-  });
+  }
 
   test("opening a workspace cancels what an agent that is gone was owed, and keeps a live agent's", async () => {
     // cf's copy of an unvisited row woke its workspace every lap for days (2026-09-26): nothing owed a gone agent stays.

@@ -1,5 +1,5 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
-import { reconcileStoppedEventLeases } from './reconcile-stopped-event-leases';
+import { reconcileStoppedEventLeases, STOPPED_EVENT_LEASES_REPAIR } from '@kinu.run/core';
 import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, missingUpload, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type AccountRead, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf,
 } from '@kinu.run/core';
 import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateRevision as builtRevision, type AppAgentEntry, type ShareChat, type ShareMode, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
@@ -8026,8 +8026,8 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
     await this.activationRecovery;
     await reconcileStoppedEventLeases({
       sql: this.boundSql,
-      done: () => this.ctx.storage.kv.get<boolean>('stopped-event-leases-2026-11-12') === true,
-      finish: () => { this.ctx.storage.kv.put('stopped-event-leases-2026-11-12', true); },
+      done: () => this.ctx.storage.kv.get<boolean>(STOPPED_EVENT_LEASES_REPAIR) === true,
+      finish: () => { this.ctx.storage.kv.put(STOPPED_EVENT_LEASES_REPAIR, true); },
       actors: () => this.actorDirectoryStore().list().map((actor) => actor.actorId),
       log: (actorId) => new EventLog(this.watchedExec, this.agentBound(actorId).handle),
       held: (actorId, ids) => this.agentCall(actorId, (isolate, snapshot) => isolate.heldDrainTurns(snapshot, ids)),

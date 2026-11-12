@@ -6,7 +6,7 @@ import {
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
   initAgentIsolateSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, readSubagentInspection,
   chatMediaPath, chatSeed, drawnStep, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
-  recordedTurns, type RecordedTurn, PROGRAMMATIC_MESSAGE_ID_PREFIX, signalCardId,
+  recordedTurns, type RecordedTurn, heldEventDeliveries,
   type TurnRequestIndex, type TurnRequestPage, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
   readAgentFigures, NO_FIGURES, statementText, type AgentFigures,
   localContextTree, readableActor, type ReadableActor, type ContextEditor, type ContextTree, type ConversationRecall,
@@ -620,19 +620,11 @@ export class AgentDatabase {
     return await this.readable().transcript.lastUserMetadata() ?? null;
   }
 
-  /** One-time Stop repair: inputs still queued, begun, or landed in a running turn are owned. */
+  /** One-time Stop repair reads this agent's actual input ownership. */
   async heldDrainTurns(ids: readonly string[]): Promise<readonly string[]> {
     const { actor, transcript } = this.readable();
-    const pending = new PendingSendStore(this.sql, actor.actorId);
-    const entries = transcript.holding(ids.flatMap((id) => [`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${id}`, signalCardId(id)]));
 
-    const runs = new Set(this.sql<{ id: string }>`SELECT json_extract(payload, '$.turn.metadata.drainTurnId') AS id
-      FROM run_events WHERE actor_id = ${actor.actorId} AND type = 'run_start'
-      AND json_extract(payload, '$.turn.metadata.drainTurnId') IN (SELECT value FROM json_each(${JSON.stringify(ids)}))`.map((row) => row.id));
-
-    const answered = new Set((await answersForDrainTurns(transcript, ids)).keys());
-
-    return ids.filter((id) => answered.has(id) || pending.hasTurn(id) || runs.has(id) || entries.has(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${id}`) || entries.has(signalCardId(id)));
+    return await heldEventDeliveries(this.sql, actor, transcript, ids);
   }
 
   /** The answer each drain turn gave, for the replies its workspace owes on them. */

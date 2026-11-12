@@ -2208,6 +2208,8 @@ export { PERSONAL_ASSISTANT_ID, kinuBlueprint, kinuListings } from './blueprints
 
 export { ClockSchema } from './blueprints/workspace';
 
+export { reconcileStoppedEventLeases, heldEventDeliveries, STOPPED_EVENT_LEASES_REPAIR, type StoppedEventLeaseHost } from './subagents/reconcile-stopped-event-leases';
+
 export { pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage } from './session/page';
 
 export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';

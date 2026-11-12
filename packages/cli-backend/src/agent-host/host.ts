@@ -69,7 +69,7 @@ import {
   type WorkspaceActorDirectory,
   readWorkspaceWork, type WorkspaceWork,
   isSubagentOrigin,
-  CHAT_SESSION_ID, convertQueuedDataUrlFiles,
+  CHAT_SESSION_ID, convertQueuedDataUrlFiles, reconcileStoppedEventLeases, heldEventDeliveries, STOPPED_EVENT_LEASES_REPAIR,
 } from '@kinu.run/core';
 import { Deferred, Effect, Result } from 'effect';
 import { KinuError, attempt, attemptInItsWords, diagnostics, hold, inItsWords, logged, refusalOf, settle, settleSync, settleLogged, detach } from '@kinu.run/core/obs';
@@ -740,6 +740,19 @@ export class LocalAgentHost {
 
       await this.drive(entry, async () => {
         await session.recoverBackgroundJobs();
+        await reconcileStoppedEventLeases({
+          sql: input.ws.rt.storage.sql,
+          done: () => input.tree.root.config.get(STOPPED_EVENT_LEASES_REPAIR) === 'true',
+          finish: () => { input.tree.root.config.set(STOPPED_EVENT_LEASES_REPAIR, 'true'); },
+          actors: () => input.tree.directory.list().map((actor) => actor.actorId),
+          log: (actorId) => new EventLog(sqlStorageOver(input.tree.db), input.tree.directory.open(actorId)),
+          held: (actorId, ids) => {
+            const bound = input.tree.host.bindStores(actorReferenceOf(input.tree.directory.open(actorId)));
+
+            return heldEventDeliveries(input.ws.rt.storage.sql, bound.handle, bound.stores.history.transcript(CHAT_SESSION_ID), ids);
+          },
+          transaction: (body) => writeTransaction(input.tree.db, body),
+        });
         session.reclaimStrandedEventDeliveries();
         await session.flushPendingDrains();
         await this.drainAssignedWork(entry);
