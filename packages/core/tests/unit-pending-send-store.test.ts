@@ -33,6 +33,17 @@ describe('PendingSendStore — the reservation', () => {
     expect(sends.files('s-2')).toEqual([]);
   });
 
+  test('a file keeps the digest it was pinned as; an upload whose own name holds the marker is read as named', () => {
+    const { store } = setup();
+    const sends = store('actor-a');
+    const pinned = { ...FILE, digest: 'ab'.repeat(32) };
+    const named = { filename: 'report#sha256=draft.txt', mediaType: 'text/plain', path: '/uploads/report#sha256=draft.txt' };
+
+    sends.reserve({ id: 's-1', turnId: 'turn-1', mode: 'build', text: 'files', files: [pinned, named] });
+
+    expect(sends.files('s-1')).toEqual([pinned, named]);
+  });
+
   test('retire spends the row AND its attachments, and no other actor\'s', () => {
     const { store } = setup();
     const sends = store('actor-a');

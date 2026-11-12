@@ -53,10 +53,14 @@ function steerFileUrl(file: PromptFile): string {
   return file.digest === undefined ? file.path : `${file.path}#sha256=${file.digest}`;
 }
 
-function steerFileOf(url: string): { readonly path: string; readonly digest?: string } {
-  const at = url.lastIndexOf('#sha256=');
+/** Only a whole digest at the row's end is a pin: an upload's own name may hold `#sha256=`, and a row from before pins
+ *  holds the bare path. */
+const PINNED_ROW = /^(?<path>.+)#sha256=(?<digest>[0-9a-f]{64})$/su;
 
-  return at < 0 ? { path: url } : { path: url.slice(0, at), digest: url.slice(at + '#sha256='.length) };
+function steerFileOf(url: string): { readonly path: string; readonly digest?: string } {
+  const pinned = PINNED_ROW.exec(url)?.groups;
+
+  return pinned?.path === undefined || pinned.digest === undefined ? { path: url } : { path: pinned.path, digest: pinned.digest };
 }
 
 /** `path` as the upload it names, normalized: a file directly or deeper under /uploads; null for any other. */
@@ -473,6 +477,8 @@ export interface UserSteerDeps {
   readonly turnId?: () => string | null;
   /** Skill bodies the landed words activate; spliced as step reference, never a durable row. */
   readonly skills?: (text: string) => Promise<string | null>;
+  /** The landed words as the model reads them: a pasted document spilled as the next turn's history will spill it. */
+  readonly words?: (message: ModelMessage) => Promise<ModelMessage>;
   /**
    * Moves the running step's tool calls to the background where that frees the step, so the words land as their handles
    * return; false where the step goes on (the model is writing, or a call cannot move), when the words wait as queued.
@@ -680,7 +686,11 @@ export class Inbox {
       const entries: Array<{ readonly message: ModelMessage; readonly durable: boolean; readonly landed?: boolean }> = [];
 
       if (users.length > 0) {
-        entries.push({ message: landedMessage ?? steerUserMessage(users.map(toUserSteer)), durable: true, landed: landedMessage !== undefined });
+        const said = landedMessage ?? steerUserMessage(users.map(toUserSteer));
+        const { words } = this.steers;
+        const message = words === undefined ? said : yield* Effect.promise(async () => await words(said));
+
+        entries.push({ message, durable: true, landed: landedMessage !== undefined });
       }
 
       if (landedEvents !== undefined) entries.push({ message: landedEvents, durable: true, landed: true });

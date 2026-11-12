@@ -163,3 +163,30 @@ test('a skill the words typed mid-turn activate reaches the next step whole: the
     fixture.close();
   }
 });
+
+test('a document pasted mid-turn is spilled where it lands, exactly as every later request reads it', async () => {
+  const pasted = `${'A line of the pasted report. '.repeat(400)}\nPASTED_TAIL`;
+  const { fixture, sent, released, prompts } = await watchedTurn();
+
+  try {
+    const steered = fixture.chat.send(pasted, { id: 'owner-2' });
+
+    released.resolve();
+    await sent;
+    await steered;
+    await fixture.chat.awaitSend('owner-1');
+    await fixture.chat.send('And the summary?', { id: 'owner-3' });
+    await fixture.chat.awaitSend('owner-3');
+
+    const spill = (prompt: string | undefined) => prompt?.match(/\[Pasted text \(\d+ bytes\) saved to [^\]]+\]/u)?.[0];
+    const [landed, later] = [prompts[1], prompts.at(-1)];
+
+    expect(prompts.length).toBeGreaterThan(2);
+    expect(spill(landed)).toBeDefined();
+    expect(spill(later)).toBe(spill(landed));
+    expect(landed).not.toContain('PASTED_TAIL');
+  } finally {
+    released.resolve();
+    fixture.close();
+  }
+});

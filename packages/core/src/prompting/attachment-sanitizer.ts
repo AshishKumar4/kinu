@@ -103,6 +103,33 @@ export function showFilesForModel(messages: readonly ModelMessage[], policy: Att
   return showModel(messages, { policy, spent: { tokens: 0 }, spills: false });
 }
 
+/**
+ * A person's words as the model is shown them, each past the inline limit spilled to a file exactly as the history pass
+ * spills it when the turn after opens, so words typed mid-turn read the same in the step they land at and in every
+ * later request. Their files are left to the step's own pass.
+ */
+export async function spillPastedWords(message: ModelMessage, policy: Pick<AttachmentPolicy, 'vfs' | 'budget'>): Promise<ModelMessage> {
+  if (message.role !== 'user') return message;
+
+  if (!Array.isArray(message.content)) {
+    const replacement = await sanitizeUserText(message.content, policy);
+
+    return replacement === null ? message : { ...message, content: replacement };
+  }
+
+  let changed = false;
+  const parts: UserPart[] = [];
+
+  for (const part of message.content) {
+    const replacement = part.type === 'text' ? await sanitizeTextPart(part, policy) : null;
+
+    if (replacement !== null) changed = true;
+    parts.push(replacement ?? part);
+  }
+
+  return changed ? { ...message, content: parts } : message;
+}
+
 async function showModel(messages: readonly ModelMessage[], shown: Shown): Promise<readonly ModelMessage[]> {
   let out: ModelMessage[] | undefined;
 
@@ -271,14 +298,14 @@ async function sanitizeFilePart(part: FilePart, shown: Shown): Promise<TextPart 
   return replaceMedia(data, { mediaType: part.mediaType, filename: part.filename, upload }, policy);
 }
 
-async function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Promise<TextPart | null> {
+async function sanitizeTextPart(part: TextPart, policy: Pick<AttachmentPolicy, 'vfs' | 'budget'>): Promise<TextPart | null> {
   const replacement = await sanitizeUserText(part.text, policy);
 
   return replacement === null ? null : { ...part, text: replacement };
 }
 
 /** Byte-stable, so a pasted document does not move the prompt-cache prefix. Null within budget. */
-async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise<string | null> {
+async function sanitizeUserText(text: string, policy: Pick<AttachmentPolicy, 'vfs' | 'budget'>): Promise<string | null> {
   const bytes = new TextEncoder().encode(text);
 
   if (bytes.length <= INLINE_TEXT_MAX_BYTES) return null;
