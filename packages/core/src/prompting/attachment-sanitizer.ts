@@ -88,13 +88,23 @@ function documentFits(spent: { tokens: number }, mediaType: string, bytes: Uint8
 const OFFLOADED_DIR = SPILL_DIRS.offloaded;
 
 /** Copy-on-write per message, and of the list from its first changed message: untouched messages keep referential
- *  identity, and an untouched history is returned as given. Every step sanitizes the whole history. */
-export async function sanitizeAttachmentsForModel(
-  messages: readonly ModelMessage[],
-  policy: AttachmentPolicy,
-): Promise<readonly ModelMessage[]> {
+ *  identity, and an untouched history is returned as given. The turn's history as it opens: its files shown, and words
+ *  past the inline limit (a pasted document) spilled to a file. */
+export function sanitizeAttachmentsForModel(messages: readonly ModelMessage[], policy: AttachmentPolicy): Promise<readonly ModelMessage[]> {
+  return showModel(messages, { policy, spent: { tokens: 0 }, spills: true });
+}
+
+/**
+ * A step's request with each file it names shown, and every word as it is: a step also carries the runtime's own
+ * user-role blocks (the skills a mid-turn message activates, the turn's state), which are instructions the model
+ * reads, never a person's pasted document to spill.
+ */
+export function showFilesForModel(messages: readonly ModelMessage[], policy: AttachmentPolicy): Promise<readonly ModelMessage[]> {
+  return showModel(messages, { policy, spent: { tokens: 0 }, spills: false });
+}
+
+async function showModel(messages: readonly ModelMessage[], shown: Shown): Promise<readonly ModelMessage[]> {
   let out: ModelMessage[] | undefined;
-  const shown: Shown = { policy, spent: { tokens: 0 } };
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
@@ -112,10 +122,11 @@ function mayCarryAttachments(message: ModelMessage): boolean {
   return message.role === 'user' || (message.role === 'assistant' && Array.isArray(message.content) && message.content.some((part) => part.type === 'file'));
 }
 
-/** A request's policy, and the documents it has shown inline so far, oldest first. */
+/** A request's policy, the documents it has shown inline so far, oldest first, and whether long words spill. */
 interface Shown {
   readonly policy: AttachmentPolicy;
   readonly spent: { tokens: number };
+  readonly spills: boolean;
 }
 
 async function sanitizeMessage(message: ModelMessage, shown: Shown): Promise<ModelMessage> {
@@ -126,6 +137,8 @@ async function sanitizeMessage(message: ModelMessage, shown: Shown): Promise<Mod
   if (message.role !== 'user') return message;
 
   if (Array.isArray(message.content)) return sanitizeUserMessage(message, message.content, shown);
+
+  if (!shown.spills) return message;
   const replacement = await sanitizeUserText(message.content, policy);
 
   return replacement === null ? message : { ...message, content: replacement };
@@ -217,7 +230,7 @@ async function sanitizePart(part: UserPart, shown: Shown): Promise<TextPart | nu
 
   if (part.type === 'file') return await sanitizeFilePart(part, shown);
 
-  if (part.type === 'text') return await sanitizeTextPart(part, shown.policy);
+  if (part.type === 'text') return shown.spills ? await sanitizeTextPart(part, shown.policy) : null;
 
   return null;
 }

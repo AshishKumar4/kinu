@@ -299,7 +299,7 @@ describe('kinu acp — prompt content', () => {
 
     const sent = v.parse(v.object({
       text: v.string(),
-      files: v.array(v.object({ path: v.string(), mediaType: v.string() })),
+      files: v.array(v.object({ path: v.string(), mediaType: v.string(), digest: v.string() })),
     }), fake.sent[0].prompt);
 
     expect(sent.text).toContain('explain this');

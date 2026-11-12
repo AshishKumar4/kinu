@@ -26,13 +26,13 @@ const MINUTE_MS = 60_000;
 /** A clock far from a day's end: the block states the date, so a turn either side of midnight states a new one. */
 const NOON = Date.parse('2026-10-07T12:00:00.000Z');
 
-/** One root turn through the chat gate; returns the request its model received. */
 /** What a turn's ask carries besides its words: the tool calls its model makes first, and the files sent with it. */
 interface Asked {
   readonly calls?: readonly { tool: string; args: object }[];
   readonly files?: readonly PromptFile[];
 }
 
+/** One root turn through the chat gate; returns the request its model received. */
 async function turn(agent: HarnessOrchestratorAgent, id: string, text: string, { calls = [], files = [] }: Asked = {}): Promise<Prompt> {
   const received: Prompt[] = [];
 
@@ -180,7 +180,8 @@ describe('a file attached to an earlier message', () => {
     setSystemTime(new Date(NOON + MINUTE_MS));
     const after = await turn(agent, 'second', 'And the trend?');
 
-    expect(JSON.stringify(after.slice(0, before.length))).toBe(JSON.stringify(before));
+    // Message by message, so a difference names the one it is in.
+    expect(after.slice(0, before.length).map((message) => JSON.stringify(message))).toEqual(before.map((message) => JSON.stringify(message)));
   });
 });
 
