@@ -84,7 +84,7 @@ test('an upload opens by the path its agent was told, typed as it reads', async 
       return chatCompletion(run, 'Read it.');
     }
 
-    const told = /saved to (\/uploads\/[^(]+) \(/u.exec(JSON.stringify(messages))?.[1] ?? '';
+    const told = /the editable file is (\/uploads\/.+?), which may/u.exec(JSON.stringify(messages))?.[1] ?? '';
     // What a model reads as a space it writes as one.
     const typed = told.replace(/\p{Z}/gu, ' ');
 
@@ -98,4 +98,39 @@ test('an upload opens by the path its agent was told, typed as it reads', async 
   });
 
   expect(answers.join('\n')).toContain(String(bytes.length));
+});
+
+test('an attachment named by a note is read as it was sent, whatever its upload holds since', async () => {
+  const sent = '%PDF-1.4 the deck as it was sent';
+  const answers: string[] = [];
+
+  const gateway = stubAiBinding((run) => {
+    const { messages, tools } = requestOf(run);
+    const answered = messages.filter((message) => message.role === 'tool');
+
+    if (tools.length === 0) return chatCompletion(run, 'Deck');
+
+    if (answered.length > 0) {
+      answers.push(JSON.stringify(answered));
+
+      return chatCompletion(run, 'Read it.');
+    }
+
+    // The model takes no PDF, so the note names the copy as sent; the second turn reads it, after the file was edited.
+    const asSent = /as sent is at (\S+);/u.exec(JSON.stringify(messages))?.[1];
+    const second = messages.some((message) => message.role === 'user' && JSON.stringify(message.content).includes('Read it now.'));
+
+    if (!second || asSent === undefined) return chatCompletion(run, 'Noted.');
+
+    return toolCallCompletion(run, { tool: 'shell', args: { command: `cat "${asSent}"` } }, 'call_read');
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+  const deck = await uploadedFile(workspace.agent, 'deck.pdf', 'application/pdf', new TextEncoder().encode(sent));
+
+  await sentTurn(workspace.agent, 'Here is the deck.', crypto.randomUUID(), { files: [deck] });
+  await workspaceFiles(workspace.agent).writeFile(deck.path, new TextEncoder().encode('%PDF-1.4 edited after Send'));
+  await sentTurn(workspace.agent, 'Read it now.', crypto.randomUUID());
+
+  expect(answers.join('\n')).toContain('the deck as it was sent');
 });

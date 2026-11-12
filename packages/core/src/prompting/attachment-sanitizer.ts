@@ -227,7 +227,7 @@ async function uploadedFile(part: FilePart, upload: string, policy: AttachmentPo
   const shown = (modality !== null && policy.accepts.has(modality)) || (isTextMediaType(part.mediaType) && stat.size < INLINE_TEXT_MAX_BYTES);
 
   // Not shown inline: named by its path and size, its bytes never read.
-  if (!shown) return referenceTo({ mediaType: part.mediaType, filename: part.filename, upload }, stat.size, here, policy);
+  if (!shown) return referenceTo({ mediaType: part.mediaType, filename: part.filename, upload, digest }, stat.size, here, policy);
   const bytes = await readUpload(policy.vfs, source, stat);
 
   return bytes === undefined ? gone : { ...part, data: bytes };
@@ -273,7 +273,7 @@ async function sanitizeImagePart(part: ImagePart, shown: Shown): Promise<TextPar
 
   if (data === null || policy.accepts.has('image')) return null;
 
-  return replaceMedia(data, { mediaType: part.mediaType ?? 'image', filename: undefined, upload: null }, policy);
+  return replaceMedia(data, { mediaType: part.mediaType ?? 'image', filename: undefined, upload: null, digest: null }, policy);
 }
 
 async function sanitizeFilePart(part: FilePart, shown: Shown): Promise<TextPart | null> {
@@ -289,13 +289,13 @@ async function sanitizeFilePart(part: FilePart, shown: Shown): Promise<TextPart 
     const payload = modality === 'image' ? null : decodePayload(data);
 
     return payload?.kind === 'bytes' && !documentFits(shown.spent, part.mediaType, payload.bytes, policy)
-      ? storeAndReference(payload.bytes, { mediaType: part.mediaType, filename: part.filename, upload }, policy)
+      ? storeAndReference(payload.bytes, { mediaType: part.mediaType, filename: part.filename, upload, digest: digestOf(part) }, policy)
       : null;
   }
 
   if (isTextMediaType(part.mediaType)) return inlineOrStoreText(data, part, policy);
 
-  return replaceMedia(data, { mediaType: part.mediaType, filename: part.filename, upload }, policy);
+  return replaceMedia(data, { mediaType: part.mediaType, filename: part.filename, upload, digest: digestOf(part) }, policy);
 }
 
 async function sanitizeTextPart(part: TextPart, policy: Pick<AttachmentPolicy, 'vfs' | 'budget'>): Promise<TextPart | null> {
@@ -356,14 +356,16 @@ async function inlineOrStoreText(data: DataContent | URL, file: FilePart, policy
     };
   }
 
-  return storeAndReference(payload.bytes, { mediaType: file.mediaType, filename: file.filename, upload }, policy);
+  return storeAndReference(payload.bytes, { mediaType: file.mediaType, filename: file.filename, upload, digest: digestOf(file) }, policy);
 }
 
-/** What a part's bytes are: their type, the name they came with, and the upload they were saved as, if any. */
+/** What a part's bytes are: their type, the name they came with, the upload they were saved as, if any, and the digest
+ *  they were pinned as when attached (`placeUpload`), if they were. */
 interface Carried {
   readonly mediaType: string;
   readonly filename: string | undefined;
   readonly upload: string | null;
+  readonly digest: string | null;
 }
 
 async function replaceMedia(data: DataContent | URL, carried: Carried, policy: AttachmentPolicy): Promise<TextPart> {
@@ -387,8 +389,17 @@ async function storeAndReference(bytes: Uint8Array, carried: Carried, policy: At
 function referenceTo(carried: Carried, size: number, path: string, policy: AttachmentPolicy): TextPart {
   policy.budget?.recordSpill({ producer: 'attachment', omitted: size, referenced: true });
   const name = carried.filename ?? path.slice(path.lastIndexOf('/') + 1);
+  const said = `[Attachment ${name} (${carried.mediaType}, ${String(size)} bytes)`;
 
-  return { type: 'text', text: `[Attachment ${name} (${carried.mediaType}, ${String(size)} bytes) saved to ${path} (read it with your file tools)]` };
+  // A pinned upload is two files: the attachment as it was sent, which nothing rewrites, and the file anyone may edit
+  // since. Both paths and the size follow from the part and its digest alone, so the note never changes.
+  if (carried.upload !== null && carried.digest !== null) {
+    const sent = onThisMachine(pinnedUpload(carried.digest, carried.mediaType), policy.planes);
+
+    return { type: 'text', text: `${said} as sent is at ${sent}; the editable file is ${path}, which may have changed since (read either with your file tools)]` };
+  }
+
+  return { type: 'text', text: `${said} saved to ${path} (read it with your file tools)]` };
 }
 
 /** An upload the model takes inline, named where it was saved. */

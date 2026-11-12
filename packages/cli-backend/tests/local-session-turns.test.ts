@@ -18,7 +18,7 @@ import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, } from './helpers/local-session';
-import { base64ToBytes, keptMediaName, placeUpload, rowText } from '@kinu.run/core';
+import { base64ToBytes, keptMediaName, placeUpload, rowText, sha256Hex } from '@kinu.run/core';
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
   const { db, rt } = workspaceRuntime();
@@ -444,13 +444,14 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     expect(fileParts).toHaveLength(0);
 
-    // The whole reference, so nothing else in the prompt (a worktree path, an instruction) can stand in for it.
+    // The reference names where the PDF is kept, so nothing else in the prompt (a worktree path, an instruction) can stand in for it.
     // The workspace's /uploads, which a local workspace keeps in its own space.
     const path = resolvePath('vfs://uploads/resume.pdf', rt.planes).absolute;
-    const reference = `[Attachment resume.pdf (application/pdf, ${pdfBytes.length} bytes) saved to ${path} (read it with your file tools)]`;
+    // And the PDF as it was sent, pinned by its digest beside the uploads.
+    const asSent = resolvePath(`vfs://uploads/.offloaded/${sha256Hex(pdfBytes)}.pdf`, rt.planes).absolute;
 
     const carriesReference = (message: PromptMessage): boolean => message.role === 'user'
-      && message.content.some((part) => part.type === 'text' && part.text === reference);
+      && message.content.some((part) => part.type === 'text' && part.text.includes(`${pdfBytes.length} bytes`) && part.text.includes(asSent) && part.text.includes(path));
 
     const referenced = present(observed.find(carriesReference), 'the user message carrying the attachment reference');
     const stored = await rt.storage.vfs.readFile(path);

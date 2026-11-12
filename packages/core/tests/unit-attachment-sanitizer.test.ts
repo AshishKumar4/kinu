@@ -408,7 +408,9 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
     const first = await sanitizeAttachmentsForModel([admitted], { accepts: accepts(), vfs });
     const again = await sanitizeAttachmentsForModel([admitted], { accepts: accepts(), vfs });
 
-    expect(textParts(first[0])[0]?.text).toBe(`[Attachment resume.pdf (application/pdf, ${PDF_BYTES.length} bytes) saved to /uploads/resume.pdf (read it with your file tools)]`);
+    // Named twice: as it was sent, pinned by its digest, and the editable file under its name.
+    expect(textParts(first[0])[0]?.text).toContain(pinnedUpload(sha256Hex(PDF_BYTES), 'application/pdf'));
+    expect(textParts(first[0])[0]?.text).toContain('/uploads/resume.pdf');
     expect(JSON.stringify(again)).toBe(JSON.stringify(first));
     expect(writes()).toBe(kept);
   });
@@ -458,7 +460,8 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
     const [out] = await sanitizeAttachmentsForModel([admitted], { accepts: accepts('image', 'pdf'), vfs, window: { contextWindow: 200_000, modelOutputLimit: 32_000 } });
 
     expect(JSON.stringify(admitted).length).toBeLessThan(1_000);
-    expect(textParts(out)[0]?.text).toBe(`[Attachment catalog.pdf (application/pdf, ${String(big.length)} bytes) saved to /uploads/catalog.pdf (read it with your file tools)]`);
+    expect(textParts(out)[0]?.text).toContain(pinnedUpload(sha256Hex(big), 'application/pdf'));
+    expect(textParts(out)[0]?.text).toContain(`${String(big.length)} bytes`);
   });
 
   test("a step's second pass over a shaped history changes nothing, and a file the model is not shown is never read", async () => {
