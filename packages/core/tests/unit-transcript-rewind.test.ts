@@ -32,7 +32,8 @@ async function seeded(): Promise<Fixture> {
 
   const history = new SessionHistory({
     sql: ws.sql, actor, transactionSync: write => ws.db.transaction(write)(),
-    files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
+    // A home the workspace's file plane lets a session write its payloads under (a file part's bytes).
+    files: async () => ({ vfs: ws.vfs, artifactDirectory: '/home/main/.kinu/context' }),
     claims: claimFences(ws.sql, actor),
   });
 
