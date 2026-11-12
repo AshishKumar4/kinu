@@ -412,9 +412,7 @@ function uploadOf(part: FilePart): string | null {
 
 /** The digest of the bytes a part's upload held when it was attached (`placeUpload`); null for a part from before. */
 function digestOf(part: FilePart): string | null {
-  const read = v.safeParse(UploadedSchema, part.providerOptions);
-
-  return read.success ? read.output.kinu.digest ?? null : null;
+  return digestOfUiPart({ providerMetadata: part.providerOptions });
 }
 
 /** Uploads read lately, per file plane: every turn's history names the same files again. */
@@ -452,16 +450,17 @@ async function readUpload(vfs: VFS, path: string, stat: { readonly mtimeMs: numb
   return bytes;
 }
 
-/**
- * The upload a chat's file part names: its `kinu.upload`, or, for a part that kept only its address (a carried opening,
- * a reverted message), the path that address is or reads from the files route. Null for a part naming no upload.
- */
 /** The digest a chat's file part names (`kinu.digest`): the bytes it was attached with; null where it names none. */
 export function digestOfUiPart(part: { readonly providerMetadata?: unknown }): string | null {
   const tagged = v.safeParse(UploadedSchema, part.providerMetadata);
 
   return tagged.success ? tagged.output.kinu.digest ?? null : null;
 }
+
+/**
+ * The upload a chat's file part names: its `kinu.upload`, or, for a part that kept only its address (a carried opening,
+ * a reverted message), the path that address is or reads from the files route. Null for a part naming no upload.
+ */
 
 export function uploadOfUiPart(part: { readonly url: string; readonly providerMetadata?: unknown }): string | null {
   const tagged = v.safeParse(UploadedSchema, part.providerMetadata);
