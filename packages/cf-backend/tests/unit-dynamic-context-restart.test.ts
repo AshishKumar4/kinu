@@ -169,8 +169,13 @@ describe('a file attached to an earlier message', () => {
 
   test('is shown from the bytes it was attached with: editing the file between turns leaves every earlier byte as it was', async () => {
     setSystemTime(new Date(NOON));
-    const { agent } = orchestratorHarness();
+    const OWNER = 'abcdef0123456789abcdef0123456789';
+    const user = createTestUserDO({ durableObjectId: OWNER });
+    // A named workspace: an unnamed one takes its first ask as its name, which the system prompt states.
+    const token = await provisionTestWorkspace(user, 'pinned', 'Pinned');
+    const { agent } = orchestratorHarness(undefined, { userDO: user.userDO, workspace: 'pinned', ownerUserId: OWNER });
 
+    agent.harnessHoldsCapability(token);
     await agent.activateActor();
     const chart = await uploadedFile(agent, 'chart.png', 'image/png', Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]));
     const before = await turn(agent, 'first', 'What does this chart show?', { files: [chart] });
