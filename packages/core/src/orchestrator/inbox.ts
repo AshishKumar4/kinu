@@ -14,7 +14,7 @@ import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
 import { UPLOADS_ROOT } from '../vfs/workspace-path';
-import { uploadPart } from '../prompting/attachment-sanitizer';
+import { attachmentBytes, placeUpload, uploadPart } from '../prompting/attachment-sanitizer';
 import type { PrepareStepContext } from '../extension';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn, PromptFile } from '../types/backend-host';
 import type {
@@ -201,6 +201,46 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     UNIQUE (actor_id, id),
     CHECK(run_end_json IS NULL OR run_end_path IS NULL)
   )`);
+}
+
+/**
+ * One-time (ARCHITECTURE-DECISIONS: a change that must keep rows writes its own one-time migration): each queued file
+ * a build before 7eb0fd75f held as a data URL, kept as an upload is (`placeUpload`, the one naming rule), its row then
+ * naming that path. The file is written before its row moves, and the row moves by one statement only from the data
+ * URL it held: a start cut short between the two writes the same bytes again, which the naming rule keeps as the same
+ * file, so a second start changes nothing. A file it cannot keep stays as it was, and is told. Remove this, and its
+ * call, once production has started every workspace on a build that has it. Answers how many rows it moved.
+ */
+export function convertQueuedDataUrlFiles(sql: SqlExecutor, files: { readonly vfs: VFS; readonly planes?: PathPlanes | undefined }): Promise<number> {
+  return settle(Effect.gen(function* () {
+    const held = sql<{ name: string }>`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pending_steer_files'`;
+
+    if (held.length === 0) return 0;
+
+    const legacy = sql<{ seq: number; filename: string; media_type: string; url: string }>`
+      SELECT seq, filename, media_type, url FROM pending_steer_files WHERE url LIKE 'data:%' ORDER BY seq`;
+
+    let moved = 0;
+
+    for (const row of legacy) {
+      const bytes = attachmentBytes(row.url);
+
+      const kept = bytes === null
+        ? null
+        : yield* Effect.result(attempted({ doing: `keeping the queued file ${row.filename} as an upload`, otherwise: 'io' },
+          async () => await placeUpload(files, row.filename, row.media_type, bytes)));
+
+      if (kept === null || kept._tag === 'Failure') {
+        diagnostics.event('steer.legacy_file_unkept', { seq: row.seq, ...(kept !== null && { failure: kept.failure.message }) });
+        continue;
+      }
+
+      void sql`UPDATE pending_steer_files SET url = ${kept.success} WHERE seq = ${row.seq} AND url = ${row.url}`;
+      moved += 1;
+    }
+
+    return moved;
+  }));
 }
 
 /**

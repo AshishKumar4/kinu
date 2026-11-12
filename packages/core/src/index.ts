@@ -922,7 +922,7 @@ export {
 // Inbox: the one way anything reaches an agent.
 
 export {
-  signalCardId, PromptFileSchema, missingUpload,
+  signalCardId, PromptFileSchema, missingUpload, convertQueuedDataUrlFiles,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   initPendingSendTables, PendingSendStore,
   type InputProducer,
