@@ -5,14 +5,13 @@
  * other.
  */
 import { expect, test } from 'bun:test';
-import { gatewayWorkspace, sentTurn, workspaceFiles } from './helpers/actor-harness';
+import { gatewayWorkspace, sentTurn, uploadedFile, workspaceFiles } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 const PROFILE = '# Ashish\n\nBuilds Kinu.\n';
 
 const NEWER = '# Ashish\n\nBuilds Kinu, and its evals.\n';
 
-const markdown = (text: string): string => `data:text/markdown;base64,${Buffer.from(text).toString('base64')}`;
 
 test('an upload keeps its own name in /uploads: the context names it, the Files tab lists it, another of that name is (2)', async () => {
   // What each turn's request carried, its messages as the model was sent them.
@@ -32,7 +31,7 @@ test('an upload keeps its own name in /uploads: the context names it, the Files 
     const id = crypto.randomUUID();
     const before = asked.length;
 
-    await sentTurn(workspace.agent, words, id, { files: [{ filename: 'ashish profile.md', mediaType: 'text/markdown', url: markdown(text) }] });
+    await sentTurn(workspace.agent, words, id, { files: [await uploadedFile(workspace.agent, 'ashish profile.md', 'text/markdown', new TextEncoder().encode(text))] });
 
     return asked.slice(before).join('\n');
   };
@@ -95,7 +94,7 @@ test('an upload opens by the path its agent was told, typed as it reads', async 
   const workspace = gatewayWorkspace(gateway);
 
   await sentTurn(workspace.agent, 'What does this show?', crypto.randomUUID(), {
-    files: [{ filename: name, mediaType: 'text/plain', url: `data:text/plain;base64,${Buffer.from(bytes).toString('base64')}` }],
+    files: [await uploadedFile(workspace.agent, name, 'text/plain', new TextEncoder().encode(bytes))],
   });
 
   expect(answers.join('\n')).toContain(String(bytes.length));

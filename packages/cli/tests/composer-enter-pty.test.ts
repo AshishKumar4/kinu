@@ -112,7 +112,8 @@ describe('the composer on a real terminal', () => {
 
     expect(run.screen).toContain('shot.png');
     expect(JSON.parse(readFileSync(sent, 'utf8'))).toEqual({
-      text: path, files: [{ filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }],
+      // Uploaded as every attachment is; the message names where it was kept.
+      text: path, files: [{ filename: 'shot.png', mediaType: 'image/png', path: '/uploads/shot.png' }],
     });
   });
 
@@ -136,7 +137,7 @@ describe('the composer on a real terminal', () => {
     expect(run.screen).toContain('agent prose reply');
     expect(JSON.parse(readFileSync(sent, 'utf8'))).toEqual({
       text: expect.stringContaining('/clipboard/'),
-      files: [{ filename: expect.stringMatching(/\.png$/), mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }],
+      files: [{ filename: expect.stringMatching(/\.png$/), mediaType: 'image/png', path: expect.stringMatching(/^\/uploads\/.+\.png$/) }],
     });
   });
 

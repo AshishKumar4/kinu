@@ -1,13 +1,13 @@
 /** The prompt boxes' attachments: chips, the paperclip, and paste. */
 import { useRef, type ClipboardEvent } from "react";
-import type { FileUIPart } from "ai";
 import { PaperclipIcon } from "@phosphor-icons/react";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { FilePicker } from "@/components/ui/FilePicker";
 import { IconControl } from "@/components/ui/IconControl";
+import type { ShownAttachment } from "@/hooks/use-pending-attachments";
 
 export interface AttachmentsControl {
-  readonly parts: readonly FileUIPart[];
+  readonly items: readonly ShownAttachment[];
   readonly onAdd: (files: FileList | null | undefined) => void;
   readonly onRemove: (index: number) => void;
 }
@@ -69,13 +69,22 @@ export function pasteAttachments(e: ClipboardEvent, attachments: AttachmentsCont
   insert(text);
 }
 
+/** How many files a composer holds, and whether one is still on its way: the message waits for it, as it is sent by
+ *  the path its upload answers. */
+export function trayOf(attachments: AttachmentsControl | undefined) {
+  const items = attachments?.items ?? [];
+
+  return { held: items.length, uploading: items.some((item) => item.state.kind === "held" || item.state.kind === "uploading") };
+}
+
 export function AttachmentTray({ attachments }: { attachments: AttachmentsControl }) {
-  if (attachments.parts.length === 0) return null;
+  if (attachments.items.length === 0) return null;
 
   return (
     <div className="flex flex-wrap gap-2 px-3 pt-3" data-attachments>
-      {attachments.parts.map((part, i) => (
-        <AttachmentChip key={`${part.filename ?? "file"}-${i}`} part={part} onRemove={() => attachments.onRemove(i)} />
+      {attachments.items.map((item, i) => (
+        <AttachmentChip key={item.key} onRemove={() => attachments.onRemove(i)} state={item.state}
+          part={{ type: "file", filename: item.name, mediaType: item.mediaType, url: item.preview ?? "" }} />
       ))}
     </div>
   );

@@ -847,7 +847,9 @@ export {
 
 export {
   attachmentBytes,
+  placeUpload,
   storeAttachment,
+  uploadOfUiPart,
 } from './prompting/attachment-sanitizer';
 
 export { ASKED, HeldReads, type Holds } from './utils/held-reads';
@@ -920,7 +922,7 @@ export {
 // Inbox: the one way anything reaches an agent.
 
 export {
-  signalCardId, PromptFileSchema,
+  signalCardId, PromptFileSchema, missingUpload,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   initPendingSendTables, PendingSendStore,
   type InputProducer,
@@ -1126,7 +1128,7 @@ export { ProgramsInFlight, launched } from './execution/programs-in-flight';
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  workspacePath, SCRATCH_ROOT, SHARED_ROOTS, SLATES_ROOT, WORKSPACE_ROOT,
+  workspacePath, SCRATCH_ROOT, SHARED_ROOTS, SLATES_ROOT, UPLOADS_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {
@@ -1643,7 +1645,6 @@ export {
 } from './plans/index';
 
 export {
-  CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   DEV_IDENTITY_ACCOUNT_HEADER,
   DEV_IDENTITY_HEADER,
   EVAL_ACCOUNTS,

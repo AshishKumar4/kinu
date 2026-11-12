@@ -1089,6 +1089,23 @@ export const PLATFORM_CATALOG = {
   },
 
 
+  'upload.file_bytes': {
+    subject: 'The largest file one upload carries into a workspace: the Files tab\'s, a chat attachment\'s, the CLI\'s',
+    origin: 'self-imposed',
+    bounds: 'peak-resident',
+    evidence: 'inferred',
+    provenance: 'packages/core/src/read-models/files.ts:1 (FILE_TRANSFER_MAX_BYTES)',
+    date: '2026-11-12',
+    trigger: 'an upload whose body passes the bound',
+    onBreach: 'the files route answers 413 naming the bound before the actor holds the file; the composer and the CLI '
+      + 'refuse the file in the same words before sending it',
+    observable: [],
+    firstPartySignal: true,
+    notes: 'A quarter of do.isolate.transient_alloc_reset (128 MiB): the actor assembles an upload\'s chunks before writing '
+      + 'it, so its peak is about twice the file, near half the allocation that reset an object. Kept equal to it by '
+      + 'unit-files.test.ts. One bound for every upload: a chat attachment is an upload, sent by reference.',
+  },
+
   'do.isolate.transient_alloc_reset': {
     subject: 'A transient allocate-and-free of 128 MiB inside a Durable Object context resets the object',
     origin: 'platform',

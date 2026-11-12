@@ -1,7 +1,7 @@
 /** ACP ContentBlock[] -> AgentPrompt. Editor buffers (`resource`) and screenshots (`image`) must survive. */
 
 import type { ContentBlock } from '@agentclientprotocol/sdk';
-import type { PromptFile } from '@kinu.run/core';
+import { base64ToBytes, type PromptFile } from '@kinu.run/core';
 import type { AgentPrompt } from '../agent-client';
 
 function blockText(block: ContentBlock): string | null {
@@ -22,36 +22,35 @@ function blockText(block: ContentBlock): string | null {
   }
 }
 
-function blockFile(block: ContentBlock): PromptFile | null {
-  if (block.type === 'image') {
-    return {
-      mediaType: block.mimeType,
-      filename: block.uri ?? 'image',
-      url: `data:${block.mimeType};base64,${block.data}`,
-    };
-  }
+/** A file an ACP client sends inline: its bytes, kept as a chat attachment is before the prompt names it. */
+interface BlockFile {
+  readonly filename: string;
+  readonly mediaType: string;
+  readonly bytes: Uint8Array;
+}
+
+function blockFile(block: ContentBlock): BlockFile | null {
+  if (block.type === 'image') return { mediaType: block.mimeType, filename: block.uri ?? 'image', bytes: base64ToBytes(block.data) };
 
   if (block.type === 'resource' && 'blob' in block.resource) {
-    const mediaType = block.resource.mimeType ?? 'application/octet-stream';
-
-    return {
-      mediaType,
-      filename: block.resource.uri,
-      url: `data:${mediaType};base64,${block.resource.blob}`,
-    };
+    return { mediaType: block.resource.mimeType ?? 'application/octet-stream', filename: block.resource.uri, bytes: base64ToBytes(block.resource.blob) };
   }
 
   return null;
 }
 
-export function toAgentPrompt(blocks: readonly ContentBlock[]): AgentPrompt {
+/** An ACP prompt as the agent's: each inline file uploaded first (`upload`, the client's), and named by its path. */
+export async function toAgentPrompt(blocks: readonly ContentBlock[], upload: (file: BlockFile) => Promise<string>): Promise<AgentPrompt> {
   const text: string[] = [];
   const files: PromptFile[] = [];
 
   for (const block of blocks) {
     const file = blockFile(block);
 
-    if (file) { files.push(file); continue; }
+    if (file) {
+      files.push({ filename: file.filename, mediaType: file.mediaType, path: await upload(file) });
+      continue;
+    }
 
     const part = blockText(block);
 

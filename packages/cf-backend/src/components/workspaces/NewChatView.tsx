@@ -3,15 +3,21 @@ import { useLocation, useNavigate } from "react-router-dom";
 import * as v from "valibot";
 import { detachPromise } from "@kinu.run/core/obs";
 import type { FileUIPart } from "ai";
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, agentRoute } from "@kinu.run/core";
+import { agentRoute } from "@kinu.run/core";
+import { uploadOfPart } from "@/lib/attachments-api";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useLabelledStep } from "@/hooks/use-labelled-step";
 import { PromptCard } from "./PromptCard";
 import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 
-const FilePartSchema = v.object({ type: v.literal("file"), mediaType: v.string(), url: v.string(), filename: v.optional(v.string()) });
+/** A sent file as a part carries it: named by its upload (`kinu.upload`), which the opening's send names. */
+const FilePartSchema = v.object({
+  type: v.literal("file"), mediaType: v.string(), url: v.string(), filename: v.optional(v.string()),
+  providerMetadata: v.optional(v.object({ kinu: v.object({ upload: v.string() }) })),
+});
 
-const CarriedAttachmentsSchema = v.strictObject({ attachments: v.array(FilePartSchema) });
+/** Files chosen where there was no workspace yet (Home): carried as they are, to upload into the one just made. */
+const CarriedAttachmentsSchema = v.strictObject({ attachments: v.array(v.instance(File)) });
 
 /** What a navigation carried here, taken once `ready`, then dropped from history so a reload never takes it again. */
 function useCarried<S extends v.GenericSchema>(schema: S, ready: boolean, take: (carried: v.InferOutput<S>) => void): void {
@@ -34,11 +40,21 @@ function useCarried<S extends v.GenericSchema>(schema: S, ready: boolean, take: 
   }, [schema, ready, state, take, navigate, location.pathname]);
 }
 
-export function useCarriedAttachments(offer: (parts: readonly FileUIPart[]) => void): void {
-  useCarried(CarriedAttachmentsSchema, true, ({ attachments }) => offer(attachments));
+export function useCarriedAttachments(add: (files: readonly File[]) => void): void {
+  useCarried(CarriedAttachmentsSchema, true, ({ attachments }) => add(attachments));
 }
 
 /** Carried from the new-chat view to the chat it opened. */
+/** A sent file as the opening carries it: each field the schema keeps, its upload named. */
+function carriedPart(part: FileUIPart): v.InferInput<typeof FilePartSchema> {
+  const upload = uploadOfPart(part);
+
+  return {
+    type: "file", mediaType: part.mediaType, url: part.url,
+    ...(part.filename !== undefined && { filename: part.filename }), ...(upload !== null && { providerMetadata: { kinu: { upload } } }),
+  };
+}
+
 const OpeningSchema = v.object({ opening: v.string(), attachments: v.optional(v.array(FilePartSchema), []) });
 
 type Opening = v.InferInput<typeof OpeningSchema>;
@@ -51,17 +67,18 @@ export function NewChatView({ workspace, title, createChat }: {
   createChat: (opening: string) => Promise<{ name: string }>;
 }) {
   const navigate = useNavigate();
-  const files = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
+  // The workspace is there: each file uploads to it as it is added, and the opening names them once they have landed.
+  const files = usePendingAttachments(workspace);
   const [text, setText] = useState("");
   const { busy, error, run } = useLabelledStep();
 
   const start = (): void => {
     const opening = text.trim();
 
-    if (opening === "" && files.parts.length === 0) return;
+    if ((opening === "" && files.parts.length === 0) || files.uploading) return;
     run("start", async () => {
       const created = await createChat(opening);
-      const state: Opening = { opening, attachments: [...files.parts] };
+      const state: Opening = { opening, attachments: files.parts.map(carriedPart) };
 
       await navigate(agentRoute(workspace, created.name), { state });
     });
@@ -78,8 +95,8 @@ export function NewChatView({ workspace, title, createChat }: {
         </h1>
         <PromptCard id="new-chat-opening" label="New chat" placeholder="Ask a question, plan a change, or hand over a task…"
           action="Start chat" value={text} onChange={setText} onSubmit={secretGuard.guarded("start", start)} notice={secretGuard.offer}
-          busy={busy !== null} error={error ?? files.refusal}
-          attachments={{ parts: files.parts, onAdd: files.add, onRemove: files.remove }} />
+          busy={busy !== null || files.uploading} error={error ?? files.refusal}
+          attachments={{ items: files.items, onAdd: files.add, onRemove: files.remove }} />
       </div>
     </div>
   );

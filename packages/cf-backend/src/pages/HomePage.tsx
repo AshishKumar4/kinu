@@ -11,7 +11,6 @@ import { PromptCard } from "@/components/workspaces/PromptCard";
 import { usePastedSecretGuard } from "@/components/secrets/PasteOffer";
 import { WORKSPACE_MISSION_ID } from "@/components/workspaces/NewWorkspaceButton";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } from "@kinu.run/core";
 import { useInstalledAssistant } from "@/hooks/use-installed-assistant";
 import { useSetupFinish } from "@/lib/setup-finish";
 import { Loader } from "@/components/ui/Loader";
@@ -51,13 +50,14 @@ function MissionHome() {
   const { entries: workspaces, error: rosterError } = useWorkspaceRoster();
   const listFailed = rosterError !== null;
   const { busy, err, create } = useCreateWorkspace();
-  const files = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
+  // No workspace yet: the files are held here, and upload to the one this makes.
+  const files = usePendingAttachments(null);
   const [isPending, startTransition] = useTransition();
   const creating = busy || isPending;
 
   const submit = (): void => {
     startTransition(async () => {
-      await create(mission, undefined, files.parts);
+      await create(mission, undefined, files.files);
     });
   };
 
@@ -84,7 +84,7 @@ function MissionHome() {
           notice={secretGuard.offer}
           busy={creating}
           error={err ?? files.refusal}
-          attachments={{ parts: files.parts, onAdd: files.add, onRemove: files.remove }}
+          attachments={{ items: files.items, onAdd: files.add, onRemove: files.remove }}
         />
 
         <aside className="order-3 min-w-0 lg:order-none">

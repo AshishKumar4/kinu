@@ -7,6 +7,7 @@ import type { FilePart, ModelMessage } from 'ai';
 import * as v from 'valibot';
 import { rasterImage, type RasterImage } from '../utils/raster-image';
 import { estimateTokens } from '../token-estimate';
+import { pdfPageCount, PDF_PAGE_TOKENS } from './document-tokens';
 import { attachmentBytes } from './attachment-sanitizer';
 import { specProvider } from '../providers/types';
 import { resolvePromptModelProfile } from './model-profile';
@@ -45,7 +46,7 @@ export function mediaTokens(spec: string, media: MediaPart): number | undefined 
   if (media.kind === 'file') {
     const pages = family === 'claude' && media.mediaType === 'application/pdf' ? pdfPages(media) : null;
 
-    return pages === null ? undefined : pages * CLAUDE_PDF_PAGE_TOKENS;
+    return pages === null ? undefined : pages * PDF_PAGE_TOKENS;
   }
 
   const image = mediaImage(media);
@@ -148,8 +149,6 @@ const OPENAI_RULES: ReadonlyArray<readonly [RegExp, PatchRule | TileRule]> = [
   [/^gpt-/u, { patch: 32, maxEdge: 2048, budget: 2500, multiplier: 1.2 }],
 ];
 
-const CLAUDE_PDF_PAGE_TOKENS = 1500;
-
 function claudeVersion(id: string): number {
   const match = /claude-(?:[a-z]+-)?(\d+)(?:[-.](\d{1,2})(?!\d))?/u.exec(id);
 
@@ -206,9 +205,7 @@ function pdfPages(media: MediaPart): number | null {
 
   if (known !== undefined) return known;
   const bytes = attachmentBytes(media.data);
-  // UTF-8 decoding keeps every ASCII byte as itself, which is all the page markers are.
-  const count = bytes === null ? 0 : new TextDecoder().decode(bytes).match(/\/Type\s*\/Page(?![a-z])/gu)?.length ?? 0;
-  const pages = count === 0 ? null : count;
+  const pages = bytes === null ? null : pdfPageCount(bytes);
 
   PDF_PAGES.set(media.source, pages);
 

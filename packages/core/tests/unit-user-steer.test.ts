@@ -300,8 +300,8 @@ describe('Inbox — the user kind, landing in the step', () => {
     ]);
   });
 
-  test('attachments ride as file parts rather than being dropped from the text', async () => {
-    const files = [{ filename: 'trace.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }];
+  test('attachments ride as file parts naming their uploads, rather than being dropped from the text', async () => {
+    const files = [{ filename: 'trace.png', mediaType: 'image/png', path: '/uploads/trace.png' }];
     const { inbox, drained } = setup({ turnInFlight: true });
     inbox.beginTurn();
     await inbox.send(steer('s1', 'look at this', { files }));
@@ -311,7 +311,7 @@ describe('Inbox — the user kind, landing in the step', () => {
       {
         role: 'user',
         content: [
-          { type: 'file', data: 'data:image/png;base64,AA', mediaType: 'image/png', filename: 'trace.png' },
+          { type: 'file', data: '/uploads/trace.png', mediaType: 'image/png', filename: 'trace.png', providerOptions: { kinu: { upload: '/uploads/trace.png' } } },
           { type: 'text', text: 'look at this' },
         ],
       },

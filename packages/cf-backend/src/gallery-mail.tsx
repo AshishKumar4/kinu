@@ -801,7 +801,7 @@ function ChatPane({ agent, threads, onOpenMail, answered, onAnswer }: {
       <div className="p-composer-dock">
         <Composer value={value} onValueChange={setValue} onSend={() => setValue("")} onStop={() => {}} placeholder="Send a message..."
           disabled={false} liveness={IDLE} mode={{ value: mode, onChange: setMode }}
-          attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
+          attachments={{ items: [], onAdd: () => {}, onRemove: () => {} }}
           modelPicker={<ModelPicker models={[{ spec: "opencode-go/muse-spark-1.3-contributor", label: "Muse Spark 1.3", provider: "OpenCode Go" }]} value={model} onChange={setModel} size="xs" />}
           notices={[]}
           attention={agent === "scout" && answered === null ? <SendCard onAnswer={onAnswer} /> : undefined} />

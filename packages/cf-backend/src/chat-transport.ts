@@ -19,7 +19,7 @@ import { Cause, Effect, Exit } from 'effect';
 import * as v from 'valibot';
 import {
   JsonObjectSchema, JsonValueSchema, MESSAGE_AMENDED_FRAME, newestOpener, PROVIDER_WAIT_PART, ProviderWaitSchema, SendMetadataSchema, sentWords, STEP_CUT_CHUNK,
-  UIMessageSchema, type SentWords, type ChatTransport, type ChatWindow, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent,
+  UIMessageSchema, uploadOfUiPart, type SentWords, type ChatTransport, type ChatWindow, type JsonObject, type MediaRef, type OwedIntent, type StoredImage, type PromptFile, type SendLanding, type SendState, type SessionEvent,
 } from '@kinu.run/core';
 import { attempt, attemptInItsWords, diagnostics, hold as holdExit, KinuError, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 
@@ -84,6 +84,8 @@ const ChatInputSchema = v.object({
   parts: v.array(v.looseObject({
     type: v.string(), text: v.optional(v.string()), url: v.optional(v.string()),
     mediaType: v.optional(v.string()), filename: v.optional(v.string()),
+    // A sent file names its upload (the files route's `uploads=` form); a part with no upload is refused at admission.
+    providerMetadata: v.optional(v.looseObject({ kinu: v.optional(v.looseObject({ upload: v.optional(v.string()) })) })),
   })),
   metadata: v.optional(v.unknown()),
 });
@@ -809,8 +811,13 @@ function chatInput(message: UIMessage): SentWords {
   const { parts, metadata } = v.parse(ChatInputSchema, message);
   const text = parts.flatMap((part) => part.type === 'text' ? [part.text ?? ''] : []).join('');
 
-  const files: PromptFile[] = parts.flatMap((part) => part.type === 'file' && part.url !== undefined
-    ? [{ filename: part.filename ?? 'attachment', mediaType: part.mediaType ?? 'application/octet-stream', url: part.url }]
+  // Each by the upload it names (`uploadOfUiPart`); one naming none (a data URL) is carried as no path, which admission
+  // refuses in its own words.
+  const files: PromptFile[] = parts.flatMap((part) => part.type === 'file'
+    ? [{
+      filename: part.filename ?? 'attachment', mediaType: part.mediaType ?? 'application/octet-stream',
+      path: uploadOfUiPart({ url: part.url ?? '', providerMetadata: part.providerMetadata }) ?? '',
+    }]
     : []);
 
   const send = v.safeParse(SendMetadataSchema, metadata);

@@ -7,6 +7,7 @@ import {
   type ReasoningEffort,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
+import { uploadOfPart } from "@/lib/attachments-api";
 import type { FileUIPart, UIMessage } from "ai";
 import * as v from "valibot";
 import type { SendLanding, SendState } from "@kinu.run/core";
@@ -667,7 +668,8 @@ export function useChatOwner(target: KinuActorAddress, extension: RefObject<Work
     }
 
     // A Plan-locked message that misses its turn must still run as a Plan turn.
-    const attachments = files.map((file) => ({ filename: file.filename ?? "attachment", mediaType: file.mediaType, url: file.url }));
+    // Each by the path its upload answered: the message carries no bytes. A part naming none is refused at admission.
+    const attachments = files.map((file) => ({ filename: file.filename ?? "attachment", mediaType: file.mediaType, path: uploadOfPart(file) ?? "" }));
 
     return sendLanding(record, rpc("send", [content, id, attachments, mode]), id);
   }, [startTurn, sendMessage, setMessages, isStreaming, rpc, agent]);

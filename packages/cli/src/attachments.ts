@@ -1,14 +1,15 @@
 /** @path, quoted and ~-prefixed tokens (drag-drop) that stat to a regular file become attachments. Images and
- * PDFs inline as data-URL parts; other files stay path references for the agent's tools. */
+ * PDFs upload as chat attachments do (`AgentClient.uploadAttachment`) and the message names their paths; other files
+ * stay path references for the agent's tools. */
 
 import { readFileSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
-import { readShellWord, referencePrefixes, resolvePath, type PathPlanes, type PromptFile } from '@kinu.run/core';
-import { renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
+import { FILE_TRANSFER_MAX_BYTES, readShellWord, referencePrefixes, resolvePath, type PathPlanes, type PromptFile } from '@kinu.run/core';
+import { attempt, renderThrownChain, settle, tolerateAsync } from '@kinu.run/core/obs';
 import { formatBytes } from '@kinu.run/core';
-import { Result } from 'effect';
+import { Effect, Result } from 'effect';
 
 /** Everything else is reachable through the agent's read tools; inlining would only burn context. */
 const INLINE_MEDIA_TYPES = new Map([
@@ -141,28 +142,27 @@ async function statCandidate(token: string, cwd: string, planes: PathPlanes | un
 }
 
 interface PromptAttachmentOptions {
-  /** The cap belongs to the backend that stores the message and the two differ by 8x, so no default. */
-  limitBytes: number;
+  /** Keeps a file as a chat attachment (`AgentClient.uploadAttachment`): the path the message names. */
+  upload: (file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }) => Promise<string>;
   cwd?: string;
   /** A local workspace's planes, where its references are on this machine. */
   planes?: PathPlanes;
 }
 
 /** A plain chain: a one-shot turn's first send races its session's start-up context measure on these ticks. */
-export async function resolvePromptAttachments(
+export function resolvePromptAttachments(
   text: string,
-  { limitBytes, cwd = process.cwd(), planes }: PromptAttachmentOptions,
+  { upload, cwd = process.cwd(), planes }: PromptAttachmentOptions,
 ): Promise<PromptAttachments> {
+  return settle(Effect.gen(function* () {
   const files: PromptFile[] = [];
   const attached: ResolvedAttachment[] = [];
   const errors: string[] = [];
   const seen = new Set<string>();
   const rewrites: Array<{ index: number; raw: string }> = [];
-  // Aggregate across all file parts: they persist together in one backend message.
-  let inlineBudget = limitBytes;
 
   for (const token of extractPathTokens(text)) {
-    const found = await statCandidate(token.path, cwd, planes);
+    const found = yield* Effect.promise(async () => await statCandidate(token.path, cwd, planes));
 
     if (!found) continue;
 
@@ -179,17 +179,13 @@ export async function resolvePromptAttachments(
       continue;
     }
 
-    if (found.size > inlineBudget) {
-      const reason = found.size > limitBytes
-        ? `${formatBytes(found.size)}; max ${formatBytes(limitBytes)} per message`
-        : `the ${formatBytes(limitBytes)} per-message budget is already used`;
-
-      errors.push(`${filename} is too large to attach (${reason}). Left as a path reference.`);
+    // One upload's bound (`upload.file_bytes`), as for a file attached in the browser.
+    if (found.size > FILE_TRANSFER_MAX_BYTES) {
+      errors.push(`${filename} is too large to attach (${formatBytes(found.size)}; one upload carries ${formatBytes(FILE_TRANSFER_MAX_BYTES)}). Left as a path reference.`);
       attached.push({ path: found.path, filename, mediaType: null, size: found.size });
       continue;
     }
 
-    // Within the inline budget, so read in place.
     const bytes = Result.try(() => readFileSync(found.path));
 
     if (Result.isFailure(bytes)) {
@@ -197,9 +193,17 @@ export async function resolvePromptAttachments(
       continue;
     }
 
-    files.push({ filename, mediaType, url: `data:${mediaType};base64,${bytes.success.toString('base64')}` });
+    const kept = yield* Effect.result(attempt({ doing: `uploading ${filename}`, otherwise: 'unavailable' },
+      async () => await upload({ filename, mediaType, bytes: new Uint8Array(bytes.success) })));
+
+    if (kept._tag === 'Failure') {
+      errors.push(`Could not upload ${filename}: ${renderThrownChain({ cause: kept.failure })}. Left as a path reference.`);
+      attached.push({ path: found.path, filename, mediaType: null, size: found.size });
+      continue;
+    }
+
+    files.push({ filename, mediaType, path: kept.success });
     attached.push({ path: found.path, filename, mediaType, size: found.size });
-    inlineBudget -= found.size;
   }
 
   // Right-to-left so indices stay valid.
@@ -210,6 +214,7 @@ export async function resolvePromptAttachments(
   }
 
   return { text: rewritten, files, attached, errors };
+  }));
 }
 
 export function describePromptAttachment(a: ResolvedAttachment): string {

@@ -116,6 +116,3 @@ export function inheritedRows(held: Readonly<Record<string, number>>, provisione
     .filter(([table, rows]) => rows > 0 && !TRIAL_ACCOUNT_KEEPS.has(table)));
 }
 
-// Cloud chat messages persist as one DO SQLite row (`do.sqlite.row_bytes`); file parts must fit whole under the
-// SDK's 1.8 MB row guard. 1 MiB raw is ~1.4 MB base64; unit-files.test.ts asserts it against the catalog.
-export const CLOUD_MAX_INLINE_ATTACHMENT_BYTES = 1024 * 1024;

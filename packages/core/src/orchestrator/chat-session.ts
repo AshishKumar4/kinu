@@ -50,7 +50,7 @@ import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import type { ClaimOutcome } from './actor-claims';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
-import { turnInputMessage, type InputProducer, type LandedEventRow, type LandedSteerRow, type PendingSendStore, type UserSteer } from './inbox';
+import { turnInputMessage, uploadsNamed, type InputProducer, type LandedEventRow, type LandedSteerRow, type PendingSendStore, type UserSteer } from './inbox';
 import { RETRIED_TURN_EVENT, runItem, runMetadata, tagged, type DeliveredRun, type QueueItem } from './chat-queue';
 import { restoreChat } from './chat-restore';
 import { DeliveredRunEnds } from './delivered-run-ends';
@@ -1086,6 +1086,11 @@ export class ChatSession {
         return yield* Effect.fail(new KinuError('bad_input', 'send requires the message text'));
       }
 
+      // Each file it names is an upload, by its path under /uploads: a message carries references, never bytes. Checked
+      // without waiting, so the words reach the running turn in the order they were sent; that the file is there is the
+      // sending host's to check before it hands the words over (`admitUploads`), and the turn's, which names one gone.
+      yield* uploadsNamed(files ?? []);
+
       if (card === undefined && this.turnInFlight()) {
         const { id } = opts;
 
@@ -1749,7 +1754,7 @@ export class ChatSession {
     this.messageId = item.continuation?.messageId ?? this.mintAnswerId();
 
     this.runId = item.continuation?.runId ?? `run-${crypto.randomUUID()}`;
-    const message = await this.actorSession.withUploads(turnInputMessage(item));
+    const message = turnInputMessage(item);
     const inputReference = await this.actorSession.canonical.admitInput({ id: this.turnId, turnId: this.turnId, message, assertOwner: () => this.actorSession.runtime.actor.assertCurrent() });
     const { questions } = this.actorSession;
 
@@ -1900,7 +1905,7 @@ export class ChatSession {
 
     await this.actorSession.openTurnInput(lease, {
       item: input,
-      message: await this.actorSession.withUploads(turnInputMessage(input)),
+      message: turnInputMessage(input),
       birthContext: async (drainTurnId) => (await this.birthContext(drainTurnId)).map(inheritedAsModelMessage),
     });
 

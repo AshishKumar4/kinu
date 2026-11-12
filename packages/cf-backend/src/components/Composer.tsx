@@ -10,7 +10,7 @@ import {
   CheckIcon, CopyIcon, WarningCircleIcon, InfoIcon, CheckCircleIcon, XIcon, type Icon,
 } from "@phosphor-icons/react";
 import { fmtSpan, providerName, type TurnLiveness, type WorkMode } from "@kinu.run/core";
-import { AttachButton, AttachmentTray, pasteAttachments, type AttachmentsControl } from "@/components/Attachments";
+import { AttachButton, AttachmentTray, pasteAttachments, trayOf, type AttachmentsControl } from "@/components/Attachments";
 import type { WorkspaceNotice } from "@kinu.run/core";
 import type { ProviderWaitShown } from "@/hooks/use-chat-owner";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
@@ -300,7 +300,8 @@ export function Composer({
   value, onValueChange, onSend, placeholder, disabled, liveness, onStop, onRecover,
   notices, mode, attachments, modelPicker, onBranch, textareaRef, attention, float, slash,
 }: ComposerProps) {
-  const empty = value.trim() === "" && (attachments?.parts.length ?? 0) === 0;
+  const tray = trayOf(attachments);
+  const empty = value.trim() === "" && tray.held === 0;
   const streaming = liveness.kind === "live";
   const stranded = liveness.kind === "stranded";
   // A branch runs the draft's words as a parallel head: attachments alone give it nothing to run.
@@ -381,7 +382,7 @@ export function Composer({
                 <span className="t-meta hidden @[30rem]:inline">Branch</span>
               </ChromeButton>
             )}
-            <SendControls streaming={streaming} empty={empty} blocked={disabled} stopping={stopping}
+            <SendControls streaming={streaming} empty={empty} blocked={tray.uploading || disabled} stopping={stopping}
               onSend={onSend} onStop={() => { setStopping(true); onStop(); }} />
           </div>
         </div>

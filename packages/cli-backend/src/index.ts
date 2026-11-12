@@ -37,7 +37,7 @@ export { hostToolchainCapabilities } from './host-toolchain';
 export { type ProfileEnvelopeSource } from './profile-authority';
 
 export {
-  LocalAgentSession, LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
+  LocalAgentSession,
   type LocalAgentSessionOpts,
   type ShellApprovalHandler,
 } from './local-session';

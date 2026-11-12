@@ -5,7 +5,7 @@
 import { Database } from 'bun:sqlite';
 import { AwaitedList, parityNormalizer, scratchPath, type ParityNormalizer, scratchDir, workspaceDatabase } from '@kinu.run/test-utils';
 import * as v from 'valibot';
-import { decodeJsonValue, initWorkspaceSchema, JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { decodeJsonValue, initWorkspaceSchema, JsonValueSchema, placeUpload, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { LanguageModelV2CallOptions, LanguageModelV2Usage } from '@ai-sdk/provider';
 import type { LLMProviderConfig, SessionTranscriptReader } from '@kinu.run/core';
@@ -209,7 +209,8 @@ function queuedSteer(events: readonly SessionEvent[], text: string): boolean {
     && event.event.status === 'queued' && event.event.text === text);
 }
 
-const NOTE_FILE = { filename: 'note.txt', mediaType: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=' };
+/** A file the person uploaded before sending it, as every chat attachment is: the message names its path. */
+const NOTE_FILE = { filename: 'note.txt', mediaType: 'text/plain', path: '/uploads/note.txt' };
 
 function frontendView(event: SessionEvent): JsonValue {
   switch (event.type) {
@@ -277,9 +278,9 @@ async function durableRows(db: Database, norm: ParityNormalizer, transcript: Ses
     id: norm.text(row.id), turnId: row.turn_id === null ? null : norm.text(row.turn_id), mode: row.mode, text: row.text,
   }));
 
-  const pendingSteerFiles = db.query<{ steer_id: string; filename: string; media_type: string; url: string }, []>(
-    `SELECT steer_id, filename, media_type, url FROM pending_steer_files ORDER BY seq`,
-  ).all().map((row) => ({ steerId: norm.text(row.steer_id), filename: row.filename, mediaType: row.media_type, url: row.url }));
+  const pendingSteerFiles = db.query<{ steer_id: string; filename: string; media_type: string; path: string }, []>(
+    `SELECT steer_id, filename, media_type, path FROM pending_steer_uploads ORDER BY seq`,
+  ).all().map((row) => ({ steerId: norm.text(row.steer_id), filename: row.filename, mediaType: row.media_type, path: row.path }));
 
   const agentLog = db.query<{
     id: string; kind: string; turn_id: string | null; step_idx: number | null; parent_id: string | null;
@@ -330,6 +331,7 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   ]);
 
   rt.actor.config.setLearning(false);
+  await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, NOTE_FILE.filename, NOTE_FILE.mediaType, new TextEncoder().encode('hello'));
   const a = new LocalAgentSession({ rt, db, model: modelA, onEvent: (event) => eventsA.push(event) });
   const norm = parityNormalizer();
 

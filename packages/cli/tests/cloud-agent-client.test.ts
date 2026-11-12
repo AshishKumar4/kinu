@@ -649,8 +649,8 @@ describe('CloudAgentClient protocol', () => {
     const client = newClient(mock);
 
     const files = [
-      { filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' },
-      { filename: 'spec.pdf', mediaType: 'application/pdf', url: 'data:application/pdf;base64,JVBERg==' },
+      { filename: 'shot.png', mediaType: 'image/png', path: '/uploads/shot.png' },
+      { filename: 'spec.pdf', mediaType: 'application/pdf', path: '/uploads/spec.pdf' },
     ];
 
     const turn = client.send({ text: 'describe these', files });
@@ -661,8 +661,8 @@ describe('CloudAgentClient protocol', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0].role).toBe('user');
     expect(messages[0].parts).toEqual([
-      { type: 'file', mediaType: 'image/png', filename: 'shot.png', url: 'data:image/png;base64,iVBORw0KGgo=' },
-      { type: 'file', mediaType: 'application/pdf', filename: 'spec.pdf', url: 'data:application/pdf;base64,JVBERg==' },
+      { type: 'file', mediaType: 'image/png', filename: 'shot.png', url: '/uploads/shot.png', providerMetadata: { kinu: { upload: '/uploads/shot.png' } } },
+      { type: 'file', mediaType: 'application/pdf', filename: 'spec.pdf', url: '/uploads/spec.pdf', providerMetadata: { kinu: { upload: '/uploads/spec.pdf' } } },
       { type: 'text', text: 'describe these' },
     ]);
 

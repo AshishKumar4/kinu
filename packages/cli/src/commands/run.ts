@@ -181,8 +181,8 @@ async function oneShotTurn(
 }
 
 async function turnOnClient(client: AgentClient, rawPrompt: string, run: OneShotRun): Promise<void> {
-  // Resolved after the client exists: it reports the backend's inline cap.
-  const prompt = await resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
+  // Resolved after the client exists: its files upload where it sends.
+  const prompt = await resolvePromptAttachments(rawPrompt, { upload: async (file) => await client.uploadAttachment(file), planes: client.planes ?? undefined });
 
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 

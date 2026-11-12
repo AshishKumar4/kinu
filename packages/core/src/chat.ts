@@ -1056,6 +1056,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         meter,
         context: callContext,
         turnStart,
+        ...(assembly.attachments !== undefined && {
+          attachments: async (stepMessages: ModelMessage[]) => {
+            const policy = assembly.attachments;
+
+            return policy === undefined ? stepMessages : await sanitizeAttachmentsForModel(stepMessages, { ...policy, accepts: current.accepts ?? policy.accepts });
+          },
+        }),
       }, { stepNumber: stepOffset + stepNumber, messages, steps });
 
       const asked = (done: PrepareStepResult<ToolSet>) => {

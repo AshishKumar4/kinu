@@ -1,5 +1,5 @@
 import { exists as nimbusExists } from '@nimbus-sh/core/vfs/vfs.js';
-import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type AccountRead, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf,
+import { objectNamed, ownerCaller, GitHubFactSchema, McpToolSurfaceSchema, actorPolicy, AgentDeliveries, AgentStops, DeliveryCoordinator, pendingEventsDelivery, wordsRefusal, missingUpload, deliveryMetadata, actorReach, type CrossedDelivery, type Delivery, type DeliveryAnswer, type AgentOrchestratorDeps, type SendLanding, readGitHubActivity, readGitHubRemotes, recordGitHubActivity, recordGitHubObservations, gitHubRefreshAsk, WORKSPACE_ROOT, effectiveRoleCatalog, narrowToolSurface, storeRevision, type GitHubFact, type WorkspaceGitHub, type WorkspaceGitHubView, type WorkspaceOverviewInputs, type AccountRead, type Fact, AGENT_CONFIG_KEYS, turnAttemptOf,
 } from '@kinu.run/core';
 import { preapproveSlateEffect, ROOT_SLATE_CALLER, slateRevision as builtRevision, type AppAgentEntry, type ShareChat, type ShareMode, type PartRunAnswer, type PartRunRequest, type PartShowRequest, type SlateCaller, type SlateCallFrom } from '@kinu.run/core/slates';
 /**
@@ -6408,7 +6408,12 @@ export class OrchestratorAgent extends Agent<Env> implements WorkspaceOwnerRpc {
    * told in the commit that owes them to the agent: a Stop from there on cancels them, on their way or taken.
    */
   private async deliverWords(actorId: string, delivery: Delivery, land: boolean, admitted?: () => void): Promise<SendLanding | null> {
-    const refused = wordsRefusal(delivery);
+    // Each file the words name is an upload the workspace holds, checked before they cross to their agent.
+    const files = delivery.input.kind === 'words' ? delivery.input.files ?? [] : [];
+
+    const missing = files.length === 0 ? null : await missingUpload(files, { vfs: this.rt.storage.vfs, planes: this.rt.planes });
+
+    const refused = missing ?? wordsRefusal(delivery);
 
     const crossed: CrossedDelivery = refused === null
       ? await whenActorTakesInput(this.boundSql, actorId, () => this.deliver(actorId, delivery, admitted))

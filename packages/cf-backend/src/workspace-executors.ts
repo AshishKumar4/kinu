@@ -7,7 +7,7 @@ import { Cause, Effect } from 'effect';
 import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import {
   asOwnerCommand, connectedDevices, deleteExecutorPathOp, ExecutorFileDownload, ExecutorFileUpload, getExecutorFiles, readExecutorFile, renameExecutorPathOp,
-  runOnExecutor,
+  placeUpload, runOnExecutor,
   type ExecutorTextFile, type ExecutorWriteResult, type ExposedPortList, type FilesPage, type FilesRequest, type RewindComputer,
 } from '@kinu.run/core';
 import type { HeldSlatePorts } from '@kinu.run/core/slates';
@@ -32,7 +32,9 @@ export interface ExecutorFileChunkRead {
 
 export interface ExecutorFileChunkWrite {
   executorId: string;
+  /** The file's path; with `upload`, the name it came with, placed under /uploads as it lands (`placeUpload`). */
   path: string;
+  upload?: { readonly mediaType: string };
   transferId: string;
   offset: number;
   chunk: Uint8Array;
@@ -49,7 +51,7 @@ interface ExecutorOutput {
 
 export interface WorkspaceExecutorsHost {
   /** This activation's runtime, read per call. */
-  runtime(): Pick<CFRuntime, 'executionRouter' | 'deviceTransport' | 'sandboxHandle'>;
+  runtime(): Pick<CFRuntime, 'executionRouter' | 'deviceTransport' | 'sandboxHandle' | 'storage' | 'planes'>;
   /** The workspace runtime's terminal, composed on first use. */
   workspaceTerminal(): Promise<WorkspaceTerminals>;
   /** The computer as its last status left it: a refusal it reported, or still restoring. */
@@ -207,7 +209,7 @@ export class WorkspaceExecutors {
   /** An `offset === 0` chunk (re)starts the transfer so retries self-heal; ordering and
    * continuity are enforced inside the transfer, not trusted from the caller. */
   async writeChunk(write: ExecutorFileChunkWrite): Promise<ExecutorWriteResult> {
-    const { executorId, path, transferId, offset, chunk, final, expectedRevision } = write;
+    const { executorId, path, transferId, offset, chunk, final, expectedRevision, upload } = write;
     const { router } = this;
 
     if (!router) return { error: 'no execution router' };
@@ -222,7 +224,10 @@ export class WorkspaceExecutors {
         executorId,
         path,
         expectedRevision,
-        upload: new ExecutorFileUpload(router, executorId, path, { expectedRevision }),
+        upload: new ExecutorFileUpload(router, executorId, path, {
+          expectedRevision,
+          ...(upload !== undefined && { place: async (bytes: Uint8Array) => await this.placeUpload(path, upload.mediaType, bytes) }),
+        }),
       };
       this.uploads.set(transferId, row);
     } else if (!row || row.executorId !== executorId || row.path !== path) {
@@ -236,6 +241,13 @@ export class WorkspaceExecutors {
     if (row.upload.done) this.uploads.delete(transferId);
 
     return result;
+  }
+
+  /** A chat attachment, kept under /uploads as it lands: its path. */
+  private async placeUpload(name: string, mediaType: string, bytes: Uint8Array): Promise<string> {
+    const { storage, planes } = this.host.runtime();
+
+    return await placeUpload({ vfs: storage.vfs, planes }, name, mediaType, bytes);
   }
 
   abortWrite(transferId: string): void {

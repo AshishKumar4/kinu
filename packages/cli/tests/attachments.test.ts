@@ -3,16 +3,26 @@ import { writeFileSync, mkdirSync, truncateSync } from 'node:fs';
 
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, formatBytes, localPlanes } from '@kinu.run/core';
+import { FILE_TRANSFER_MAX_BYTES, formatBytes, localPlanes } from '@kinu.run/core';
 import { present } from '@kinu.run/test-utils';
-import { LOCAL_MAX_INLINE_ATTACHMENT_BYTES } from '@kinu.run/cli-backend';
 import {
   describePromptAttachment,
   resolvePromptAttachments,
 } from '../src/attachments';
 
-/** Any cap cheap to exceed on disk; real backend caps are tested separately. */
-const CAP = 64 * 1024;
+/** Each file kept as an upload is: here, recorded by name under /uploads, as the client's upload answers. */
+function uploads() {
+  const kept: { filename: string; mediaType: string; bytes: number }[] = [];
+
+  return {
+    kept,
+    upload: async (file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<string> => {
+      kept.push({ filename: file.filename, mediaType: file.mediaType, bytes: file.bytes.length });
+
+      return `/uploads/${file.filename}`;
+    },
+  };
+}
 
 function makeDir(): string {
   const dir = scratchDir('attach');
@@ -32,7 +42,7 @@ describe('prompt token shapes through resolution', () => {
 
     const result = await resolvePromptAttachments(
       `look at @${img} and "${notes}" plus ~/docs/spec.pdf but not src/index.ts`,
-      { limitBytes: CAP, cwd: dir },
+      { upload: uploads().upload, cwd: dir },
     );
 
     expect(result.text).toBe(`look at ${img} and "${notes}" plus ~/docs/spec.pdf but not src/index.ts`);
@@ -45,7 +55,7 @@ describe('prompt token shapes through resolution', () => {
     const img = join(dir, 'two words.png');
     writeFileSync(img, PNG_BYTES);
 
-    const result = await resolvePromptAttachments(`compare @"${img}" please`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`compare @"${img}" please`, { upload: uploads().upload, cwd: dir });
     expect(result.files).toHaveLength(1);
     expect(result.files[0].filename).toBe('two words.png');
     expect(result.text).toBe(`compare ${img} please`);
@@ -53,7 +63,7 @@ describe('prompt token shapes through resolution', () => {
 
   test('an email-style @ inside a word resolves to nothing', async () => {
     const dir = makeDir();
-    const result = await resolvePromptAttachments('mail me@example.com today', { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments('mail me@example.com today', { upload: uploads().upload, cwd: dir });
     expect(result.text).toBe('mail me@example.com today');
     expect(result.attached).toEqual([]);
     expect(result.files).toEqual([]);
@@ -62,19 +72,17 @@ describe('prompt token shapes through resolution', () => {
 });
 
 describe('resolvePromptAttachments', () => {
-  test('an @mentioned image inlines as a data-URL file and the @ is stripped', async () => {
+  test('an @mentioned image uploads, the message names its path, and the @ is stripped', async () => {
     const dir = makeDir();
     const img = join(dir, 'shot.png');
     writeFileSync(img, PNG_BYTES);
+    const kept = uploads();
 
-    const result = await resolvePromptAttachments(`describe @${img} please`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`describe @${img} please`, { upload: kept.upload, cwd: dir });
     expect(result.text).toBe(`describe ${img} please`);
     expect(result.errors).toEqual([]);
-    expect(result.files).toEqual([{
-      filename: 'shot.png',
-      mediaType: 'image/png',
-      url: `data:image/png;base64,${PNG_BYTES.toString('base64')}`,
-    }]);
+    expect(result.files).toEqual([{ filename: 'shot.png', mediaType: 'image/png', path: '/uploads/shot.png' }]);
+    expect(kept.kept).toEqual([{ filename: 'shot.png', mediaType: 'image/png', bytes: PNG_BYTES.length }]);
     expect(result.attached).toEqual([
       { path: img, filename: 'shot.png', mediaType: 'image/png', size: PNG_BYTES.length },
     ]);
@@ -85,7 +93,7 @@ describe('resolvePromptAttachments', () => {
     const pdf = join(dir, 'two words.pdf');
     writeFileSync(pdf, '%PDF-1.4');
 
-    const result = await resolvePromptAttachments(`summarize "${pdf}"`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`summarize "${pdf}"`, { upload: uploads().upload, cwd: dir });
     expect(result.files).toHaveLength(1);
     expect(result.files[0].mediaType).toBe('application/pdf');
     expect(result.text).toBe(`summarize "${pdf}"`);
@@ -96,7 +104,7 @@ describe('resolvePromptAttachments', () => {
     const img = join(dir, 'my shot.png');
     writeFileSync(img, PNG_BYTES);
 
-    const mention = await resolvePromptAttachments(`what is in @${img.replaceAll(' ', '\\ ')}`, { limitBytes: CAP, cwd: dir });
+    const mention = await resolvePromptAttachments(`what is in @${img.replaceAll(' ', '\\ ')}`, { upload: uploads().upload, cwd: dir });
     expect(mention.attached.map(({ path }) => path)).toEqual([img]);
   });
 
@@ -110,7 +118,7 @@ describe('resolvePromptAttachments', () => {
 
     const shellQuoted = `'${quoted.replaceAll("'", "'\\''")}'`;
     const shellEscaped = escaped.replaceAll(' ', '\\ ').replaceAll('"', '\\"');
-    const result = await resolvePromptAttachments(`compare ${shellQuoted} with ${shellEscaped}`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`compare ${shellQuoted} with ${shellEscaped}`, { upload: uploads().upload, cwd: dir });
 
     expect(result.attached.map(({ path }) => path)).toEqual([quoted, escaped]);
   });
@@ -120,7 +128,7 @@ describe('resolvePromptAttachments', () => {
     mkdirSync(join(dir, 'assets'));
     writeFileSync(join(dir, 'assets', 'logo.png'), PNG_BYTES);
 
-    const result = await resolvePromptAttachments('use @assets/logo.png here', { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments('use @assets/logo.png here', { upload: uploads().upload, cwd: dir });
     expect(result.files).toHaveLength(1);
     expect(result.attached[0].path).toBe(join(dir, 'assets', 'logo.png'));
     expect(result.text).toBe('use assets/logo.png here');
@@ -131,7 +139,7 @@ describe('resolvePromptAttachments', () => {
     const img = join(dir, 'shot.png');
     writeFileSync(img, PNG_BYTES);
 
-    const result = await resolvePromptAttachments(`what is in @${img}?`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`what is in @${img}?`, { upload: uploads().upload, cwd: dir });
     expect(result.files).toHaveLength(1);
     expect(result.files[0].filename).toBe('shot.png');
   });
@@ -141,7 +149,7 @@ describe('resolvePromptAttachments', () => {
     const notes = join(dir, 'notes.txt');
     writeFileSync(notes, 'remember the milk');
 
-    const result = await resolvePromptAttachments(`read @${notes}`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`read @${notes}`, { upload: uploads().upload, cwd: dir });
     expect(result.files).toEqual([]);
     expect(result.attached).toEqual([
       { path: notes, filename: 'notes.txt', mediaType: null, size: 17 },
@@ -158,38 +166,30 @@ describe('resolvePromptAttachments', () => {
     writeFileSync(disk, '');
     truncateSync(disk, 1024 ** 3);
 
-    const result = await resolvePromptAttachments(`inspect @${disk}`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`inspect @${disk}`, { upload: uploads().upload, cwd: dir });
     expect(describePromptAttachment(present(result.attached[0], 'the referenced disk'))).toBe(`disk.img (${formatBytes(1024 ** 3)}, referenced)`);
   });
 
-  test('an over-cap image is left as a reference with a visible error', async () => {
+  test('an image past what one upload carries is left as a reference with a visible error', async () => {
     const dir = makeDir();
     const big = join(dir, 'huge.png');
-    writeFileSync(big, Buffer.alloc(CAP + 1));
+    writeFileSync(big, Buffer.alloc(FILE_TRANSFER_MAX_BYTES + 1));
 
-    const result = await resolvePromptAttachments(`look at @${big}`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`look at @${big}`, { upload: uploads().upload, cwd: dir });
     expect(result.files).toEqual([]);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('huge.png');
     expect(result.attached[0].mediaType).toBeNull();
   });
 
-  test('the inline cap is a per-message aggregate: a second image that no longer fits falls back to a path reference', async () => {
+  test('a file whose upload fails is left as a reference, its failure said', async () => {
     const dir = makeDir();
-    const first = join(dir, 'first.png');
-    const second = join(dir, 'second.png');
-    writeFileSync(first, Buffer.alloc(Math.ceil(CAP * 0.7)));
-    writeFileSync(second, Buffer.alloc(Math.ceil(CAP * 0.7)));
+    const img = join(dir, 'shot.png');
+    writeFileSync(img, PNG_BYTES);
 
-    const result = await resolvePromptAttachments(`compare @${first} with @${second}`, { limitBytes: CAP, cwd: dir });
-    expect(result.files).toHaveLength(1);
-    expect(result.files[0].filename).toBe('first.png');
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]).toContain('second.png');
-    expect(result.attached).toEqual([
-      { path: first, filename: 'first.png', mediaType: 'image/png', size: Math.ceil(CAP * 0.7) },
-      { path: second, filename: 'second.png', mediaType: null, size: Math.ceil(CAP * 0.7) },
-    ]);
+    const result = await resolvePromptAttachments(`look at @${img}`, { upload: async () => { throw new Error('the workspace is full'); }, cwd: dir });
+    expect(result.files).toEqual([]);
+    expect(result.errors).toEqual([expect.stringContaining('the workspace is full')]);
   });
 
   // 2026-10-04: `@vfs://…` and `@local://…` named nothing, since the CLI resolved every token against its own cwd.
@@ -201,7 +201,7 @@ describe('resolvePromptAttachments', () => {
     writeFileSync(join(folder, 'notes.txt'), 'in the folder');
     const planes = localPlanes({ space, folder, home: folder, views: [] });
 
-    const result = await resolvePromptAttachments('see @vfs://slates/board/shot.png and @local://notes.txt not @computer://x', { limitBytes: CAP, cwd: folder, planes });
+    const result = await resolvePromptAttachments('see @vfs://slates/board/shot.png and @local://notes.txt not @computer://x', { upload: uploads().upload, cwd: folder, planes });
 
     expect(result.attached.map((a) => a.path)).toEqual([join(space, 'slates', 'board', 'shot.png'), join(folder, 'notes.txt')]);
     expect(result.files).toHaveLength(1);
@@ -211,7 +211,7 @@ describe('resolvePromptAttachments', () => {
 
   test('nonexistent paths and directories are ignored', async () => {
     const dir = makeDir();
-    const result = await resolvePromptAttachments(`see @${join(dir, 'missing.png')} and @${dir}`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`see @${join(dir, 'missing.png')} and @${dir}`, { upload: uploads().upload, cwd: dir });
     expect(result.files).toEqual([]);
     expect(result.attached).toEqual([]);
     expect(result.errors).toEqual([]);
@@ -222,35 +222,10 @@ describe('resolvePromptAttachments', () => {
     const img = join(dir, 'shot.png');
     writeFileSync(img, PNG_BYTES);
 
-    const result = await resolvePromptAttachments(`diff @${img} with @${img}`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`diff @${img} with @${img}`, { upload: uploads().upload, cwd: dir });
     expect(result.files).toHaveLength(1);
     expect(result.attached).toHaveLength(1);
     expect(result.text).toBe(`diff ${img} with ${img}`);
-  });
-});
-
-describe('the inline cap belongs to the backend, not to the CLI', () => {
-  test('an attachment between the two caps inlines locally and is refused on the cloud', async () => {
-    // The cloud cap is a Durable Object row limit; a local bun:sqlite session is bounded by provider
-    // request size instead, so a file in between gets two different answers.
-    expect(LOCAL_MAX_INLINE_ATTACHMENT_BYTES).toBeGreaterThan(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
-    const dir = makeDir();
-    const img = join(dir, 'screenshot.png');
-    writeFileSync(img, Buffer.alloc(CLOUD_MAX_INLINE_ATTACHMENT_BYTES + 1));
-
-    const local = await resolvePromptAttachments(`look at @${img}`, {
-      limitBytes: LOCAL_MAX_INLINE_ATTACHMENT_BYTES, cwd: dir,
-    });
-
-    expect(local.files).toHaveLength(1);
-    expect(local.errors).toEqual([]);
-
-    const cloud = await resolvePromptAttachments(`look at @${img}`, {
-      limitBytes: CLOUD_MAX_INLINE_ATTACHMENT_BYTES, cwd: dir,
-    });
-
-    expect(cloud.files).toEqual([]);
-    expect(cloud.errors[0]).toContain('screenshot.png is too large to attach');
   });
 });
 
@@ -264,7 +239,7 @@ describe('a quoted sentence is prose, not a path', () => {
   test('a quoted token longer than a filename resolves to nothing and throws nothing', async () => {
     const dir = makeDir();
     expect(SENTENCE.length).toBeGreaterThan(255);
-    const result = await resolvePromptAttachments(`Answer: "${SENTENCE}"`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`Answer: "${SENTENCE}"`, { upload: uploads().upload, cwd: dir });
     expect(result.attached).toEqual([]);
     expect(result.files).toEqual([]);
     expect(result.errors).toEqual([]);
@@ -276,7 +251,7 @@ describe('a quoted sentence is prose, not a path', () => {
     const name = `${'a'.repeat(160)}.png`;
     writeFileSync(join(dir, name), PNG_BYTES);
 
-    const result = await resolvePromptAttachments(`look at "${name}"`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`look at "${name}"`, { upload: uploads().upload, cwd: dir });
     expect(result.files).toHaveLength(1);
     expect(result.attached[0]?.filename).toBe(name);
   });
@@ -284,7 +259,7 @@ describe('a quoted sentence is prose, not a path', () => {
   test('an absolute path over the resolvable limit is refused before stat', async () => {
     const dir = makeDir();
     const deep = Array.from({ length: 40 }, () => 'd'.repeat(120)).join('/');
-    const result = await resolvePromptAttachments(`look at "${deep}"`, { limitBytes: CAP, cwd: dir });
+    const result = await resolvePromptAttachments(`look at "${deep}"`, { upload: uploads().upload, cwd: dir });
     expect(result.attached).toEqual([]);
     expect(result.errors).toEqual([]);
   });

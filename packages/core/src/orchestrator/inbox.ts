@@ -7,9 +7,14 @@
  */
 
 import { Effect, Exit } from 'effect';
-import { attempt as attempted, hold, settle } from '../obs/effect';
+import { attempt as attempted, hold, settle, tolerateAsync } from '../obs/effect';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { resolvePath, vfsReference, type PathPlanes } from '../vfs/resolve';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
+import { normalizePath } from '@nimbus-sh/core/vfs/composite.js';
+import { UPLOADS_ROOT } from '../vfs/workspace-path';
+import { uploadPart } from '../prompting/attachment-sanitizer';
 import type { PrepareStepContext } from '../extension';
 import type { BackendHost, EnqueueTurnResult, ProgrammaticTurn, PromptFile } from '../types/backend-host';
 import type {
@@ -35,14 +40,49 @@ export interface UserSteer {
   readonly id?: string;
 }
 
-/** Parsed, not trusted, at the RPC boundary. */
+/** Parsed, not trusted, at the RPC boundary: a path under /uploads, normalized, which `admitUploads` then finds. */
 export const PromptFileSchema: v.GenericSchema<PromptFile> = v.object({
   filename: v.string(),
   mediaType: v.string(),
-  url: v.string(),
+  path: v.pipe(v.string(), v.check((path) => uploadPath(path) !== null, `an attachment is a file uploaded under ${UPLOADS_ROOT}`)),
 });
 
-/** Attachments as file parts, then the text. */
+/** `path` as the upload it names, normalized: a file directly or deeper under /uploads; null for any other. */
+function uploadPath(path: string): string | null {
+  const normal = normalizePath(path);
+
+  return normal.startsWith(`${UPLOADS_ROOT}/`) && normal.length > UPLOADS_ROOT.length + 1 ? normal : null;
+}
+
+/** Refuses a send naming a file by anything but its upload's path under /uploads (a data URL, another place). */
+export function uploadsNamed(files: ReadonlyArray<PromptFile>): Effect.Effect<void, KinuError> {
+  const stray = files.find((file) => uploadPath(file.path) === null);
+
+  return stray === undefined
+    ? Effect.void
+    : Effect.fail(new KinuError('bad_input', `${stray.filename} is not an upload: send a file by the path its upload answered, under ${UPLOADS_ROOT}`));
+}
+
+/** Refuses a send naming a file that is not an upload there: one under /uploads that the workspace's file plane holds. */
+function admitUploads(files: ReadonlyArray<PromptFile>, plane: { readonly vfs: Pick<VFS, 'stat'>; readonly planes?: PathPlanes }): Effect.Effect<void, KinuError> {
+  return Effect.forEach(files, (file) => Effect.gen(function* () {
+    const path = uploadPath(file.path);
+
+    if (path === null) return yield* new KinuError('bad_input', `${file.filename} is not an upload: send a file by the path its upload answered, under ${UPLOADS_ROOT}`);
+    const here = plane.planes === undefined ? path : resolvePath(vfsReference(path), plane.planes).absolute;
+    const stat = yield* Effect.promise(async () => await tolerateAsync(async () => await plane.vfs.stat(here), 'enoent') ?? null);
+
+    if (stat === null || stat.type !== 'file') return yield* new KinuError('bad_input', `${file.filename} is not uploaded at ${path}: upload it again`);
+  }), { discard: true });
+}
+
+/** The refusal a send naming files earns where one is not an upload there; null where each is. */
+export function missingUpload(files: ReadonlyArray<PromptFile>, plane: { readonly vfs: Pick<VFS, 'stat'>; readonly planes?: PathPlanes }): Promise<KinuError | null> {
+  return settle(Effect.match(admitUploads(files, plane), { onFailure: (failure) => failure, onSuccess: () => null }));
+}
+
+/** Attachments as file parts, then the text. Each names its upload, which the model is shown from the file plane
+ *  (`prompting/attachment-sanitizer.ts`): the message carries no bytes. */
 export function turnInputMessage(input: { readonly text: string; readonly files?: ReadonlyArray<PromptFile> }): ModelMessage {
   const files = input.files ?? [];
 
@@ -51,7 +91,7 @@ export function turnInputMessage(input: { readonly text: string; readonly files?
   return {
     role: 'user',
     content: [
-      ...files.map((f) => ({ type: 'file' as const, data: f.url, mediaType: f.mediaType, filename: f.filename })),
+      ...files.map((f) => uploadPart(f)),
       { type: 'text' as const, text: input.text },
     ],
   };
@@ -126,15 +166,15 @@ export function initPendingSendTables(execRaw: RawSqlExec): void {
     metadata_json TEXT,
     UNIQUE (actor_id, id)
   )`);
-  // A row per file: a send's files, each up to CLOUD_MAX_INLINE_ATTACHMENT_BYTES as base64, are not counted, so together
-  // they can pass `do.sqlite.row_bytes` (8 MiB since 2026-10-21) where each alone cannot.
-  execRaw(`CREATE TABLE IF NOT EXISTS pending_steer_files (
+  // A row per file a send names, each by its upload's path (`PromptFile`), in send order. Retired `pending_steer_files`
+  // held each file's bytes as a data URL, from before an attachment was an upload.
+  execRaw(`CREATE TABLE IF NOT EXISTS pending_steer_uploads (
     seq        INTEGER PRIMARY KEY AUTOINCREMENT,
     actor_id   TEXT NOT NULL,
     steer_id   TEXT NOT NULL,
     filename   TEXT NOT NULL,
     media_type TEXT NOT NULL,
-    url        TEXT NOT NULL
+    path       TEXT NOT NULL
   )`);
   // Per producer, the newest delivery it took and the newest a Stop cut off (design v3 C): deliveries cross in their
   // producer's order, so one at or below either mark was answered before, or was cancelled.
@@ -181,8 +221,8 @@ export class PendingSendStore {
       VALUES (${this.actorId}, ${steer.id}, ${steer.turnId}, ${steer.mode}, ${steer.text}, ${metadata})`;
 
     for (const file of steer.files ?? []) {
-      void this.sql`INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
-        VALUES (${this.actorId}, ${steer.id}, ${file.filename}, ${file.mediaType}, ${file.url})`;
+      void this.sql`INSERT INTO pending_steer_uploads (actor_id, steer_id, filename, media_type, path)
+        VALUES (${this.actorId}, ${steer.id}, ${file.filename}, ${file.mediaType}, ${file.path})`;
     }
   }
 
@@ -203,7 +243,7 @@ export class PendingSendStore {
   /** Files are deleted first: a crash in between must not re-deliver the reservation. */
   retire(ids: readonly string[]): void {
     for (const id of ids) {
-      void this.sql`DELETE FROM pending_steer_files
+      void this.sql`DELETE FROM pending_steer_uploads
         WHERE actor_id = ${this.actorId} AND steer_id = ${id}`;
       void this.sql`DELETE FROM pending_steers
         WHERE actor_id = ${this.actorId} AND id = ${id}`;
@@ -224,11 +264,11 @@ export class PendingSendStore {
 
   /** Attachments in send order, restored so a restart keeps acknowledged files. */
   files(steerId: string): PromptFile[] {
-    return this.sql<{ filename: string; media_type: string; url: string }>`
-      SELECT filename, media_type, url FROM pending_steer_files
+    return this.sql<{ filename: string; media_type: string; path: string }>`
+      SELECT filename, media_type, path FROM pending_steer_uploads
       WHERE actor_id = ${this.actorId} AND steer_id = ${steerId}
       ORDER BY seq ASC`
-      .map((row) => ({ filename: row.filename, mediaType: row.media_type, url: row.url }));
+      .map((row) => ({ filename: row.filename, mediaType: row.media_type, path: row.path }));
   }
 
   metadata(steerId: string): JsonObject | undefined {

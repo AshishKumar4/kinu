@@ -18,7 +18,7 @@ import type { SessionEvent } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, } from './helpers/local-session';
-import { keptMediaName, rowText } from '@kinu.run/core';
+import { base64ToBytes, keptMediaName, placeUpload, rowText } from '@kinu.run/core';
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
   const { db, rt } = workspaceRuntime();
@@ -403,14 +403,10 @@ describe('LocalAgentSession.send — a user turn', () => {
     let observed: PromptMessage[] = [];
     const { rt, session } = setup('a red square', historyCapturingModel('a red square', (messages) => { observed = messages; }));
 
-    await session.send({
-      text: 'what is in this image?',
-      files: [{
-        filename: 'square.png',
-        mediaType: 'image/png',
-        url: 'data:image/png;base64,iVBORw0KGgo=',
-      }],
-    }, { id: crypto.randomUUID() });
+    // Uploaded first, as every attachment is; the message names its path.
+    const path = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'square.png', 'image/png', base64ToBytes('iVBORw0KGgo='));
+
+    await session.send({ text: 'what is in this image?', files: [{ filename: 'square.png', mediaType: 'image/png', path }] }, { id: crypto.randomUUID() });
 
     const user = [...observed].reverse().find((message) =>
       message.role === 'user' && message.content.some((part) => part.type === 'file'));
@@ -430,21 +426,16 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(rows[0]).toMatchObject({ role: 'user', content: 'what is in this image?' });
   });
 
-  test('a PDF the model cannot accept is saved under its own name in /uploads, and the model sees that path', async () => {
-    // Workers AI's chat schema rejects type:"file" parts. The upload is saved once as the words are admitted, and the
-    // sanitizer, which runs on every turn's assembly, names where it was saved in place of the part.
+  test('a PDF the model cannot accept is kept under its own name in /uploads, and the model sees that path', async () => {
+    // Workers AI's chat schema rejects type:"file" parts. The upload is kept as it lands, and the sanitizer, which runs
+    // on every turn's assembly, names where it is in place of the part.
     const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 9, 8, 7]);
     const captures: PromptMessage[][] = [];
     const { rt, session } = setup('reading it', historyCapturingModel('reading it', (messages) => { captures.push(messages); }));
 
-    await session.send({
-      text: 'here is my resume',
-      files: [{
-        filename: 'resume.pdf',
-        mediaType: 'application/pdf',
-        url: `data:application/pdf;base64,${btoa(String.fromCharCode(...pdfBytes))}`,
-      }],
-    }, { id: crypto.randomUUID() });
+    const kept = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'resume.pdf', 'application/pdf', pdfBytes);
+
+    await session.send({ text: 'here is my resume', files: [{ filename: 'resume.pdf', mediaType: 'application/pdf', path: kept }] }, { id: crypto.randomUUID() });
 
     const observed = captures[0];
 

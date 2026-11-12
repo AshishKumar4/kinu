@@ -91,6 +91,34 @@ function attachmentAnswer(latest: string): ScriptedAnswer | undefined {
   return { text: `${ATTACHMENT_REPLY} ${latest.includes(ATTACHMENT_WORD) ? ATTACHMENT_WORD : ATTACHMENT_UNREAD}` };
 }
 
+/** The large attachment row: a 20 MB PDF dropped on the chat, its marker at its start for the file tool's search. */
+export const LARGE_ATTACHMENT_FILE = 'flow-large.pdf';
+
+export const LARGE_ATTACHMENT_MARKER = 'flow-large-marker-9c41';
+
+export const LARGE_ATTACHMENT_ASK = 'Flow large attachment: which marker does the attached PDF hold?';
+
+export const LARGE_ATTACHMENT_REPLY = 'THE PDF HOLDS';
+
+/** Said where the request named no upload to search, or the search found no marker. */
+export const LARGE_ATTACHMENT_UNREAD = 'no marker found';
+
+/** Reads the PDF by the path its request names (the attachment is too large to be shown inline), with the file tool. */
+function largeAttachmentAnswer(latest: string, request: ScriptedRequest): ScriptedAnswer | undefined {
+  if (!latest.includes(LARGE_ATTACHMENT_ASK)) return undefined;
+  const searched = request.turn.find((call) => call.name === 'file');
+
+  if (searched !== undefined) {
+    return { text: `${LARGE_ATTACHMENT_REPLY} ${searched.result.includes(LARGE_ATTACHMENT_MARKER) ? LARGE_ATTACHMENT_MARKER : LARGE_ATTACHMENT_UNREAD}` };
+  }
+
+  const path = new RegExp(`saved to (\\S*/uploads/${LARGE_ATTACHMENT_FILE.replace('.', '\\.')})`, 'u').exec(request.userTexts.join('\n'))?.[1];
+
+  if (path === undefined) return { text: `${LARGE_ATTACHMENT_REPLY} ${LARGE_ATTACHMENT_UNREAD}` };
+
+  return { toolCall: { name: 'file', arguments: { op: 'search', path, query: LARGE_ATTACHMENT_MARKER } } };
+}
+
 /** The stack row's own fact and asks, so it never meets the Settings row's on one account. */
 export const STACK_FACT_ASK = 'Flow stack memory: my editor is Helix. Remember that for every workspace.';
 
@@ -777,7 +805,7 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
 
   const latest = request.userTexts.at(-1) ?? '';
 
-  const proposed = agentWorkspaceAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? attachmentAnswer(latest) ?? activityAnswer(latest, request)
+  const proposed = agentWorkspaceAnswer(latest, request) ?? accountMemoryAnswer(latest, request) ?? attachmentAnswer(latest) ?? largeAttachmentAnswer(latest, request) ?? activityAnswer(latest, request)
     ?? ownerAskAnswer(request, latest);
 
   if (proposed !== undefined) return proposed;

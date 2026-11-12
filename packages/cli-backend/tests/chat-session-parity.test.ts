@@ -13,7 +13,7 @@ describe('ChatSession steering and recovery', () => {
     expect(rows.map(row => row.content)).toEqual(['one', 'answer one', 'two', 'two-steer', 'answer two']);
     expect(rows.map(row => row.position)).toEqual(rows.map((_, index) => index));
     expect(now.beforeRestart.pendingSteers).toHaveLength(2);
-    expect(now.beforeRestart.pendingSteerFiles).toMatchObject([{ filename: 'note.txt', mediaType: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=' }]);
+    expect(now.beforeRestart.pendingSteerFiles).toMatchObject([{ filename: 'note.txt', mediaType: 'text/plain', path: '/uploads/note.txt' }]);
     expect(now.end.pendingSteers).toEqual([]);
     expect(now.end.pendingSteerFiles).toEqual([]);
     const failures = now.events.flat().filter(event => v.is(v.object({ type: v.literal('error') }), event));

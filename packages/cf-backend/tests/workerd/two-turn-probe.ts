@@ -779,13 +779,13 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   async pendingSteerFileRows(): Promise<PendingSteerFile[]> {
-    return (await this.mainRows('SELECT actor_id, steer_id, filename, media_type, url FROM pending_steer_files ORDER BY actor_id, steer_id, seq'))
+    return (await this.mainRows('SELECT actor_id, steer_id, filename, media_type, path FROM pending_steer_uploads ORDER BY actor_id, steer_id, seq'))
       .map((row) => ({
         actorId: textColumn(row.actor_id),
         steerId: textColumn(row.steer_id),
         filename: textColumn(row.filename),
         mediaType: textColumn(row.media_type),
-        url: textColumn(row.url),
+        path: textColumn(row.path),
       }));
   }
 
@@ -1020,9 +1020,28 @@ const NOTE: ChangeNote = {
 
 const NOTED: NotedChanges = { source: 'workspace', label: 'Workspace', mode: 'vfs-baseline' };
 
+/** A chat attachment as a send names it: the upload the workspace answered for it. */
+interface ProbeAttachment {
+  readonly filename: string;
+  readonly mediaType: string;
+  readonly path: string;
+}
+
+/** The probe's chart, uploaded to `target` as a chat attachment is (the files route's `uploads=` form). */
+async function uploadedChart(target: Pick<ProductionOrchestrator, 'writeExecutorFileChunk'>): Promise<ProbeAttachment> {
+  const written = await target.writeExecutorFileChunk({
+    executorId: 'workspace', path: 'chart.png', transferId: crypto.randomUUID(), offset: 0,
+    chunk: Uint8Array.from(atob('iVBORw0KGgo='), (char) => char.charCodeAt(0)), final: true, upload: { mediaType: 'image/png' },
+  });
+
+  if (!('ok' in written) || written.path === undefined) throw new Error(`the probe's chart did not upload: ${JSON.stringify(written)}`);
+
+  return { filename: 'chart.png', mediaType: 'image/png', path: written.path };
+}
+
 type QueueTarget = Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
   'claimOwner' | 'setModel' | 'setSoul' | 'setEvolutionConfig' | 'setDisplayName' | 'beginGenesisTurn' | 'receivePeerMessage' | 'runTaskFromMcp' | 'evalAbortActivation' | 'workspaceTitle'
-  | 'createSubagentAgent' | 'dismissSubagent'>
+  | 'createSubagentAgent' | 'dismissSubagent' | 'writeExecutorFileChunk'>
   & Pick<ObservedOrchestrator, 'probeFile'>
   & Pick<ProductionOrchestrator, 'getChangeNotes' | 'saveChangeNotes' | 'sendChangeNotes'>
   & Pick<ObservedOrchestrator, 'refuseReservations' | 'owedSends' | 'latestClaimOutcome' | 'recoveryPass'
@@ -1399,13 +1418,13 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         }
       });
 
-      const send = async (text: string, file?: { filename: string; mediaType: string; url: string }): Promise<void> => {
+      const send = async (text: string, file?: ProbeAttachment): Promise<void> => {
         if (socket === null) throw new Error('queue probe socket is closed');
         socket.send(JSON.stringify({
           type: 'cf_agent_use_chat_request', id: text,
           init: { method: 'POST', body: JSON.stringify({
             messages: [{ id: `input-${text}`, role: 'user', parts: [
-              ...(file !== undefined ? [{ type: 'file', mediaType: file.mediaType, url: file.url, filename: file.filename }] : []),
+              ...(file !== undefined ? [{ type: 'file', mediaType: file.mediaType, url: file.path, filename: file.filename, providerMetadata: { kinu: { upload: file.path } } }] : []),
               { type: 'text', text },
             ] }],
             trigger: 'submit-message',
@@ -1435,7 +1454,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await fetch('http://probe-control.invalid/queue/arrived');
         await send('QUEUE-A');
         await send('QUEUE-B', mode === 'attach'
-          ? { filename: 'chart.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }
+          ? await uploadedChart(target)
           : undefined);
       }
 
@@ -1597,7 +1616,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   private async sendChatFrame(
     target: QueueTarget, workspace: string, text: string,
-    opts: { file?: { filename: string; mediaType: string; url: string } } = {},
+    opts: { file?: ProbeAttachment } = {},
   ): Promise<{ wire: string; landed: string | null }> {
     const { file } = opts;
 
@@ -1630,7 +1649,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
       type: 'cf_agent_use_chat_request', id: text,
       init: { method: 'POST', body: JSON.stringify({
         messages: [{ id: `input-${text}`, role: 'user', parts: [
-          ...(file !== undefined ? [{ type: 'file', mediaType: file.mediaType, url: file.url, filename: file.filename }] : []),
+          ...(file !== undefined ? [{ type: 'file', mediaType: file.mediaType, url: file.path, filename: file.filename, providerMetadata: { kinu: { upload: file.path } } }] : []),
           { type: 'text', text },
         ] }],
         trigger: 'submit-message',
@@ -1679,7 +1698,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     if (!genesis.started) throw new Error('queue probe genesis did not start');
 
     const attach = mode === 'attach' || mode === 'attach-cold'
-      ? { filename: 'chart.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' }
+      ? await uploadedChart(target)
       : undefined;
 
     // Sent after the fake reports the held call: sent earlier, B can land inside it and the
@@ -2172,12 +2191,12 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     return (frame) => frame.type === 'steer_status' && frame.status === 'queued' && frame.steerId === steerId;
   }
 
-  private parityFrame(text: string, file?: { filename: string; mediaType: string; url: string }): string {
+  private parityFrame(text: string, file?: ProbeAttachment): string {
     return JSON.stringify({
       type: 'cf_agent_use_chat_request', id: text,
       init: { method: 'POST', body: JSON.stringify({
         messages: [{ id: `input-${text}`, role: 'user', parts: [
-          ...(file !== undefined ? [{ type: 'file', mediaType: file.mediaType, url: file.url, filename: file.filename }] : []),
+          ...(file !== undefined ? [{ type: 'file', mediaType: file.mediaType, url: file.path, filename: file.filename, providerMetadata: { kinu: { upload: file.path } } }] : []),
           { type: 'text', text },
         ] }],
         trigger: 'submit-message',
@@ -2216,7 +2235,15 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
     const frames: ParityFrame[] = [];
     const landings: Record<string, string | null> = {};
-    const file = { filename: 'note.txt', mediaType: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=' };
+
+    // Uploaded first, as every attachment is: the steers name it by its path.
+    const written = await target.writeExecutorFileChunk({
+      executorId: 'workspace', path: 'note.txt', transferId: crypto.randomUUID(), offset: 0, chunk: new TextEncoder().encode('hello'), final: true,
+      upload: { mediaType: 'text/plain' },
+    });
+
+    if (!('ok' in written) || written.path === undefined) throw new Error(`the parity note did not upload: ${JSON.stringify(written)}`);
+    const file: ProbeAttachment = { filename: 'note.txt', mediaType: 'text/plain', path: written.path };
     let afterTwo: ParityRows | null = null;
 
     try {

@@ -423,7 +423,7 @@
     },
     {
       "key": "packages/cf-backend/src/components/Composer.tsx#Composer",
-      "complexity": 24
+      "complexity": 23
     },
     {
       "key": "packages/cf-backend/src/components/mail/MailMessage.tsx#MailMessage",

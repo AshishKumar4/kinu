@@ -163,7 +163,7 @@ export const PendingSteerFileSchema = v.object({
   steerId: v.string(),
   filename: v.string(),
   mediaType: v.string(),
-  url: v.string(),
+  path: v.string(),
 });
 
 export type PendingSteerFile = v.InferOutput<typeof PendingSteerFileSchema>;

@@ -294,6 +294,10 @@ export function installDriveFixture(frame: string): void {
 
     return next(input, init);
   }, { preconnect: next.preconnect });
+}
+
+/** Every frame's uploads (Drive's, a chat attachment's) answered by the page's own stubbed fetch, as its other calls are. */
+export function installFetchUploads(): void {
   Object.defineProperty(window, "XMLHttpRequest", { value: FixtureUpload, configurable: true });
 }
 

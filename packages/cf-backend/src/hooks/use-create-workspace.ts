@@ -1,7 +1,6 @@
 /** Shared agent-creation flow. The mission becomes the workspace's SOUL.md and title server-side, not a chat message. */
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import type { FileUIPart } from "ai";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
 import { useLimitRefusal } from "@/components/limits/LimitRefusal";
 import { Cause, Effect } from 'effect';
@@ -19,8 +18,9 @@ export function useCreateWorkspace() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  /** `onBeforeNavigate` lets a modal dismiss itself first. */
-  const create = useCallback((mission: string, onBeforeNavigate?: () => void, attachments: readonly FileUIPart[] = []): Promise<void> => {
+  /** `onBeforeNavigate` lets a modal dismiss itself first. `attachments`: files chosen before the workspace was, carried
+   *  to its chat to upload there. */
+  const create = useCallback((mission: string, onBeforeNavigate?: () => void, attachments: readonly File[] = []): Promise<void> => {
     const m = mission.trim();
 
     if (!m || busy) return Promise.resolve();

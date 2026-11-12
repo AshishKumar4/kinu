@@ -19,6 +19,7 @@
   "mail_untriaged",
   "memory_projection_updates",
   "pattern_extractions",
+  "pending_steer_files",
   "refinement_lane_holds",
   "request_renders",
   "slate_live_share_users",

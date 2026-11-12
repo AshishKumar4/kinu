@@ -27,7 +27,7 @@ import type { CFSeat } from '../../src/actor-hosting';
 import type { ChatWireTransport } from '../../src/chat-transport';
 import type { AgentTurns } from '../../src/agent-turns';
 import type { PictureBucket } from '../../src/slates/pictures';
-import { isWorkMode, turnTags, type RunCheck, type UserProfile, type WatchCheck, type WatchOutcome } from '@kinu.run/core';
+import { isWorkMode, PLANE, turnTags, type RunCheck, type UserProfile, type WatchCheck, type WatchOutcome } from '@kinu.run/core';
 import { ActorClaimStore, agentArtifactDirectory, prepareOutput, agentHome, CHAT_SESSION_ID, EventLog, SubagentRosterStore, MAIN_AGENT, openWorkspaceMainActor, SessionHistory, TerminalTransitions, WorkspaceActorDirectory } from '@kinu.run/core';
 import { answeredAs, present, admitTestClaim } from '@kinu.run/test-utils';
 import {
@@ -977,6 +977,17 @@ export async function sentTurn(agent: HarnessOrchestratorAgent, text: string, id
   await agent.send(text, id, sent.files ?? [], sent.mode);
   await agent.harnessMainLanding(id);
   await agent.harnessAgentsIdle();
+}
+
+/** A chat attachment uploaded as the files route uploads one (`uploads=<name>`): the file a send then names. */
+export async function uploadedFile(agent: HarnessOrchestratorAgent, filename: string, mediaType: string, bytes: Uint8Array): Promise<PromptFile> {
+  const written = await agent.writeExecutorFileChunk({
+    executorId: PLANE, path: filename, transferId: crypto.randomUUID(), offset: 0, chunk: bytes, final: true, upload: { mediaType },
+  });
+
+  if (!('ok' in written) || written.path === undefined) throw new Error(`the upload of ${filename} answered ${JSON.stringify(written)}`);
+
+  return { filename, mediaType, path: written.path };
 }
 
 /** One owner message to the main actor, its turn run to the end on the models the workspace catalog routes to. */

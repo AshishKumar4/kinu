@@ -4,7 +4,7 @@ import { createCliRenderer, type ScrollBoxRenderable, type TextareaRenderable } 
 import { createRoot, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
-import { nextReasoningEffort, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type PendingDeviceConsent, type ReasoningEffort, type TierId } from '@kinu.run/core';
+import { FILE_TRANSFER_MAX_BYTES, nextReasoningEffort, type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type PendingDeviceConsent, type ReasoningEffort, type TierId } from '@kinu.run/core';
 import { composerVisibleRows } from '@kinu.run/core/tui';
 import { findForkPivot, forkCandidates, type AgentClient, type AgentClientEvent, type AgentClientSendOptions, type AgentClientStatus, type DeviceConsentDecision, type ForkPoint } from '../agent-client';
 import { commandsForClient, describeBranchStatus, executeSlashCommand, isBranchStatusEvent, renderPlanReview, performUndo, type SlashOutcome } from '../slash-commands';
@@ -336,7 +336,7 @@ function ChatScene({
   const pasteNote = useCallback((content: string) => addMessage({ role: 'system', content }), [addMessage]);
 
   const expandPastes = useComposerPaste({ renderer: rendererInstance, input: inputRef,
-    enabled: inputShouldFocusRef, limitBytes: client.inlineAttachmentLimitBytes, note: pasteNote });
+    enabled: inputShouldFocusRef, limitBytes: FILE_TRANSFER_MAX_BYTES, note: pasteNote });
 
   // Live assistant segments: a tool-call seals the active segment so the next text-delta opens one after the tool,
   // keeping text and tools in chronological order.
@@ -393,7 +393,7 @@ function ChatScene({
 
     // A send that failed was never admitted: its row goes, and the failure says why, unless the workspace changed.
     return settle(Effect.ensuring(Effect.catchCause(Effect.promise(async () => {
-      const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
+      const prompt = await resolvePromptAttachments(input, { upload: async (file) => await client.uploadAttachment(file), planes: client.planes ?? undefined });
 
       if (clientGenerationRef.current !== generation) return;
 

@@ -1,6 +1,5 @@
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
-  CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   JsonValueSchema,
   OwedIntentSchema, PlanDecisionOutcomeSchema, PlanReviewResultSchema, PlanReviewSchema,
   AskingAgentSchema,
@@ -36,6 +35,7 @@ import {
   createCloudAgentConnectTicket,
   listCloudAvailableModels,
   testCloudModel,
+  uploadCloudAttachment,
 } from './cloud-api';
 import {
   createCliSession,
@@ -159,7 +159,6 @@ export class CloudAgentClient implements AgentClient {
   readonly plans: PlanReviewSurface | null;
   readonly questions: OwnerQuestionSurface | null;
   readonly approvals: WaitingApprovalSurface | null;
-  readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
   readonly planes = null;
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
 
@@ -408,6 +407,10 @@ export class CloudAgentClient implements AgentClient {
   /** {@link rpc}'s answer read as `schema`: an answer of another shape is a failure, not a defect. */
   private rpcAs<T>(method: AgentRpcMethod, args: JsonValue[], schema: v.GenericSchema<unknown, T>): Effect.Effect<T, KinuError> {
     return Effect.flatMap(this.rpc(method, args), (answer) => inItsWords('unavailable', Effect.sync(() => v.parse(schema, answer))));
+  }
+
+  uploadAttachment(file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<string> {
+    return uploadCloudAttachment(this.origin, this.token, this.cloudName, file);
   }
 
   /** The SDK frame aborts the chat request; the actor RPC awaits every foreground device outcome. */

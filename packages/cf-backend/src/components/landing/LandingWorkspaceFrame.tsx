@@ -495,7 +495,7 @@ export default function LandingWorkspaceFrame(): ReactElement {
                       disabled={false}
                       liveness={{ kind: 'idle' }}
                       mode={{ value: mode, onChange: setMode }}
-                      attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
+                      attachments={{ items: [], onAdd: () => {}, onRemove: () => {} }}
                       modelPicker={<ModelPicker models={LANDING_MODELS} value={model} onChange={setModel} size="xs" />}
                     />
                   </div>

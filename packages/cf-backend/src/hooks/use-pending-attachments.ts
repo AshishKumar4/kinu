@@ -1,187 +1,200 @@
 /**
- * The per-message cap is shared by all pending parts, so sizing runs in the reducer against the current list;
- * sizing before the base64 await lets concurrent additions spend the same capacity.
+ * The files a composer holds for its next message. Each uploads as it is added, through the workspace's files route
+ * (`lib/attachments-api.ts`), with its progress on its chip; the message carries the paths those uploads answered, never
+ * the bytes. Before a workspace exists (Home) a file is held as it is, and uploads once the workspace does.
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import type { FileUIPart } from "ai";
-import { base64Bytes } from "@kinu.run/core";
-import { Cause, Effect } from "effect";
-import { detach, diagnostics, renderThrownChain } from "@kinu.run/core/obs";
+import { Effect } from "effect";
+import { FILE_TRANSFER_MAX_BYTES } from "@kinu.run/core";
+import { attempt, detach, renderThrownChain } from "@kinu.run/core/obs";
+import { uploadAttachment, uploadHref, uploadOfPart } from "@/lib/attachments-api";
 
-interface AttachmentAdmission {
-  readonly parts: readonly FileUIPart[];
-  readonly refused: readonly string[];
+/** Where a held file stands: waiting for a workspace, going (its share sent), kept at a path, or refused. */
+export type AttachmentState =
+  | { readonly kind: "held" }
+  | { readonly kind: "uploading"; readonly share: number }
+  | { readonly kind: "uploaded"; readonly path: string }
+  | { readonly kind: "failed"; readonly error: string };
+
+interface PendingAttachment {
+  readonly key: string;
+  /** Its bytes, where they are still here to send; null for an upload already kept (a reverted message's). */
+  readonly file: File | null;
+  readonly name: string;
+  readonly mediaType: string;
+  readonly state: AttachmentState;
 }
 
-const partName = (part: FileUIPart): string => part.filename ?? "an attachment";
-
-/** Each file as the part a message carries it in, its bytes a data URL: as `ai`'s `convertFileListToFileUIParts`, which
- *  would load the whole SDK into every page that offers an attachment. */
-function fileParts(files: FileList): Promise<FileUIPart[]> {
-  return Promise.all([...files].map(async (file): Promise<FileUIPart> => {
-    const reading = Promise.withResolvers<string>();
-    const reader = new FileReader();
-
-    // `readAsDataURL` answers a string.
-    reader.onload = () => { reading.resolve(typeof reader.result === "string" ? reader.result : ""); };
-
-    reader.onerror = () => { reading.reject(reader.error); };
-
-    reader.readAsDataURL(file);
-
-    return { type: "file", mediaType: file.type, filename: file.name, url: await reading.promise };
-  }));
-}
-
-/** In offer order, not best-fit: best-fit would reorder the user's message. */
-function admitAttachments(
-  current: readonly FileUIPart[],
-  offered: readonly FileUIPart[],
-  limitBytes: number,
-): AttachmentAdmission {
-  let budget = limitBytes - current.reduce((sum, part) => sum + base64Bytes(part.url), 0);
-  const admitted: FileUIPart[] = [];
-  const refused: string[] = [];
-
-  for (const part of offered) {
-    const bytes = base64Bytes(part.url);
-
-    if (bytes <= budget) {
-      admitted.push(part);
-      budget -= bytes;
-    } else {
-      refused.push(partName(part));
-    }
-  }
-
-  return {
-    parts: admitted.length === 0 ? current : [...current, ...admitted],
-    refused,
-  };
-}
-
-interface State {
-  readonly parts: readonly FileUIPart[];
-  readonly refused: readonly string[];
-  readonly conversionFailure: string | null;
+/** A held file as its chip draws it: an uploaded image by its address on the plane. */
+export interface ShownAttachment extends PendingAttachment {
+  readonly preview: string | null;
 }
 
 type Action =
-  | { readonly kind: "offer"; readonly parts: readonly FileUIPart[]; readonly oversized: readonly string[] }
-  | { readonly kind: "conversion_failed"; readonly oversized: readonly string[]; readonly message: string }
-  | { readonly kind: "remove"; readonly index: number }
+  | { readonly kind: "add"; readonly items: readonly PendingAttachment[] }
+  | { readonly kind: "state"; readonly key: string; readonly state: AttachmentState }
+  | { readonly kind: "remove"; readonly key: string }
   | { readonly kind: "clear" };
 
-const EMPTY: State = { parts: [], refused: [], conversionFailure: null };
+function reduce(items: readonly PendingAttachment[], action: Action): readonly PendingAttachment[] {
+  if (action.kind === "add") return [...items, ...action.items];
 
-function reduce(state: State, action: Action, limitBytes: number): State {
-  if (action.kind === "clear") return EMPTY;
+  if (action.kind === "remove") return items.filter((item) => item.key !== action.key);
 
-  if (action.kind === "remove") {
-    return {
-      parts: state.parts.filter((_, index) => index !== action.index),
-      refused: [],
-      conversionFailure: null,
-    };
-  }
+  if (action.kind === "clear") return [];
 
-  if (action.kind === "conversion_failed") {
-    return {
-      parts: state.parts,
-      refused: action.oversized,
-      conversionFailure: action.message,
-    };
-  }
+  return items.map((item) => (item.key === action.key ? { ...item, state: action.state } : item));
+}
 
-  const admission = admitAttachments(state.parts, action.parts, limitBytes);
+let keys = 0;
+
+/** A file as the composer holds it: refused at once past what one upload carries, in the route's own terms. */
+function held(file: File): PendingAttachment {
+  keys += 1;
+  const over = file.size > FILE_TRANSFER_MAX_BYTES;
 
   return {
-    parts: admission.parts,
-    refused: [...action.oversized, ...admission.refused],
-    conversionFailure: null,
+    key: `attachment-${String(keys)}`, file, name: file.name, mediaType: file.type || "application/octet-stream",
+    state: over ? { kind: "failed", error: `${file.name} is over the ${String(FILE_TRANSFER_MAX_BYTES / (1024 * 1024))} MiB one upload carries.` } : { kind: "held" },
   };
 }
 
-interface PendingAttachments {
+/** How one upload is watched: stopped by `stop`, its progress and end told to `told`, `done` once it stopped either way. */
+interface UploadWatch {
+  readonly stop: AbortController;
+  readonly told: (state: AttachmentState) => void;
+  readonly done: () => void;
+}
+
+/** `item`'s upload to `workspace`, as `watch` follows it. */
+function uploadFor(workspace: string, item: PendingAttachment, watch: UploadWatch): Effect.Effect<void> {
+  const { file } = item;
+  const { stop, told, done } = watch;
+
+  if (file === null) return Effect.sync(done);
+
+  return Effect.ensuring(Effect.catch(
+    Effect.map(attempt({ doing: `uploading ${file.name}`, otherwise: "io" }, async () => await uploadAttachment(workspace, file, {
+      signal: stop.signal,
+      sent: (share) => { told({ kind: "uploading", share }); },
+    })), (path) => { told({ kind: "uploaded", path }); }),
+    (failed) => Effect.sync(() => {
+      if (!stop.signal.aborted) told({ kind: "failed", error: `${file.name}: ${renderThrownChain({ cause: failed })}` });
+    }),
+  ), Effect.sync(done));
+}
+
+export interface PendingAttachments {
+  readonly items: readonly ShownAttachment[];
+  /** The message's file parts: each upload that landed, named by its path. */
   readonly parts: readonly FileUIPart[];
+  /** Each file still held here, for a composer that carries them to a workspace not yet made (Home). */
+  readonly files: readonly File[];
+  /** Whether a file is still on its way: the message waits for it. */
+  readonly uploading: boolean;
   readonly refusal: string | null;
-  readonly add: (files: FileList | null | undefined) => void;
+  readonly add: (files: FileList | readonly File[] | null | undefined) => void;
+  /** Parts a message already carried (a reverted one's, a new chat's opening): kept where they are uploads. */
   readonly offer: (parts: readonly FileUIPart[]) => void;
   readonly remove: (index: number) => void;
   readonly clear: () => void;
 }
 
-export function usePendingAttachments(limitBytes: number): PendingAttachments {
-  const [state, dispatch] = useReducer(
-    (current: State, action: Action) => reduce(current, action, limitBytes),
-    EMPTY,
-  );
+/** `workspace`: where files upload to; null holds them until there is one. */
+export function usePendingAttachments(workspace: string | null): PendingAttachments {
+  const [items, dispatch] = useReducer(reduce, []);
+  const going = useRef(new Map<string, AbortController>());
 
-  const conversionGeneration = useRef(0);
-  // Each drop's offer waits for the one dropped before it: the cap keeps what came first, not what read first.
-  const lastOffer = useRef<Promise<void>>(Promise.resolve());
+  // Each held file uploads once there is a workspace for it; removing it, or leaving, stops it.
+  useEffect(() => {
+    if (workspace === null) return;
+
+    const starting = items.filter((item) => item.state.kind === "held" && item.file !== null && !going.current.has(item.key)).map((item) => {
+      const { key } = item;
+      const stop = new AbortController();
+
+      going.current.set(key, stop);
+      dispatch({ kind: "state", key, state: { kind: "uploading", share: 0 } });
+
+      return uploadFor(workspace, item, { stop, told: (state) => { dispatch({ kind: "state", key, state }); }, done: () => { going.current.delete(key); } });
+    });
+
+    // Run from the effect, which never awaits it: each upload tells its chip how far it is, and how it ended.
+    detach(Effect.all(starting, { concurrency: "unbounded", discard: true }));
+  }, [items, workspace]);
+
   useEffect(() => () => {
-    conversionGeneration.current += 1;
+    for (const stop of going.current.values()) stop.abort();
   }, []);
 
-  const add = useCallback((files: FileList | null | undefined): void => {
-    if (!files || files.length === 0) return;
-    const candidates = [...files];
-    const oversized = candidates.filter((file) => file.size > limitBytes).map((file) => file.name);
-    const convertible = candidates.filter((file) => file.size <= limitBytes);
+  const add = useCallback((files: FileList | readonly File[] | null | undefined): void => {
+    // Materialized now: a FileList empties when its input clears or its drop handler returns.
+    const list = files === null || files === undefined ? [] : [...files];
 
-    if (convertible.length === 0) {
-      dispatch({ kind: "offer", parts: [], oversized });
+    if (list.length > 0) dispatch({ kind: "add", items: list.map(held) });
+  }, []);
 
-      return;
-    }
+  const offer = useCallback((parts: readonly FileUIPart[]): void => {
+    const kept = parts.flatMap((part) => {
+      const path = uploadOfPart(part);
 
-    // Materialize now: FileList empties when the input is cleared, dataTransfer when the handler returns.
-    const generation = conversionGeneration.current;
-    const before = lastOffer.current;
-    let offered = (): void => {};
+      keys += 1;
 
-    lastOffer.current = new Promise((resolve) => { offered = resolve; });
-    detach(Effect.gen(function* () {
-      const thrown = yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
-        const transfer = new DataTransfer();
+      return path === null ? [] : [{
+        key: `attachment-${String(keys)}`, file: null, name: part.filename ?? path.slice(path.lastIndexOf("/") + 1), mediaType: part.mediaType,
+        state: { kind: "uploaded", path } as const,
+      }];
+    });
 
-        for (const file of convertible) transfer.items.add(file);
-        const parts = yield* Effect.promise(() => fileParts(transfer.files));
-        yield* Effect.promise(() => before);
+    if (kept.length > 0) dispatch({ kind: "add", items: kept });
+    // A part stored before attachments were uploads carries its bytes: they upload again, as a file added now.
+    const carried = parts.filter((part) => uploadOfPart(part) === null);
 
-        if (generation === conversionGeneration.current) dispatch({ kind: "offer", parts, oversized });
+    if (carried.length === 0) return;
+    detach(Effect.matchEffect(attempt({ doing: "reading a message's files back", otherwise: "unavailable" }, async () => await Promise.all(carried.map(async (part) => (
+      new File([await (await fetch(part.url)).blob()], part.filename ?? "attachment", { type: part.mediaType })
+    )))), {
+      onSuccess: (files) => Effect.sync(() => { add(files); }),
+      // Each comes back as a chip that says it could not: the person sees which, and why.
+      onFailure: (failed) => Effect.sync(() => {
+        dispatch({ kind: "add", items: carried.map((part) => {
+          keys += 1;
 
-        return null;
-      }), (failed) => Effect.succeed({ cause: Cause.squash(failed) })), Effect.sync(() => {
-        offered();
-      }));
-
-      if (thrown === null || generation !== conversionGeneration.current) return;
-      const names = convertible.map((file) => file.name).join(", ");
-      const reason = renderThrownChain(thrown);
-      diagnostics.event('attachments.conversion_failed', { names, reason });
-      dispatch({ kind: "conversion_failed", oversized, message: `Could not read ${names}: ${reason}` });
+          return {
+            key: `attachment-${String(keys)}`, file: null, name: part.filename ?? "attachment", mediaType: part.mediaType,
+            state: { kind: "failed", error: `${part.filename ?? "attachment"}: ${renderThrownChain({ cause: failed })}` } as const,
+          };
+        }) });
+      }),
     }));
-  }, [limitBytes]);
+  }, [add]);
 
-  const offer = useCallback((parts: readonly FileUIPart[]) => { dispatch({ kind: "offer", parts, oversized: [] }); }, []);
-  const remove = useCallback((index: number) => { dispatch({ kind: "remove", index }); }, []);
-  const clear = useCallback(() => { dispatch({ kind: "clear" }); }, []);
+  const remove = useCallback((index: number): void => {
+    const item = items[index];
 
-  const refusal = useMemo(() => {
-    const capacityRefusal = state.refused.length === 0 ? null : (
-      `A message can carry ${String(limitBytes / (1024 * 1024))} MB of attachments. `
-      + `${state.refused.join(", ")} did not fit. `
-      + `Upload larger files in the Files tab.`
-    );
+    if (item === undefined) return;
+    going.current.get(item.key)?.abort();
+    dispatch({ kind: "remove", key: item.key });
+  }, [items]);
 
-    if (state.conversionFailure === null) return capacityRefusal;
+  const clear = useCallback((): void => { dispatch({ kind: "clear" }); }, []);
 
-    return capacityRefusal === null
-      ? state.conversionFailure
-      : `${capacityRefusal} ${state.conversionFailure}`;
-  }, [limitBytes, state.conversionFailure, state.refused]);
+  const parts = useMemo(() => items.flatMap((item): FileUIPart[] => (item.state.kind === "uploaded" && workspace !== null ? [{
+    type: "file", filename: item.name, mediaType: item.mediaType, url: uploadHref(workspace, item.state.path),
+    providerMetadata: { kinu: { upload: item.state.path } },
+  }] : [])), [items, workspace]);
 
-  return { parts: state.parts, refusal, add, offer, remove, clear };
+  const failures = items.flatMap((item) => (item.state.kind === "failed" ? [item.state.error] : []));
+
+  return {
+    items: items.map((item) => ({
+      ...item, preview: item.state.kind === "uploaded" && workspace !== null && item.mediaType.startsWith("image/") ? uploadHref(workspace, item.state.path) : null,
+    })),
+    parts,
+    files: items.flatMap((item) => (item.file === null ? [] : [item.file])),
+    uploading: items.some((item) => item.state.kind === "held" || item.state.kind === "uploading"),
+    refusal: failures.length === 0 ? null : failures.join(" "),
+    add, offer, remove, clear,
+  };
 }

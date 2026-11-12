@@ -74,7 +74,8 @@ export interface DirEntry {
 }
 
 export type ExecutorWriteResult =
-  | { ok: true; revision?: VfsRevision }
+  /** `path`: where an upload placed by name (`place`) was kept. */
+  | { ok: true; revision?: VfsRevision; path?: string }
   | { conflict: true; revision: VfsRevision }
   | { unsupported: true; error: string }
   | { error: string }
@@ -97,14 +98,13 @@ export interface ExecutorTextFile {
   error?: string;
 }
 
-/** Peak transient footprint is ~2x the total (parts plus assembled copy), so a quarter of the
- *  `do.isolate.transient_alloc_reset` wall keeps the peak near half of it. */
+/** The largest file one upload carries (`upload.file_bytes`, a quarter of `do.isolate.transient_alloc_reset`). Read
+ *  through a call marked pure: the browser reaches this module, and a bundle that never reads the bound then leaves the
+ *  catalog out of it. */
 function fileTransferMaxBytes(): number {
-  return PLATFORM_LIMITS['do.isolate.transient_alloc_reset'].value / 4;
+  return PLATFORM_LIMITS['upload.file_bytes'].value;
 }
 
-/** Read through a call marked pure: the browser reaches this module, and a bundle that never reads the bound then
- *  leaves the catalog out of it. */
 export const FILE_TRANSFER_MAX_BYTES = /* @__PURE__ */ fileTransferMaxBytes();
 
 /** One chunked upload; the holder constructs a fresh instance on an `offset === 0` chunk. */
@@ -117,6 +117,8 @@ export class ExecutorFileUpload {
     private readonly path: string,
     private readonly write: {
       readonly expectedRevision?: VfsRevision | undefined;
+      /** Keeps the assembled file where its own rule says (a chat attachment under /uploads), in place of `path`. */
+      readonly place?: ((bytes: Uint8Array) => Promise<string>) | undefined;
     } = {},
   ) {}
 
@@ -132,7 +134,9 @@ export class ExecutorFileUpload {
       onFailure: (refused) => Effect.succeed<ExecutorWriteResult>({ error: refused.message }),
       onSuccess: (assembled) => (assembled === null
         ? Effect.succeed<ExecutorWriteResult>({ ok: true })
-        : orError(step(async (): Promise<ExecutorWriteResult> => writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembled, expectedRevision })))),
+        : orError(step(async (): Promise<ExecutorWriteResult> => (this.write.place === undefined
+          ? writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembled, expectedRevision })
+          : { ok: true, path: await this.write.place(assembled) })))),
     }));
   }
 

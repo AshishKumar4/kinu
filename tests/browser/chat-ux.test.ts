@@ -2206,8 +2206,8 @@ describe('Now lists what is still owed, by the phase its store records', () => {
 
 /** Two files dropped one after the other, each under the cap but over it together: the one dropped first is kept,
  *  the other is refused by name, and only what was kept goes out with the words. */
-describe('attachments at the message cap', () => {
-  test('two drops that together exceed the cap keep the first, refuse the second by name, and send only the first', async () => {
+describe('attachments upload before the message', () => {
+  test('each dropped file uploads to the workspace, Send waits for them, and the message names both', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();
       await page.setViewport({ width: 1280, height: 900 });
@@ -2215,11 +2215,11 @@ describe('attachments at the message cap', () => {
       const pane = '[data-agent-pane="api-worker/main"]';
       await page.waitForSelector(`${pane} textarea:not([disabled])`);
 
-      // Two separate drops in one task: both read their files while the other is still being read.
+      // Two separate drops in one task, each larger than the inline limit the composer once had.
       await page.$eval(pane, (node) => {
         const drop = (name: string) => {
           const files = new DataTransfer();
-          files.items.add(new File([new Uint8Array(640 * 1024)], name, { type: 'application/octet-stream' }));
+          files.items.add(new File([new Uint8Array(2 * 1024 * 1024)], name, { type: 'application/octet-stream' }));
           node.dispatchEvent(new DragEvent('dragover', { dataTransfer: files, bubbles: true, cancelable: true }));
           node.dispatchEvent(new DragEvent('drop', { dataTransfer: files, bubbles: true, cancelable: true }));
         };
@@ -2229,20 +2229,14 @@ describe('attachments at the message cap', () => {
       });
 
       const composer = `${pane} [data-composer-root]`;
-      await page.waitForFunction((at) => (document.querySelector(at)?.textContent ?? '').includes('second.bin'), {}, composer);
-
-      const shown = await page.$eval(composer, (root) => ({
-        chips: [...root.querySelectorAll('button[aria-label^="Remove "]')].map((button) => button.getAttribute('aria-label')),
-        refusal: [...root.querySelectorAll('*')].map((node) => node.textContent ?? '').find((text) => text.includes('did not fit')) ?? '',
-      }));
-
-      expect(shown.chips).toEqual(['Remove first.bin']);
-      expect(shown.refusal).toContain('second.bin');
+      await page.waitForFunction((at) => document.querySelectorAll(`${at} [data-attachment="uploaded"]`).length === 2, {}, composer);
+      expect(await page.$$eval(`${composer} button[aria-label^="Remove "]`, (buttons) => buttons.map((button) => button.getAttribute('aria-label'))))
+        .toEqual(['Remove first.bin', 'Remove second.bin']);
 
       await page.type(`${pane} textarea`, 'Here are the files');
       await page.click(`${pane} button[aria-label="Send"]`);
       await page.waitForFunction(() => document.documentElement.dataset.galleryChatSent !== undefined);
-      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:first.bin', 'text:Here are the files']);
+      expect(JSON.parse(await page.evaluate(() => document.documentElement.dataset.galleryChatSent ?? '[]'))).toEqual(['file:first.bin', 'file:second.bin', 'text:Here are the files']);
       await page.close();
     });
   });

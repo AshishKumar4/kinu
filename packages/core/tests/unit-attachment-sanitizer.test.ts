@@ -9,9 +9,11 @@ import * as v from 'valibot';
 import {
   acceptedMediaForModel,
   sanitizeAttachmentsForModel,
-  saveUploads,
+  placeUpload,
+  uploadPart,
   type MediaModality,
 } from '../src/prompting/attachment-sanitizer';
+import { PLATFORM_LIMITS } from '../src/platform-limits';
 
 import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
 import { shownEntries } from '../src/read-models/files';
@@ -337,7 +339,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     expect(writes()).toBe(1);
   });
 
-  test('an accepted PDF past the inline ceiling is spilled; a small one still rides inline', async () => {
+  test("an accepted PDF past what the model's step leaves is spilled; one that fits still rides inline", async () => {
     const { vfs } = countingVfs();
     const budget = new TurnContextBudget();
 
@@ -351,7 +353,8 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
       }],
     };
 
-    const policy = { accepts: accepts('image', 'pdf'), vfs, budget };
+    // Priced by its bytes as text where its pages cannot be counted: 2 MiB is about 524k tokens, past a 100k window.
+    const policy = { accepts: accepts('image', 'pdf'), vfs, budget, window: { contextWindow: 100_000, modelOutputLimit: 8_000 } };
 
     const spilled = await sanitizeAttachmentsForModel([bigPdf], policy);
     const part = textParts(spilled[0])[0];
@@ -379,20 +382,21 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
 });
 
 describe("the owner's uploads keep their own names, in /uploads", () => {
-  const upload = (filename: string, bytes: Uint8Array, mediaType = 'application/pdf'): ModelMessage => ({
+  /** A file uploaded as a chat attachment is, and the message that names it. */
+  const upload = async (vfs: VFS, filename: string, bytes: Uint8Array, mediaType = 'application/pdf'): Promise<ModelMessage> => ({
     role: 'user',
-    content: [{ type: 'file', data: `data:${mediaType};base64,${btoa(String.fromCharCode(...bytes))}`, mediaType, filename }, { type: 'text', text: 'here' }],
+    content: [uploadPart({ filename, mediaType, path: await placeUpload({ vfs }, filename, mediaType, bytes) }), { type: 'text', text: 'here' }],
   });
 
-  /** Where the admitted message's file part says it was saved. */
+  /** Where the message's file part says its upload is. */
   const savedAs = (message: ModelMessage): string => v.parse(
     v.object({ kinu: v.object({ upload: v.string() }) }),
     Array.isArray(message.content) ? message.content.find((part) => part.type === 'file')?.providerOptions : undefined,
   ).kinu.upload;
 
-  test('saved once under its name, which the sanitizer names in place of the part, storing nothing again', async () => {
+  test('kept once under its name, which the sanitizer names in place of the part, storing nothing again', async () => {
     const { vfs, writes } = countingVfs();
-    const admitted = await saveUploads(upload('resume.pdf', PDF_BYTES), { vfs });
+    const admitted = await upload(vfs, 'resume.pdf', PDF_BYTES);
 
     expect(savedAs(admitted)).toBe('/uploads/resume.pdf');
     const stored = await vfs.readFile('/uploads/resume.pdf');
@@ -409,7 +413,7 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
   test('a name holding other bytes takes the next copy; the same bytes are the same file', async () => {
     const { vfs } = countingVfs();
     const other = new Uint8Array([...PDF_BYTES, 7]);
-    const saved = async (bytes: Uint8Array): Promise<string> => savedAs(await saveUploads(upload('resume.pdf', bytes), { vfs }));
+    const saved = async (bytes: Uint8Array): Promise<string> => savedAs(await upload(vfs, 'resume.pdf', bytes));
 
     expect([await saved(PDF_BYTES), await saved(other), await saved(PDF_BYTES), await saved(other)])
       .toEqual(['/uploads/resume.pdf', '/uploads/resume (2).pdf', '/uploads/resume.pdf', '/uploads/resume (2).pdf']);
@@ -417,7 +421,7 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
 
   test('a name keeps no folder, separator or control character, and an empty one is named by its type', async () => {
     const { vfs } = countingVfs();
-    const saved = async (filename: string): Promise<string> => savedAs(await saveUploads(upload(filename, PDF_BYTES), { vfs }));
+    const saved = async (filename: string): Promise<string> => savedAs(await upload(vfs, filename, PDF_BYTES));
 
     expect(await saved('../../etc/my\u0007 cv.pdf')).toBe('/uploads/my cv.pdf');
     expect(await saved('C:\\Users\\a\\..')).toBe('/uploads/upload.pdf');
@@ -432,12 +436,66 @@ describe("the owner's uploads keep their own names, in /uploads", () => {
 
   test('an upload the model takes as it is still names where it was saved, just before it', async () => {
     const { vfs } = countingVfs();
-    const admitted = await saveUploads(upload('screen.png', new TextEncoder().encode('fake-png-bytes'), 'image/png'), { vfs });
+    const bytes = new TextEncoder().encode('fake-png-bytes');
+    const admitted = await upload(vfs, 'screen.png', bytes, 'image/png');
     const [out] = await sanitizeAttachmentsForModel([admitted], { accepts: accepts('image'), vfs });
     const parts = Array.isArray(out?.content) ? out.content : [];
 
     expect(parts.map((part) => part.type)).toEqual(['text', 'file', 'text']);
     expect(parts[0]).toEqual({ type: 'text', text: '[Attachment screen.png (image/png) saved to /uploads/screen.png, shown below]' });
+    // Its bytes are read from the file plane: the message names the path only.
+    expect(parts[1]?.type === 'file' ? Array.from(new Uint8Array(v.parse(v.instance(Uint8Array), parts[1].data))) : null).toEqual(Array.from(bytes));
+    expect(JSON.stringify(admitted)).not.toContain('fake-png-bytes');
+  });
+
+  test("a 20 MB PDF the model accepts goes by its path when it passes the model's step, and the message never holds it", async () => {
+    const { vfs } = countingVfs();
+    const big = new Uint8Array(20 * 1024 * 1024);
+    const admitted = await upload(vfs, 'catalog.pdf', big);
+    const [out] = await sanitizeAttachmentsForModel([admitted], { accepts: accepts('image', 'pdf'), vfs, window: { contextWindow: 200_000, modelOutputLimit: 32_000 } });
+
+    expect(JSON.stringify(admitted).length).toBeLessThan(1_000);
+    expect(textParts(out)[0]?.text).toBe(`[Attachment catalog.pdf (application/pdf, ${String(big.length)} bytes) saved to /uploads/catalog.pdf (read it with your file tools)]`);
+  });
+
+  test("a step's second pass over a shaped history changes nothing, and a file the model is not shown is never read", async () => {
+    const { vfs } = countingVfs();
+    const read: string[] = [];
+
+    const reading: VFS = {
+      ...vfs,
+      readFile: async (path) => {
+        read.push(path);
+
+        return await vfs.readFile(path);
+      },
+    };
+
+    const image = await upload(vfs, 'screen.png', new TextEncoder().encode('fake-png-bytes'), 'image/png');
+    const pdf = await upload(vfs, 'deck.pdf', PDF_BYTES);
+    const policy = { accepts: accepts('image'), vfs: reading };
+    const once = await sanitizeAttachmentsForModel([image, pdf], policy);
+    const twice = await sanitizeAttachmentsForModel(once, policy);
+
+    expect(twice).toEqual(once);
+    expect(read).toEqual(['/uploads/screen.png']);
+  });
+
+  test('one upload is bounded wherever it lands', async () => {
+    const { vfs } = countingVfs();
+    const bound = PLATFORM_LIMITS['upload.file_bytes'].value;
+
+    await expect(placeUpload({ vfs }, 'huge.bin', 'application/octet-stream', new Uint8Array(bound + 1))).rejects.toMatchObject({ code: 'bad_input' });
+  });
+
+  test('an upload deleted since it was sent is named as gone, not read', async () => {
+    const { vfs } = countingVfs();
+    const admitted = await upload(vfs, 'gone.pdf', PDF_BYTES);
+
+    await vfs.unlink('/uploads/gone.pdf');
+    const [out] = await sanitizeAttachmentsForModel([admitted], { accepts: accepts('pdf'), vfs });
+
+    expect(textParts(out)[0]?.text).toBe('[Attachment gone.pdf (application/pdf) was saved to /uploads/gone.pdf; it is no longer there]');
   });
 });
 

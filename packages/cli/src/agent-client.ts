@@ -259,7 +259,9 @@ export interface AgentClient {
    * owner-authoritative path. Root cloud workspaces keep the web sidebar path. */
   readonly rename?: (displayName: string) => Promise<{ name: string; displayName: string }>;
   /** Per-message cap on inlined raw bytes. Cloud and local limits differ by 8x, so surfaces ask. */
-  readonly inlineAttachmentLimitBytes: number;
+  /** A file the person names, uploaded as a chat attachment is (the files route's `uploads=` form): the path it was kept
+   *  at under /uploads, which the message names. */
+  uploadAttachment(file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<string>;
   /** Where a local workspace's references are on this machine; a cloud workspace's are not here. */
   readonly planes: PathPlanes | null;
   /** Where a file the agent names opens. */
@@ -323,7 +325,8 @@ interface AgentUiMessage {
 }
 
 type AgentUiMessagePart =
-  | { type: 'file'; mediaType: string; filename: string; url: string }
+  /** A sent file names its upload (`kinu.upload`), the path the workspace answered; `url` is the same path. */
+  | { type: 'file'; mediaType: string; filename: string; url: string; providerMetadata: { kinu: { upload: string } } }
   | { type: 'text'; text: string };
 
 export function createUserUiMessage(
@@ -333,7 +336,7 @@ export function createUserUiMessage(
   metadata: SendMetadata = {},
 ): AgentUiMessage {
   const parts: AgentUiMessagePart[] = files.map((file) => ({
-    type: 'file', mediaType: file.mediaType, filename: file.filename, url: file.url,
+    type: 'file', mediaType: file.mediaType, filename: file.filename, url: file.path, providerMetadata: { kinu: { upload: file.path } },
   }));
 
   if (text || files.length === 0) parts.push({ type: 'text', text });

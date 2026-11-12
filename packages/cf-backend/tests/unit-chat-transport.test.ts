@@ -167,7 +167,7 @@ function openRequest(landing: SendLanding | HarnessRefusal = 'turn', loadHistory
 }
 
 /** A Plan-mode send, with a file before its text when given. */
-const planRequest = (id: string, text: string, file?: { url: string; mediaType: string; filename: string }): string =>
+const planRequest = (id: string, text: string, file?: { url: string; mediaType: string; filename: string; providerMetadata?: { kinu: { upload: string } } }): string =>
   chatRequest(id, text, { metadata: { kinuMode: 'plan' }, before: file === undefined ? [] : [{ type: 'file', ...file }] });
 
 test("connect publication waits for the transcript, and chat admission for the agent's answer of what it holds", async () => {
@@ -274,14 +274,23 @@ async function joinedWhileLedgerReads() {
 }
 
 describe('ChatWireTransport', () => {
+  test('a file part carried by its address alone (a new chat\'s opening, a reverted message) names the same upload', async () => {
+    const h = harness('mid-turn');
+    const conn = h.connection('c1');
+    const carried = { url: '/api/workspaces/w/files?executor=workspace&path=%2Fuploads%2Fchart.png', mediaType: 'image/png', filename: 'chart.png' };
+
+    expect(await h.transport.onMessage(conn, planRequest('req-1', 'again', carried))).toBe(true);
+    expect(h.sent).toEqual([{ text: 'again', files: [{ filename: 'chart.png', mediaType: 'image/png', path: '/uploads/chart.png' }], id: 'input-req-1', mode: 'plan' }]);
+  });
+
   test('a chat request hands the message to the loop under its own id and writes no row; a splice answers at once', async () => {
     const h = harness('mid-turn');
     const conn = h.connection('c1');
-    const file = { url: 'data:text/plain;base64,aGk=', mediaType: 'text/plain', filename: 'note.txt' };
+    const file = { url: '/uploads/note.txt', mediaType: 'text/plain', filename: 'note.txt', providerMetadata: { kinu: { upload: '/uploads/note.txt' } } };
 
     expect(await h.transport.onMessage(conn, planRequest('req-1', 'hello', file))).toBe(true);
-    // The loop's drain writes the row when the splice lands, never the transport.
-    expect(h.sent).toEqual([{ text: 'hello', files: [file], id: 'input-req-1', mode: 'plan' }]);
+    // The loop's drain writes the row when the splice lands, never the transport; the file goes by its upload.
+    expect(h.sent).toEqual([{ text: 'hello', files: [{ filename: 'note.txt', mediaType: 'text/plain', path: '/uploads/note.txt' }], id: 'input-req-1', mode: 'plan' }]);
     expect(h.history).toEqual([]);
     expect(h.broadcasts).toEqual([{ frame: { type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true, landed: 'mid-turn' }, exclude: undefined }]);
     // The loop's reservation says the message was taken, so a replay asks for no turn.

@@ -2273,7 +2273,7 @@ export function GalleryComposer({ notices = [] }: { notices?: readonly ComposerN
         disabled={false}
         liveness={IDLE_TURN}
         mode={{ value: mode, onChange: setMode }}
-        attachments={{ parts: [], onAdd: () => {}, onRemove: () => {} }}
+        attachments={{ items: [], onAdd: () => {}, onRemove: () => {} }}
         modelPicker={<ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs" />}
         notices={notices}
       />

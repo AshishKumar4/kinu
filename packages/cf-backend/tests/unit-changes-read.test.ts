@@ -6,7 +6,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { agentHome, actorHomeName } from '@kinu.run/core';
-import { gatewayWorkspace, hostedSubagentHarness, orchestratorHarness, sentTurn, workspaceFiles, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
+import { gatewayWorkspace, hostedSubagentHarness, orchestratorHarness, sentTurn, uploadedFile, workspaceFiles, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 /** The workspace's change-set as the page lists it. A write's file events are delivered on a microtask queued before
@@ -76,7 +76,7 @@ test("a person's upload stays out of Changes, and the file the agent wrote besid
   await sentTurn(workspace.agent, 'Hello.', crypto.randomUUID());
   await workspace.agent.resetWorkspaceBaseline();
   await sentTurn(workspace.agent, 'Summarize this report.', crypto.randomUUID(), {
-    files: [{ filename: 'report.txt', mediaType: 'text/plain', url: `data:text/plain;base64,${Buffer.from('hello\n').toString('base64')}` }],
+    files: [await uploadedFile(workspace.agent, 'report.txt', 'text/plain', new TextEncoder().encode('hello\n'))],
   });
 
   expect(await readText(workspaceFiles(workspace.agent), '/uploads/report.txt')).toBe('hello\n');

@@ -28,6 +28,7 @@ import {
   type AccountUsage,
   type AgentRpcMethod,
   ModelTestResultSchema,
+  PLANE,
   type ModelTestResult,
   type ArchiveCursor,
   type ArchivePage,
@@ -497,6 +498,28 @@ export function joinCloudDevice(origin: string, join: Omit<CloudDeviceRegistrati
 
 export function listCloudDevices(origin: string, token: string): Promise<CloudDevice[]> {
   return settle(cloudJson(v.array(CloudDeviceSchema), origin, '/api/cli/devices', { token }));
+}
+
+/** `file` uploaded to workspace `workspace`'s /uploads through its files route, as a chat attachment is: the path it was
+ *  kept at, which a message then names. */
+export async function uploadCloudAttachment(origin: string, token: string, workspace: string, file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<string> {
+  const query = `executor=${encodeURIComponent(PLANE)}&uploads=${encodeURIComponent(file.filename)}`;
+  const owned = new Uint8Array(new ArrayBuffer(file.bytes.byteLength));
+
+  owned.set(file.bytes);
+
+  const res = await fetch(`${origin.replace(/\/+$/, '')}/api/workspaces/${encodeURIComponent(workspace)}/files?${query}`, {
+    method: 'PUT', headers: { authorization: `Bearer ${token}`, 'content-type': file.mediaType }, body: new Blob([owned], { type: file.mediaType }),
+  });
+
+  const body: JsonValue = (await tolerateAsync(async () => decodeJsonValue({ value: await res.json() }), 'malformed-input')) ?? {};
+
+  return settle(Effect.gen(function* () {
+    yield* assertCloudOk(res.status, body);
+    const kept = v.safeParse(v.object({ path: v.string() }), body);
+
+    return kept.success ? kept.output.path : yield* Effect.die(new Error(`uploading ${file.filename}: the workspace named no path`));
+  }));
 }
 
 interface CloudRequestOpts {

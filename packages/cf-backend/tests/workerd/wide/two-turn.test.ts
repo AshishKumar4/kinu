@@ -32,6 +32,7 @@ const FailuresSchema = v.array(DiagnosticFailureSchema);
 const HttpSchema = v.array(HttpCallSchema);
 
 /** The attachment the queue probes splice, byte-stable from the reservation through the replay. */
+/** The chart the probe uploads, as the provider is shown it: its bytes, read from its upload. */
 const ATTACHMENT_URL = 'data:image/png;base64,iVBORw0KGgo=';
 
 /** A new workspace's logo is drawn by its own model too; a test counting turns leaves that call out. */
@@ -397,7 +398,7 @@ describe('two real turns over the HTTP model seam', () => {
   it('re-delivers a mid-turn attachment with real file data through a cold reset and replay', async () => {
     const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('attach-cold-driver'));
 
-    // The reservation spans pending_steers + pending_steer_files; the replay must re-bind both.
+    // The reservation spans pending_steers + pending_steer_uploads; the replay must re-bind both.
     // A distinct mode keeps its workspace separate from the warm attach test's.
     const prepared = v.parse(PreparedConversationSchema, await root.prepareQueuedConversation('attach-cold'));
     expect(prepared.steerFiles).toHaveLength(1);
@@ -411,7 +412,7 @@ describe('two real turns over the HTTP model seam', () => {
       steerId: 'input-QUEUE-B',
       filename: 'chart.png',
       mediaType: 'image/png',
-      url: ATTACHMENT_URL,
+      path: '/uploads/chart.png',
     }]);
 
     const done = await coldRoot.completeQueuedConversation(prepared);

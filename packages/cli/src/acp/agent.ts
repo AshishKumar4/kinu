@@ -264,7 +264,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
 
       try {
         await session.client.send(
-          toAgentPrompt(ctx.params.prompt),
+          await toAgentPrompt(ctx.params.prompt, async (file) => await session.client.uploadAttachment(file)),
           { cwd: session.cwd },
         );
       } finally {

@@ -11,7 +11,7 @@ import { FEEDBACK_ENDPOINT } from "@kinu.run/core";
 import { CLIENT_ERROR_ENDPOINT } from "@kinu.run/core";
 import { WorkspaceOverviewSchema } from "@kinu.run/core";
 import { profileCatalogCanonical } from "@kinu.run/core";
-import { installDriveFixture } from "@/gallery-drive";
+import { installDriveFixture, installFetchUploads } from "@/gallery-drive";
 import { installGalleryFixture } from "@/gallery-listings";
 import { installPartsFixture, installShareModeFixture } from "@/gallery-parts";
 import type { SharePreapproval } from "@kinu.run/core";
@@ -1115,7 +1115,12 @@ const uploadsAsked = new Set<string>();
  */
 function galleryUploadFixture(path: string, method: string): Response | null {
   if (method !== "PUT" || !/^\/api\/workspaces\/[^/]+\/files\?/.test(path)) return null;
-  const target = new URLSearchParams(path.slice(path.indexOf("?") + 1)).get("path") ?? "";
+  const query = new URLSearchParams(path.slice(path.indexOf("?") + 1));
+  const attachment = query.get("uploads");
+
+  // A chat attachment is kept under /uploads by its name, as the route answers.
+  if (attachment !== null) return new Response(`{"ok":true,"path":${JSON.stringify(`/uploads/${attachment}`)}}`, { headers: { "content-type": "application/json" } });
+  const target = query.get("path") ?? "";
 
   if (target.endsWith("/AGENTS.md") && !uploadsAsked.has(target)) {
     uploadsAsked.add(target);
@@ -1255,6 +1260,8 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
 window.fetch = galleryFetch;
 
 installDriveFixture(frame);
+
+installFetchUploads();
 
 installGalleryFixture(frame);
 

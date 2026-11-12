@@ -22,7 +22,7 @@ import {
   driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState, openWaitsNamed, slateOpensFromSlates,
   slateSharesReachingNothing, slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges, changesStormStaysBounded,
   openMemoryFollowsItsWriter, computerDesktopSurvivesAResize, computerSwitchKeepsItsScreens, reopenedWorkspaceRunsTheDeployedBuild,
-  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, chatOnlyRewindReturnsTheAsk, activityIsShown, slatePicturesFollowMode, claudeCodePageExchanges, type AgentPlanVerdict, type AgentReturnVerdict,
+  computerSessionsComeBackByName, agentJobIsAnsweredInItsSession, attachmentIsReadAndShown, largeAttachmentIsRead, type LargeAttachmentVerdict, chatOnlyRewindReturnsTheAsk, activityIsShown, slatePicturesFollowMode, claudeCodePageExchanges, type AgentPlanVerdict, type AgentReturnVerdict,
   appAgentAnswersItsOwner, appAgentAnswersALentVisitor, appAgentAnswersAVisitorOnTheirOwn, appAgentFollowsTheShareMode, appAgentTicketsStayTheirs, type AppAgentOwnerVerdict, type AppAgentTicketVerdict, type AppAgentLentVerdict, type AppAgentOwnVerdict, type AppAgentFlipVerdict,
   type ApprovalStackVerdict, type HireApprovalVerdict, type AgentWorkspaceVerdict, type AccountMemoryVerdict, type StackMemoryVerdict,
   type SpliceVerdict, type ChangesStormVerdict, type LiveMemoryVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict,
@@ -34,7 +34,7 @@ import { INSPECTOR_SHUT_PX, type FlowTarget } from '../../scripts/browser-page';
 import {
   ACCOUNT_FACT, ACCOUNT_RECALL_REPLY, CONTINUE, FLOW_MEMORY_NOTE, FLOW_PROBE, FLOW_SHELL_PROBE, FLOW_SLATE, HIRE_PARKED_COMMAND, INTERRUPTED_BRIEF,
   INTERRUPTED_TITLE, PARKED_COMMANDS, PIN_PAGE, PLAN_COMMENT, AGENT_WORKSPACE, REACH_REPLY, REACH_STREAM, STACK_FACT, STACK_RECALL_REPLY, STORM_FILES,
-  THREAD_REPLY, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_WORD, ACTIVITY_REFUSAL, APP_AGENT_REPLY, APP_AGENT_SLATE,
+  THREAD_REPLY, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_WORD, LARGE_ATTACHMENT_MARKER, LARGE_ATTACHMENT_REPLY, ACTIVITY_REFUSAL, APP_AGENT_REPLY, APP_AGENT_SLATE,
 } from '../../scripts/flows-script';
 import {
   chatTitledFromItsBrief, hireLivesUnderItsName, pinKeepsAnInChatPage, planCommentReachesTheAgent, slateStreamsAndHires,
@@ -587,6 +587,22 @@ describe(productFlowTestName('attachment', 'a file dropped on the chat is read a
     const attached = verdictOf(observed, 'attachment');
 
     expect([attached.sent, attached.sentAfterReload]).toEqual([true, true]);
+  });
+});
+
+describe(productFlowTestName('attachment-large', 'a 20 MB PDF dropped on the chat uploads before the message, which names it, and the agent reads it'), () => {
+  let observed: LargeAttachmentVerdict | null = null;
+
+  beforeAll(async () => {
+    observed = await flowRow('attachment-large', largeAttachmentIsRead);
+  });
+
+  test('the PDF uploads from the tray before the message is sent', () => {
+    expect(verdictOf(observed, 'attachment-large').uploaded).toBe(true);
+  });
+
+  test("the agent's reply repeats the marker only the PDF held", () => {
+    expect(verdictOf(observed, 'attachment-large').reply).toBe(`${LARGE_ATTACHMENT_REPLY} ${LARGE_ATTACHMENT_MARKER}`);
   });
 });
 

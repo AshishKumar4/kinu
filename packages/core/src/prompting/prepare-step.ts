@@ -61,6 +61,9 @@ export interface StepPipeline {
   readonly context?: StepContextPlane | undefined;
   /** The input's index in the step's messages when no context plane re-reads them. */
   readonly turnStart?: number | undefined;
+  /** Shows the model each file the step's messages name (`sanitizeAttachmentsForModel`), words that landed this step
+   *  included, before the request is pruned, marked and measured. A message already shaped passes through unchanged. */
+  readonly attachments?: ((messages: ModelMessage[]) => Promise<readonly ModelMessage[]>) | undefined;
   readonly abortSignal?: AbortSignal | undefined;
 }
 
@@ -109,6 +112,11 @@ function prepareFromContext(
   const steered = pipeline.extensions?.runPrepareStep(prepared);
 
   const input = turnStart === undefined ? undefined : { at: turnStart, firstStep: ctx.stepNumber === 0 } satisfies TurnInput;
+  const { attachments } = pipeline;
+
+  if (attachments !== undefined) {
+    return Promise.resolve(steered).then(async (messages) => finishPrepareStep(pipeline, ctx, [...await attachments(messages ?? ctx.messages)], input));
+  }
 
   return steered instanceof Promise
     ? steered.then(messages => finishPrepareStep(pipeline, ctx, messages, input))

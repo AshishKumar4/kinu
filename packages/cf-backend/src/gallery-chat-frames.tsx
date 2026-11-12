@@ -1,7 +1,8 @@
 /** The chat's frames: transcripts, the composer, tool calls, streaming, history and quality. */
 import { Effect } from 'effect';
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { FileUIPart, UIMessage } from "ai";
+import type { UIMessage } from "ai";
+import type { ShownAttachment } from "@/hooks/use-pending-attachments";
 import { threadLiveTail, type TurnLiveness, type ModelMenuEntry, type WorkspaceEntry } from "@kinu.run/core";
 import { KinuError } from "@kinu.run/core/obs";
 import { Button } from "@/components/ui/Button";
@@ -222,7 +223,7 @@ function ComposerFrame() {
   const [model, setModel] = useState("opencode-go/muse-spark-1.3-contributor");
   /* The thinking level travels with the model; the composer sizes the row, so the picker takes no width class. */
   const [effort, setEffort] = useState<ReasoningEffort | null>(null);
-  const [parts, setParts] = useState<FileUIPart[]>([]);
+  const [parts, setParts] = useState<ShownAttachment[]>([]);
 
   const picker = () => (
     <ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs"
@@ -237,9 +238,11 @@ function ComposerFrame() {
     disabled: false,
     mode: { value: mode, onChange: setMode, locked: false },
     attachments: {
-      parts,
-      onAdd: (files: FileList | null | undefined) => setParts((held) => [...held, ...[...files ?? []].map((file): FileUIPart => ({
-        type: "file", mediaType: file.type, filename: file.name, url: "data:,",
+      items: parts,
+      // A file dropped here is shown as kept: the gallery has no workspace to upload it to.
+      onAdd: (files: FileList | null | undefined) => setParts((held) => [...held, ...[...files ?? []].map((file): ShownAttachment => ({
+        key: `${file.name}-${String(held.length)}`, file: null, name: file.name, mediaType: file.type,
+        state: { kind: "uploaded", path: `/uploads/${file.name}` }, preview: null,
       }))]),
       onRemove: (index: number) => setParts((held) => held.filter((_, at) => at !== index)),
     },
@@ -549,7 +552,7 @@ function ClientContinuityFrame() {
           disabled={false}
           liveness={IDLE_TURN}
           attachments={{
-            parts: [],
+            items: [],
             onAdd: (added) => setFiles((current) => [
               ...current,
               ...Array.from(added ?? [], (file) => `${file.name}:${file.size}`),

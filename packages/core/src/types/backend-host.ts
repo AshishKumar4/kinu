@@ -63,11 +63,12 @@ export interface OperatorSend {
   readonly mode?: WorkMode;
 }
 
-/** ai-sdk FileUIPart payload; `url` is a data: URL so it crosses every transport unfetched. */
+/** A file a person sent with their words: uploaded first, through the files route, to `path` under /uploads. A message
+ *  carries this reference only, never the file's bytes. */
 export interface PromptFile {
   readonly filename: string;
   readonly mediaType: string;
-  readonly url: string;
+  readonly path: string;
 }
 
 export interface EnqueueTurnResult {

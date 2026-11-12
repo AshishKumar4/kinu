@@ -400,17 +400,12 @@ describe("fileResponseHeaders — the download route's security posture", () => 
   });
 });
 
-describe("CLOUD_MAX_INLINE_ATTACHMENT_BYTES", () => {
-  test("a max-size attachment message fits the agents SDK row guard, under the platform row cap", async () => {
-    const { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, PLATFORM_LIMITS } = await import("@kinu.run/core");
-    const { ROW_MAX_BYTES } = await import("agents/chat");
-    // A chat message is one DO SQLite row and the SDK cannot shrink file parts (base64, 4/3 × raw).
-    // The limit is read from catalog `do.sqlite.row_bytes`, making that entry load-bearing.
-    const platformRowBytes = PLATFORM_LIMITS["do.sqlite.row_bytes"].value;
-    const encoded = Math.ceil((CLOUD_MAX_INLINE_ATTACHMENT_BYTES * 4) / 3);
-    const slack = 256 * 1024;
-    expect(encoded + slack).toBeLessThan(ROW_MAX_BYTES);
-    expect(ROW_MAX_BYTES).toBeLessThan(platformRowBytes);
+describe("upload.file_bytes", () => {
+  test("one upload carries a quarter of what resets an object, as the actor holds a file and its chunks at once", async () => {
+    const { FILE_TRANSFER_MAX_BYTES, PLATFORM_LIMITS } = await import("@kinu.run/core");
+
+    expect(FILE_TRANSFER_MAX_BYTES).toBe(PLATFORM_LIMITS["upload.file_bytes"].value);
+    expect(PLATFORM_LIMITS["upload.file_bytes"].value * 4).toBe(PLATFORM_LIMITS["do.isolate.transient_alloc_reset"].value);
   });
 });
 

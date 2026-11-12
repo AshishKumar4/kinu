@@ -211,7 +211,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       return;
     }
 
-    const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
+    const resolved = await resolvePromptAttachments(input, { upload: async (file) => await client.uploadAttachment(file), planes: client.planes ?? undefined });
 
     for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
     const payload = resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text;
@@ -269,7 +269,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     let consentWatch: ReturnType<typeof watchTerminalConsents> | null = null;
 
     const sending = Effect.promise(async () => {
-      const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes, planes: client.planes ?? undefined });
+      const resolved = await resolvePromptAttachments(input, { upload: async (file) => await client.uploadAttachment(file), planes: client.planes ?? undefined });
 
       // Stopped while its attachments were read: it never leaves, and comes back to edit like what was queued.
       if (interruptRequested) {

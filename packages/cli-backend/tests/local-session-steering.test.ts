@@ -3,7 +3,7 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { AwaitedList, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams, workspaceDatabase, freshServedStores } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
-import { initWorkspaceSchema } from '@kinu.run/core';
+import { initWorkspaceSchema, placeUpload } from '@kinu.run/core';
 import { narrowToolSurface, WORKSPACE_ROOT } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { APICallError } from 'ai';
@@ -507,7 +507,9 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
   test('a user-origin enqueueTurn lands at the queue FRONT, carrying its files', async () => {
     // The seam's rerun (a user turn) is admitted ahead of waiting programmatic injects, with its attachment as a file part.
     const { model, prompts, release } = toolThenAnswerModel('done');
-    const { session, events } = setup('unused', model);
+    const { session, events, rt } = setup('unused', model);
+    // Uploaded before it was sent, as every attachment is.
+    const shot = await placeUpload({ vfs: rt.storage.vfs, planes: rt.planes }, 'shot.png', 'image/png', new Uint8Array([0]));
 
     const turn = session.send('main question', { id: crypto.randomUUID() });
     await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
@@ -517,7 +519,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const userTurn = session.enqueueTurn({
       origin: 'user',
       text: 'the operator said this',
-      sends: [{ id: 'steer-1', text: 'the operator said this', files: [{ filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,AA' }] }],
+      sends: [{ id: 'steer-1', text: 'the operator said this', files: [{ filename: 'shot.png', mediaType: 'image/png', path: shot }] }],
     });
 
     release();
@@ -539,9 +541,8 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     );
 
     expect(steerMessage.content).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: 'file', data: 'AA', mediaType: 'image/png', filename: 'shot.png',
-      }),
+      // Its bytes, read from where it was uploaded.
+      expect.objectContaining({ type: 'file', mediaType: 'image/png', filename: 'shot.png' }),
     ]));
 
     await expect(programTurn).resolves.toEqual({ status: 'queued' });

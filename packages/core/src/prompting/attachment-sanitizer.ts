@@ -1,19 +1,25 @@
 import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
- * Replaces parts the resolved model cannot accept with a text reference to their bytes: the owner's upload where the
- * file part says it was saved ({@link saveUploads}), else a content-addressed copy in the hidden offloaded directory.
- * Applied to the whole history each turn, never mutating it; byte-stable (prompt-cache prefix); message count
- * never changes, so index-anchored consumers stay valid.
+ * What the model is shown of a message's files. A file a person sends is uploaded first and named by its path
+ * ({@link uploadPart}); its bytes are read from the file plane here, each step, where the model accepts its type and it
+ * fits ({@link documentFits}), and it is named by its path where not. A part carrying bytes (history stored before
+ * uploads were references, a tool's file) is replaced, where the model cannot take it, by a reference: its upload's
+ * path where it was saved as one, else a content-addressed copy in the hidden offloaded directory. Applied to the whole
+ * history each turn, never mutating it; byte-stable (prompt-cache prefix); message count never changes, so
+ * index-anchored consumers stay valid.
  */
 
 import type { AssistantModelMessage, DataContent, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
 import { untagged } from '../utils/file-data';
-import { base64Bytes } from '../utils/base64';
+import type { PromptFile } from '../types/backend-host';
+import { stepContextLimit, type ModelWindow } from '../context-window';
+import { documentTokens } from './document-tokens';
+import { PLATFORM_LIMITS } from '../platform-limits';
 
 import type { ModelInputModality } from '../providers/types';
 import { servingRoute } from '../providers/serving-route';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
-import { diagnostics, KinuError, renderThrownChain, settle } from '../obs/index';
+import { diagnostics, KinuError, renderThrownChain, settle, tolerateAsync } from '../obs/index';
 import { Effect } from 'effect';
 import { UPLOADS_ROOT } from '../vfs/workspace-path';
 import { resolvePath, vfsReference, type PathPlanes } from '../vfs/resolve';
@@ -27,6 +33,8 @@ export type MediaModality = Exclude<ModelInputModality, 'text'>;
 export interface AttachmentPolicy {
   readonly accepts: ReadonlySet<MediaModality>;
   readonly vfs: VFS;
+  /** The serving model's window, out of whose step allocation documents shown inline are spent; unknown, all fit. */
+  readonly window?: ModelWindow;
   /** Where the workspace's own paths sit on this machine, by which an upload is named; absent, they are its own. */
   readonly planes?: PathPlanes;
   /** Counters show how often real traffic crosses the spill threshold. */
@@ -61,8 +69,21 @@ const INLINE_TEXT_MAX_BYTES = 8 * 1024;
 /** Enough to identify the payload, never enough to be it. */
 const PASTED_TEXT_PREVIEW_CHARS = 2_000;
 
-/** Inline documents are re-priced every turn, so large ones spill anyway. Images always stay inline: no read-back recipe exists. */
-const OVERSIZE_ACCEPTED_DOC_MAX_BYTES = 1024 * 1024;
+/**
+ * Whether a document the model accepts is shown inline: it is, while the documents shown so far, oldest first, and it fit
+ * the step's allocation (`stepContextLimit`), spent as every request-bound producer spends it, priced by
+ * `documentTokens`; past that it goes by its path, for the file tools. Oldest first keeps a document once shown in
+ * place: a newer one never pushes it out of the cached prefix. Images always stay inline: no read-back recipe exists.
+ */
+function documentFits(spent: { tokens: number }, mediaType: string, bytes: Uint8Array, policy: AttachmentPolicy): boolean {
+  const tokens = documentTokens(mediaType, bytes);
+  const room = policy.window === undefined ? Number.POSITIVE_INFINITY : stepContextLimit(policy.window);
+
+  if (spent.tokens + tokens > room) return false;
+  spent.tokens += tokens;
+
+  return true;
+}
 
 const OFFLOADED_DIR = SPILL_DIRS.offloaded;
 
@@ -73,10 +94,11 @@ export async function sanitizeAttachmentsForModel(
   policy: AttachmentPolicy,
 ): Promise<readonly ModelMessage[]> {
   let out: ModelMessage[] | undefined;
+  const shown: Shown = { policy, spent: { tokens: 0 } };
 
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
-    const sanitized = mayCarryAttachments(message) ? await sanitizeMessage(message, policy) : message;
+    const sanitized = mayCarryAttachments(message) ? await sanitizeMessage(message, shown) : message;
 
     if (sanitized !== message) out ??= messages.slice(0, index);
     out?.push(sanitized);
@@ -90,12 +112,20 @@ function mayCarryAttachments(message: ModelMessage): boolean {
   return message.role === 'user' || (message.role === 'assistant' && Array.isArray(message.content) && message.content.some((part) => part.type === 'file'));
 }
 
-async function sanitizeMessage(message: ModelMessage, policy: AttachmentPolicy): Promise<ModelMessage> {
-  if (message.role === 'assistant' && Array.isArray(message.content)) return sanitizeAssistantMessage(message, message.content, policy);
+/** A request's policy, and the documents it has shown inline so far, oldest first. */
+interface Shown {
+  readonly policy: AttachmentPolicy;
+  readonly spent: { tokens: number };
+}
+
+async function sanitizeMessage(message: ModelMessage, shown: Shown): Promise<ModelMessage> {
+  const { policy } = shown;
+
+  if (message.role === 'assistant' && Array.isArray(message.content)) return sanitizeAssistantMessage(message, message.content, shown);
 
   if (message.role !== 'user') return message;
 
-  if (Array.isArray(message.content)) return sanitizeUserMessage(message, message.content, policy);
+  if (Array.isArray(message.content)) return sanitizeUserMessage(message, message.content, shown);
   const replacement = await sanitizeUserText(message.content, policy);
 
   return replacement === null ? message : { ...message, content: replacement };
@@ -108,35 +138,68 @@ type AssistantPart = Exclude<AssistantModelMessage['content'], string>[number];
 async function sanitizeUserMessage(
   message: UserModelMessage,
   content: readonly UserPart[],
-  policy: AttachmentPolicy,
+  shown: Shown,
 ): Promise<UserModelMessage> {
+  const { policy } = shown;
   let changed = false;
   const parts: UserPart[] = [];
 
-  for (const part of content) {
-    const replacement = await sanitizePart(part, policy);
-    const upload = part.type === 'file' ? uploadOf(part) : null;
+  for (const offered of content) {
+    const upload = offered.type === 'file' ? uploadOf(offered) : null;
+    const read = offered.type === 'file' && upload !== null ? await uploadedFile(offered, upload, policy) : offered;
 
-    // An upload the model takes as it is still names where it was saved, so the agent can work on the file.
-    if (replacement === null && upload !== null && part.type === 'file') parts.push(uploadNote(part, onThisMachine(upload, policy.planes)));
+    // A note in its place: the upload it named is gone.
+    if (read !== offered && read.type === 'text') {
+      parts.push(read);
+      changed = true;
+      continue;
+    }
 
-    if (replacement || upload !== null) changed = true;
-    parts.push(replacement ?? part);
+    const replacement = await sanitizePart(read, shown);
+
+    // An upload the model takes as it is still names where it was saved, so the agent can work on the file; named once,
+    // as its path gives way to its bytes, so a message already shaped passes through a later step unchanged.
+    if (replacement === null && upload !== null && read.type === 'file' && read !== offered) parts.push(uploadNote(read, onThisMachine(upload, policy.planes)));
+
+    if (replacement !== null || read !== offered) changed = true;
+    parts.push(replacement ?? read);
   }
 
   return changed ? { ...message, content: parts } : message;
 }
 
+/**
+ * An upload's part with its bytes, read from the file plane where the part names them by path (each step: the message
+ * never holds them); as it is where it carries its bytes (history stored before uploads were references, never written
+ * now); a note where the file is no longer there.
+ */
+async function uploadedFile(part: FilePart, upload: string, policy: AttachmentPolicy): Promise<FilePart | TextPart> {
+  if (untagged(part.data) !== upload) return part;
+  const here = onThisMachine(upload, policy.planes);
+  const stat = await tolerateAsync(async () => await policy.vfs.stat(here), 'enoent') ?? null;
+  const gone: TextPart = { type: 'text', text: `[Attachment ${part.filename ?? upload} (${part.mediaType}) was saved to ${here}; it is no longer there]` };
+
+  if (stat === null) return gone;
+  const modality = mediaModalityFor(part.mediaType);
+  const shown = (modality !== null && policy.accepts.has(modality)) || (isTextMediaType(part.mediaType) && stat.size < INLINE_TEXT_MAX_BYTES);
+
+  // Not shown inline: named by its path and size, its bytes never read.
+  if (!shown) return referenceTo({ mediaType: part.mediaType, filename: part.filename, upload }, stat.size, here, policy);
+  const bytes = await readUpload(policy.vfs, here, stat);
+
+  return bytes === undefined ? gone : { ...part, data: bytes };
+}
+
 async function sanitizeAssistantMessage(
   message: AssistantModelMessage,
   content: readonly AssistantPart[],
-  policy: AttachmentPolicy,
+  shown: Shown,
 ): Promise<AssistantModelMessage> {
   let changed = false;
   const parts: AssistantPart[] = [];
 
   for (const part of content) {
-    const replacement = part.type === 'file' ? await sanitizeFilePart(part, policy) : null;
+    const replacement = part.type === 'file' ? await sanitizeFilePart(part, shown) : null;
 
     if (replacement) changed = true;
     parts.push(replacement ?? part);
@@ -146,19 +209,21 @@ async function sanitizeAssistantMessage(
 }
 
 /** Only the three carrier kinds can hold an attachment. */
-async function sanitizePart(part: UserPart, policy: AttachmentPolicy): Promise<TextPart | null> {
-  if (part.type === 'image') return await sanitizeImagePart(part, policy);
+async function sanitizePart(part: UserPart, shown: Shown): Promise<TextPart | null> {
+  if (part.type === 'image') return await sanitizeImagePart(part, shown);
 
-  if (part.type === 'file') return await sanitizeFilePart(part, policy);
+  if (part.type === 'file') return await sanitizeFilePart(part, shown);
 
-  if (part.type === 'text') return await sanitizeTextPart(part, policy);
+  if (part.type === 'text') return await sanitizeTextPart(part, shown.policy);
 
   return null;
 }
 
-async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Promise<TextPart | null> {
+async function sanitizeImagePart(part: ImagePart, shown: Shown): Promise<TextPart | null> {
+  const { policy } = shown;
+
   if (part.mediaType !== undefined && !RASTER_IMAGES.has(part.mediaType)) {
-    return sanitizeFilePart({ type: 'file', data: part.image, mediaType: part.mediaType }, policy);
+    return sanitizeFilePart({ type: 'file', data: part.image, mediaType: part.mediaType }, shown);
   }
 
   const data = untagged(part.image);
@@ -168,7 +233,8 @@ async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Pro
   return replaceMedia(data, { mediaType: part.mediaType ?? 'image', filename: undefined, upload: null }, policy);
 }
 
-async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promise<TextPart | null> {
+async function sanitizeFilePart(part: FilePart, shown: Shown): Promise<TextPart | null> {
+  const { policy } = shown;
   const data = untagged(part.data);
 
   // The provider's own handle to a file it already holds: nothing here to read or store.
@@ -177,8 +243,10 @@ async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promi
   const upload = uploadOf(part);
 
   if (modality !== null && policy.accepts.has(modality)) {
-    return modality !== 'image' && oversizeForInlineDocument(data)
-      ? replaceMedia(data, { mediaType: part.mediaType, filename: part.filename, upload }, policy)
+    const payload = modality === 'image' ? null : decodePayload(data);
+
+    return payload?.kind === 'bytes' && !documentFits(shown.spent, part.mediaType, payload.bytes, policy)
+      ? storeAndReference(payload.bytes, { mediaType: part.mediaType, filename: part.filename, upload }, policy)
       : null;
   }
 
@@ -206,23 +274,6 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
 
   return `[Pasted text (${bytes.length} bytes) saved to ${path} (read or slice it with your file tools; ` +
     `oversize: name ${path} in the message of a lifetime:"task" agents hire so that agent reads it instead of you). The first ${head.length} chars follow.]\n\n${head}`;
-}
-
-/** Sized without decoding: base64 is ~4/3 of the bytes; remote URLs have no local payload. */
-function oversizeForInlineDocument(data: DataContent | URL): boolean {
-  const bytes = estimatePayloadBytes(data);
-
-  return bytes !== null && bytes > OVERSIZE_ACCEPTED_DOC_MAX_BYTES;
-}
-
-function estimatePayloadBytes(data: DataContent | URL): number | null {
-  if (data instanceof URL) return null;
-
-  if (data instanceof Uint8Array) return data.byteLength;
-
-  if (data instanceof ArrayBuffer) return data.byteLength;
-
-  return /^https?:\/\//.test(data) ? null : base64Bytes(data);
 }
 
 /** An SVG is markup: it goes as text. */
@@ -286,13 +337,15 @@ async function storeAndReference(bytes: Uint8Array, carried: Carried, policy: At
     ? await storeAttachment(policy.vfs, OFFLOADED_DIR, bytes, carried.mediaType)
     : onThisMachine(carried.upload, policy.planes);
 
-  policy.budget?.recordSpill({ producer: 'attachment', omitted: bytes.length, referenced: true });
+  return referenceTo(carried, bytes.length, path, policy);
+}
+
+/** A file named where it is kept, by its size, for the agent's file tools. */
+function referenceTo(carried: Carried, size: number, path: string, policy: AttachmentPolicy): TextPart {
+  policy.budget?.recordSpill({ producer: 'attachment', omitted: size, referenced: true });
   const name = carried.filename ?? path.slice(path.lastIndexOf('/') + 1);
 
-  return {
-    type: 'text',
-    text: `[Attachment ${name} (${carried.mediaType}, ${bytes.length} bytes) saved to ${path} (read it with your file tools)]`,
-  };
+  return { type: 'text', text: `[Attachment ${name} (${carried.mediaType}, ${String(size)} bytes) saved to ${path} (read it with your file tools)]` };
 }
 
 /** An upload the model takes inline, named where it was saved. */
@@ -305,13 +358,66 @@ function onThisMachine(path: string, planes: PathPlanes | undefined): string {
   return planes === undefined ? path : resolvePath(vfsReference(path), planes).absolute;
 }
 
-/** Where an admitted file part says its upload was saved ({@link saveUploads}); a key no provider reads. */
+/** Where a file part says its upload is ({@link uploadPart}); a key no provider reads. */
 const UploadedSchema = v.object({ kinu: v.object({ upload: v.string() }) });
 
 function uploadOf(part: FilePart): string | null {
   const read = v.safeParse(UploadedSchema, part.providerOptions);
 
   return read.success ? read.output.kinu.upload : null;
+}
+
+/** Uploads read lately, per file plane: every turn's history names the same files again. */
+const READ_UPLOADS = new WeakMap<VFS, Map<string, { readonly mtimeMs: number; readonly size: number; readonly bytes: Uint8Array }>>();
+
+/** The bytes kept per file plane, oldest dropped first: one upload's bound (`upload.file_bytes`), what the actor holds
+ *  of a single upload as it lands. A file past it is read each time it is shown. */
+const READ_UPLOADS_BYTES = PLATFORM_LIMITS['upload.file_bytes'].value;
+
+/** An upload's bytes, read again only when its size or time changed since; undefined where it is gone. */
+async function readUpload(vfs: VFS, path: string, stat: { readonly mtimeMs: number; readonly size: number }): Promise<Uint8Array | undefined> {
+  const kept = READ_UPLOADS.get(vfs) ?? new Map();
+
+  READ_UPLOADS.set(vfs, kept);
+  const known = kept.get(path);
+
+  if (known !== undefined && known.mtimeMs === stat.mtimeMs && known.size === stat.size) return known.bytes;
+  const read = await tolerateAsync(async () => await vfs.readFile(path), 'enoent');
+
+  if (read === undefined) return undefined;
+  const bytes = typeof read === 'string' ? new TextEncoder().encode(read) : read;
+
+  kept.delete(path);
+
+  if (bytes.byteLength > READ_UPLOADS_BYTES) return bytes;
+  kept.set(path, { mtimeMs: stat.mtimeMs, size: stat.size, bytes });
+  let held = [...kept.values()].reduce((sum, each) => sum + each.bytes.byteLength, 0);
+
+  for (const [oldest, each] of kept) {
+    if (held <= READ_UPLOADS_BYTES) break;
+    kept.delete(oldest);
+    held -= each.bytes.byteLength;
+  }
+
+  return bytes;
+}
+
+/**
+ * The upload a chat's file part names: its `kinu.upload`, or, for a part that kept only its address (a carried opening,
+ * a reverted message), the path that address is or reads from the files route. Null for a part naming no upload.
+ */
+export function uploadOfUiPart(part: { readonly url: string; readonly providerMetadata?: unknown }): string | null {
+  const tagged = v.safeParse(UploadedSchema, part.providerMetadata);
+
+  if (tagged.success) return tagged.output.kinu.upload;
+  const path = part.url.startsWith('/api/workspaces/') ? new URL(part.url, 'http://kinu.local').searchParams.get('path') : part.url;
+
+  return path !== null && path.startsWith(`${UPLOADS_ROOT}/`) ? path : null;
+}
+
+/** A sent file as its message holds it: named by its upload's path, which also stands in its bytes' place. */
+export function uploadPart(file: PromptFile): FilePart {
+  return { type: 'file', data: file.path, mediaType: file.mediaType, filename: file.filename, providerOptions: { kinu: { upload: file.path } } };
 }
 
 /** Copies of one name an upload may take before it is refused: `name (2).ext` up to this. */
@@ -321,35 +427,19 @@ const UPLOAD_COPIES = 1_000;
 const UPLOAD_NAME_BYTES = 248;
 
 /**
- * The owner's files, each saved once as the words they came with are admitted: under {@link UPLOADS_ROOT} by the name it
- * came with, as `name (2).ext` when that name holds other bytes, and to the same file when it holds these. Each file
- * part then says where (`providerOptions.kinu.upload`), which the sanitizer names and never stores again. A part with no
- * bytes here (a URL, a provider's own handle) is left as it is.
+ * A person's file, kept as an upload lands (the files route's `uploads=` form): under {@link UPLOADS_ROOT} by the name
+ * it came with ({@link uploadName}), as `name (2).ext` when that name holds other bytes, and the same file when it holds
+ * these. Answers the workspace path its message then names.
  */
-export function saveUploads(message: ModelMessage, files: Pick<AttachmentPolicy, 'vfs' | 'planes'>): Promise<ModelMessage> {
-  if (message.role !== 'user' || !Array.isArray(message.content)) return Promise.resolve(message);
-  const offered: readonly UserPart[] = message.content;
+export function placeUpload(files: Pick<AttachmentPolicy, 'vfs' | 'planes'>, filename: string, mediaType: string, bytes: Uint8Array): Promise<string> {
+  const bound = PLATFORM_LIMITS['upload.file_bytes'].value;
 
-  return settle(Effect.gen(function* () {
-    let changed = false;
-    const content: UserPart[] = [];
+  // One bound for every upload, wherever it lands: the files route's, the CLI's, an ACP client's.
+  if (bytes.byteLength > bound) {
+    return settle(Effect.fail(new KinuError('bad_input', `${filename} is ${String(bytes.byteLength)} bytes; one upload carries at most ${String(bound)} (upload.file_bytes).`)));
+  }
 
-    for (const part of offered) {
-      const data = part.type === 'file' && uploadOf(part) === null ? untagged(part.data) : null;
-      const payload = data === null ? null : decodePayload(data);
-
-      if (part.type !== 'file' || payload === null || payload.kind === 'remote') {
-        content.push(part);
-        continue;
-      }
-
-      const upload = yield* saveUpload(files, uploadName(part.filename, part.mediaType), payload.bytes);
-      content.push({ ...part, providerOptions: { ...part.providerOptions, kinu: { upload } } });
-      changed = true;
-    }
-
-    return changed ? { ...message, content } : message;
-  }));
+  return settle(saveUpload(files, uploadName(filename, mediaType), bytes));
 }
 
 /**

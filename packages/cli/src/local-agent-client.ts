@@ -1,12 +1,11 @@
 import { statSync } from 'node:fs';
-import { localFileLinks, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
+import { localFileLinks, placeUpload, type BranchStatusEvent, type FileLinks, type PathPlanes, type SessionEvent } from '@kinu.run/core';
 import type { AgentConfigStore, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementListing, RefinementRequestView, SubagentInspectionRequest, SubagentInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import { getChatHistoryPage, keptMediaName, getToolList, CHAT_SESSION_ID, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, usageReported } from '@kinu.run/core';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { TurnCalls } from './turn-calls';
 import {
-  LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   readWorkspaceInfo,
   type CLIRuntime,
   type LocalAgentHost,
@@ -120,10 +119,14 @@ export class LocalAgentClient implements AgentClient {
   readonly questions: OwnerQuestionSurface;
   readonly approvals: WaitingApprovalSurface;
   private readonly deps: LocalAgentClientDeps;
-  readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
   readonly planes: PathPlanes;
   readonly fileLinks: FileLinks;
   readonly rename = async (displayName: string) => renameLocalAgent(this.agentName, displayName);
+
+  /** A file kept in this space's /uploads as a chat attachment is in a workspace (`placeUpload`): its path. */
+  uploadAttachment(file: { readonly filename: string; readonly mediaType: string; readonly bytes: Uint8Array }): Promise<string> {
+    return placeUpload({ vfs: this.deps.rt.storage.vfs, planes: this.deps.rt.planes }, file.filename, file.mediaType, file.bytes);
+  }
 
   /** Outlives the session, so a walk-back fork does not invalidate it. */
   private readonly config: AgentConfigStore;

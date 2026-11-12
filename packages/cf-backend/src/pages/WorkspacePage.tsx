@@ -5,7 +5,7 @@ import { useParams, useLocation, Link, Navigate, useMatch, useNavigate, useSearc
 import { Loader } from "@/components/ui/Loader";
 import { Button } from "@/components/ui/Button";
 import { ArrowsClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, ownerAsks, planSurface, workspaceRoute } from "@kinu.run/core";
+import { ownerAsks, planSurface, workspaceRoute } from "@kinu.run/core";
 import { APP_ROUTES, rowText, threadLiveTail, type SignalCard, type WorkspaceLayout } from "@kinu.run/core";
 import type { UIMessage } from "ai";
 import { useKinu } from "@/hooks/use-kinu";
@@ -41,7 +41,7 @@ import { FileLinkContext } from "@/components/surfaces/shared";
 import { type ChatTab } from "@/components/WorkspaceHeader";
 import { useWorkspaceArea } from "@/components/layout";
 import { workspaceDisplayTitle, workspaceTitleDraft } from "@kinu.run/core";
-import { attempt, renderThrownChain, showing, detach, settle, type KinuError, detachPromise } from "@kinu.run/core/obs";
+import { showing, detach, settle, detachPromise } from "@kinu.run/core/obs";
 import { WorkbenchPanels, type InspectorControl } from "@/components/WorkbenchPanels";
 import { useCarriedAttachments } from "@/components/workspaces/NewChatView";
 import { OpenWorkspaceProvider } from "@/hooks/use-open-workspace";
@@ -97,24 +97,6 @@ export interface WorkspacePageProps {
   readonly workspace?: string;
   /** The layout the caller already knows, drawn until the workspace's own status says: Home's assistant is `focus`. */
   readonly layout?: WorkspaceLayout;
-}
-
-/** A message's files, read back from where the chat shows them and given to the composer as dropped files are. */
-function reattached(message: UIMessage, add: (files: FileList) => void): Effect.Effect<void, KinuError> {
-  const files = message.parts.flatMap((part) => (part.type === "file" ? [part] : []));
-
-  if (files.length === 0) return Effect.void;
-
-  return Effect.gen(function* () {
-    const transfer = new DataTransfer();
-
-    for (const part of files) {
-      const blob = yield* attempt({ doing: "reading a reverted message's file back", otherwise: 'unavailable' }, async () => (await fetch(part.url)).blob());
-      transfer.items.add(new File([blob], part.filename ?? "attachment", { type: part.mediaType }));
-    }
-
-    add(transfer.files);
-  });
 }
 
 export default function WorkspacePage(props: WorkspacePageProps = {}) {
@@ -303,10 +285,9 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
   const { history, thread, positions, transcript } = chat;
   const retryOwed = retryIsOwed(state.owedIntents, null, state.messages);
 
-  // The hook spends the per-message aggregate cap (one DO row, see core/cloud-wire) inside its
-  // reducer, so concurrent additions cannot reserve the same remaining capacity.
-  const attachments = usePendingAttachments(CLOUD_MAX_INLINE_ATTACHMENT_BYTES);
-  useCarriedAttachments(attachments.offer);
+  // Each file uploads to this workspace as it is added; the message names the paths.
+  const attachments = usePendingAttachments(agentId);
+  useCarriedAttachments(attachments.add);
   const chatDrop = useFileDrop(attachments.add);
 
   // A visit the roster does not take is a gone workspace; asked again when the socket drops.
@@ -398,10 +379,9 @@ function OpenWorkspace({ onGone, workspace: agentId, elsewhere, layout }: {
     const words = rowText(message);
 
     ui.updateDraft((current) => (current.trim() === "" ? words : `${words}\n\n${current}`));
-    detach(Effect.catchCause(reattached(message, attachments.add), (failed) => Effect.sync(() => {
-      setRestoreNotice(`The reverted message's files did not come back to the composer: ${renderThrownChain({ cause: Cause.squash(failed) })}`);
-    })));
-  }, [threadMessages, revertFor, history, ui, attachments.add]);
+    // Its uploads come back as they are kept: the same paths, nothing sent again.
+    attachments.offer(message.parts.flatMap((part) => (part.type === "file" ? [part] : [])));
+  }, [threadMessages, revertFor, history, ui, attachments]);
 
   const slateInline = useMemo(() => ({
     rpc: state.rpc,

@@ -31,7 +31,9 @@ export function filesRoutes<Bindings extends object, Agent extends FilesRouteAge
     if (request.method !== 'PUT' && request.method !== 'GET') return err(405, 'use PUT or GET');
     const url = new URL(request.url);
     const executorId = url.searchParams.get('executor');
-    const path = url.searchParams.get('path');
+    // A chat attachment: its name, kept under /uploads by the upload rule (`placeUpload`), which answers its path.
+    const attachment = request.method === 'PUT' ? url.searchParams.get('uploads') : null;
+    const path = attachment ?? url.searchParams.get('path');
 
     if (!executorId) return err(400, 'executor query parameter required');
 
@@ -40,9 +42,12 @@ export function filesRoutes<Bindings extends object, Agent extends FilesRouteAge
     if (request.method === 'PUT') {
       const expectedRevision = expectedRevisionFrom(request);
 
-      return expectedRevision === null
-        ? err(400, 'If-Match must encode a numeric or string revision')
-        : upload({ request, agent, executorId, path, expectedRevision });
+      if (expectedRevision === null) return err(400, 'If-Match must encode a numeric or string revision');
+
+      return upload({
+        request, agent, executorId, path, expectedRevision,
+        ...(attachment !== null && { attachment: { mediaType: request.headers.get('content-type') ?? 'application/octet-stream' } }),
+      });
     }
 
     return download(agent, executorId, path, url);
@@ -68,14 +73,15 @@ function upload(transfer: {
   executorId: string;
   path: string;
   expectedRevision: VfsRevision | undefined;
+  attachment?: { readonly mediaType: string };
 }): Promise<Response> {
-  const { request, agent, executorId, path, expectedRevision } = transfer;
+  const { request, agent, executorId, path, expectedRevision, attachment } = transfer;
 
   return serveUpload(request, {
     surface: 'files',
     fields: { executorId, path },
     write: (transferId, offset, chunk, final): Promise<ExecutorWriteResult> => agent.writeExecutorFileChunk({
-      executorId, path, transferId, offset, chunk, final, expectedRevision,
+      executorId, path, transferId, offset, chunk, final, expectedRevision, ...(attachment !== undefined && { upload: attachment }),
     }),
     refused: (written) => ('error' in written ? new KinuError('bad_input', written.error) : null),
     abort: (transferId) => agent.abortExecutorFileWrite(transferId),

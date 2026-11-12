@@ -63,6 +63,7 @@ export const PLATFORM_LIMITS = {
   'sqlite.nomem': null,
   'do.kv.value_bytes': { value: 128 * KiB, unit: 'bytes' },
   'do.isolate.transient_alloc_reset': { value: 128 * MiB, unit: 'bytes' },
+  'upload.file_bytes': { value: 32 * MiB, unit: 'bytes' },
   'worker.memory_kill_is_burst_sensitive': null,
   'do.storage.size_is_per_object': null,
   'do.storage.sync_kv': { value: 8_388_620, unit: 'bytes' },

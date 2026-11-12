@@ -268,7 +268,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
     abortChat: state.abortChat,
     draft: ui.draft,
     setDraft: ui.updateDraft,
-    ...(attachments !== undefined && { attachments: { parts: attachments.parts, clear: attachments.clear } }),
+    ...(attachments !== undefined && { attachments: { parts: attachments.parts, uploading: attachments.uploading, clear: attachments.clear } }),
     steerRuns: state.steerRuns,
   });
 
@@ -357,7 +357,7 @@ export function ChatColumn({ pane, label, state, ui, chat, retryOwed, input, pla
           float={extras.float}
           mode={{ value: ui.mode, onChange: ui.setMode }}
           slash={commands.slash}
-          {...(attachments !== undefined && { attachments: { parts: [...attachments.parts], onAdd: attachments.add, onRemove: attachments.remove } })}
+          {...(attachments !== undefined && { attachments: { items: attachments.items, onAdd: attachments.add, onRemove: attachments.remove } })}
           modelPicker={<ConnectedModelPicker value={as?.model.model ?? ""} onChange={pickModel} size="xs"
             effort={{ value: as?.reasoningEffort ?? null, onChange: pickEffort }} />}
           notices={[

@@ -29,6 +29,8 @@ import { PreviewFrame } from "@/components/PreviewFrame";
 import { SlateInlineContext, usePreviewFold } from "@/components/slates/context";
 import { AnswerText, MarkdownContent, CodeBlock, SlateLink, type AnswerChat } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
+import { uploadHref, uploadOfPart } from "@/lib/attachments-api";
+import { useOpenWorkspace } from "@/hooks/use-open-workspace";
 import { AnswerPicturesContext, PartPictures, useAnswerPictures } from "@/components/ChatImages";
 import { extractPreviewUrl, previewSite } from "@kinu.run/core";
 import {
@@ -73,10 +75,15 @@ export function eventTurnKey(message: UIMessage): string | null {
   return JSON.stringify([kind, rowText(message)]);
 }
 
+/** A sent file, drawn from where it is kept: an upload of this workspace by its address on the plane. */
 function FilePartView({ part }: { part: FileUIPart }) {
-  return part.mediaType.startsWith("image/")
-    ? <Surface look="outlined" as="img" className="max-h-48 max-w-full" src={part.url} alt={part.filename ?? "image"} />
-    : <AttachmentChip part={part} />;
+  const workspace = useOpenWorkspace();
+  const upload = uploadOfPart(part);
+  const shown = upload === null || workspace === null ? part : { ...part, url: uploadHref(workspace, upload) };
+
+  return shown.mediaType.startsWith("image/")
+    ? <Surface look="outlined" as="img" className="max-h-48 max-w-full" src={shown.url} alt={shown.filename ?? "image"} />
+    : <a href={shown.url} target="_blank" rel="noreferrer" className="inline-flex"><AttachmentChip part={shown} /></a>;
 }
 
 function MessageTimestamp({ at }: { at: number | undefined }) {

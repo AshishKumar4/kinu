@@ -282,7 +282,7 @@ describe('kinu acp — prompt turn', () => {
 });
 
 describe('kinu acp — prompt content', () => {
-  test('text, resource context and an image all cross into one Kinu prompt', async () => {
+  test('text, resource context and an uploaded image all cross into one Kinu prompt', async () => {
     const fake = fakeClient();
 
     const prompt: ContentBlock[] = [
@@ -299,15 +299,14 @@ describe('kinu acp — prompt content', () => {
 
     const sent = v.parse(v.object({
       text: v.string(),
-      files: v.array(v.object({ url: v.string(), mediaType: v.string() })),
+      files: v.array(v.object({ path: v.string(), mediaType: v.string() })),
     }), fake.sent[0].prompt);
 
     expect(sent.text).toContain('explain this');
     expect(sent.text).toContain('const a = 1;');
     expect(sent.text).toContain('file:///a.ts');
-    expect(sent.files).toEqual([
-      expect.objectContaining({ mediaType: 'image/png', url: 'data:image/png;base64,AAAA' }),
-    ]);
+    // The image is uploaded first, as every attachment is, and the prompt names where it was kept.
+    expect(sent.files).toEqual([expect.objectContaining({ mediaType: 'image/png', path: '/uploads/image' })]);
   });
 });
 

@@ -36,7 +36,8 @@ import {
   APPROVALS_ASK, DECISION_HEARD, HIRE_APPROVAL_ASK, HIRE_RAN, AGENT_WORKSPACE_REPLY, AGENT_WORKSPACE_ASK, ACCOUNT_FACT, ACCOUNT_FACT_ASK,
   ACCOUNT_RECALL_ASK, ACCOUNT_RECALL_REPLY, STACK_FACT, STACK_FACT_ASK, STACK_RECALL_ASK, STACK_RECALL_REPLY,
   SPLICE_HEARD, SPLICE_PAGE_ASK, SPLICE_SENT, SPLICE_STEPS, SPLICE_WORK_ASK,
-  ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD, ACTIVITY_ASK, ACTIVITY_WORKSPACE, MODE_SLATE, MODE_SLATE_ASK,
+  ATTACHMENT_ASK, ATTACHMENT_FILE, ATTACHMENT_REPLY, ATTACHMENT_UNREAD, ATTACHMENT_WORD, LARGE_ATTACHMENT_ASK, LARGE_ATTACHMENT_FILE,
+  LARGE_ATTACHMENT_MARKER, LARGE_ATTACHMENT_REPLY, LARGE_ATTACHMENT_UNREAD, ACTIVITY_ASK, ACTIVITY_WORKSPACE, MODE_SLATE, MODE_SLATE_ASK,
   APP_AGENT_ASK, APP_AGENT_FILES, APP_AGENT_SLATE, LENT_OWNER_FACT,
 } from './flows-script';
 import { FALLBACK_ANSWER } from './scripted-protocol';
@@ -580,6 +581,63 @@ export async function attachmentIsReadAndShown(target: FlowTarget): Promise<Atta
     await page.close();
 
     return { tray, reply, sent, sentAfterReload };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+export interface LargeAttachmentVerdict {
+  /** Each step of the upload's progress the chip showed, in percent, and where it stood when the message was sent. */
+  readonly progress: readonly number[];
+  readonly uploaded: boolean;
+  /** What the agent answered: `THE PDF HOLDS <marker>`, the marker only the PDF held, or `no marker found`. */
+  readonly reply: string;
+}
+
+/** A 20 MB PDF, built in the page: its marker first, where the file tool's search reads, then padding to its size. */
+const LARGE_PDF = `(() => {
+  const head = '%PDF-1.4\\n% ${LARGE_ATTACHMENT_MARKER}\\n';
+  const pad = new Uint8Array(20 * 1024 * 1024 - head.length).fill(0x20);
+  return new File([head, pad], ${JSON.stringify(LARGE_ATTACHMENT_FILE)}, { type: 'application/pdf' });
+})()`;
+
+/** A 20 MB PDF dropped on the chat uploads before the message is sent, the message names it, and the agent reads it. */
+export async function largeAttachmentIsRead(target: FlowTarget): Promise<LargeAttachmentVerdict> {
+  const workspace = await createFlowWorkspace(target, 'attachment-large');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    await page.evaluate(`(() => {
+      window.__kinuFlowProgress = [];
+      new MutationObserver(() => {
+        const shown = document.querySelector('#chat [data-attachment-progress]')?.textContent;
+        if (shown) window.__kinuFlowProgress.push(Number.parseInt(shown, 10));
+      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+      const pane = document.querySelector('#chat [data-agent-pane]');
+      if (pane === null) throw new Error('the chat column has no pane to drop on');
+      const files = new DataTransfer();
+      files.items.add(${LARGE_PDF});
+      for (const type of ['dragenter', 'dragover', 'drop']) pane.dispatchEvent(new DragEvent(type, { dataTransfer: files, bubbles: true, cancelable: true }));
+    })()`);
+    // Uploaded, or refused with a notice in the composer: either way the composer has answered the drop.
+    await until(page, 'the PDF uploaded from the tray, or refused', `document.querySelector('#chat [data-attachments] [data-attachment="uploaded"]') !== null
+      || document.querySelector('#chat [data-composer-root] [aria-label="Notices"]') !== null`);
+    const progress = v.parse(v.array(v.number()), await page.evaluate('window.__kinuFlowProgress'));
+    const uploaded = v.parse(v.boolean(), await page.evaluate(`document.querySelector('#chat [data-attachments] [data-attachment="uploaded"]') !== null`));
+
+    if (!uploaded) {
+      await page.close();
+
+      return { progress, uploaded, reply: '' };
+    }
+
+    await sendAndSettle(page, LARGE_ATTACHMENT_ASK);
+    const reply = await lastReply(page, LARGE_ATTACHMENT_REPLY, [LARGE_ATTACHMENT_MARKER, LARGE_ATTACHMENT_UNREAD]);
+
+    await page.close();
+
+    return { progress, uploaded, reply };
   } finally {
     await removeFlowWorkspace(target, workspace);
   }

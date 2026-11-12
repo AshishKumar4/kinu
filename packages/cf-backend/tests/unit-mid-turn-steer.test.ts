@@ -110,7 +110,7 @@ describe('a message typed while the agent is working', () => {
     await expect(h.agent.send('   ', 'steer-blank')).rejects.toThrow(/requires the message text/);
   });
 
-  test('a pending steer with an attachment survives a reset intact — the rerun carries real file data, saved in /uploads', async () => {
+  test('a pending steer with an attachment survives a reset intact — the rerun names its upload in /uploads', async () => {
     const h = steerHarness();
     const actorId = workspaceMainActor(h.db).actorId;
 
@@ -123,8 +123,8 @@ describe('a message typed while the agent is working', () => {
        VALUES (?, 'steer-dead-file', 'turn-dead', 'build', 'attach this too')`,
     ).run(actorId);
     mainDatabase(h).query(
-      `INSERT INTO pending_steer_files (actor_id, steer_id, filename, media_type, url)
-       VALUES (?, 'steer-dead-file', 'chart.png', 'image/png', 'data:image/png;base64,AAAA')`,
+      `INSERT INTO pending_steer_uploads (actor_id, steer_id, filename, media_type, path)
+       VALUES (?, 'steer-dead-file', 'chart.png', 'image/png', '/uploads/chart.png')`,
     ).run(actorId);
 
     const restarted = await reactivateOrchestratorHarness(h.db);
@@ -138,7 +138,7 @@ describe('a message typed while the agent is working', () => {
     expect((await rerun).messages.at(-1)).toEqual({
       role: 'user',
       content: [
-        { type: 'file', data: 'data:image/png;base64,AAAA', mediaType: 'image/png', filename: 'chart.png', providerOptions: { kinu: { upload: '/uploads/chart.png' } } },
+        { type: 'file', data: '/uploads/chart.png', mediaType: 'image/png', filename: 'chart.png', providerOptions: { kinu: { upload: '/uploads/chart.png' } } },
         { type: 'text', text: 'attach this too' },
       ],
     });
